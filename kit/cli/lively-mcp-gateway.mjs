@@ -72,8 +72,10 @@ const WATCH_INTERVAL_MS = Number(process.env.LIVELY_MCP_WATCH_MS || 20_000);
 //  그 파일을 못 찾으면(부트스트랩만 된 CLI·구 설치) 종전 동작(켬)이다 — 그런 설치엔 판정하는 훅도 없다.
 //  세션 중간에 폴더를 등록하면(/lively-connect) 주기 검사가 바뀐 판정을 보고 tools/list_changed 로 목록을 다시 받게 한다.
 const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
-export const OUTSIDE_TOOL_TEXT = "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
-  + "여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 셸의 `lively work-root add` 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.";
+//  셸 명령은 훅과 같은 판정 파일이 낸다 — 배치 실행이 막힌 윈도우 PC 에선 `lively` 대신 node 로 바로 부르는 꼴(record-scope.mjs workRootAddVia).
+//  범위 밖이라고 판정했으면 그 파일은 이미 불러와져 있다. 그 함수가 없는 옛 훅 폴더면 종전 문구.
+export const outsideToolText = () => "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
+  + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`;
 let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
 async function loadScopeModule() {
   if (scopeMod !== undefined) return scopeMod;
@@ -480,8 +482,8 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
       await scopeReady;
       if (!scopeIn()) {
         if (method === "tools/list") { lastTools = []; okr(id, { tools: [] }); return; }
-        if (method === "tools/call") { okr(id, { content: [{ type: "text", text: OUTSIDE_TOOL_TEXT }], isError: true }); return; }
-        if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32603, message: OUTSIDE_TOOL_TEXT } });
+        if (method === "tools/call") { okr(id, { content: [{ type: "text", text: outsideToolText() }], isError: true }); return; }
+        if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32603, message: outsideToolText() } });
         return;
       }
 

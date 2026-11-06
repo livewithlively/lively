@@ -911,17 +911,68 @@ function backupUserMcp(name) {
 //
 //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
 //   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
+/**
+ * (순수) `claude mcp add … <name>` 뒤에 붙일 command+args. Windows 는 심(lively.cmd) 대신 node.exe 로 lively.mjs 를 바로 띄운다 —
+ *  보안 솔루션이 배치 실행을 막는 PC 에서 심이 «액세스가 거부되었습니다» 로 못 뜨고 그 심을 가리키는 MCP 도 함께 죽는다(2026-11-05).
+ *  ⚠ kit/hooks/stdio-launch.mjs livelyStdioEntry 와 같은 규칙이다(self-update 가 그쪽으로 기존 등록을 교정한다).
+ *   여기서 그 파일을 import 하지 않는 이유: 부트스트랩이 CLI 만 새로 받으면 옛 훅 폴더와 짝이 안 맞아 CLI 가 통째로 못 뜬다.
+ */
+export function livelyStdioLaunch({ win, shim, nodeExe, cliPath, sub }) {
+  const n = String(nodeExe || "");
+  if (win && isAbsWinNodeExe(n)) return [n, cliPath, sub];
+  return [shim, sub];
+}
+const isAbsWinNodeExe = (n) => /^(?:[A-Za-z]:[\\/]|\\\\)/.test(n) && /[\\/]node\.exe$/i.test(n);
+
+/**
+ * (순수) 작업 폴더 등록 명령 한 줄 — 위 livelyStdioLaunch 와 같은 기준으로, 윈도우에서 node 절대경로를 알면 심 대신 node 로 lively.mjs 를
+ *  바로 부른다. 같은 PC 에서 `lively`(=lively.cmd)는 «액세스가 거부되었습니다» 로 막혀도 키트 전용 node.exe 는 뜬다(2026-11-05, 배치 실행 차단 PC).
+ *  dir 은 작은따옴표로 감싸 붙이고, 작은따옴표·제어문자가 든 이름이면 빼고 낸다(그 폴더에서 실행하는 꼴).
+ *  ⚠ kit/hooks/record-scope.mjs workRootAddCommand 와 같은 규칙이다 — import 하지 않는 이유는 livelyStdioLaunch 와 같다.
+ *   두 곳이 같은 값을 내는지 install-scope-notice.test.mjs 가 한 표로 잰다.
+ */
+export function workRootAddCommand({ win, nodeExe, cliPath, dir = "" }) {
+  const n = String(nodeExe || ""), d = String(dir || "");
+  const arg = d && !/['\u0000-\u001f\u007f]/.test(d) ? ` '${d}'` : "";
+  if (win && isAbsWinNodeExe(n)) return `& "${n.replace(/\\/g, "/")}" "${String(cliPath).replace(/\\/g, "/")}" work-root add${arg}`;
+  return `lively work-root add${arg}`;
+}
+/** (순수) 사람에게 보이는 «작업 폴더 등록» 안내. node 직결형이면 긴 셸 명령보다 AI 세션 안의 /lively-connect 를 먼저 말한다. */
+export function workRootAddHint(opts) {
+  const cmd = workRootAddCommand(opts);
+  return cmd.startsWith("& ") ? `/lively-connect(AI 세션 안, 코덱스는 /prompts:lively-connect) 또는 PowerShell 의 ${cmd}` : cmd;
+}
+const addHint = () => workRootAddHint({ win: WIN, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs") });
+
+/**
+ * (순수) 우리 훅·MCP 가 실행 파일로 가리키는 **절대경로** 중 지금 없는 것(중복 없이) — doctor 가 쓴다.
+ *  설치 때 node 경로를 굽는다(Windows 는 설치를 돌린 node.exe — 버전이 경로에 든 런타임·volta·fnm 일 수 있다). 그 파일이 지워지면
+ *  그걸로 뜨는 훅·MCP 가 전부 죽는데 «배선»·«등록» 칸은 설정에 우리 항목이 있으니 ✓ 다. 훅이 죽으면 자가 업데이트(session-preload 훅이
+ *  띄운다)도 못 떠 스스로 못 돌아온다 — 다시 굽는 길은 `lively update`(지금 node 로 설치기를 돌리고 MCP 를 다시 등록한다)뿐이다.
+ *  hookCommands = 훅 명령줄(첫 토큰이 실행 파일 — 큰따옴표로 감쌌으면 그 안) · mcpCommands = MCP 항목의 command.
+ *  맨몸 `node` 처럼 PATH 로 찾는 이름은 판정하지 않는다(모르는 것을 고장으로 단정하지 않는다).
+ */
+export function missingLaunchTargets({ hookCommands = [], mcpCommands = [], exists }) {
+  const head = (cmd) => { const s = String(cmd || "").trim(); return (s.startsWith('"') ? /^"([^"]*)"/.exec(s) : /^(\S+)/.exec(s))?.[1] || ""; };
+  const out = [];
+  for (const p of [...hookCommands.map(head), ...mcpCommands.map((c) => String(c || ""))]) {
+    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p) && !out.includes(p) && !exists(p)) out.push(p);
+  }
+  return out;
+}
+
 // 한 config dir 에 전부 등록한다. 대상 열거는 claudeMcpTargets, 여기선 '그 한 곳에 무엇을 넣나' 만.
 function registerClaudeMcpIn(target, gw) {
   const cd = target.configDir;
   const at = cd ? ` [${target.label}]` : "";
   const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
   let registered = 0, failed = 0;
+  const launch = (sub) => livelyStdioLaunch({ win: WIN, shim, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs"), sub });
 
   // lively 본체 — **로컬 stdio 프록시**(`lively mcp`)로 등록한다(#1079).
   runClaudeIn(cd, ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
-    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", ...launch("mcp")], { quiet: true });
     ok(`MCP 등록: lively${at} (stdio 프록시 → ${gw}/mcp)`);
     registered++;
   } catch (e) { fail(`MCP 등록 실패(lively${at}): ${e.message}`); failed++; }
@@ -931,7 +982,7 @@ function registerClaudeMcpIn(target, gw) {
   //  매 세션 최신 → 코드가 바뀌어도 재등록 불필요(툴 목록 자체를 바꿀 때만 여기 add 가 다시 태운다).
   runClaudeIn(cd, ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
   try {
-    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", ...launch("mcp-local")], { quiet: true });
     ok(`MCP 등록: lively-local${at} (stdio · 로컬조작)`);
     registered++;
   } catch (e) { fail(`MCP 등록 실패(lively-local${at}): ${e.message}`); failed++; }
@@ -1164,9 +1215,9 @@ export function launchNames(harnesses = []) {
  *  종전 «아무 폴더에서든» 은 기본값이 «작업 폴더에서만» 이 된 뒤 거짓이 됐다 — 배선은 ✓ 인데 일반 폴더에선 맥락이 안 들어온다.
  *  scope 가 없으면 아직 모른다(설치 시드가 못 닿음 · 구 게이트웨이) — 지금은 켜져 있어도 서버 기본값이 «작업 폴더에서만» 이라 첫 세션에
  *  사본을 받으면 일반 폴더가 꺼진다(record-scope.mjs 머리말). 그래서 단정하지 않는다. needsRoot 면 등록 명령을 함께 보여 준다. */
-export function launchNotice(label, { scope = null, roots = 0 } = {}) {
+export function launchNotice(label, { scope = null, roots = 0, hint = addHint() } = {}) {
   if (scope === "anywhere") return { line: `이제 아무 폴더에서든 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
-  if (!scope) return { line: `이제 ${label} 를 켜면 회사 맥락이 따라옵니다. 일반 폴더에서 꺼져 있으면 그 폴더에서 lively work-root add 를 실행하세요.`, needsRoot: false };
+  if (!scope) return { line: `이제 ${label} 를 켜면 회사 맥락이 따라옵니다. 일반 폴더에서 꺼져 있으면 그 폴더에서 ${hint} 를 실행하세요.`, needsRoot: false };
   if (roots > 0) return { line: `이제 작업 폴더(${roots}개)에서 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
   return { line: `아직 작업 폴더가 없어, 일반 폴더에서는 ${label} 를 켜도 회사 맥락이 들어오지 않습니다.`, needsRoot: true };
 }
@@ -1175,7 +1226,7 @@ export async function sayLaunchNotice(harnesses, out = say) {
   const launch = launchNotice(launchNames(harnesses).map(bold).join(" · "), (await recordScopeState()) || {});
   out(`  ${launch.line}`);
   if (!launch.needsRoot) return;
-  out(`  쓰는 폴더에서 한 번 실행하세요: ${bold("lively work-root add")}`);
+  out(`  쓰는 폴더에서 한 번 실행하세요: ${bold(addHint())}`);
   out(dim("  (모든 폴더에서 켜려면: lively scope anywhere — 개인 폴더의 대화도 워크스페이스에 기록됩니다)"));
 }
 
@@ -2452,7 +2503,7 @@ async function cmdStatus(opts) {
       say(dim("     (opencode 는 ~/.claude/skills 도 함께 읽습니다 — 위 수치는 opencode 전용 자리에 심은 것만 셉니다)"));
     }
   }
-  if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold("lively work-root add"));
+  if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold(addHint()));
 }
 
 async function cmdDoctor(opts) {
@@ -2510,6 +2561,36 @@ async function cmdDoctor(opts) {
     chk("Claude MCP 연결", st.harness.claude.mcpConnected,
       st.harness.claude.mcpConnected ? "lively 연결됨" : "등록은 됐지만 연결 실패 — 게이트웨이 도달·VPN·프록시 확인",
       "lively doctor 후 게이트웨이 도달 여부(위 줄) 확인");
+  }
+  // 훅·MCP 가 가리키는 실행 파일이 살아 있나 — 위 «배선»·«등록» 은 설정에 우리 항목이 있는지만 본다(missingLaunchTargets 머리말).
+  {
+    const hookCommands = [];
+    try {
+      const hooks = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8"))?.hooks || {};
+      for (const entries of Object.values(hooks)) {
+        for (const e of Array.isArray(entries) ? entries : []) {
+          for (const h of Array.isArray(e?.hooks) ? e.hooks : []) {
+            if (typeof h?.command === "string" && /\.lively[\\/]hooks[\\/]/.test(h.command)) hookCommands.push(h.command);
+          }
+        }
+      }
+    } catch { /* 없음·파손 — 위 «배선» 칸이 말한다 */ }
+    const mcpCommands = claudeUserConfigPaths().flatMap((p) => {
+      try {
+        const s = JSON.parse(readFileSync(p, "utf8"))?.mcpServers || {};
+        return ["lively", "lively-local"].map((n) => (s[n]?.type === "stdio" ? s[n].command : null)).filter(Boolean);
+      } catch { return []; }
+    });
+    if (hookCommands.length || mcpCommands.length) {
+      const gone = missingLaunchTargets({ hookCommands, mcpCommands, exists: existsSync });
+      //  윈도우는 `lively`(심) 자체가 배치 실행 차단으로 막힐 수 있다 — 지금 이 진단을 돌린 node 로 바로 부르는 꼴도 함께 준다.
+      const direct = WIN && isAbsWinNodeExe(process.execPath)
+        ? `  (lively 가 막히면 PowerShell: & "${process.execPath.replace(/\\/g, "/")}" "${join(LIVELY, "lib", "lively.mjs").replace(/\\/g, "/")}" update)`
+        : "";
+      chk("훅·MCP 실행 파일", !gone.length,
+        gone.length ? `없음: ${gone.join(" · ")} — 이걸로 뜨는 훅·MCP 가 전부 못 뜨고 스스로 못 돌아옵니다` : "OK",
+        `lively update${direct}`);
+    }
   }
   if (st.harness.codex.installed) {
     chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml 에 관리 블록 있음" : "미배선", "lively install");
@@ -2607,7 +2688,7 @@ async function cmdDoctor(opts) {
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
   chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
   // 꺼진 폴더는 고장이 아니라 설정이다 — 실패로 세지 않되, «모두 정상» 인데 맥락이 안 들어오는 일이 없게 값을 보여 준다.
-  if (st.recordScope?.scope) chk("기록 범위", true, scopeSummary(st.recordScope, (ok) => (ok ? "켜짐" : "꺼짐 — 쓰는 폴더에서: lively work-root add")));
+  if (st.recordScope?.scope) chk("기록 범위", true, scopeSummary(st.recordScope, (ok) => (ok ? "켜짐" : `꺼짐 — 쓰는 폴더에서: ${addHint()}`)));
 
   if (opts.json) { jsonOut({ status: st, checks }); return; }
   say(`\n${bold("라이블리 진단")}\n`);
@@ -2878,7 +2959,7 @@ async function cmdWorkRoot(rest) {
     say(dim("  라이블리 프로젝트 폴더(.lively/project.json)와 라이블리가 띄운 세션은 등록하지 않아도 켜집니다."));
     const here = sessionFolderOf(rs);
     const d = rs.decideRecordScope({ env: process.env, dir: here, lively: LIVELY });
-    say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(" — 등록: lively work-root add")}`);
+    say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(` — 등록: ${addHint()}`)}`);
     return;
   }
   if (sub !== "add" && sub !== "remove") die("사용법: lively work-root [list | add [경로] | remove [경로]]", 2);

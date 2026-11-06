@@ -29,10 +29,14 @@
 // 토큰 값은 절대 출력/로깅하지 않는다.
 import {
   readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync,
-  existsSync, statSync, openSync, closeSync, accessSync, constants as FSC,
+  existsSync, statSync, openSync, closeSync, accessSync, renameSync, realpathSync, chmodSync, constants as FSC,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { hostEffects } from "./host-effects-port.mjs";
+// 동적 import 다 — 이 파일은 자가 치유 경로라, 옆 모듈이 없는 훅 폴더(부분 복사·옛 설치)에서도 떠서 다음 번들을 받아야 한다.
+//  없으면 종전 심 직결 항목을 쓰고 교정을 건너뛴다.
+const stdioLaunch = await import("./stdio-launch.mjs").catch(() => null);
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const fetch = (...args) => hostEffects.fetch(...args);
@@ -322,6 +326,33 @@ function reconcileClaudeMcp(gw, token) {
   }
 }
 
+// ~/.claude.json 은 사람이 쓰는 설정 파일이다 — 바꿔 쓰되 파일의 모습(권한·링크)은 종전 덮어쓰기 때와 같게 둔다.
+//  · 원자적 — 같은 폴더의 임시 파일에 쓰고 이름을 바꾼다. Claude Code 는 반쯤 쓰인 .claude.json 을 손상으로 보고
+//    mcpServers 를 통째로 비운 적이 있다(session-preload claudeMcpMissing 머리말).
+//  · 권한 — 새 파일은 umask(보통 0644)로 생긴다. 원본 mode(못 읽으면 0600)를 그대로 준다(헤더·토큰이 실릴 수 있는 파일이다).
+//    쓰기 권한이 없는 파일(읽기 전용으로 잠가 둔 것)은 rename 이 그 잠금을 우회하므로 건드리지 않는다 — 종전 덮어쓰기도 거기서 실패했다.
+//  · 심볼릭 링크 — 링크가 아니라 가리키는 파일을 바꾼다(dotfiles 관리 등). 링크 자리에 rename 하면 링크가 일반 파일이 된다.
+//  · 임시 파일 이름에 pid·난수 — reconcile 은 잠금 밖(최신 경로·--mcp-only)에서도 돌아, 동시에 뜬 업데이터 둘이 같은 이름이면
+//    서로의 임시 파일을 덮거나 지운다. "wx" 로 만들어 이미 있는 파일(·링크)을 따라 쓰지 않는다.
+//  rename 이 실패하면(Windows 는 대상이 열려 있으면 EPERM 일 수 있다) 임시 파일을 지우고 직접 덮어쓴다 — 그 한 번은 원자적이지
+//   않지만 종전 동작이고, 있는 파일에 쓰므로 권한·링크는 그대로다. ⚠ Windows 의 rename 은 원본 ACL 을 옮기지 않는다(폴더 상속 ACL).
+function writeUserConfig(path, body) {
+  let target = path;
+  try { target = realpathSync(path); } catch { /* 못 풀면 그 경로 그대로 */ }
+  accessSync(target, FSC.W_OK);   // 읽기 전용이면 여기서 던진다 → 호출자가 로그만 남기고 건너뛴다
+  let mode = 0o600;
+  try { mode = statSync(target).mode & 0o777; } catch { /* 못 읽으면 0600 */ }
+  const tmp = `${target}.lvly-${process.pid}-${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(tmp, body, { mode, flag: "wx" });
+    try { chmodSync(tmp, mode); } catch { /* umask 를 못 걷어도 mode 보다 넓게 열리지는 않는다 */ }
+    renameSync(tmp, target);
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch { /* 무시 */ }
+    writeFileSync(target, body);
+  }
+}
+
 function reconcileOneClaudeConfig(cj, gw, token) {
   let conf;
   try { conf = JSON.parse(readFileSync(cj, "utf8")); } catch { return; } // 파손/못읽음 → 안전 skip(덮어쓰지 않음)
@@ -339,15 +370,20 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   // ⚠ 헤더 세트는 register-clients.sh(scripts/·kit/setup/)·kit/cli/lively.mjs 와 **동일하게 유지**(lively.test.mjs ④ 가 4곳 parity 강제).
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
   //  (stdio 프록시로 가면 이 헤더들은 프록시가 상류 호출에 붙인다 — 같은 이름·같은 값, 출처만 설정→env/토큰파일.)
+  //  Windows 는 심 대신 node 직결(stdio-launch.mjs 머리말 — 배치 실행이 막힌 PC 에서 심이 못 뜬다).
+  const cliPath = join(LIVELY, "lib", "lively.mjs");
+  const stdio = (sub) => stdioLaunch
+    ? stdioLaunch.livelyStdioEntry({ win: process.platform === "win32", shim, nodeExe: process.execPath, cliPath, sub })
+    : { type: "stdio", command: shim, args: [sub], env: {} };
   want["lively"] = canProxy
-    ? { type: "stdio", command: shim, args: ["mcp"], env: {} }
+    ? stdio("mcp")
     : { type: "http", url: `${gw}/mcp`, headers: {
         Authorization: `Bearer ${token}`,
         "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
         "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
         "x-lively-workspace": "${LVLY_TENANT_SLUG:-}", // #1750 S3 — 셀프호스트 다중 워크스페이스 소속(없으면 primary)
       } };
-  want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
+  want["lively-local"] = stdio("mcp-local");
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.
   try {
     const raw = JSON.parse(readFileSync(join(LIVELY, "mcp-servers.json"), "utf8"));
@@ -367,7 +403,22 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   for (const [name, entry] of Object.entries(want)) {
     const cur = servers[name];
     if (!cur) { servers[name] = entry; added++; log(`MCP additive 등록: ${name}`); continue; } // 없는 서버 = 통째로 add(종전)
-    // #1079 — additive 무손실의 **유일한 예외**: 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
+    // additive 무손실의 예외 ① — 우리가 심은 stdio 항목의 **실행 형태**만 지금 기준으로 고친다(stdio-launch.mjs correctStdioEntry):
+    //  · 심 직결형(lively.cmd) → node 직결(배치 실행이 막힌 PC 대응)
+    //  · node 직결인데 그 node.exe 가 사라진 항목 → 지금 node(설치 때 구운 버전 박힌 경로가 지워지면 MCP 가 영영 죽는다)
+    //  바꾸는 건 command·args 뿐 — env·timeout 처럼 사람이 붙인 다른 필드는 멤버 값이라 그대로 둔다. 사람이 바꾼 항목(command·args 가 다름)은 손대지 않는다.
+    //  옛 stdio-launch.mjs(이 함수 없음)와 짝이 되면 교정을 건너뛴다.
+    const fix = (name === "lively" || name === "lively-local") && typeof stdioLaunch?.correctStdioEntry === "function"
+      ? stdioLaunch.correctStdioEntry(cur, entry, { shim, cliPath, sub: name === "lively" ? "mcp" : "mcp-local", exists: existsSync })
+      : null;
+    if (fix) {
+      servers[name] = fix.entry; added++;
+      log(fix.from === "dead-node"
+        ? `MCP 실행 형태 교정: ${name} 사라진 node(${cur.command}) → ${fix.entry.command} (다음 세션 적용)`
+        : `MCP 실행 형태 교정: ${name} 심 → node 직결(배치 실행이 막힌 PC 대응, 다음 세션 적용)`);
+      continue;
+    }
+    // 예외 ② #1079 — 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
     //  이건 '멤버 값 덮어쓰기'가 아니라 **우리가 심은 항목의 전송방식 교정**이다(같은 게이트웨이·같은 신원·같은 툴 이름).
     //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
     if (name === "lively" && canProxy && cur.type !== "stdio") {
@@ -386,7 +437,7 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   }
   if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
   conf.mcpServers = servers;
-  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); }
+  try { writeUserConfig(cj, JSON.stringify(conf, null, 2) + "\n"); }
   catch (e) { log(`MCP reconcile 쓰기 실패(무시) ${cj}: ${(e && e.message) || e}`); return; }
   // #1079 — **쓴 뒤 되읽어 확인한다.** "로그는 고쳤다는데 화면은 그대로"였던 실측 사고 때, 로그만으로는
   //  무엇이 잘못됐는지(다른 파일을 고쳤나·되돌려졌나) 구분할 수 없었다. 여기서 확인하면 다음 진단이 한 줄로 끝난다.

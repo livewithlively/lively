@@ -75,17 +75,32 @@ const cloneAbs = (p) => join(CLONE_ROOT, p);
 //  중복 훅 방지). Windows 는 $HOME 셸확장/`env` 프리픽스가 안 먹으므로 forward-slash 절대경로 + argv 하네스.
 //  node 는 Windows 에서도 forward-slash 경로를 받는다. 제거 매칭은 '.lively/hooks/' 부분문자열(양쪽 다 포함).
 const fwd = (p) => p.replace(/\\/g, "/");
+/** (순수) Windows 에서 훅·MCP 가 부를 node — 절대경로 node.exe 면 forward-slash 로, 아니면 종전의 맨몸 `node`. */
+export function winNodeBin(execPath) {
+  const p = String(execPath || "");
+  return /^(?:[A-Za-z]:[\\/]|\\\\)/.test(p) && /[\\/]node\.exe$/i.test(p) ? fwd(p) : "node";
+}
+/** (순수) 훅 명령줄 첫 토큰. 하네스마다 훅을 돌리는 셸이 다르다(git-bash · cmd · PowerShell). PowerShell 은 따옴표로 시작하는 줄을
+ *  실행이 아니라 문자열로 읽으므로 따옴표를 쓰지 않는다 — 그래서 세 셸 어디서도 글자 그대로인 문자로만 된 경로만 쓰고,
+ *  그 밖(공백 · `( ) & ; ' " $ ^ , % ! = # @ + [ ] { }` · 백틱 · 유니코드 따옴표·대시 등)이 든 경로면 맨몸 `node`(종전 문자열 그대로)로 둔다.
+ *  허용 = 글자·숫자(한글 등 포함) · `.` `_` `-` `~` `/` `:`. */
+export const winNodeToken = (bin) => (bin !== "node" && /^[\p{L}\p{M}\p{N}._~\/:-]+$/u.test(bin) ? bin : "node");
 const hookAbs = (script) => fwd(join(LIVELY, "hooks", script));
 const WIN = process.platform === "win32";
 // #355: 훅은 하네스가 실행하는 셸의 PATH 로 `node` 를 찾는다 → node 를 갓 설치했거나 rc 를 아직 source 안 한
 //  셸에서 claude/codex 를 켜면 'node: command not found' 로 훅이 죽는다(페르소나 미주입·Stop 게이트 무작동).
 //  부트스트랩한 번들 node(~/.lively/runtime/current/bin/node — 안정 심링크)가 있으면 그 절대경로로 호출해
-//  실행 셸 PATH 와 무관하게 만든다. 없으면(시스템 node) 기존대로 PATH 의 `node`. (Windows 는 User PATH 로 처리 — bare 유지.)
+//  실행 셸 PATH 와 무관하게 만든다. 없으면(시스템 node) 기존대로 PATH 의 `node`. Windows 는 아래 NODEBIN 주석.
 const bundledNode = join(LIVELY, "runtime", "current", "bin", "node");
-const NODEBIN = (!WIN && existsSync(bundledNode)) ? bundledNode : "node";
-const hookCmd = (script) => WIN ? `node "${hookAbs(script)}"` : `"${NODEBIN}" "$HOME/.lively/hooks/${script}"`;
+// Windows 는 설치를 돌리는 node(process.execPath)의 절대경로를 쓴다 — 심(lively.cmd)이 고르는 것과 같은 node 다
+//  (번들 런타임이 있으면 부트스트랩·심이 그걸로 이 설치기를 띄운다). 맨몸 `node` 는 User PATH 에 기대는데,
+//  번들 런타임은 PATH 에 오르지 않아 시스템 node 가 없는 PC 에선 훅이 전부 죽는다.
+//  ⚠ 런타임 폴더(node-vX-win-*)는 버전이 이름에 박혀 있다 — 새 런타임은 부트스트랩 재실행으로만 들어오고 그때 setup 이 이 값을 다시 굽는다.
+const NODEBIN = WIN ? winNodeBin(process.execPath) : (existsSync(bundledNode) ? bundledNode : "node");
+const winNode = () => winNodeToken(NODEBIN);
+const hookCmd = (script) => WIN ? `${winNode()} "${hookAbs(script)}"` : `"${NODEBIN}" "$HOME/.lively/hooks/${script}"`;
 // 커스텀 훅 런너 — 이벤트당 고정 엔트리 1개(커스텀 훅 자체는 런너가 런타임에 fetch). 이벤트는 argv 로 전달.
-const hookCmdRunner = (event) => WIN ? `node "${hookAbs("run-custom.mjs")}" ${event}` : `"${NODEBIN}" "$HOME/.lively/hooks/run-custom.mjs" ${event}`;
+const hookCmdRunner = (event) => WIN ? `${winNode()} "${hookAbs("run-custom.mjs")}" ${event}` : `"${NODEBIN}" "$HOME/.lively/hooks/run-custom.mjs" ${event}`;
 
 // settings-hooks.json 이 발행물에 없을 수 있으니, user-level 훅 블록을 코드로 구성(어댑터와 동일 형태).
 function userLevelHooksBlock() {
@@ -490,9 +505,14 @@ function agentsMerge(existing, ctx) {
 //   claude·grok·opencode·antigravity = frontmatter(description) + 본문 · codex = 본문만(frontmatter 가 프롬프트로 샌다)
 //   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다).
 export const CONNECT_MARK = "lively-managed: record-scope(#5016)";
+//  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
+//   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
+const directCli = ({ win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) } = {}) => (win && nodeBin !== "node" ? `& "${nodeBin}" "${cliPath}"` : "");
 const CONNECT_IDS = ["lively-connect", "lively-disconnect"];
-export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN }) {
-  const cli = `lively(PATH 에 없으면 ${shim})`;
+export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) }) {
+  const direct = directCli({ win, nodeBin, cliPath });
+  const cli = direct ? `(PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고) ${direct} 를 lively 대신 쓰는` : `lively(PATH 에 없으면 ${shim})`;
+  const lv = direct || "lively";
   //  자리표시 `$ARGUMENTS` 는 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스)에서 두 번 쓰면 «경로(~/w)를, 비었거나 `~/w` 그대로면…»
   //  처럼 스스로 모순이 된다. 치환 안 하는 하네스를 위해 «달러로 시작하는 글자 그대로면 없는 것» 을 말로만 덧붙인다.
   const session = "이 세션을 연 폴더(세션 시작 때 라이블리가 «작업 폴더 밖» 안내에 적어 준 폴더 — 없으면 지금 작업 폴더)";
@@ -503,7 +523,7 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
       body: [
         "이 폴더를 이 컴퓨터의 라이블리 작업 폴더로 등록하라.",
         "",
-        `1. 셸에서 ${cli} 명령을 실행하라: \`lively work-root add "<폴더>"\``,
+        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root add "<폴더>"\``,
         `   ${folderRule}`,
         "2. 실행 결과를 사람에게 한두 줄로 전하라. 등록됐으면 «다음 메시지부터 이 폴더에서 라이블리가 연결됩니다» 라고 알려라. 실패했으면 결과에 나온 이유를 그대로 전하라.",
       ].join("\n") },
@@ -511,7 +531,7 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
       body: [
         "이 폴더를 이 컴퓨터의 라이블리 작업 폴더 목록에서 빼라.",
         "",
-        `1. 셸에서 ${cli} 명령을 실행하라: \`lively work-root remove "<폴더>"\``,
+        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root remove "<폴더>"\``,
         `   ${folderRule}`,
         "2. 실행 결과를 사람에게 전하라. «등록된 다른 폴더 아래라서 켜져 있다» 는 답이면 그 폴더 이름과 함께 그대로 전하고, 그 폴더를 뺄지 사람에게 물어라.",
       ].join("\n") },
@@ -547,15 +567,15 @@ export function writeConnectCommands(dir, format, label) {
       wrote++;
     }
     if (wrote) console.log(`  ✓ ${label} «여기 연결» 커맨드(${CONNECT_IDS.join("·")})`);
-  } catch (e) { console.log(`  · ${label} «여기 연결» 커맨드 설치 실패(무해 — 셸의 lively work-root add 로 대신): ${e.message}`); }
+  } catch (e) { console.log(`  · ${label} «여기 연결» 커맨드 설치 실패(무해 — 셸의 ${directCli() ? `${directCli()} work-root add 로 대신 — PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고` : "lively work-root add 로 대신"}): ${e.message}`); }
 }
 // Windows: `env` 프리픽스 불가 → 하네스는 argv 로. Mac/Linux: 기존 env 형 유지(idempotency 키 안정).
 const codexHookCmd = (script) => WIN
-  ? `node "${hookAbs(script)}" --harness codex`
+  ? `${winNode()} "${hookAbs(script)}" --harness codex`
   : `env LIVELY_HARNESS=codex "${NODEBIN}" "${join(LIVELY, "hooks", script)}"`;   // #355: 번들 node 절대경로(PATH 무관)
 // 커스텀 훅 런너(codex) — 이벤트는 argv. 등록 이벤트는 CODEX_RUNNER_EVENTS 참조.
 const codexRunnerCmd = (event) => WIN
-  ? `node "${hookAbs("run-custom.mjs")}" ${event} --harness codex`
+  ? `${winNode()} "${hookAbs("run-custom.mjs")}" ${event} --harness codex`
   : `env LIVELY_HARNESS=codex "${NODEBIN}" "${join(LIVELY, "hooks", "run-custom.mjs")}" ${event}`;
 
 // codex 훅 엔트리 한 벌 — `[[hooks.<E>]]`(+matcher) + `[[hooks.<E>.hooks]]` 핸들러. TOML array-of-tables 라
@@ -1137,7 +1157,7 @@ const AGY_HOOKS = join(GEMINI, "config", "hooks.json");
 // 어댑터 호출 command — claude hookCmd 와 같은 규약(#355 번들 node 절대경로 · $HOME 은 sh -c 확장).
 //  antigravity 는 훅 command 를 `sh -c`(win: cmd /c) 로 실행하고 cwd 를 hooks.json 디렉터리로 둔다(#1689 실측).
 const agyHookCmd = (event) => WIN
-  ? `node "${hookAbs("antigravity-adapter.mjs")}" ${event}`
+  ? `${winNode()} "${hookAbs("antigravity-adapter.mjs")}" ${event}`
   : `"${NODEBIN}" "$HOME/.lively/hooks/antigravity-adapter.mjs" ${event}`;
 
 // hooks.json — top-level 키가 '이름 있는 훅'이다. 파일이 통째로 우리 플러그인 안이라 머지가 필요 없다.
@@ -1280,7 +1300,7 @@ const GRK_END = "# <<< lively-managed <<<";
 //  grok 은 command 에 공백·$ 이 있으면 `sh -c`(win: git-bash/pwsh 자동)로 실행한다(#1701 소스검증) — 이 형태는
 //  항상 그 경로를 탄다. ⚠ 미설정 env 참조($VAR)가 있으면 훅 스폰 자체가 거부되므로 $HOME 외에는 쓰지 않는다.
 const grokHookCmd = (event) => WIN
-  ? `node "${hookAbs("grok-adapter.mjs")}" ${event}`
+  ? `${winNode()} "${hookAbs("grok-adapter.mjs")}" ${event}`
   : `"${NODEBIN}" "$HOME/.lively/hooks/grok-adapter.mjs" ${event}`;
 
 // lively-grok.json — claude 와 동형의 훅 JSON(이벤트명 1:1). timeout 은 어댑터 내부 러너 타임박스 합보다 넉넉히
@@ -1444,9 +1464,9 @@ const isOurCursorHook = (e) => !!e && typeof e === "object" && !Array.isArray(e)
 
 // 어댑터 호출 command — **절대경로**로 쓴다($HOME 확장에 기대지 않는다). Cursor 가 command 를 어떤 셸로 돌리든
 //  (POSIX sh·윈도우 PowerShell — 포럼 실측: 윈도우 훅이 셸 불일치로 전 툴을 막은 사례) 경로가 그대로 성립한다.
-//  #355 — POSIX 는 번들 node 절대경로(실행 셸 PATH 무관). 윈도우는 claude 와 같은 bare `node`(User PATH).
+//  #355 — POSIX 는 번들 node 절대경로(실행 셸 PATH 무관). 윈도우는 claude 와 같은 winNode()(설치를 돌린 node.exe 절대경로).
 const cursorHookCmd = (event) => WIN
-  ? `node "${hookAbs(CURSOR_ADAPTER)}" ${event}`
+  ? `${winNode()} "${hookAbs(CURSOR_ADAPTER)}" ${event}`
   : `"${NODEBIN}" "${hookAbs(CURSOR_ADAPTER)}" ${event}`;
 
 // 배선할 Cursor 이벤트와 timeout(초). 어댑터가 받는 argv 는 **Cursor 이벤트 이름 그대로**다(번역은 어댑터 몫).

@@ -237,9 +237,10 @@ function fakeServer(state) {
 }
 
 // ══ 알림 · 늦은 주입 표식 ════════════════════════════════════════════════════
+//  등록 명령의 꼴은 기본 인자가 이 프로세스의 플랫폼·node 를 따른다(윈도 CI 에선 node 직결형) — 종전 명령을 보는 행은 win: false 로 입력을 고정한다.
 check("N1 클로드 알림은 /lively-connect 를 가리킨다", rs.outsideNotice({ dir: "/p", harness: "claude" }).user.includes("/lively-connect"));
 check("N2 코덱스 알림은 /prompts:lively-connect", rs.outsideNotice({ dir: "/p", harness: "codex" }).user.includes("/prompts:lively-connect"));
-check("N3 그 밖의 하네스는 CLI(lively work-root add)", rs.outsideNotice({ dir: "/p", harness: "grok" }).user.includes("lively work-root add"));
+check("N3 그 밖의 하네스는 CLI(lively work-root add)", rs.outsideNotice({ dir: "/p", harness: "grok", win: false }).user.includes("lively work-root add"));
 {
   const flags = mkdtempSync(join(tmpdir(), "rscope-flags-"));
   const set = rs.markStartedOutside("abc-1", flags), seen = rs.startedOutside("abc-1", flags);
@@ -249,7 +250,7 @@ check("N3 그 밖의 하네스는 CLI(lively work-root add)", rs.outsideNotice({
 }
 {
   const evil = '/tmp/a"; rm -rf ~; echo "`x`';
-  const n = rs.outsideNotice({ dir: evil, harness: "claude" });
+  const n = rs.outsideNotice({ dir: evil, harness: "claude", win: false });
   check("N7 따옴표·백틱·달러가 든 폴더 이름은 AI 안내·명령에 넣지 않는다", !n.ai.includes(evil) && !n.ai.includes("rm -rf") && n.ai.includes("lively work-root add"));
   const p = rs.outsideNotice({ dir: "/w/p", harness: "claude", plugin: true });
   check("N8 플러그인만 깐 컴퓨터는 웹 화면을 가리킨다(/lively-connect 없음)", !p.user.includes("/lively-connect") && p.user.includes("내 컴퓨터별 연결"));
@@ -257,23 +258,63 @@ check("N3 그 밖의 하네스는 CLI(lively work-root add)", rs.outsideNotice({
 {
   // 윈도 경로는 역슬래시가 구분자다 — 이름을 넣고, 등록 명령은 작은따옴표로 감싸 셸이 글자 그대로 받게 한다.
   const win = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\my proj";
-  const w = rs.outsideNotice({ dir: win, harness: "claude" });
+  const w = rs.outsideNotice({ dir: win, harness: "claude", win: false });
   check("N9 윈도 경로도 AI 안내에 그 폴더를 짚고, 등록 명령은 작은따옴표로 감싼다", w.ai.includes(`\`${win}\``) && w.ai.includes(`lively work-root add '${win}'`), w.ai.slice(0, 300));
   const unc = "\\\\srv\\share\\proj";
-  check("N10 UNC 경로도 글자 그대로 넣는다", rs.outsideNotice({ dir: unc, harness: "codex" }).ai.includes(`lively work-root add '${unc}'`));
+  check("N10 UNC 경로도 글자 그대로 넣는다", rs.outsideNotice({ dir: unc, harness: "codex", win: false }).ai.includes(`lively work-root add '${unc}'`));
   const q = "/home/me/it's";
-  const nq = rs.outsideNotice({ dir: q, harness: "claude" });
+  const nq = rs.outsideNotice({ dir: q, harness: "claude", win: false });
   check("N11 작은따옴표가 든 폴더 이름은 넣지 않는다(명령의 감싸개라서)", !nq.ai.includes(q) && nq.ai.includes("이 폴더에서 `lively work-root add`"));
 }
 if (process.platform !== "win32") {
   // 안내 속 명령을 실제 셸에 넣으면 인자가 그 폴더 글자 그대로 와야 한다 — 공백·역슬래시·끝 역슬래시(드라이브 루트 꼴)까지.
   const dirs = ["C:\\Users\\RUNNER~1\\my proj", "\\\\srv\\share\\p", "C:\\", "/home/me/a b\\c"];
   const got = dirs.map((d) => {
-    const m = rs.outsideNotice({ dir: d, harness: "claude" }).ai.match(/`lively work-root add (.+?)`/);
+    const m = rs.outsideNotice({ dir: d, harness: "claude", win: false }).ai.match(/`lively work-root add (.+?)`/);
     if (!m) return null;
     try { return execFileSync("sh", ["-c", `printf %s ${m[1]}`], { encoding: "utf8" }); } catch { return null; }
   });
   check("N12 등록 명령을 셸에 넣으면 인자가 그 폴더 글자 그대로다", got.every((g, i) => g === dirs[i]), JSON.stringify(got));
+}
+{
+  // 배치 실행이 막힌 윈도우 PC(2026-11-05) — node 절대경로를 알면 lively.cmd 대신 node 로 lively.mjs 를 부르는 명령을 준다.
+  //  같은 표를 kit/cli/install-scope-notice.test.mjs 가 CLI 쪽 같은 이름 함수와 맞대 본다.
+  const NODE = "C:\\Profiles\\me\\.lively\\runtime\\node-v22.11.0-win-x64\\node.exe";
+  const CLI_JS = "C:\\Profiles\\me\\.lively\\lib\\lively.mjs";
+  const DIRECT = '& "C:/Profiles/me/.lively/runtime/node-v22.11.0-win-x64/node.exe" "C:/Profiles/me/.lively/lib/lively.mjs" work-root add';
+  const rows = [
+    ["윈도+절대 node.exe · 폴더 없음", { win: true, nodeExe: NODE, cliPath: CLI_JS }, DIRECT],
+    ["윈도+절대 node.exe · 공백 든 윈도 폴더", { win: true, nodeExe: NODE, cliPath: CLI_JS, dir: "C:\\work\\my proj" }, `${DIRECT} 'C:\\work\\my proj'`],
+    ["윈도+절대 node.exe · 작은따옴표 든 폴더는 빼고", { win: true, nodeExe: NODE, cliPath: CLI_JS, dir: "C:\\work\\it's" }, DIRECT],
+    ["윈도+슬래시 드라이브 경로 · 대문자 NODE.EXE", { win: true, nodeExe: "D:/rt/NODE.EXE", cliPath: CLI_JS }, '& "D:/rt/NODE.EXE" "C:/Profiles/me/.lively/lib/lively.mjs" work-root add'],
+    ["윈도+UNC node.exe", { win: true, nodeExe: "\\\\srv\\rt\\node.exe", cliPath: CLI_JS }, '& "//srv/rt/node.exe" "C:/Profiles/me/.lively/lib/lively.mjs" work-root add'],
+    ["윈도+맨몸 node — 종전 명령", { win: true, nodeExe: "node", cliPath: CLI_JS, dir: "C:\\w\\p" }, "lively work-root add 'C:\\w\\p'"],
+    ["윈도+상대경로 node.exe — 종전 명령", { win: true, nodeExe: "rt\\node.exe", cliPath: CLI_JS }, "lively work-root add"],
+    ["윈도+절대경로지만 node.exe 아님 — 종전 명령", { win: true, nodeExe: "C:\\rt\\node", cliPath: CLI_JS }, "lively work-root add"],
+    ["윈도 아님+윈도 꼴 node.exe — 종전 명령", { win: false, nodeExe: NODE, cliPath: CLI_JS }, "lively work-root add"],
+    ["윈도 아님 · 폴더", { win: false, nodeExe: "/usr/bin/node", cliPath: "/home/me/.lively/lib/lively.mjs", dir: "/home/me/a b" }, "lively work-root add '/home/me/a b'"],
+    ["윈도 아님 · 작은따옴표 든 폴더는 빼고", { win: false, nodeExe: "/usr/bin/node", cliPath: "/x", dir: "/home/me/it's" }, "lively work-root add"],
+  ];
+  for (const [name, opts, want] of rows) {
+    const got = rs.workRootAddCommand(opts);
+    check(`W1 등록 명령 — ${name}`, got === want, got);
+  }
+  check("W2 MCP 문구 — node 직결이면 PowerShell 아닌 셸의 & 빼기를 함께 말한다",
+    rs.workRootAddVia({ win: true, nodeExe: NODE, cliPath: CLI_JS }) === `셸의 \`${DIRECT}\`(PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고)`);
+  check("W2 MCP 문구 — 아니면 종전 그대로", rs.workRootAddVia({ win: false, nodeExe: "/usr/bin/node", cliPath: "/x" }) === "셸의 `lively work-root add`");
+
+  const lively = "C:\\Profiles\\me\\.lively";
+  const dir = "C:\\work\\proj";
+  const c = rs.outsideNotice({ dir, harness: "claude", win: true, nodeExe: NODE, lively });
+  check("W3 ★ 윈도 node 직결 — AI 가 실행할 명령이 node 직접 호출이고 lively.cmd 를 부르지 않는다",
+    c.ai.includes(`\`${DIRECT} '${dir}'\``) && !c.ai.includes("`lively work-root add") && c.ai.includes("PowerShell 이면 그대로"), c.ai);
+  check("W3 사람 한 줄은 여전히 /lively-connect", c.user.includes("/lively-connect") && !c.user.includes("node.exe"), c.user);
+  const g = rs.outsideNotice({ dir, harness: "grok", win: true, nodeExe: NODE, lively });
+  check("W4 ★ 커맨드가 없는 하네스 — 사람 한 줄·AI 안내 모두 node 직접 호출", g.user.includes(`\`${DIRECT}\``) && !g.user.includes("`lively work-root add") && !g.ai.includes("`lively work-root add"), g.user);
+  const u = rs.outsideNotice({ dir: "C:\\work\\it's", harness: "claude", win: true, nodeExe: NODE, lively });
+  check("W5 넣을 수 없는 폴더 이름이면 «이 폴더에서» node 직접 호출", u.ai.includes(`이 폴더에서 \`${DIRECT}\``) && !u.ai.includes("it's"), u.ai);
+  const b = rs.outsideNotice({ dir, harness: "claude", win: true, nodeExe: "node", lively });
+  check("W6 윈도라도 node 경로를 모르면 종전 명령 · & 안내 없음", b.ai.includes(`\`lively work-root add '${dir}'\``) && !b.ai.includes("PowerShell 이면"), b.ai);
 }
 
 // ══ 가짜 게이트웨이(127.0.0.1) — 받은 요청을 센다 ══════════════════════════════

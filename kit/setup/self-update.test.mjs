@@ -5,16 +5,31 @@
 //  실행: node kit/setup/self-update.test.mjs   (npm test 체인에 포함)
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import {
+  copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync,
+  chmodSync, statSync, lstatSync, symlinkSync, readdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { sandboxEnv, WIN, writeTgz, closedPath, nodeOnlyDir } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
+// 우리가 심은 stdio MCP 항목의 두 꼴. 심(`bin/lively`, 윈도우는 `bin\\lively.cmd` — #1510) + [sub], 또는
+//  Windows 에서 node.exe 절대경로 + [<.lively/lib/lively.mjs>, sub](배치 실행이 막힌 PC 대응 — livelyStdioLaunch).
+//  구분자·확장자를 가정하지 않는다.
+function stdioLaunchOk(e, sub) {
+  if (!e || e.type !== "stdio" || !Array.isArray(e.args)) return false;
+  const cmd = String(e.command || "");
+  if (/[/\\]bin[/\\]lively(\.cmd)?$/.test(cmd)) return e.args.length === 1 && e.args[0] === sub;
+  return WIN && /[/\\]node\.exe$/i.test(cmd)
+    && e.args.length === 2 && /[/\\]\.lively[/\\]lib[/\\]lively\.mjs$/.test(String(e.args[0])) && e.args[1] === sub;
+}
+
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
 //  '조용한 무동작'이 되어 "무동작을 기대하는" 테스트들이 공허하게 통과한다(실제로 한 번 당했다).
+
 const pExecFile = promisify(execFile);
 
 const HERE = join(fileURLToPath(import.meta.url), "..");           // kit/setup
@@ -504,15 +519,12 @@ try {
     await runUpdater(home);
     const conf = JSON.parse(readFileSync(cj, "utf8"));
     const ll = conf.mcpServers && conf.mcpServers["lively-local"];
-    const llOk = !!(ll && ll.type === "stdio" && Array.isArray(ll.args) && ll.args[0] === "mcp-local"
-      && /[/\\]bin[/\\]lively(\.cmd)?$/.test(String(ll.command)));   // 윈도우 심은 `bin\\lively.cmd`(#1510)
+    const llOk = stdioLaunchOk(ll, "mcp-local");
     const userKept = !!(conf.mcpServers && conf.mcpServers.other && conf.projects && conf.projects["/some/path"]);
     // #1079 — additive 무손실의 **유일한 예외**: 우리가 심은 lively 항목을 http 직결 → stdio 프록시로 교정한다.
     //  (http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다.) 유저 항목·claude 상태는 여전히 불변이어야 한다.
     const lvEntry = (conf.mcpServers && conf.mcpServers.lively) || {};
-    const migrated = lvEntry.type === "stdio" && Array.isArray(lvEntry.args) && lvEntry.args[0] === "mcp"
-      // 윈도우 심은 `bin\\lively.cmd` 다 — 구분자·확장자를 가정하지 않는다(#1510).
-      && /[/\\]bin[/\\]lively(\.cmd)?$/.test(String(lvEntry.command));
+    const migrated = stdioLaunchOk(lvEntry, "mcp");
     // 부수 이득 — 설정 파일에서 평문 토큰이 사라진다(신원은 런타임에 ~/.lively/token 에서 읽는다).
     const tokenGone = !JSON.stringify(lvEntry).includes("test-token");
     (llOk && userKept && migrated && tokenGone)
@@ -560,7 +572,7 @@ try {
       const e4 = (JSON.parse(readFileSync(join(h4, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
       // 설치는 일어나지 않아야 한다(최신이므로) — 훅 파일이 안 깔린 것으로 확인.
       const noReinstall = !existsSync(join(h4, ".lively", "hooks", "session-preload.mjs"));
-      (e4.type === "stdio" && Array.isArray(e4.args) && e4.args[0] === "mcp" && noReinstall)
+      (stdioLaunchOk(e4, "mcp") && noReinstall)
         ? ok("⑮f 최신이어도 등록 정합 교정 — 재설치 없이 http→stdio 마이그레이션")
         : bad("⑮f 최신 경로 reconcile", `entry=${JSON.stringify(e4)} noReinstall=${noReinstall}`);
 
@@ -622,6 +634,117 @@ try {
     const bare = freshHome(null);
     await runUpdater(bare);
     (!existsSync(join(bare, ".claude.json"))) ? ok("⑮c .claude.json 없으면 미생성(무접촉)") : bad("⑮c 무접촉", ".claude.json 이 생성됨");
+
+    // ⑮h — .claude.json 은 사람이 쓰는 설정 파일이다. 바꿔 쓸 때 파일의 모습(권한·링크·읽기 전용·남의 임시 파일)은
+    //  종전 «제자리 덮어쓰기» 와 같아야 한다 — 임시 파일+rename 은 그 넷을 모두 조용히 바꿀 수 있다.
+    //  --mcp-only 경로로 잰다(네트워크·설치 없이 reconcile 쓰기만 탄다). 빈 mcpServers 라 쓰기가 반드시 일어난다.
+    {
+      const empty = JSON.stringify({ mcpServers: {} }, null, 2) + "\n";
+      const reconciled = (p) => { try { return !!JSON.parse(readFileSync(p, "utf8")).mcpServers["lively-local"]; } catch { return false; } };
+      const leftovers = (dir) => readdirSync(dir).filter((f) => /\.lvly-.*\.tmp$/.test(f));
+      // A4 — 다른 업데이터가 고정 이름(<cj>.lvly-tmp)으로 쓰는 중인 임시 파일을 덮거나 지우지 않는다(잠금 밖에서도 도는 경로다).
+      {
+        const h = freshHome("v-mcp");
+        const cj = join(h, ".claude.json");
+        writeFileSync(cj, empty);
+        const foreign = `${cj}.lvly-tmp`;
+        writeFileSync(foreign, "다른 업데이터가 쓰는 중\n");
+        await runUpdater(h, {}, ["--mcp-only"]);
+        const kept = readIf(foreign) === "다른 업데이터가 쓰는 중";
+        (reconciled(cj) && kept && !leftovers(h).length)
+          ? ok("⑮h 남의 임시 파일(고정 이름)을 덮거나 지우지 않는다 + 찌꺼기 없음")
+          : bad("⑮h 임시 파일 충돌", `reconciled=${reconciled(cj)} foreignKept=${kept} leftovers=${leftovers(h).join(",")}`);
+      }
+      //  POSIX 권한·링크 계약 — 윈도우엔 mode 비트가 없고(ACL) 링크 생성에 권한이 든다. root 는 읽기 전용을 무시한다.
+      if (WIN || process.getuid?.() === 0) console.log("skip ⑮h-b1~e — 윈도우·root 는 POSIX mode·읽기 전용 계약이 성립하지 않는다");
+      else {
+        // A1·A2 — 원본 mode 유지(0600 강제가 아니라 원본 그대로 — 0640 이 그 둘을 가른다).
+        //  0664 는 umask(022)가 깎는 비트가 있는 원본이다 — 새 파일을 만들 때 mode 를 줘도 umask 에 깎이므로 따로 맞춰야 한다.
+        for (const [mode, tag] of [[0o600, "b1"], [0o640, "b2"], [0o664, "b3"]]) {
+          const h = freshHome("v-mcp");
+          const cj = join(h, ".claude.json");
+          writeFileSync(cj, empty);
+          chmodSync(cj, mode);
+          await runUpdater(h, {}, ["--mcp-only"]);
+          const got = statSync(cj).mode & 0o777;
+          (reconciled(cj) && got === mode && !leftovers(h).length)
+            ? ok(`⑮h-${tag} 쓰기 후 원본 권한 유지(${mode.toString(8)})`)
+            : bad(`⑮h-${tag} 권한 유지`, `reconciled=${reconciled(cj)} mode=${got.toString(8)} (원본 ${mode.toString(8)}) leftovers=${leftovers(h).join(",")}`);
+        }
+        // A3 — 심볼릭 링크(dotfiles 관리)는 링크로 남고 가리키는 파일이 갱신된다.
+        {
+          const h = freshHome("v-mcp");
+          const dot = join(h, "dotfiles");
+          mkdirSync(dot, { recursive: true });
+          const real = join(dot, "claude.json");
+          writeFileSync(real, empty);
+          chmodSync(real, 0o600);
+          symlinkSync(real, join(h, ".claude.json"));
+          await runUpdater(h, {}, ["--mcp-only"]);
+          const stillLink = lstatSync(join(h, ".claude.json")).isSymbolicLink();
+          const realMode = statSync(real).mode & 0o777;
+          (stillLink && reconciled(real) && realMode === 0o600 && !leftovers(h).length && !leftovers(dot).length)
+            ? ok("⑮h-d 심볼릭 링크 유지 — 가리키는 파일만 갱신(권한 그대로)")
+            : bad("⑮h-d 심볼릭 링크", `stillLink=${stillLink} reconciled=${reconciled(real)} mode=${realMode.toString(8)} leftovers=${[...leftovers(h), ...leftovers(dot)].join(",")}`);
+        }
+        // A5 — 읽기 전용으로 잠가 둔 파일은 건드리지 않는다(rename 은 그 잠금을 우회한다 — 종전 덮어쓰기는 여기서 실패했다).
+        {
+          const h = freshHome("v-mcp");
+          const cj = join(h, ".claude.json");
+          writeFileSync(cj, empty);
+          chmodSync(cj, 0o444);
+          await runUpdater(h, {}, ["--mcp-only"]);
+          const same = readFileSync(cj, "utf8") === empty;
+          const got = statSync(cj).mode & 0o777;
+          chmodSync(cj, 0o644);   // 정리가 막히지 않게
+          (same && got === 0o444 && !leftovers(h).length)
+            ? ok("⑮h-e 읽기 전용 .claude.json 은 내용·권한 그대로")
+            : bad("⑮h-e 읽기 전용", `same=${same} mode=${got.toString(8)} leftovers=${leftovers(h).join(",")}`);
+        }
+      }
+    }
+
+    // ⑮i — node 직결 항목의 node.exe 가 사라졌으면(설치 때 구운 버전 박힌 경로가 지워짐) 지금 실행 형태로 교정한다.
+    //  모양이 정확히 우리 것(args = [<우리 lively.mjs>, sub])일 때만이고, env·timeout 같은 사람이 붙인 필드는 그대로다.
+    //  플랫폼 중립: 교정 결과는 이 러너의 규칙 꼴(윈도우=node 직결, 그 밖=심)이다 — stdioLaunchOk 가 둘 다 받는다.
+    {
+      const h = freshHome("v-mcp");
+      mkdirSync(join(h, ".lively", "lib"), { recursive: true });
+      writeFileSync(join(h, ".lively", "lib", "lively-mcp-gateway.mjs"), "// proxy stub\n");   // lively 도 stdio 기준(canProxy)
+      const DEAD = "C:\\lvly-gone\\runtime\\node-v0.0.0-win-x64\\node.exe";
+      const cli = join(h, ".lively", "lib", "lively.mjs");
+      const dead = (sub, extra) => ({ type: "stdio", command: DEAD, args: [cli, sub], env: { HTTPS_PROXY: "http://proxy.corp:8080" }, ...extra });
+      const cj = join(h, ".claude.json");
+      writeFileSync(cj, JSON.stringify({ mcpServers: { lively: dead("mcp", { timeout: 45000 }), "lively-local": dead("mcp-local", { disabled: false }) } }, null, 2) + "\n");
+      await runUpdater(h, {}, ["--mcp-only"]);
+      const s = JSON.parse(readFileSync(cj, "utf8")).mcpServers || {};
+      const fixed = stdioLaunchOk(s.lively, "mcp") && stdioLaunchOk(s["lively-local"], "mcp-local")
+        && s.lively.command !== DEAD && s["lively-local"].command !== DEAD;
+      const kept = s.lively?.env?.HTTPS_PROXY === "http://proxy.corp:8080" && s.lively?.timeout === 45000
+        && s["lively-local"]?.env?.HTTPS_PROXY === "http://proxy.corp:8080" && s["lively-local"]?.disabled === false;
+      (fixed && kept)
+        ? ok("⑮i 사라진 node.exe 를 가리키는 우리 항목 → 지금 실행 형태로 교정 + env·timeout·disabled 보존")
+        : bad("⑮i 죽은 node 교정", `fixed=${fixed} kept=${kept} servers=${JSON.stringify(s)}`);
+    }
+
+    // ⑮j — 새 교정 함수가 없는 옛 stdio-launch.mjs 와 짝이 되어도(부분 복사) 업데이터가 죽지 않는다 — 빠진 등록은 여전히 additive 로 들어가고,
+    //  교정할 수 없는 항목은 그대로 둔다. (죽으면 reconcile 이 통째로 실패해 빠진 등록도 못 되살린다.)
+    {
+      const h = freshHome("v-mcp");
+      installUpdaterFixture(h);
+      writeFileSync(join(h, ".lively", "hooks", "stdio-launch.mjs"),
+        "// correctStdioEntry 가 없던 판의 공개면\n"
+        + "export function livelyStdioEntry({ shim, sub }) { return { type: \"stdio\", command: shim, args: [sub], env: {} }; }\n"
+        + "export function isOurShimEntry() { return false; }\n");
+      const deadLocal = { type: "stdio", command: "C:\\lvly-gone\\node.exe", args: [join(h, ".lively", "lib", "lively.mjs"), "mcp-local"], env: {} };
+      const cj = join(h, ".claude.json");
+      writeFileSync(cj, JSON.stringify({ mcpServers: { "lively-local": deadLocal } }, null, 2) + "\n");
+      await pExecFile(process.execPath, [join(h, ".lively", "hooks", "self-update.mjs"), "--mcp-only"], { env: env(h), timeout: 60_000 });
+      const s = JSON.parse(readFileSync(cj, "utf8")).mcpServers || {};
+      (s.lively && JSON.stringify(s["lively-local"]) === JSON.stringify(deadLocal))
+        ? ok("⑮j 교정 함수 없는 옛 stdio-launch.mjs 와 짝 — 죽지 않고 빠진 lively 는 additive 등록, 나머지는 그대로")
+        : bad("⑮j 옛 모듈 짝", `servers=${JSON.stringify(s)}`);
+    }
 
     // ⑯ #2255 — **grok 만 배선된 머신**도 자동 업데이트가 그 하네스로 돈다.
     //  종전엔 installedHarnesses() 가 claude·codex·opencode·antigravity 넷만 봐서, grok 단독 머신은 목록이

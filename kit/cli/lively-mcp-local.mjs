@@ -389,8 +389,10 @@ function armPeerGuards() {
 //  lively mcp(lively-mcp-gateway.mjs)와 같은 규칙 — 작업 폴더 밖에서 켠 세션이면 이 로컬 도구도 0개다(라이블리가 꺼진 세션).
 //  판정은 훅과 같은 파일(~/.lively/hooks/record-scope.mjs). 못 찾으면 종전 동작(켬). 폴더를 등록하면 주기 검사가 목록을 다시 받게 한다.
 const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
-const OUTSIDE_TOOL_TEXT = "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
-  + "여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 셸의 `lively work-root add` 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.";
+//  셸 명령은 훅과 같은 판정 파일이 낸다 — 배치 실행이 막힌 윈도우 PC 에선 `lively` 대신 node 로 바로 부르는 꼴(record-scope.mjs workRootAddVia).
+//  범위 밖이라고 판정했으면 그 파일은 이미 불러와져 있다. 그 함수가 없는 옛 훅 폴더면 종전 문구.
+const outsideToolText = () => "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
+  + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`;
 let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
 async function loadScopeModule() {
   if (scopeMod !== undefined) return scopeMod;
@@ -463,7 +465,7 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
       } else if (method === "tools/list") {
         okr(id, { tools: scopeIn() ? TOOLS.map(toolSpec) : [] });
       } else if (method === "tools/call" && !scopeIn()) {
-        okr(id, { content: [{ type: "text", text: OUTSIDE_TOOL_TEXT }], isError: true });   // 기록 범위 밖(#5016)
+        okr(id, { content: [{ type: "text", text: outsideToolText() }], isError: true });   // 기록 범위 밖(#5016)
       } else if (method === "tools/call") {
         try {
           okr(id, await handleCall(params && params.name, params && params.arguments));
