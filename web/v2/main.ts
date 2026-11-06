@@ -633,6 +633,7 @@ export async function bootV2(): Promise<void> {
         if (o.navigate) location.hash = sectionRoute(sec);
       },
       onLayout: () => { drawSide(); syncRailBtn(); },
+      onSearch: () => omniOpen(),   // #5319 사이드바를 접었을 때 레일 맨 위 [검색] 칸
     });
     syncRailBtn();
   }

@@ -40,6 +40,7 @@ import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크�
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
 import { installedRecentKey, isInstalledRecentKey, mergeRailOrder, railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
 import { sectionShown, type SideOwner } from '../lib/side-owner.js';   // #4632 — 이 화면에 서는 구역(구역과 같은 문은 그 구역 · 세션 화면에 위키는 홈)
+import { omniKeyHint } from '../lib/omni-chord.js';   // #5319 레일 [검색] 칸의 단축키 이름 — 검색칸 · 우클릭 메뉴와 같은 이름
 
 export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
@@ -56,6 +57,8 @@ export interface RailHooks {
   onSection?: (sec: RailSection, opts: { navigate: boolean }) => void;
   /** 레일을 숨기거나 되살렸다 — 사이드바도 같이 다시 그린다(숨김에만 머리·발치에 워크스페이스·구역·앱·나가 선다). */
   onLayout?: () => void;
+  /** #5319 4차 1안 — 레일 맨 위 [검색] 칸(사이드바를 접었을 때만 선다 — 47-v2-rail.css). 통합검색을 연다. */
+  onSearch?: () => void;
 }
 
 // ── 구역 표 ──────────────────────────────────────────────────────────────────
@@ -105,6 +108,17 @@ const RECENT_N = 4;
 //   다른 기기에서 처음 열 때 한 번 더 앞으로 오는 것뿐이다.
 const RECENT_SEED_STORE = deviceStore('lively_v2_rail_recent_seed');
 const SEED_APPS = ['terminal', 'projects2', 'knowledge'];
+//  #5319 4차(원준 2026-11-05 «홈과 자료 이거 두 개를 맨 위에 고정된 앱으로 만들자») — 자료를 홈 바로 뒤에 **한 번** 고정했다는 이 기기의 표식.
+//   #2423(2026-08-31)에 자료를 독에서 내렸던 결정을 사람이 되돌렸다. 한 번만 한다 — 그 뒤 사람이 다시 빼면 그 결정이 산다(위 SRC_UNPIN_STORE 와 같은 꼴).
+const SRC_PIN_STORE = deviceStore('lively_v2_rail_src_pinned_5319');
+/** 자료를 홈 바로 뒤(없으면 맨 앞)에 끼운 순서 — 이미 있으면 그대로. */
+function withSourcesPinned(list: readonly string[]): string[] {
+  if (list.includes('sources')) return [...list];
+  const out = [...list];
+  const h = out.indexOf('home');
+  out.splice(h >= 0 ? h + 1 : 0, 0, 'sources');
+  return out;
+}
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
 let section: RailSection = 'home';
@@ -116,6 +130,8 @@ let inited = false;
 let cleanedSrcThisLoad = false;
 //  이번 로드의 init() 이 #5319 구역 셋을 최근 기록에 끼웠나 — 같은 까닭으로 정본이 도착하면 거기에도 한 번 더 끼운다.
 let seededRecentThisLoad = false;
+//  이번 로드의 init() 이 #5319 자료 고정을 했나 — 정본(서버)이 도착하면 거기에도 한 번 더 끼우고 올린다.
+let pinnedSrcThisLoad = false;
 /** 구역 셋을 최근 기록 맨 앞에 끼운다(#5319) — 이미 있던 자리는 빼고 앞으로. 캐시만 고친다(올리는 것은 부르는 쪽). */
 function seedRecent(): boolean {
   let cur: string[] = [];
@@ -151,6 +167,13 @@ function init(): void {
       localStorage.setItem(SRC_UNPIN_STORE, '1');
       cleanedSrcThisLoad = true;   // ⚠ 아래 reloadRailPrefs 주석 — 정본이 도착한 뒤 한 번 더 내려야 실제로 내려간다
       if (order.includes('sources')) { order = order.filter((k) => k !== 'sources'); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
+    }
+    //  #5319 4차 — 자료를 홈 뒤에 **한 번** 고정한다. 위 #2423 청소(옛 기본값의 흔적 내리기)보다 **뒤에** 둔다 — 같은 로드에서 청소가 이걸 지우지 않게.
+    if (!localStorage.getItem(SRC_PIN_STORE)) {
+      localStorage.setItem(SRC_PIN_STORE, '1');
+      pinnedSrcThisLoad = true;
+      cleanedSrcThisLoad = false;   // 이번 로드의 #2423 청소는 정본에 다시 하지 않는다(사람이 방금 자료를 고정하라고 했다)
+      if (!order.includes('sources')) { order = normalizeOrder(withSourcesPinned(order)); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
     }
     localStorage.removeItem('lively_v2_rail_open');   // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
     //  #5319 — 구역 셋을 최근 칸의 기본값으로 **한 번** 세운다(위 RECENT_SEED_STORE). 첫 동기 전이라 서버엔 아직 안 올라간다(shellPrefsPush 가드) —
@@ -193,6 +216,14 @@ export function reloadRailPrefs(): void {
     order = order.filter((k) => k !== 'sources');
     try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
     shellPrefsPush();   // 정본에도 내려야 다른 기기·다음 로드가 다시 밀어 넣지 않는다
+  }
+  //  #5319 4차 — 이번 로드에 처음 자료를 고정했다면 정본에도 한 번(그 뒤 다시 읽기는 사람이 정한 순서를 그대로 둔다).
+  const pinNow = pinnedSrcThisLoad;
+  pinnedSrcThisLoad = false;
+  if (pinNow && !order.includes('sources')) {
+    order = normalizeOrder(withSourcesPinned(order));
+    try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
+    shellPrefsPush();
   }
   drawRail();
 }
@@ -987,7 +1018,14 @@ export function drawRail(): void {
   document.getElementById('v2-root')?.classList.toggle('rail-hidden', hidden);
 
   // ⓪ 워크스페이스
-  const top = el('div', { class: 'v2-rail-top' }, el('div', { class: 'v2-rail-ws' }, stackTile()));
+  //  #5319 4차 1안(원준 2026-11-05) — 사이드바를 접으면 [‹][›][검색] 줄이 창을 가로질러 한 줄을 통째로 먹었다(«검색이 굉장히 중요하긴 하지만
+  //   저게 저렇게 한 줄을 통채로 차지할 이유가 없다»). 접힌 동안은 검색이 레일 맨 위(워크스페이스 아래) 칸으로 온다. 늘 그려 두고 CSS 가
+  //   사이드바가 접혔을 때만 세운다(47-v2-rail.css) — 접고 펼 때마다 레일을 다시 그리지 않게. 사이드바가 펴져 있으면 검색칸은 사이드바 맨 위다.
+  const search = el('button', {
+    class: 'v2-rail-it v2-rail-search', type: 'button', 'data-key': 'search', title: '통합검색 — ' + omniKeyHint(/mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '')),
+    'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.(),
+  }, icon('search', 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: '검색' }));
+  const top = el('div', { class: 'v2-rail-top' }, el('div', { class: 'v2-rail-ws' }, stackTile()), search);
 
   // 항목 한 붓 — 아이콘 위, 이름 아래.
   const item = (key: string, label: string, ic: string, on: boolean, extra: HTMLElement | null, onclick: () => void, href?: string): HTMLElement =>

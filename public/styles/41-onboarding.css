@@ -230,6 +230,8 @@
   #v2-root.ob-ghost.has-topbar.topbar-web:not(.app-ctx) .ob-root { top: 0; }
   /* #4533 — 사이드바를 닫아 둔 기기에서도 줄이 전폭이다(①-d) — app-ctx 와 같은 이유로 줄 아래에서 선다. */
   #v2-root.ob-ghost.has-topbar.topbar-web.side-closed .ob-root { top: var(--v2-tb-h, 42px); }
+  /* #5319 4차 — 레일이 보이면 사이드바를 닫아도 줄은 레일 칸 위에만 선다(47-v2-rail.css) — 기둥은 다시 창 꼭대기부터. 레일까지 걷으면 ①-d(전폭) 그대로. */
+  #v2-root.ob-ghost.has-topbar.topbar-web.side-closed:not(.rail-hidden) .ob-root { top: 0; }
   #v2-root.ob-ghost .ob-root .ob-crumb { width: min(560px, 92%); margin: 0 auto; padding-left: 0; padding-right: 0; }
   #v2-root.ob-ghost .ob-root[data-scene="sources"] .ob-crumb { width: min(820px, 94%); }
 }

@@ -9,7 +9,7 @@
 //  · 교차 불변식: 어떤 하네스도 대화상자·인증 화면을 'ready' 로 판정하면 안 된다 — 그 순간 프롬프트가 삼켜진다(실측 사고 2건:
 //    antigravity 신뢰 대화상자에 첫 지시 주입 · 인증 검증 중 프롬프트 거부 유실).
 import assert from "node:assert/strict";
-import { HARNESS_IO, harnessIo, chatIoCaps, CHAT_ACTIONS } from "./adapter.js";
+import { HARNESS_IO, harnessIo, chatIoCaps, CHAT_ACTIONS, termUiWire } from "./adapter.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -143,7 +143,30 @@ t("[5c] 화면 사실 표 — claude 와 codex 의 실측값", () => {
   assert.equal(claude.choiceNeedsEnter, false);  // 숫자만으로 골라진다(#4160 폰 키 줄이 Enter 를 안 붙이는 근거)
   assert.equal(codex.choiceNeedsEnter, true);    // 실측: '1' 만 보내면 커서도 안 움직인다
   assert.equal(claude.pastePlaceholder, true);   // «[Pasted text +N lines]»
-  assert.equal(codex.pastePlaceholder, false);   // 그대로 펼쳐진다
+  assert.equal(codex.pastePlaceholder, true);    // #5332 실측 0.157.1·0.166.0: 1000자 넘으면 «[Pasted Content N chars]»
+  //  #5332 — ⌘C 다리 · 맨 글 붙여넣기 뭉치 · 권한 모드 단추.
+  assert.equal(claude.copyBridge, true);         // 앱이 제 선택을 ^C 로 복사한다(#972)
+  assert.equal(codex.copyBridge, false);         // codex 의 ^C 는 입력칸 지우기·종료다
+  assert.equal(claude.pasteBurst, false);
+  assert.equal(codex.pasteBurst, true);          // 글+CR 한 읽힘 → 줄바꿈(제출 아님)
+  assert.equal(claude.permModes, true);
+  assert.equal(codex.permModes, false);
+});
+t("[5d] #5332 미실측 하네스는 ^C 를 복사로 보내지 않고, 셸은 화면 관측으로만 움직이는 종전 동작을 지킨다", () => {
+  for (const key of ["opencode", "grok", "cursor", "antigravity"]) {
+    const t = harnessIo(key)!.term;
+    assert.equal(t.copyBridge, false, `${key}.copyBridge`);
+    assert.equal(t.pasteBurst, false, `${key}.pasteBurst`);
+    assert.equal(t.permModes, false, `${key}.permModes`);
+  }
+  const sh = harnessIo("shell")!.term;
+  assert.equal(sh.copyBridge, true);
+  assert.equal(sh.permModes, true);
+  assert.equal(sh.pasteBurst, false);
+  //  배선 — 화면으로 가는 모양에 새 사실이 실린다(빠지면 화면은 종전(클로드) 동작으로 간다).
+  assert.deepEqual(
+    (({ copyBridge, pasteBurst, permModes }) => ({ copyBridge, pasteBurst, permModes }))(termUiWire(harnessIo("codex")!.term)),
+    { copyBridge: false, pasteBurst: true, permModes: false });
 });
 
 // [표 6] pathFor 인젝션 방어 — convId 가 경로 조각이 될 수 있으면 만들지 않는다.

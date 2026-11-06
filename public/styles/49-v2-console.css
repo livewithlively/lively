@@ -77,3 +77,32 @@
 .pn-con-mi-t { flex: 1; min-width: 0; }
 .pn-con-mi small { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ell1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── #5319 KRDS 글자 단계(원준 2026-11-05 4차 확정 «폰트도 너가 제안한 만큼 키우는건 좋은데») ───────────────────────────
+   KRDS 크기표 13 · 15 · 17 · 19 와 굵기 500 · 700 만 쓴다(13px 미만 없음 · 800/600 없음 · 행간 150%).
+   곁칸 콘솔: 제목 19/700 · 부제 15 · 구획 머리 15/700 · 줄 15/500 + 메타 13 · 요약 17 · 칩 32px/13 · 바닥 단추 36px/15. */
+.pn-con-t { font-size: 19px; font-weight: 700; line-height: 1.5; }
+.pn-con-s { font-size: 15px; line-height: 1.5; margin-top: 0; }
+.pn-con-lead { font-size: 15px; line-height: 1.5; }
+.pn-con-back { font-size: 15px; font-weight: 500; }
+.pn-con-sh, .pn-con-sh.fold { font-size: 15px; font-weight: 700; line-height: 1.5; }
+.pn-con-sh .n { font-size: 13px; font-weight: 500; }
+.pn-con-ck-n { font-size: 15px; font-weight: 700; line-height: 1.5; }
+.pn-con-ck-v { font-size: 13px; line-height: 1.5; }
+.pn-con-a { font-size: 15px; }
+.pn-con-cand-l { font-size: 15px; }
+.pn-con-put { font-size: 13px; font-weight: 500; padding: 4px 12px; border-radius: 6px; }
+.pn-con-sum { font-size: 17px; line-height: 1.5; }
+.pn-con-sum b { font-size: 13px; font-weight: 700; }
+.pn-con-find { height: 40px; padding: 0 12px; border-radius: 6px; font-size: 15px; }
+.pn-con-chip { height: 32px; padding: 0 12px; font-size: 13px; font-weight: 500; }
+.pn-con-chip.on { font-weight: 700; }
+.pn-con-row { min-height: 56px; }
+.pn-con-row-q { font-size: 15px; font-weight: 500; line-height: 1.5; }
+.pn-con-row-m { font-size: 13px; line-height: 1.5; margin-top: 0; }
+.pn-con-num { width: 20px; height: 20px; font-size: 13px; font-weight: 700; }
+.pn-con-menu-h { font-size: 13px; font-weight: 700; }
+.pn-con-mi { font-size: 15px; }
+.pn-con-mi small { font-size: 13px; }
+.pn-con-fb { height: 36px; padding: 0 12px; border-radius: 6px; font-size: 15px; font-weight: 500; }
+.pn-con-fb.pri { font-weight: 700; }

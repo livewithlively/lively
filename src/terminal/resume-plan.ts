@@ -60,3 +60,14 @@ export type ResumedKind = "precise" | "picker" | "fresh";
 export function resumedKind(plan: ResumePlan): ResumedKind {
   return plan.resume ? "precise" : plan.resumePick ? "picker" : "fresh";
 }
+
+/**
+ * #5332 — 화면이 «피커 대신 새 대화» 를 청했으면(복원 body `{fresh:true}`) 피커 갈래를 새 대화로 접는다(순수).
+ *  상단 드롭다운의 «새 설정으로 이어 열기»(codex 0.166 미만)가 쓴다: 이어 열 대화를 정확히 모르면 **목록(피커)을 띄우는 것보다**
+ *  새 대화가 낫다 — 설정 하나 바꾸려던 사람 앞에 지난 대화 목록이 뜨면 거기서 무엇을 골라야 하는지 알 수 없다. 대화를 아는 갈래
+ *  (resume)는 건드리지 않는다. body 가 없거나 fresh 가 참이 아니면 그대로다(종전 복원 무변경).
+ */
+export function freshInsteadOfPicker(plan: ResumePlan, body: unknown): ResumePlan {
+  const fresh = !!body && typeof body === "object" && (body as { fresh?: unknown }).fresh === true;
+  return fresh && plan.resumePick ? {} : plan;
+}

@@ -1113,6 +1113,64 @@ t("M8 Shift+↓ 는 줄 끝에서 아랫줄 끝으로 넘어간다 · Shift+End 
   assert.equal(app.pos, 7, "Shift+↓ 는 아랫줄 끝까지");
 });
 
+// ── #5332 입력 **전체** — ⌘A · ⌘⇧↑/↓ · ⌘↑/↓ (원준님: «클로드에선 되는 ⌘A 등 … 코덱스엔 클로드만큼 반영 안 돼 있다») ──────────
+//  종전엔 셋 다 Ctrl+A/E(= 지금 줄)라 여러 줄 입력에서 그 줄 머리·끝에서 멈췄다. 앱엔 입력 처음·끝으로 가는 키가 없다 → 걷는다.
+const focusInput = (h: Harness): void => { (globalThis as any).document.activeElement = h.term.textarea; };
+t("M9 ★두 줄 입력에서 ⌘A → ⌘X: 두 줄이 다 잘리고 클립보드엔 줄바꿈까지(종전: 아랫줄만)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard(); focusInput(h);
+  const app = fakeApp(h, "첫줄 입니다\n둘째 줄");
+  key(h, "a", { metaKey: true });
+  await settle(() => app.pos === 0);
+  assert.equal(app.pos, 0, "커서가 입력 맨 앞까지 걸어갔다");
+  key(h, "x", { metaKey: true });
+  await settle(() => app.text === "");
+  assert.equal(app.text, "", "입력 전체가 잘렸다");
+  assert.equal(h.execData.pop(), "첫줄 입니다\n둘째 줄");
+});
+t("M10 접힌 긴 입력 중간에서 ⌘⇧↑ → ⌫: 커서 앞 전부만 지운다 · ⌘⇧↓ → ⌫: 커서 뒤 전부만", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard(); focusInput(h);
+  const app = fakeApp(h, "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeee ffff");
+  placeAt(h, app, 33);                                   // «dddd…» 머리 — 둘째 행
+  assert.ok(h.term.buffer.active.cursorY >= 1, "장면 전제: 접혔고 커서가 둘째 행 이후");
+  key(h, "ArrowUp", { metaKey: true, shiftKey: true });
+  await settle(() => app.pos === 0);
+  key(h, "Backspace");
+  await settle(() => app.text.startsWith("d"));
+  assert.equal(app.text, "dddddddddd eeee ffff");
+  key(h, "ArrowDown", { metaKey: true, shiftKey: true }); // 이제 커서 0 → 입력 끝까지
+  await settle(() => app.pos === Array.from(app.text).length);
+  key(h, "Backspace");
+  await settle(() => app.text === "");
+  assert.equal(app.text, "");
+});
+t("M11 ⌘↑ / ⌘↓ 는 캐럿을 입력 처음·끝으로(선택 없음 · 지우기 바이트 0)", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard(); focusInput(h);
+  const app = fakeApp(h, "one\ntwo\nthree");
+  key(h, "ArrowUp", { metaKey: true });
+  await settle(() => app.pos === 0);
+  assert.equal(app.pos, 0);
+  key(h, "ArrowDown", { metaKey: true });
+  await settle(() => app.pos === 13);
+  assert.equal(app.pos, 13);
+  assert.equal(app.text, "one\ntwo\nthree");
+  assert.ok(!h.inputs().some((d) => d.includes("\x7f") || d.includes("\x1b[3~")), "지우기 바이트 0");
+});
+t("M12 한 줄 입력의 ⌘A 는 종전 그대로(Home → End) — 걷지 않는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard(); focusInput(h);
+  const app = fakeApp(h, "hello world");
+  key(h, "a", { metaKey: true });
+  await sleep(120);
+  assert.deepEqual(h.inputs(), ["\x01", "\x05"]);
+  key(h, "x", { metaKey: true });
+  await settle(() => app.text === "");
+  assert.equal(app.text, "");
+  assert.equal(h.execData.pop(), "hello world");
+});
+
 async function main(): Promise<void> {
   let pass = 0; const fails: Array<[string, unknown]> = [];
   for (const [name, fn] of tests) {
