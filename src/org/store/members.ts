@@ -312,6 +312,11 @@ export interface LivSecretAsk {
   why?: string;
   /** 값이 어떻게 생겼는지(예: `ntn_` 로 시작하는 긴 문자열). 사람이 맞게 복사했는지 스스로 확인한다. */
   hint?: string;
+  /**
+   * 저장 위치 — **서버가 만든 문장**(본인 금고 대상만 · liv-secret.ts vaultAskDest). 카드는 label 과 다른 칸으로 보여 준다.
+   *  label·why·hint 는 리브가 쓴 말이라 값이 갈 곳을 사람에게 말해 줄 수 없다 — 리브가 고른 칸을 리브의 말로 설명하면 검증이 안 된다.
+   */
+  dest?: string;
 }
 
 /**

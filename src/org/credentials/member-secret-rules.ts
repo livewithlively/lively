@@ -13,6 +13,25 @@ export const SCOPE_RE = /^[A-Za-z0-9._:-]{0,120}$/;
  */
 export const ADMIN_ONLY_KINDS: ReadonlySet<string> = new Set(["aws_role_arn"]);
 
+/** 호스트 kind 한 줄 — 빈 scope 가 뜻이 있나(기본 칸) · 사람이 그 칸을 직접 등록하는 화면. */
+export interface HostScopedKind { emptyOk: boolean; connect: string }
+
+/**
+ * scope_key 가 그 자격이 실려 나가는 **접속 호스트**인 kind — 칸을 고르는 쪽이 값이 갈 곳을 고른다.
+ *  gitlab_pat       : GitLab 수집기의 접속 호스트가 그 칸의 scope_key 다(member-collect-apps.ts gitlab extraConfig ·
+ *                     gitlab-token-source.ts resolveGitlabTokenSource). 레포 목록 조회도 scope_key 를 호스트로 모아 그 호스트로
+ *                     토큰을 싣는다(repo-discover.ts candidateHosts → listGitlab). 빈 scope 는 기본 칸이다(gitlab.com).
+ *  lively_workspace : 연결한 워크스페이스 주소가 meta.base_url 이 없으면 https://<scope_key> 다(linked-workspaces.ts metaToLink —
+ *                     remoteCall 이 그 주소로 토큰을 싣는다). 빈 scope 는 주소 없는 연결이라 뜻이 없다.
+ *  github_pat 은 아니다 — 토큰이 가는 곳은 수집기 설정의 host 와 github.com 뿐이고(connectors/config.ts · repo-discover.ts hostAuth),
+ *   scope_key 는 칸 고르기에만 쓰인다(github-token-source.ts pickGithubSlot).
+ *  ⚠ scope_key 로 접속하는 소비처가 새로 생기면 여기에 더한다 — 빠지면 리브 안전 입력칸이 AI 가 고른 호스트로 사람의 토큰을 보낸다.
+ */
+export const HOST_SCOPED_KINDS: ReadonlyMap<string, HostScopedKind> = new Map([
+  ["gitlab_pat", { emptyOk: true, connect: "[외부 앱 연결 ▸ GitLab]" }],
+  ["lively_workspace", { emptyOk: false, connect: "[팀 워크스페이스 연결]" }],
+]);
+
 export type SelfCredentialVerdict =
   | { ok: true; kind: string; scope_key: string }
   | { ok: false; reason: "no-kind" | "bad-kind" | "bad-scope" | "admin-only" };

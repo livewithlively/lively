@@ -30,9 +30,40 @@
 //  | V7 | put 에 브라우저가 다른 대상을 실어 보냄            | 무시 — 저장된 요청의 대상만               |
 //  | V8 | 금고 칸이 이미 차 있음(요청 전 / 요청 뒤 채움)     | 요청 뒤에 채워졌을 때만 닫는다(교체 요청이 바로 사라지지 않게) |
 //  | V9 | me_credential_set 과 같은 판정                   | 같은 순수 함수가 같은 답                   |
+//
+// 호스트 kind(scope 가 그 값이 실려 나갈 접속 호스트 — gitlab_pat·lively_workspace)는 칸을 고른 쪽(리브)이 값이 갈 곳을 고른다.
+//  사람은 입력칸에 값만 친다 — 그래서 리브가 고른 scope 는 이미 등록된 호스트일 때만 받는다(격리 리뷰 B1).
+//  | S1  | gitlab_pat · 처음 보는 호스트                   | unknown-host                             |
+//  | S2  | gitlab_pat · 빈 scope                           | 허용(기본 칸)                            |
+//  | S3  | 내 칸과 대소문자만 다른 호스트                    | 허용 — 내 칸의 표기로(칸이 하나 더 생기지 않게) |
+//  | S4  | 조직이 같은 kind 로 등록한 호스트                 | 허용(대소문자 무시 · 조직 칸 표기)        |
+//  | S5  | 내 칸이 있지만 **다른 kind** 의 칸               | unknown-host                             |
+//  | S6  | lively_workspace · 빈 scope                     | unknown-host(기본 칸이 없다)             |
+//  | S7  | lively_workspace · 내 칸의 호스트                | 허용                                     |
+//  | S8  | 호스트 kind 가 아님                              | 아무 scope 나 그대로                     |
+//  | S9  | 조직 목록 인자 생략(새 인자 부재)                | 비어 있지 않은 호스트 거절 · 빈 scope 허용 |
+//  | S10 | 내 칸에 GitLab.com·gitlab.com 둘 다               | 정확히 같은 표기를 먼저 고른다            |
+// 저장 위치 문장(dest) — 서버가 만들어 카드가 label 과 따로 보인다. 화면 문구라 끝맺는 문장이다.
+//  | D1~D4 | 새 칸 — 빈 scope / 구분값 / 호스트 / 호스트 기본 칸 | 정확한 문장                            |
+//  | D5  | 그 칸에 이미 값이 있다                           | « 이미 저장된 값을 바꿉니다.» 가 붙는다    |
+//  | D6  | 모르는 kind · 원형 속성 이름(constructor)        | kind 그대로                              |
+//  | D7  | 모든 dest                                       | «다.» 로 끝난다(명사 종결 없음)           |
+// 배선 — 요청(livVaultAsk)·넣기(livSecretPut)를 가짜 의존으로 돌려 «무엇이 불렸나» 를 잰다(DB 없이).
+//  | WA1 | 처음 보는 호스트                                 | 400 · 요청 저장 0회                       |
+//  | WA2 | 리브가 label·dest 를 실어 보냄                   | dest 는 서버 문장 · label 은 따로 그대로   |
+//  | WA3 | 그 칸에 이미 값이 있다                           | 저장된 dest 에 교체 문장                  |
+//  | WA4 | 조회·저장 대상                                   | 요청자 id · 내 칸 표기의 scope            |
+//  | WA5 | 조직 조회가 던짐                                 | 조직 호스트 없음으로 본다(400 — 500 아님) |
+//  | WP1 | 넣기 — 입력에 다른 vault_kind·scope·collector_id | 저장된 요청의 칸으로 · 요청자 id · 기존 meta·label |
+//  | WP2 | 넣기 성공                                        | 저장 **다음에** 요청자 요청을 지운다       |
+//  | WP3 | 응답·로그                                        | 값이 어디에도 없다                        |
+//  | WP4 | 저장이 던짐                                      | 요청을 지우지 않는다(사람이 다시 넣는다)   |
+//  | WP5 | 저장된 요청 없음                                 | 409 · 저장 0회                            |
+//  | WP6 | 수집기 요청                                      | 수집기 저장만 · 본인 금고 저장 0회         |
 import assert from "node:assert/strict";
 import {
   askTargetVerdict, askStillOpen, askTargetChoice, vaultAskVerdict, vaultAskLabel, askTargetOf, livSecretPutPlan,
+  vaultScopeVerdict, vaultAskDest, vaultKindName,
   type AskTargetCollector,
 } from "./liv-secret.js";
 
@@ -193,6 +224,87 @@ t("[V9] scope 만 주고 kind 를 빠뜨리면 형식 오류가 아니라 «kind
   assert.deepEqual(vaultAskVerdict("", "T1", true), { ok: false, reason: "no-kind" });
 });
 
+// ── 호스트 kind 의 scope — 리브가 고른 호스트로 사람의 토큰이 나가지 않게(B1) ────────────────
+const slotOf = (kind: string, scope_key: string) => ({ kind, scope_key });
+const NO_HOST = { ok: false, reason: "unknown-host" } as const;
+
+t("[S1] gitlab_pat 을 처음 보는 호스트로 요청하면 거절한다 — 수집·레포 목록 조회가 그 호스트로 토큰을 싣는다", () => {
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "evil.example.com", [], []), NO_HOST);
+});
+
+t("[S2] gitlab_pat 의 빈 scope 는 기본 칸이라 받는다", () => {
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "", [], []), { ok: true, vault_scope: "" });
+});
+
+t("[S3] 내 칸과 대소문자만 다른 호스트는 받되, 내 칸의 표기로 바꾼다 — 금고 키는 대소문자를 지켜서 그대로 두면 칸이 하나 더 생긴다", () => {
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "GitLab.Corp.com", [slotOf("gitlab_pat", "gitlab.corp.com")], []),
+    { ok: true, vault_scope: "gitlab.corp.com" });
+});
+
+t("[S4] 조직이 같은 kind 로 등록한 호스트는 받는다(대소문자 무시 · 조직 칸의 표기)", () => {
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "gitlab.corp.com", [], ["gitlab.corp.com"]), { ok: true, vault_scope: "gitlab.corp.com" });
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "GITLAB.corp.com", [], ["gitlab.corp.com"]), { ok: true, vault_scope: "gitlab.corp.com" });
+  // 조직의 빈 칸이 «아무 호스트나» 로 읽히지 않는다.
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "evil.example.com", [], [""]), NO_HOST);
+});
+
+t("[S5] 같은 호스트의 칸이 있어도 **다른 kind** 면 근거가 아니다", () => {
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "evil.example.com", [slotOf("github_pat", "evil.example.com")], ["gitlab.corp.com"]), NO_HOST);
+});
+
+t("[S6] lively_workspace 는 빈 scope 를 받지 않는다 — 주소 없는 연결은 뜻이 없다", () => {
+  assert.deepEqual(vaultScopeVerdict("lively_workspace", "", [], []), NO_HOST);
+  assert.deepEqual(vaultScopeVerdict("lively_workspace", "evil.example.com", [], []), NO_HOST);
+});
+
+t("[S7] lively_workspace 도 내 칸의 호스트면 받는다(토큰 교체)", () => {
+  assert.deepEqual(vaultScopeVerdict("lively_workspace", "team.example.com", [slotOf("lively_workspace", "team.example.com")], []),
+    { ok: true, vault_scope: "team.example.com" });
+});
+
+t("[S8] 호스트 kind 가 아니면 scope 는 구분값일 뿐이라 그대로 받는다", () => {
+  assert.deepEqual(vaultScopeVerdict("slack_user_token", "T01", [], []), { ok: true, vault_scope: "T01" });
+  assert.deepEqual(vaultScopeVerdict("github_pat", "evil.example.com", [], []), { ok: true, vault_scope: "evil.example.com" });
+});
+
+t("[S9] 조직 목록을 안 넘겨도(기본값) 처음 보는 호스트는 거절 · 빈 scope 는 허용", () => {
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "gitlab.corp.com", []), NO_HOST);
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "", []), { ok: true, vault_scope: "" });
+});
+
+t("[S10] 대소문자만 다른 내 칸이 둘이면 정확히 같은 표기를 먼저 고른다", () => {
+  const mine = [slotOf("gitlab_pat", "GitLab.com"), slotOf("gitlab_pat", "gitlab.com")];
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "gitlab.com", mine, []), { ok: true, vault_scope: "gitlab.com" });
+  assert.deepEqual(vaultScopeVerdict("gitlab_pat", "GitLab.com", mine, []), { ok: true, vault_scope: "GitLab.com" });
+});
+
+// ── 저장 위치 문장 — 카드가 리브의 label 과 따로 보이는 서버 문장 ──────────────────────
+t("[D7] 저장 위치는 언제나 끝맺는 문장이다(명사 종결 없음)", () => {
+  for (const [k, s] of [["figma_token", ""], ["slack_user_token", "T01"], ["gitlab_pat", "h.example.com"], ["gitlab_pat", ""], ["lively_workspace", "t.example.com"], ["foo_token", "x"]]) {
+    for (const r of [false, true]) assert.match(vaultAskDest(k, s, r), /다\.$/, `${k}@${s} replaces=${r}`);
+  }
+});
+
+t("[D1~D4] 새 칸의 저장 위치 — 빈 scope · 구분값 · 호스트 · 호스트 기본 칸", () => {
+  assert.equal(vaultAskDest("figma_token", "", false), "이 값은 내 개인 금고의 «Figma 토큰» 칸에 저장됩니다.");
+  assert.equal(vaultAskDest("slack_user_token", "T01", false), "이 값은 내 개인 금고의 «Slack 사용자 토큰» 칸(구분값 T01)에 저장됩니다.");
+  assert.equal(vaultAskDest("gitlab_pat", "gitlab.corp.com", false),
+    "이 값은 내 개인 금고의 «GitLab 개인 토큰» 칸에 저장되고, gitlab.corp.com 에 접속할 때 쓰입니다.");
+  assert.equal(vaultAskDest("gitlab_pat", "", false), "이 값은 내 개인 금고의 «GitLab 개인 토큰» 기본 칸에 저장됩니다.");
+});
+
+t("[D5] 이미 값이 있는 칸이면 «이미 저장된 값을 바꿉니다.» 가 붙는다", () => {
+  assert.equal(vaultAskDest("gitlab_pat", "gitlab.corp.com", true),
+    "이 값은 내 개인 금고의 «GitLab 개인 토큰» 칸에 저장되고, gitlab.corp.com 에 접속할 때 쓰입니다. 이미 저장된 값을 바꿉니다.");
+  assert.equal(vaultAskDest("figma_token", "", true), "이 값은 내 개인 금고의 «Figma 토큰» 칸에 저장됩니다. 이미 저장된 값을 바꿉니다.");
+});
+
+t("[D6] 모르는 kind 는 kind 그대로 — 원형 속성 이름(constructor)도 이름표로 둔갑하지 않는다", () => {
+  assert.equal(vaultKindName("foo_token"), "foo_token");
+  assert.equal(vaultKindName("constructor"), "constructor");
+  assert.equal(vaultAskDest("constructor", "", false), "이 값은 내 개인 금고의 «constructor» 칸에 저장됩니다.");
+});
+
 // ── 핸들러 — 거절은 DB 에 닿기 전에 난다(그래서 DB 없이 잰다) ─────────────────
 {
   const { livCapabilities } = await import("../../capabilities/delivery/liv.js");
@@ -219,6 +331,139 @@ t("[V9] scope 만 주고 kind 를 빠뜨리면 형식 오류가 아니라 «kind
     await rejects(meSet, { kind: " aws_role_arn", secret: "x" }, 403, "공백 우회");
     await rejects(meSet, { kind: "bad kind!", secret: "x" }, 400, "kind 형식");
     await rejects(meSet, { kind: "", secret: "x" }, 400, "kind 없음");
+  });
+}
+
+// ── 배선 — 요청·넣기를 가짜 의존으로 돌려 «무엇이 어떤 인자로 불렸나» 를 잰다(DB 없이) ─────────
+{
+  const { livVaultAsk, livSecretPut } = await import("../../capabilities/delivery/liv.js");
+  type AskDeps = Parameters<typeof livVaultAsk>[2];
+  type PutDeps = Parameters<typeof livSecretPut>[2];
+  const status = (e: unknown): number | undefined => (e as { status?: number })?.status;
+
+  const askDeps = (o: { mine?: Array<{ kind: string; scope_key: string }>; org?: string[]; orgThrows?: boolean; filled?: boolean } = {}) => {
+    const calls = { mine: [] as string[], slot: [] as string[][], org: [] as string[], setAsk: [] as Array<[string, Record<string, unknown>]> };
+    const d: AskDeps = {
+      secretsEnabled: async () => true,
+      mine: async (u) => { calls.mine.push(u); return o.mine ?? []; },
+      slot: async (u, k, s) => { calls.slot.push([u, k, s]); return o.filled ? { has_secret: true } : null; },
+      orgScopes: async (k) => { calls.org.push(k); if (o.orgThrows) throw new Error("db down"); return o.org ?? []; },
+      setAsk: async (u, a) => { calls.setAsk.push([u, a as unknown as Record<string, unknown>]); },
+    };
+    return { d, calls };
+  };
+
+  await ta("[WA1] 처음 보는 호스트의 gitlab_pat 요청은 400 이고 요청이 저장되지 않는다(사람 화면에 칸이 안 뜬다)", async () => {
+    const { d, calls } = askDeps();
+    await assert.rejects(() => livVaultAsk("u1", { vault_kind: "gitlab_pat", vault_scope: "evil.example.com", label: "GitLab 토큰" }, d),
+      (e: unknown) => status(e) === 400);
+    assert.equal(calls.setAsk.length, 0);
+  });
+
+  await ta("[WA2] 저장 위치는 서버 문장이다 — 리브가 dest 를 실어 보내도 쓰지 않고, label 은 따로 그대로 남는다", async () => {
+    const { d, calls } = askDeps();
+    const ask = await livVaultAsk("u1", { vault_kind: "gitlab_pat", label: "GitLab 토큰", dest: "gitlab.com 에 저장됩니다." }, d);
+    assert.equal(ask.dest, vaultAskDest("gitlab_pat", "", false));
+    assert.equal(ask.label, "GitLab 토큰");
+    assert.equal(calls.setAsk.length, 1);
+    assert.deepEqual(calls.setAsk[0][1], ask as unknown as Record<string, unknown>, "저장한 요청 = 돌려준 요청");
+  });
+
+  await ta("[WA3] 그 칸에 이미 값이 있으면 저장된 요청의 dest 가 교체를 말한다", async () => {
+    const { d, calls } = askDeps({ mine: [{ kind: "gitlab_pat", scope_key: "gitlab.corp.com" }], filled: true });
+    await livVaultAsk("u1", { vault_kind: "gitlab_pat", vault_scope: "gitlab.corp.com" }, d);
+    assert.equal(calls.setAsk[0][1].dest, vaultAskDest("gitlab_pat", "gitlab.corp.com", true));
+  });
+
+  await ta("[WA4] 칸 조회·요청 저장은 요청자 id 로 · 저장된 scope 는 내 칸의 표기다", async () => {
+    const { d, calls } = askDeps({ mine: [{ kind: "gitlab_pat", scope_key: "gitlab.corp.com" }] });
+    await livVaultAsk("u7", { vault_kind: "gitlab_pat", vault_scope: "GitLab.Corp.com" }, d);
+    assert.deepEqual(calls.mine, ["u7"]);
+    assert.deepEqual(calls.slot, [["u7", "gitlab_pat", "gitlab.corp.com"]]);
+    assert.equal(calls.setAsk[0][0], "u7");
+    assert.equal(calls.setAsk[0][1].vault_scope, "gitlab.corp.com");
+  });
+
+  await ta("[WA5] 조직 칸 조회가 실패하면 조직 호스트가 없는 것으로 본다 — 400(500 아님) · 빈 scope 는 그대로 받는다", async () => {
+    const a = askDeps({ orgThrows: true });
+    await assert.rejects(() => livVaultAsk("u1", { vault_kind: "gitlab_pat", vault_scope: "gitlab.corp.com" }, a.d), (e: unknown) => status(e) === 400);
+    assert.deepEqual(a.calls.org, ["gitlab_pat"], "조직 조회가 실제로 불렸다");
+    assert.equal(a.calls.setAsk.length, 0);
+    const b = askDeps({ orgThrows: true });
+    await livVaultAsk("u1", { vault_kind: "gitlab_pat", vault_scope: "" }, b.d);
+    assert.equal(b.calls.setAsk.length, 1);
+  });
+
+  const VALUE = "glpat-REAL-VALUE-1610";
+  const putDeps = (ask: unknown, o: { saveThrows?: boolean } = {}) => {
+    const calls = {
+      order: [] as string[], save: [] as Array<[string, Record<string, unknown>]>, clear: [] as string[],
+      collector: [] as unknown[][], vaultSlot: [] as string[][], getAsk: [] as string[], log: [] as unknown[],
+    };
+    const d: PutDeps = {
+      getAsk: async (u) => { calls.getAsk.push(u); return ask as never; },
+      clearAsk: async (u) => { calls.order.push("clear"); calls.clear.push(u); },
+      vaultSlot: async (u, k, s) => { calls.vaultSlot.push([u, k, s]); return { meta: { auth_header: "PRIVATE-TOKEN", token_prefix: "" }, label: "회사 GitLab" }; },
+      saveOwnCredential: async (m, i) => {
+        calls.order.push("save");
+        if (o.saveThrows) throw Object.assign(new Error("암호화 키 없음"), { status: 400 });
+        calls.save.push([m, i as unknown as Record<string, unknown>]);
+      },
+      saveCollectorSecret: async (...a) => { calls.order.push("collector"); calls.collector.push(a); },
+      log: (...a) => { calls.log.push(a); },
+    };
+    return { d, calls };
+  };
+  const vaultAsk = { at: "2026-11-06T00:00:00.000Z", kind: "secret", target: "vault", vault_kind: "gitlab_pat", vault_scope: "gitlab.corp.com", label: "GitLab 토큰" };
+  const forged = { value: VALUE, vault_kind: "github_pat", vault_scope: "evil.example.com", collector_id: 9, field: "token", target: "collector" };
+
+  await ta("[WP1] 넣기는 저장된 요청의 칸으로만 — 입력의 vault_kind·scope·collector_id 는 무시 · 요청자 id · 기존 meta·label 유지", async () => {
+    const { d, calls } = putDeps(vaultAsk);
+    await livSecretPut("u1", forged, d);
+    assert.deepEqual(calls.getAsk, ["u1"]);
+    assert.deepEqual(calls.vaultSlot, [["u1", "gitlab_pat", "gitlab.corp.com"]]);
+    assert.deepEqual(calls.save, [["u1", {
+      kind: "gitlab_pat", scope_key: "gitlab.corp.com", secret: VALUE,
+      meta: { auth_header: "PRIVATE-TOKEN", token_prefix: "" }, label: "회사 GitLab",
+    }]]);
+    assert.equal(calls.collector.length, 0);
+  });
+
+  await ta("[WP2] 저장이 끝난 **다음에** 요청자 요청을 지운다", async () => {
+    const { d, calls } = putDeps(vaultAsk);
+    await livSecretPut("u1", forged, d);
+    assert.deepEqual(calls.order, ["save", "clear"]);
+    assert.deepEqual(calls.clear, ["u1"]);
+  });
+
+  await ta("[WP3] 응답에도 로그에도 값이 없다", async () => {
+    const { d, calls } = putDeps(vaultAsk);
+    const res = await livSecretPut("u1", forged, d);
+    assert.equal(JSON.stringify(res).includes(VALUE), false, JSON.stringify(res));
+    assert.ok(calls.log.length > 0, "로그 의존이 실제로 불렸다(관측 장치가 살아 있다)");
+    assert.equal(JSON.stringify(calls.log).includes(VALUE), false);
+  });
+
+  await ta("[WP4] 저장이 실패하면 요청을 지우지 않는다 — 칸이 남아 사람이 다시 넣을 수 있다", async () => {
+    const { d, calls } = putDeps(vaultAsk, { saveThrows: true });
+    await assert.rejects(() => livSecretPut("u1", forged, d), (e: unknown) => status(e) === 400);
+    assert.deepEqual(calls.order, ["save"]);
+    assert.equal(calls.clear.length, 0);
+  });
+
+  await ta("[WP5] 저장된 요청이 없으면 409 이고 아무것도 저장하지 않는다", async () => {
+    const { d, calls } = putDeps(null);
+    await assert.rejects(() => livSecretPut("u1", forged, d), (e: unknown) => status(e) === 409);
+    assert.deepEqual(calls.order, []);
+  });
+
+  await ta("[WP6] 수집기 요청이면 수집기 칸에만 넣는다 — 본인 금고 저장은 0회", async () => {
+    const { d, calls } = putDeps({ at: "2026-11-06T00:00:00.000Z", collector_id: 3, field: "token", label: "Notion 토큰" });
+    const res = await livSecretPut("u1", forged, d);
+    assert.deepEqual(calls.collector, [[3, "token", VALUE, "u1"]]);
+    assert.equal(calls.save.length, 0);
+    assert.deepEqual(calls.order, ["collector", "clear"]);
+    assert.equal(JSON.stringify(res).includes(VALUE), false);
   });
 }
 

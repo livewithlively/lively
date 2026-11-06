@@ -8,7 +8,10 @@
 //
 //  넣을 자리는 둘이다 — 수집기의 시크릿 칸(collector_id·field)과 요청자 **본인 금고** 칸(vault_kind·vault_scope).
 //   본인 금고 쪽 규칙은 me_credential_set 과 같은 판정(member-secret-rules.ts)을 쓴다 — 입구가 달라도 경계는 하나다.
-import { selfCredentialTargetVerdict } from "../credentials/member-secret-rules.js";
+//   다만 리브 입력칸에만 붙는 규칙이 둘 있다 — 칸을 고른 것은 리브(AI)인데 값을 치는 것은 사람이라서다:
+//   ① scope 가 접속 호스트인 kind 는 이미 등록된 호스트로만 받는다(vaultScopeVerdict) ② 저장 위치를 서버가 문장으로 만들어
+//   카드에 따로 보인다(vaultAskDest). me_credential_set 은 값을 넣는 쪽이 칸도 고르므로 둘 다 필요 없다.
+import { selfCredentialTargetVerdict, HOST_SCOPED_KINDS } from "../credentials/member-secret-rules.js";
 
 /** 판정에 필요한 만큼의 수집기(CollectorView 의 부분집합). */
 export interface AskTargetCollector {
@@ -81,6 +84,75 @@ export function vaultAskVerdict(kind: unknown, scope: unknown, secretsEnabled: b
 /** 금고 칸의 기본 이름 — 리브가 label 을 안 줬을 때 사람이 무슨 칸인지는 알게. */
 export function vaultAskLabel(kind: string, scope: string): string {
   return scope ? `${kind} (${scope})` : kind;
+}
+
+export type VaultScopeVerdict =
+  | { ok: true; vault_scope: string }
+  | { ok: false; reason: "unknown-host" };
+
+/**
+ * 리브가 고른 scope 로 받아도 되는가 — **scope 가 접속 호스트인 kind**(HOST_SCOPED_KINDS)만 따진다.
+ *  왜: 리브가 gitlab_pat 칸을 evil.example.com 으로 요청하면 사람이 친 진짜 토큰이 수집·레포 목록 조회 때 그 호스트로 나간다.
+ *   사람은 입력칸에 값만 친다 — 호스트를 고른 것은 사람이 아니다.
+ *  받는 scope: (a) 요청자가 이미 가진 같은 kind 칸의 scope · (b) 조직이 같은 kind 로 등록한 칸의 scope(관리자 통합 자격) ·
+ *   (c) 빈 scope — 그 kind 에 기본 칸이 있을 때만.
+ *  호스트라 대소문자를 가리지 않고, 맞으면 **이미 있는 칸의 표기**를 돌려준다 — 금고 키는 대소문자를 지켜서 다른 표기로 넣으면
+ *   칸이 하나 더 생기고, 기존 칸은 그대로 남는다(사람은 바꿨다고 믿는다).
+ *  ⚠ (a) 는 «사람이 그 호스트를 정했다» 의 증거가 아니다 — me_credential_set(MCP)으로 칸을 먼저 만들 수 있다.
+ *   그때 남는 방어선은 카드의 저장 위치 문장(vaultAskDest — 호스트와 «이미 저장된 값을 바꿉니다» 가 보인다)이다.
+ */
+export function vaultScopeVerdict(
+  kind: string, scope: string,
+  mine: ReadonlyArray<Pick<VaultSlot, "kind" | "scope_key">>, orgScopes: ReadonlyArray<string> = [],
+): VaultScopeVerdict {
+  const host = HOST_SCOPED_KINDS.get(kind);
+  if (!host) return { ok: true, vault_scope: scope };
+  const lc = scope.toLowerCase();
+  const pick = (xs: ReadonlyArray<string>): string | undefined => xs.find((x) => x === scope) ?? xs.find((x) => x.toLowerCase() === lc);
+  const own = pick(mine.filter((r) => r.kind === kind).map((r) => r.scope_key));
+  if (own !== undefined) return { ok: true, vault_scope: own };
+  if (!scope) return host.emptyOk ? { ok: true, vault_scope: "" } : { ok: false, reason: "unknown-host" };
+  const org = pick(orgScopes);
+  return org !== undefined ? { ok: true, vault_scope: org } : { ok: false, reason: "unknown-host" };
+}
+
+/**
+ * 금고 kind 의 사람이 읽는 이름 — 웹 [자격] 목록(web/admin-credentials.ts CRED_KINDS)의 이름과 맞춘다.
+ *  모르는 kind 는 kind 그대로 보인다(모양은 판정이 이미 소문자·숫자·_ 로 걸렀다). Map 인 이유: 객체면 `constructor` 같은 kind 가
+ *   원형의 속성을 집어 온다.
+ */
+const VAULT_KIND_NAMES: ReadonlyMap<string, string> = new Map([
+  ["gitlab_pat", "GitLab 개인 토큰"],
+  ["github_pat", "GitHub 토큰"],
+  ["slack_user_token", "Slack 사용자 토큰"],
+  ["clickup_token", "ClickUp 토큰"],
+  ["notion_token", "Notion 토큰"],
+  ["figma_token", "Figma 토큰"],
+  ["zotero_token", "Zotero API 키"],
+  ["prometheus_bearer", "Prometheus Bearer 토큰"],
+  ["claude_setup_token", "Claude 헤드리스 토큰"],
+  ["codex_auth_json", "Codex 로그인 파일(auth.json)"],
+  ["anthropic_api_key", "Anthropic API 키"],
+  ["lively_workspace", "팀 워크스페이스 토큰"],
+]);
+export function vaultKindName(kind: string): string {
+  return VAULT_KIND_NAMES.get(kind) ?? kind;
+}
+
+/**
+ * 카드에 보일 **저장 위치** — 서버가 만들어 요청에 싣는다(리브가 준 label·why·hint 와 따로). 사람은 리브의 말이 아니라 이
+ *  문장으로 값이 갈 곳을 안다: 내 개인 금고 · 어느 자격 칸 · 호스트 kind 면 어느 호스트에 쓰이는지 · 이미 있던 값을 바꾸는지.
+ *  ⚠ 화면 문구라 끝맺는 문장이다(명사 종결 금지 — 이 조직의 UI 문구 규칙).
+ */
+export function vaultAskDest(kind: string, scope: string, replaces: boolean): string {
+  const name = `«${vaultKindName(kind)}»`;
+  const host = HOST_SCOPED_KINDS.get(kind);
+  const where = !scope
+    ? `이 값은 내 개인 금고의 ${name} ${host?.emptyOk ? "기본 " : ""}칸에 저장됩니다.`
+    : host
+      ? `이 값은 내 개인 금고의 ${name} 칸에 저장되고, ${scope} 에 접속할 때 쓰입니다.`
+      : `이 값은 내 개인 금고의 ${name} 칸(구분값 ${scope})에 저장됩니다.`;
+  return replaces ? `${where} 이미 저장된 값을 바꿉니다.` : where;
 }
 
 /**
