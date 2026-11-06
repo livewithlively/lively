@@ -306,9 +306,9 @@
   /* 맥락 관리 — 흐름 지도를 세로 선로로 (외부 앱 ↓ 수집기 ↓ 자료 ↓ 증류기 ↓ 지식 ↓ 주입 ↓ AI 세션). */
   .cxm-floor { padding: 12px; }
   .cxm-lane { flex-direction: column; overflow-x: visible; }
-  .cxm-st { min-width: 0; width: 100%; }
-  .cxm-duct { width: auto; height: auto; min-height: 72px; display: flex; align-items: center; justify-content: center; padding: 22px 0; }
-  .cxm-duct-c { position: static; transform: none; }
+  .cxm-st { flex: none; min-width: 0; max-width: none; width: 100%; }
+  .cxm-duct { flex: none; min-width: 0; max-width: none; width: auto; height: auto; min-height: 72px; display: flex; align-items: center; justify-content: center; padding: 22px 0; }
+  .cxm-duct-c { position: static; transform: none; width: 116px; }
   .cxm-wire { left: calc(50% - 1.5px); right: auto; top: -2px; bottom: -2px; width: 3px; height: auto; }
   .cxm-wire.is-still { background: repeating-linear-gradient(180deg, var(--line-net-2) 0 8px, transparent 8px 14px); }
   .cxm-wire.is-flow::after { background: repeating-linear-gradient(180deg, var(--mint) 0 10px, transparent 10px 22px); animation: cxm-flow-v 1.8s linear infinite; }
@@ -324,6 +324,9 @@
   .cxr-legend { padding: 2px 12px 8px; }
   .cxr-legend .cxr-sp { display: none; }
   .cxr-feed { padding: 2px 4px 6px; }
+  .cxr-pk-h { grid-template-columns: 52px 30px minmax(0, 1fr) 28px; gap: 8px; }
+  .cxr-pk-h > .cxr-s { display: none; }
+  .cxr-pk .cxr-pk-il, .cxr-x-in .cxr-pk-il, .cxr-pk-f { padding-left: 10px; }
   /* 3판 — 머리줄은 두 줄(날짜 이동 · 기간), 「자세히 보기」는 오른쪽 끝에 남긴다 · 줄 링크는 요약을 아래로 */
   .cxr-stepper { order: 2; }
   .cxr-stp-lbl { min-width: 150px; }

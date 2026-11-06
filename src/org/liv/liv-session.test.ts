@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, serialByKey, storedLivSession, type LivSessionFacts } from "./session.js";
+import { LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, pickLivSessionHarness, serialByKey, storedLivSession, type LivSessionFacts } from "./session.js";
 import { BY_WORKSPACE, WORKSPACE_SCOPED_KEYS, mergeForWorkspace, viewForWorkspace } from "../store/members.js";
 import { livChatCapabilities, livFirstWords } from "../../capabilities/delivery/liv-chat.js";
 import { HttpError } from "../../http-error.js";
@@ -232,4 +232,31 @@ test("★★ 리브 화면(단독)엔 대화 칸이 없고, 떠나면 되묻기�
 test("★★ 옛 킥오프 첫 지시 숨김은 리브 2턴이 남아 있는 동안 그대로 — 리브 세션의 첫 말은 사람에게 보인다", () => {
   assert.match(WEB_CHAT, /if \(livKickoff\(\) && !kickoffOpened\) \{/, "킥오프 첫 지시 숨김이 사라졌다(진행 중인 2턴 재개 세션에 서버 지시문이 말풍선으로 뜬다)");
   assert.doesNotMatch(WEB_CHAT, /&& !kickoffOpened[^\n]*livChat|livChat\(\)[^\n]*&& !kickoffOpened/, "사람이 쓴 첫 말까지 숨긴다");
+});
+
+// ── 표 F — 리브 세션 하네스(원준님 2026-10-30 «코덱스만 연결했는데 첫 AI 세션이 클로드로 됨») ─────────────────────
+//  2턴 스윕이 리브 세션을 새로 열 때 로그인을 못 재면 headless-harness 의 «모르면 claude» 로 접혔다 — 로그인 안 한 claude 는
+//   로그인 화면에 멈춰 첫 지시가 안 들어간다. 이제 기억해 둔 AI(처음 설정 때 로그인돼 있던 것)로 열고, 그것도 없으면 열지 않는다.
+test("★★ 표 F — 리브 세션 하네스: 지금 로그인한 것 > 기억해 둔 것, 모르면 claude 로 접지 않는다", () => {
+  const L = ["claude", "codex", "antigravity", "grok", "shell"];
+  const rows: Array<[string, { usable: string[]; remembered?: string[] | null }, string | null]> = [
+    ["F1 코덱스만 로그인", { usable: ["codex"] }, "codex"],
+    ["F2 ★로그인 못 잼 + 처음 설정 때 코덱스 → 코덱스(claude 아님)", { usable: [], remembered: ["codex"] }, "codex"],
+    ["F3 ★로그인 못 잼 + 기억 없음 → 열지 않음(claude 아님)", { usable: [], remembered: null }, null],
+    ["F4 둘 다 로그인 + 기억은 코덱스 → 코덱스", { usable: ["claude", "codex"], remembered: ["codex"] }, "codex"],
+    ["F5 둘 다 로그인 + 기억 없음 → 로그인 순 첫째", { usable: ["claude", "codex"] }, "claude"],
+    ["F6 기억한 것이 지금은 로그아웃 → 지금 로그인한 것", { usable: ["claude"], remembered: ["codex"] }, "claude"],
+    ["F7 띄울 수 없는 하네스(셸·모르는 것)는 고르지 않는다", { usable: ["shell", "nope"], remembered: ["nope"] }, null],
+  ];
+  for (const [name, i, want] of rows) assert.equal(pickLivSessionHarness({ ...i, launchable: L }), want, name);
+});
+
+test("★★ 리브 세션 하네스 배선 — openLivSession 이 claude 기본(resolveHeadlessHarness)을 안 쓰고, 2턴 스윕이 기억해 둔 AI 를 넘기고, 처음 설정이 그것을 적는다", () => {
+  const sess = code(readFileSync("src/org/liv/session.ts", "utf8"));
+  assert.doesNotMatch(sess, /resolveHeadlessHarness/, "★ 리브 세션이 «모르면 claude» 로 접힌다");
+  assert.match(sess, /await resolveLivHarness\(userId, o\.remembered\)/);
+  const sweep = code(readFileSync("src/org/liv/second-turn-sweep.ts", "utf8"));
+  assert.match(sweep, /remembered: c\.welcome\.harnesses \?\? null/, "★ 2턴 스윕이 기억해 둔 AI 를 안 넘긴다");
+  const welcome = code(readFileSync("src/capabilities/delivery/welcome.ts", "utf8"));
+  assert.match(welcome, /harnesses: loggedAi\.length \? loggedAi : \(priorWelcome\?\.harnesses \?\? null\)/, "처음 설정이 로그인한 AI 를 안 적는다");
 });

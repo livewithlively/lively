@@ -42,8 +42,10 @@ export interface RunHarness {
   flags: RunFlagDef[];
   effortsByModel?: Record<string, string[]>;
   hasAutoApprove?: boolean;
+  // (#5321) 오토모드·확인 후 실행을 argv 로 말할 수 있나(서버 catalog autoModeArgv·askModeArgv).
+  hasAutoMode?: boolean; hasAskMode?: boolean;
   // 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만 — 서버 catalog.ts runtimeCmd).
-  runtime?: { model?: boolean; effort?: boolean };
+  runtime?: { model?: boolean; effort?: boolean; both?: boolean };   // both — 두 축을 한 줄로(#5332 codex)
 }
 
 /** 추론강도 값 → 사람 말. 서버가 주는 값은 low|medium|high|xhigh|max 로 하네스마다 일부만 쓴다. */
@@ -195,7 +197,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
   const gear = el('button', { class: 'v2-launch-gear', type: 'button', 'aria-label': '새 세션 기본값' }) as HTMLButtonElement;
   gear.innerHTML = GEAR_SVG;
   gear.addEventListener('click', () => {
-    void openSessionDefaults({ hasAutoApprove: !!cur()?.hasAutoApprove })
+    void openSessionDefaults({ caps: { hasAutoApprove: !!cur()?.hasAutoApprove, hasAutoMode: !!cur()?.hasAutoMode, hasAskMode: !!cur()?.hasAskMode } })
       .then((saved) => { if (saved) { paint(); opts?.onChange?.(pick()); } });
   });
   const paintGear = (): void => { gear.title = '새 세션 기본값 — ' + defaultsSummary(sessionDefaults()); };
@@ -327,11 +329,16 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     const flags: Record<string, string> = {};
     for (const n of AXES) { const v = visVal(n); if (v) flags[n] = v; }
     const d = sessionDefaults();
+    const h = cur();
+    //  (#5321) 실행 승인 — 오토모드·확인 후 실행도 세션 표식(@auto_mode 1/0)으로 실어 서버가 argv 로 못 박게 한다. 그 방식을 모르는 AI 엔
+    //   안 싣는다: 서버는 오토모드를 모르는 하네스에서 자동 승인으로 올려 버리므로(sessions.ts), 실으면 더 넓은 권한이 된다.
+    if (d.approve === 'auto' && h?.hasAutoMode) flags['@auto_mode'] = '1';
+    else if (d.approve === 'ask' && h?.hasAskMode) flags['@auto_mode'] = '0';
     return {
       harness: harnessKey, flags, node: nodeKey(),
       mode: d.mode,
       // 자동 승인 플래그가 없는 AI 엔 안 넘긴다 — 서버가 조용히 버릴 값을 화면이 «켰다»고 믿게 두지 않는다.
-      autoApprove: d.autoApprove && !!cur()?.hasAutoApprove,
+      autoApprove: d.approve === 'bypass' && !!h?.hasAutoApprove,
       writeVis: d.mode === 'normal' ? d.writeVis : '',
     };
   };

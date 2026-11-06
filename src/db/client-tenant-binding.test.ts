@@ -137,6 +137,21 @@ test("BEGIN 은 종전대로 트랜잭션 로컬 바인딩도 건다(중복이�
   assert.match(sqls[2], /set_config.*true\)/, "BEGIN 뒤 로컬 바인딩(종전 동작)");
 });
 
+test("★ BEGIN 덩이(격리 수준 + LOCK)를 통째로 먼저 보내고 로컬 바인딩은 그 **뒤** — 앱 데이터 떠 두기의 시점이 잠금 뒤에 고정된다(#5172)", async () => {
+  //  app-snapshot inSnapshotTx 가 이 순서에 기댄다: REPEATABLE READ 의 시점은 첫 SELECT(로컬 바인딩)에서 고정되므로, 바인딩이
+  //   LOCK 보다 먼저 가면 잠그기 전의 시점이 잡혀, 그 사이 다시 쓰인 표가 빈 채로 사본에 담긴다.
+  installTenantResolver(() => "55555555-5555-5555-5555-555555555555");
+  const f = fakeClient();
+  const w = wrapClient(f.client);
+  const batch = 'BEGIN ISOLATION LEVEL REPEATABLE READ;\nLOCK TABLE "app_x"."a__big", "app_x"."a__small" IN ACCESS SHARE MODE';
+  await w.query(batch);
+  const sqls = f.calls.map((c) => c.sql);
+  assert.match(sqls[0], /set_config.*false\)/, "체크아웃 바인딩(자동 커밋)이 먼저");
+  assert.equal(sqls[1], batch, "BEGIN 덩이는 쪼개지 않고 그대로");
+  assert.match(sqls[2], /set_config.*true\)/, "로컬 바인딩은 BEGIN 덩이 뒤");
+  assert.equal(sqls.length, 3);
+});
+
 test("★★ 반납 전에 세션 값을 지운다 — 다음 차례가 남의 테넌트를 물려받지 않는다", async () => {
   installTenantResolver(() => "44444444-4444-4444-4444-444444444444");
   const f = fakeClient();

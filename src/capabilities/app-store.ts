@@ -303,6 +303,8 @@ const storeSql: Capability = {
   description: "앱 자기 데이터 테이블에 SQL 한 문장(SELECT·INSERT·UPDATE·DELETE)을 실행한다. 앱 화면·앱 세션, 또는 그 앱이 붙은 세션(app_id)에서. "
     + "테이블은 매니페스트에 선언한 이름 그대로 쓴다(FROM contacts). 값은 $1·$2 … 와 params 로 넘긴다. 테이블·칸 만들기는 매니페스트로만(DDL 불가). "
     + "Postgres 문법 그대로(조인·서브쿼리·WITH·집계·ON CONFLICT·RETURNING·FOR UPDATE SKIP LOCKED). 조건 없는 UPDATE·DELETE 는 거부. "
+    + "원래 id 로 넣기(시드·다른 DB 에서 옮기기)는 INSERT … OVERRIDING SYSTEM VALUE — id 시퀀스는 라이블리가 같은 트랜잭션에서 맞춘다"
+    + "(옮기는 동안 같은 표의 평범한 INSERT 와 번호가 겹치면 409 — 다시 하면 된다). "
     + "스키마 붙인 이름·카탈로그·설정 함수는 받지 않는다. 결과는 최대 5,000행·5MB(넘으면 truncated, strict 면 413), 문장 5초. "
     + "여러 문장을 전부-되거나-전부-취소로 하려면 store_sql_batch. 워크스페이스가 설치한 앱에서만(기본 앱은 store_query 등을 쓴다). 반환 {kind, columns, rows, row_count, truncated, changed, ms}.",
   scope: null,

@@ -21,6 +21,7 @@ import { getApp, getActiveGrant, listActiveGrants } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { TOOL_APP_META_KEY } from "../org/policies/tool-log.js";
+import { sessionFromExtra } from "../org/auth/agent-identity.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { appViewFor, listsAppFor, isEmptyDraftApp, addressVariantFor, type AppVisState, type Viewer } from "../apps/visibility.js";
 import { isBuiltinSource } from "../apps/store-ddl.js";
@@ -176,6 +177,7 @@ export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra:
   const nick = String(member.nickname ?? "").trim();
   const name = (member.use_nickname && nick ? nick : String(member.display_name ?? "").trim()) || member.id;
   const tokenScopes = [...(user.scopes ?? [])];
+  const session = sessionFromExtra(extra);
   const signal = (extra as { signal?: AbortSignal } | undefined)?.signal;
   //  진행 알림 — 부른 쪽이 progressToken 을 실었을 때만(MCP 진행 규약). 무상태 /mcp 는 답을 SSE 로 흘리므로 기다리는 동안 알림이 먼저 나간다.
   const { _meta: reqMeta, sendNotification } = (extra ?? {}) as { _meta?: { progressToken?: unknown }; sendNotification?: (n: unknown) => Promise<void> };
@@ -197,6 +199,7 @@ export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra:
         scopes: tokenScopes.filter((s) => grant.scopes.includes(s)),
         ...(user.oauthClientId ? { oauthClientId: user.oauthClientId } : {}),
         ...(user.tokenHashPrefix ? { tokenHashPrefix: user.tokenHashPrefix } : {}),
+        ...(session ? { session } : {}),
       },
       ...(signal ? { signal } : {}),
       ...(progress ? { progress } : {}),

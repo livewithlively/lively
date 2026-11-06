@@ -14,6 +14,10 @@
 //  E6 외래키가 있는 앱(#4483) — 묶음 전체 되돌리기는 지우기 자식부터·넣기 부모부터로 된다 · 다른 표가 가리키는 표만 되돌리기는
 //     시작 전 409(그 표의 행이 cascade 로 함께 지워지지 않는다) · 가리킬 행이 없는 표만 되돌리기는 409 · 둘 다 데이터 그대로
 //     · 자기 자신을 가리키는 표(2,500행, 앞 조각 행이 뒤 조각 행을 가리킴)도 되돌린다(표마다 한 문장으로 넣는다)
+//  E7 원래 id 로 넣은 0·음수 id 행(#5172)도 떠 두기에 담기고 되돌리기에서 살아남는다(종전 떠 두기는 id > 0 부터 넘겼다)
+//     · 원래 id 로 넣은 뒤 평범한 INSERT 가 부딪치지 않는다(store_sql 능력 끝단)
+//  E8 떠 두기 도중 아직 안 읽은 표를 설치가 다시 쓰더라도(칸 형 바꾸기 — MVCC 안전하지 않은 DDL) 그 표가 빈 채로 담기지 않는다
+//     (떠 두기가 표들을 먼저 잠그고 시점을 고정한다 — #5172 한 시점 떠 두기의 보강)
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 
@@ -32,7 +36,7 @@ await initAllSchemas({ quiet: true });
 const { appCapabilities } = await import(`${D}/capabilities/apps.js`);
 const { appStoreCapabilities } = await import(`${D}/capabilities/app-store.js`);
 const { itemsPool } = await import(`${D}/db/client.js`);
-const { appSqlRoleName } = await import(`${D}/apps/store-ddl.js`);
+const { appSqlRoleName, qualifiedAppTable, SHARED_APP_SCHEMA } = await import(`${D}/apps/store-ddl.js`);
 const X = await import(`${D}/apps/app-sql-exec.js`);
 const S = await import(`${D}/apps/app-snapshot.js`);
 const cap = (n) => [...appCapabilities, ...appStoreCapabilities].find((c) => c.name === n);
@@ -203,6 +207,50 @@ try {
   const onlyChild = await status(cap("app_data_restore").handler({ app_id: "crm-fk", taken_at: fkSnap.taken_at, table: "deals" }, admin, ctx));
   chk("E6c 가리킬 행이 지금 없는 표만 되돌리기는 409(500 아님) · 전부 취소돼 그대로", onlyChild === 409 && (await fkState()) === beforeOrphan,
     JSON.stringify({ onlyChild }));
+
+  // ── E7 원래 id 가 0·음수인 행도 떠 두기·되돌리기에 남는다(#5172) ──
+  const signed = await status(fsql("INSERT INTO people (id, name) OVERRIDING SYSTEM VALUE VALUES (-5, '음수'), (0, '영'), (3000, '큰 수')"));
+  const nextPerson = Number((await fsql("INSERT INTO people (name) VALUES ('평범') RETURNING id")).rows[0]?.id);
+  chk("E7 store_sql 로 원래 id(-5 · 0 · 3000)를 넣고, 뒤의 평범한 INSERT 는 3001(부딪치지 않는다)", signed === "ok" && nextPerson === 3001, JSON.stringify({ signed, nextPerson }));
+  const signedSnap = await S.snapshotAppData("crm-fk", "daily", new Date(Date.now() + 120_000));
+  const atSigned = await fkState();
+  const peopleCount = Number((await fsql("SELECT count(*)::int AS n FROM people")).rows[0].n);
+  const snapPeople = signedSnap.tables.find((t) => t.table === "people")?.rows;
+  await fsql("DELETE FROM people WHERE id <= $1", [0]);
+  const backSigned = await status(cap("app_data_restore").handler({ app_id: "crm-fk", taken_at: signedSnap.taken_at }, admin, ctx));
+  const nonPositive = (await fsql("SELECT id::int AS id, name FROM people WHERE id <= 0 ORDER BY id")).rows;
+  chk("E7b 0·음수 id 행이 떠 두기에 담기고(담은 행 = 표의 행) 되돌리기 뒤에도 그대로 있다",
+    snapPeople === peopleCount && backSigned === "ok" && JSON.stringify(nonPositive) === JSON.stringify([{ id: -5, name: "음수" }, { id: 0, name: "영" }]) && (await fkState()) === atSigned,
+    JSON.stringify({ snapPeople, peopleCount, backSigned, nonPositive }));
+
+  // ── E8 떠 두기 도중 표 다시 쓰기(칸 형 바꾸기)가 끼어도 그 표가 빈 채로 담기지 않는다(#5172) ──
+  const raceFiles = [{ path: "lively-app.json", content: JSON.stringify({ id: "snap-race", title: "떠 두기 경합", version: "0.1.0",
+    permissions: { tools: ["store_sql"] },
+    data: { tables: [{ name: "big", columns: [{ name: "v", type: "text" }] }, { name: "small", columns: [{ name: "n", type: "int4" }] }] },
+    ui: { pages: [{ key: "main", title: "x", entry: "ui/index.html" }] } }) }, { path: "ui/index.html", content: "<p>x</p>" }];
+  await cap("org_app_install").handler({ source: { kind: "inline", files: raceFiles } }, admin, ctx);
+  const rsql = (text, params) => cap("store_sql").handler({ sql: text, params }, { userId: "pgt-admin", appId: "snap-race" }, ctx);
+  for (let k = 0; k < 3; k++) {                                          // 30만 행 — 문장 5초 상한 안쪽으로 나눠 넣는다(느린 CI)
+    await rsql("INSERT INTO big(v) SELECT 'x' || g FROM generate_series($1::int, $2::int) g", [k * 100000 + 1, (k + 1) * 100000]);
+  }
+  await rsql("INSERT INTO small(n) SELECT g FROM generate_series(1, 5) g");
+  const smallRel = qualifiedAppTable(SHARED_APP_SCHEMA, "snap-race", "small");
+  const ddl = new pg.Client({ connectionString: dsnFor(DB) }); await ddl.connect();
+  await ddl.query("SET lock_timeout = '30s'");
+  const raceSnapP = S.snapshotAppData("snap-race", "daily", new Date(Date.now() + 180_000)).then((v) => ({ v }), (e) => ({ e }));
+  //  떠 두기가 큰 표(big)를 읽기 시작한 것을 그 표의 ACCESS SHARE 로 확인한 순간 — 시점은 이미 고정됐고 작은 표는 아직 안 읽었다.
+  let sawBig = false;
+  for (let i = 0; i < 2000 && !sawBig; i++) {
+    sawBig = (await ddl.query(`SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+      WHERE c.relname = 'snap_race__big' AND l.mode = 'AccessShareLock' AND l.granted AND l.pid <> pg_backend_pid()`)).rowCount > 0;
+    if (!sawBig) await new Promise((r) => setTimeout(r, 2));
+  }
+  const altered = await ddl.query(`ALTER TABLE ${smallRel} ALTER COLUMN n TYPE bigint`).then(() => "ok", (e) => e.message);   // int4 → int8 은 표를 다시 쓴다
+  await ddl.end();
+  const raceSnap = await raceSnapP;
+  const smallInSnap = raceSnap.v?.tables.find((t) => t.table === "small")?.rows;
+  chk("E8 떠 두기 도중 아직 안 읽은 표를 다시 쓰는 DDL 이 끼어도 그 표가 빈 채로 담기지 않는다(5행)", sawBig && altered === "ok" && smallInSnap === 5,
+    JSON.stringify({ sawBig, altered, smallInSnap, err: raceSnap.e?.message }));
 } catch (e) { fail++; console.error("FAIL 예외 —", e); }
 finally {
   X.resetAppSqlLimits(env0);

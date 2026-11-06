@@ -9,7 +9,7 @@
 import { api, busy, el, errorNote, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 
-//  bare(#5159) — [AI 주입 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 행 목록만 그린다.
+//  bare(#5159) — [AI 주입기 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 행 목록만 그린다.
 export async function visibilityAxesPanel(detail, opts: { bare?: boolean; onChange?: () => void } = {}): Promise<void> {
   const reload = () => { opts.onChange?.(); return visibilityAxesPanel(detail, opts); };
   busy(detail, el('div', { class: opts.bare ? '' : 'card' }, skeleton('맥락 공개범위 설정을 불러오는 중')));

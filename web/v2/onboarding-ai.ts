@@ -9,6 +9,8 @@
 import { api } from '../core.js';
 import { aiLoginPanel, confirmSharedLogin, type AiLoginAccount, type AiLoginPanel } from '../ai-login-panel.js';
 import { AI_BRAND, AI_LOGO, AI_ORDER } from '../lib/ai-logos.js';
+import { HEADLESS_INLINE } from '../lib/ai-login-inline.js';
+import { headlessParts } from '../me-ai.js';
 
 /** /api/ui/me/ai-accounts 의 한 줄 — 이 장면이 읽는 칸만. */
 export interface AiAccountRow extends AiLoginAccount {
@@ -22,8 +24,8 @@ export interface AiAccountRow extends AiLoginAccount {
 }
 
 export interface AiListHooks {
-  /** 목록을 (다시) 그렸다 — 연결된 AI 가 하나라도 있나. */
-  onRows(anyConnected: boolean): void;
+  /** 목록을 (다시) 그렸다 — 다 된 AI 가 하나라도 있나(로그인 + 필요하면 자동 정리 승인까지, #5167 aiStepReady). */
+  onRows(ready: boolean): void;
   /** 이 서버에서 띄울 AI 가 하나도 없다. */
   onEmpty(): void;
   /** 화면이 아직 살아 있나(떠난 뒤의 늦은 답은 칠하지 않는다). */
@@ -32,7 +34,28 @@ export interface AiListHooks {
   noneText: string;
 }
 
-interface Item { a: AiAccountRow; wrap: HTMLElement; card: HTMLElement; act: HTMLElement; panel: AiLoginPanel | null }
+interface Item {
+  a: AiAccountRow; wrap: HTMLElement; card: HTMLElement; act: HTMLElement; panel: AiLoginPanel | null;
+  /** (#5167) 자동 정리 승인 칸 — 로그인을 마친 줄 아래. 승인을 시작했으면(hlBusy) 다시 그리지 않는다(주소·코드를 지우지 않게). */
+  hl: HTMLElement | null; hlBusy: boolean;
+}
+
+/** /api/ui/me/headless 의 한 줄 — 이 장면이 읽는 칸만(나머지는 headlessParts 가 읽는다). */
+export interface HeadlessRow { key: string; label: string; connected: boolean; failure?: unknown; [k: string]: unknown }
+/** (#5167) 자동 정리 자격 현황 — needed 는 이 서버의 정리가 따로 받은 자격으로만 도는가(매니지드), ok 는 지금 쓸 수 있는 자격이 있는 AI. */
+export interface HeadlessState { needed: boolean; rows: Map<string, HeadlessRow>; ok: Set<string> }
+
+/**
+ * (순수, #5167) [다음]을 켤 수 있나 — 로그인을 마친 AI 가 하나라도 «다 된» 것.
+ *  · 화면에서 자동 정리 자격을 받을 수 있는 AI(클로드·코덱스)는, 이 서버가 그 자격을 따로 요구하면(needed) 그것까지 받아야 «다 됐다».
+ *    로그인만 하고 넘어가면 리브는 규칙을 세우는데 정리 잡이 자격 없음으로 멈춰, 올린 파일이 지식이 되지 않는다(2026-10-30 실측 두 계정).
+ *  · 그 밖의 AI(제미나이 등)는 여기서 받을 길이 없다 — 막지 않는다(막아도 해 줄 수 있는 게 없다).
+ *  · 현황을 아직 모르면(hl null) 클로드·코덱스 줄은 «아직» 이다 — 묻기가 실패하면 부르는 쪽이 needed:false 로 채워 막지 않는다.
+ */
+export function aiStepReady(rows: ReadonlyArray<{ key: string; loggedIn: boolean | null }>, hl: HeadlessState | null): boolean {
+  return rows.some((a) => a.loggedIn === true
+    && (HEADLESS_INLINE[a.key] !== true || (!!hl && (!hl.needed || hl.ok.has(a.key)))));
+}
 
 /** (순수) 목록 응답 → 보일 줄. 순서는 [AI 계정 연결] 표와 같고, 설치가 확인된 «없음» 만 뺀다. */
 export function visibleAiRows(accounts: readonly AiAccountRow[]): AiAccountRow[] {
@@ -132,7 +155,7 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
       </div>`;
     const card = wrap.querySelector<HTMLElement>('.ob-ai-card')!;
     const act = wrap.querySelector<HTMLElement>('.ob-ai-act')!;
-    return { a, wrap, card, act, panel: null };
+    return { a, wrap, card, act, panel: null, hl: null, hlBusy: false };
   };
 
   /** 그 줄을 제자리에서 고친다 — 연결됐으면 칸을 걷는다(떨어진 칸은 폴링이 스스로 멈춘다). */
@@ -143,6 +166,47 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     it.card.classList.toggle('ob-on', on);
     if (on && it.panel) { it.panel.panel.remove(); it.panel = null; }
     if (on !== was || !it.act.firstElementChild) { it.act.innerHTML = actHtml(a); wireGo(it); }
+  };
+
+  //  (#5167) 자동 정리 자격 — 로그인을 마친 클로드·코덱스 줄이 생기면 묻는다. 묻기가 실패하면 막지 않는다(needed:false).
+  let hl: HeadlessState | null = null;
+  const ready = (): boolean => aiStepReady([...items.values()].map((it) => it.a), hl);
+  const loadHeadless = async (): Promise<void> => {
+    try {
+      const r = (await api('/api/ui/me/headless')) as { needed?: unknown; harnesses?: HeadlessRow[] } | null;
+      const rows = new Map((r?.harnesses || []).map((h) => [h.key, h] as const));
+      hl = { needed: r?.needed === true, rows, ok: new Set([...rows.values()].filter((h) => h.connected && !h.failure).map((h) => h.key)) };
+    } catch (_) {
+      if (!hl) hl = { needed: false, rows: new Map(), ok: new Set() };   // 처음부터 못 물었다 — 처음 설정을 막지 않는다
+    }
+  };
+  /** 그 줄 아래 자동 정리 승인 칸을 고친다 — 로그인을 마친 클로드·코덱스 줄이고 이 서버가 그 자격을 요구할 때만. */
+  const paintHl = (it: Item): void => {
+    const row = hl && hl.needed && it.a.loggedIn === true && HEADLESS_INLINE[it.a.key] === true ? hl.rows.get(it.a.key) : undefined;
+    if (!row) { if (it.hl && !it.hlBusy) { it.hl.remove(); it.hl = null; } return; }
+    if (!it.hl) { it.hl = document.createElement('div'); it.hl.className = 'ob-ai-hl'; it.wrap.append(it.hl); }
+    if (hl!.ok.has(it.a.key)) {
+      it.hlBusy = false;
+      it.hl.innerHTML = '<p class="ob-q-help ob-ai-hl-ok">✓ 자리에 없을 때 파일 정리도 이 계정으로 해요</p>';
+      return;
+    }
+    if (it.hlBusy) return;   // 승인 칸이 열려 있다 — 받은 주소·코드를 지우지 않는다
+    const p = headlessParts(row, () => { void reload(); });
+    p.act.textContent = '승인하기';
+    p.act.className = 'ob-btn ob-btn-pri ob-btn-inline';
+    p.act.addEventListener('click', () => { it.hlBusy = true; });
+    const say = document.createElement('p');
+    say.className = 'ob-q-help';
+    say.textContent = `자리에 없을 때도 올린 파일을 지식으로 정리하려면 ${AI_BRAND[it.a.key] || row.label} 승인을 한 번 더 해 주세요 — 주소를 열어 승인하면 30초쯤이면 끝나요.`;
+    it.hl.replaceChildren(say, p.act, p.panel);
+  };
+  const paintAllHl = (): void => { for (const it of items.values()) paintHl(it); };
+  const refreshHeadless = async (): Promise<void> => {
+    if (![...items.values()].some((it) => it.a.loggedIn === true && HEADLESS_INLINE[it.a.key] === true)) return;
+    await loadHeadless();
+    if (!hooks.alive()) return;
+    paintAllHl();
+    hooks.onRows(ready());
   };
 
   const paint = (rows: AiAccountRow[]): void => {
@@ -160,6 +224,8 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
         const prev = old.get(a.key);
         const it = make(a);
         if (prev?.panel) { it.panel = prev.panel; it.wrap.append(prev.panel.panel); }
+        //  (#5167) 자동 정리 승인 칸도 같이 옮긴다 — 받던 주소·코드가 지워지지 않게.
+        if (prev?.hl) { it.hl = prev.hl; it.hlBusy = prev.hlBusy; it.wrap.append(prev.hl); }
         items.set(a.key, it);
         update(it, a);
       }
@@ -167,7 +233,8 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     } else {
       for (const a of rows) update(items.get(a.key)!, a);
     }
-    hooks.onRows([...items.values()].some((it) => it.a.loggedIn === true));
+    paintAllHl();
+    hooks.onRows(ready());
   };
 
   /** 다시 읽기는 한 번에 하나 — 도중에 또 부르면 끝난 뒤 한 번 더 읽는다(낡은 답을 돌려주지 않는다). */
@@ -205,8 +272,9 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
       if (!hooks.alive()) return;
       const it = items.get(a.key);
       if (it && probed.has(a.key)) update(it, { ...it.a, loggedIn: probed.get(a.key)! });
-      hooks.onRows([...items.values()].some((x) => x.a.loggedIn === true));
+      hooks.onRows(ready());
     }
+    await refreshHeadless();
   };
   const reload = (): Promise<void> => {
     if (running) { again = true; return running; }

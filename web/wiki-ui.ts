@@ -83,6 +83,7 @@ function wkDocCard(e: any, opts: any = {}) {
     deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null,
     el('div', { class: 'wk-doccard-meta' }, ...([
       e.is_wiki ? el('span', { class: 'wk-row-m', text: '인덱스' }) : null,
+      e.searchable === false ? el('span', { class: 'wk-row-m', text: '검색 제외' }) : null,   // #5169
       e.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[e.type] || e.type }) : null,
       ...(opts.metas || []),
       e.updated_at ? el('span', { class: 'wk-row-m', text: relTime(e.updated_at) }) : null,
@@ -102,6 +103,7 @@ function wkRow(e: any, opts: any = {}) {
   const ic = e.icon || (e.is_folder ? '📁' : '');
   const metas = (opts.metas || [
     e.is_wiki ? '인덱스' : null,
+    e.searchable === false ? '검색 제외' : null,   // #5169 — 목록에는 나오지만 검색·자동 소환에는 안 나오는 문서
     e.type ? (KN_TYPE_LABEL[e.type] || e.type) : null,
     e.updated_at ? relTime(e.updated_at) : null,
   ]).filter((x) => x != null && x !== '');

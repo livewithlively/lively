@@ -161,6 +161,8 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   //  (성능 때문에 껐는데 재부팅으로 되살아나면 안 된다). 기본 false=평소대로 자동 백필. 관리탭 ▸ 의미 검색 에서 사람이 토글.
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_backfill_paused BOOLEAN NOT NULL DEFAULT false;
+    -- #5204 지식 조각 검색 되돌리기. 끄면 찾기 · 자동 소환이 문서 벡터로 돌아간다(조각 색인과 임베딩은 계속 돈다).
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS knowledge_chunk_search BOOLEAN NOT NULL DEFAULT true;
     -- #1291 맥락 유형별 공개범위 켜기/끄기. 키가 없으면 '켜짐'(현행 동작) — 새 축이 추가돼도 자동으로 켜진 채 시작한다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS visibility_axes JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);

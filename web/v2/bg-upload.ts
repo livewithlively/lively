@@ -29,6 +29,8 @@ export interface BgUploadState {
   failed: number;
   /** 이미 올린 것이라 건너뛴 수(다시 고른 경우). */
   skipped: number;
+  /** 올라갔지만 자료로 만들지 않은 수(#5167 — 음악·영상·압축·숨김 파일 등. 서버 응답의 skipped). 파일은 폴더에 그대로 있다. */
+  notSource: number;
   running: boolean;
 }
 
@@ -49,7 +51,7 @@ type Job = { file: File; rel: string; key: string; tries: number };
 const queue: Job[] = [];
 const failedJobs: Job[] = [];
 /** waiting — 다시 보내려고 잠깐 쉬는 중인 수(그동안도 «도는 중» 이다). */
-let total = 0, done = 0, skipped = 0, active = 0, waiting = 0;
+let total = 0, done = 0, skipped = 0, notSource = 0, active = 0, waiting = 0;
 const listeners = new Set<(s: BgUploadState) => void>();
 let idleWaiters: Array<() => void> = [];
 let doneKeys: string[] | null = null;
@@ -78,7 +80,7 @@ function markDone(key: string): void {
 }
 
 export function bgUploadState(): BgUploadState {
-  return { total, done, failed: failedJobs.length, skipped, running: active > 0 || queue.length > 0 || waiting > 0 };
+  return { total, done, failed: failedJobs.length, skipped, notSource, running: active > 0 || queue.length > 0 || waiting > 0 };
 }
 /**
  * (순수) «고른 것이 다 올라갔나» — expected 는 부르는 쪽이 고른 수(새로 줄 선 것 + 이미 올려 건너뛴 것).
@@ -115,7 +117,7 @@ export function bgUploadAdd(items: BgUploadItem[]): { added: number; skipped: nu
     queue.push({ file: it.file, rel: it.rel, key, tries: 0 }); added++;
   }
   total += added; skipped += skip;
-  if (added) { guardUnload(true); pump(); }
+  if (added) { uploadDismissed = false; guardUnload(true); pump(); }
   emit();
   return { added, skipped: skip };
 }
@@ -124,6 +126,7 @@ export function bgUploadAdd(items: BgUploadItem[]): { added: number; skipped: nu
 export function bgUploadRetry(): void {
   if (!failedJobs.length) return;
   for (const j of failedJobs.splice(0)) { j.tries = 0; queue.push(j); }
+  uploadDismissed = false;
   guardUnload(true); pump(); emit();
 }
 
@@ -132,7 +135,7 @@ function pump(): void {
     const job = queue.shift()!;
     active++;
     void send(job).then(
-      () => { done++; markDone(job.key); },
+      (r) => { done++; if (r.notSource) notSource++; markDone(job.key); },
       (e: SendError) => {
         //  일시 오류면 잠깐 쉬었다 뒤에 다시 세운다(두 번까지). 4xx(권한·크기·경로)는 다시 보내도 같다 — 곧바로 실패로 쥔다.
         if (e && e.transient && job.tries < AUTO_RETRY) {
@@ -151,7 +154,12 @@ function pump(): void {
 /** PUT 한 번. 워크스페이스는 apiUrl 이 주소에 싣는다(lvly_ws — 셀프호스트 다중 워크스페이스). */
 type SendError = Error & { transient?: boolean };
 const sendErr = (msg: string, transient: boolean): SendError => Object.assign(new Error(msg), { transient });
-function send(job: Job): Promise<void> {
+/** 한 건의 결과 — 서버가 «자료로 만들지 않았다»(skipped)고 했나(#5167). 응답을 못 읽으면 모른다(false — 세지 않는다). */
+type SendResult = { notSource: boolean };
+const notSourceOf = (text: string): boolean => {
+  try { const j = JSON.parse(text) as { skipped?: unknown }; return typeof j?.skipped === 'string' && !!j.skipped; } catch (_) { return false; }
+};
+function send(job: Job): Promise<SendResult> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', apiUrl('/api/ui/terminal/browse/file?root=personal&path=' + encodeURIComponent('uploads/' + job.rel)));
@@ -159,7 +167,7 @@ function send(job: Job): Promise<void> {
     const token = localStorage.getItem(TOKEN_KEY);
     if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
     xhr.timeout = SEND_TIMEOUT_MS;
-    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(sendErr(String(xhr.status), xhr.status >= 500 || xhr.status === 429)));
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve({ notSource: notSourceOf(xhr.responseText) }) : reject(sendErr(String(xhr.status), xhr.status >= 500 || xhr.status === 429)));
     xhr.onerror = () => reject(sendErr('네트워크 오류', true));
     xhr.ontimeout = () => reject(sendErr('시간 초과', true));
     xhr.onabort = () => reject(sendErr('취소', false));
@@ -181,11 +189,35 @@ function guardUnload(on: boolean): void {
 }
 
 /* ── 진행 띠 — 화면 구석에 하나. 어느 화면에 있든 같은 자리다. ── */
+//  (#5167) 띠는 올리기에서 끝나지 않는다 — 다 올린 뒤 «리브가 곧 시작 · 정리 중 · 승인 필요» 를 둘째 줄(setup)이 잇는다(setup-watch.ts).
+//   종전엔 «다 올렸어요» 를 8초 보이고 사라져, 사람은 리브가 언제 오는지·되고 있는지 볼 길이 없었다(2026-10-30 실측).
+/** 둘째 줄. key 는 단계 이름 — 사람이 [닫기]로 걷은 단계는 다시 띄우지 않고, 단계가 바뀌면(예: 정리 중 → 승인 필요) 다시 띄운다. */
+export interface BgSetupLine { text: string; href?: string; label?: string; keep: boolean; key?: string }
 let bar: HTMLElement | null = null;
 let hideT: ReturnType<typeof setTimeout> | null = null;
+let setup: BgSetupLine | null = null;
+let dismissed: string | null = null;
+/** 사람이 [닫기]로 걷은 «다 올렸어요» 줄 — 새로 올리기 전까지 다시 안 띄운다(둘째 줄의 숫자가 바뀔 때마다 띠가 되살아나지 않게). */
+let uploadDismissed = false;
 const fmt = (n: number): string => n.toLocaleString('ko-KR');
+const sameLine = (a: BgSetupLine | null, b: BgSetupLine | null): boolean =>
+  a === b || (!!a && !!b && a.text === b.text && a.href === b.href && a.label === b.label && a.keep === b.keep && a.key === b.key);
+/** 둘째 줄을 바꾼다(null = 걷는다). keep 이면 띠를 저절로 걷지 않는다(아직 진행 중 — [닫기]는 있다). 같은 줄이면 다시 그리지 않는다(닫은 띠가 되살아나지 않게). */
+export function bgSetupLine(line: BgSetupLine | null): void {
+  if (sameLine(setup, line)) return;
+  setup = line;
+  paintBar(bgUploadState());
+}
+/** (순수) 올리기 줄의 문구 — 다 올렸는데 자료로 안 만든 것이 있으면 그 수와 이유를 붙인다(파일은 폴더에 그대로다). */
+export function uploadLineText(s: BgUploadState): string {
+  if (s.running) return `파일 올리는 중 · ${fmt(s.done)} / ${fmt(s.total)} — 이 창을 닫으면 멈춰요`;
+  const head = s.failed ? `${fmt(s.done)}개를 올렸고 ${fmt(s.failed)}개는 못 올렸어요` : `파일 ${fmt(s.done)}개를 다 올렸어요`;
+  return s.notSource ? `${head} · ${fmt(s.notSource)}개는 음악·영상·압축 파일 같은 것이라 자료로 만들지 않았어요(파일은 그대로 있어요)` : head;
+}
 function paintBar(s: BgUploadState): void {
-  if (!s.total && !s.failed) return;
+  const hasUpload = !!(s.total || s.failed) && (s.running || !uploadDismissed);
+  const showSetup = !!setup && !(setup.key && dismissed === setup.key);
+  if (!hasUpload && !showSetup) { if (bar) { bar.hidden = true; bar.textContent = ''; } return; }
   if (!bar) {
     bar = document.createElement('div');
     bar.className = 'bgup';
@@ -195,23 +227,43 @@ function paintBar(s: BgUploadState): void {
   }
   if (hideT) { clearTimeout(hideT); hideT = null; }
   bar.hidden = false;
-  const pct = s.total ? Math.round(((s.done + s.failed) / s.total) * 100) : 100;
-  const msg = s.running
-    ? `파일 올리는 중 · ${fmt(s.done)} / ${fmt(s.total)}`
-    : s.failed ? `${fmt(s.done)}개를 올렸고 ${fmt(s.failed)}개는 못 올렸어요` : `파일 ${fmt(s.done)}개를 다 올렸어요`;
   bar.textContent = '';
-  const line = document.createElement('div'); line.className = 'bgup-line';
-  const t = document.createElement('span'); t.className = 'bgup-text'; t.textContent = msg; line.append(t);
-  if (!s.running && s.failed) {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'bgup-btn'; b.textContent = '다시 시도';
-    b.onclick = () => bgUploadRetry(); line.append(b);
+  let lastLine: HTMLElement | null = null;
+  if (hasUpload) {
+    const pct = s.total ? Math.round(((s.done + s.failed) / s.total) * 100) : 100;
+    const line = document.createElement('div'); line.className = 'bgup-line';
+    const t = document.createElement('span'); t.className = 'bgup-text'; t.textContent = uploadLineText(s); line.append(t);
+    if (!s.running && s.failed) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'bgup-btn'; b.textContent = '다시 시도';
+      b.onclick = () => bgUploadRetry(); line.append(b);
+    }
+    bar.append(line); lastLine = line;
+    if (s.running || !showSetup) {
+      const track = document.createElement('div'); track.className = 'bgup-track';
+      const fill = document.createElement('i'); fill.style.width = pct + '%'; track.append(fill);
+      bar.append(track);
+    }
   }
-  if (!s.running) {
+  if (showSetup && setup) {
+    const line = document.createElement('div'); line.className = 'bgup-line bgup-setup';
+    const t = document.createElement('span'); t.className = 'bgup-text'; t.textContent = setup.text; line.append(t);
+    if (setup.href && setup.label) {
+      const a = document.createElement('a'); a.className = 'bgup-btn'; a.href = setup.href; a.textContent = setup.label; line.append(a);
+    }
+    bar.append(line); lastLine = line;
+  }
+  //  [닫기]는 올리는 중이 아니면 늘 있다 — 정리가 몇 시간 걸려도 띠에 갇히지 않게(격리 리뷰 2026-10-30). 닫은 단계는 기억해 다시 안 띄운다.
+  if (!s.running && lastLine) {
     const x = document.createElement('button'); x.type = 'button'; x.className = 'bgup-btn bgup-x'; x.textContent = '닫기';
-    x.onclick = () => { if (bar) bar.hidden = true; }; line.append(x);
+    x.onclick = () => { if (setup && setup.key) dismissed = setup.key; uploadDismissed = true; if (bar) bar.hidden = true; };
+    lastLine.append(x);
   }
-  const track = document.createElement('div'); track.className = 'bgup-track';
-  const fill = document.createElement('i'); fill.style.width = pct + '%'; track.append(fill);
-  bar.append(line, track);
-  if (!s.running && !s.failed) hideT = setTimeout(() => { if (bar) bar.hidden = true; }, HIDE_MS);
+  //  저절로 걷는 것은 진행 중이 아닐 때만 — 실패·자료로 안 만든 것이 있으면 사람이 읽어야 하니 걷지 않는다.
+  const busy = s.running || (showSetup && !!setup && setup.keep);
+  if (!busy && !s.failed && !s.notSource) {
+    hideT = setTimeout(() => {
+      if (bar) bar.hidden = true;
+      if (setup && !setup.keep) setup = null;   // 끝난 단계의 말은 한 번만 — 나중의 다른 올리기에 따라붙지 않게
+    }, HIDE_MS);
+  }
 }

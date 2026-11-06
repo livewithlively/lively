@@ -4,7 +4,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { RateWindow } from "../apps/app-chat-send.js";
-import { PROXY_TOKEN_PREFIX, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
+import { PROXY_TOKEN_PREFIX, callerUnattended, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
 import { parseAccountSettings } from "./plan.js";
 
 /** 워크스페이스 Anthropic API 키의 자격 금고 kind(org_credential_set kind=anthropic_api_key · owner=gateway). */
@@ -94,7 +94,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       return { id: row.id };
     },
     getJob: async (id) => (await import("../agent-jobs/store.js")).getAgentJob(id),
-    resumeTarget: resumeTargetOf,
+    resumeTarget: (id) => resumeTargetOf(id),
     cancelJob: async (id, user) => {
       const svc = await import("../agent-jobs/service.js");
       const jobs = await (await import("../agent-jobs/live.js")).liveAgentJobDeps();
@@ -105,6 +105,16 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     //  #5082 앱 판 지시 — 부른 사람(주소)의 판에서 그 작업 이름의 지시 파일(apps/app-job-instructions) · 형식 재시도는 원래 작업 행에 실린 글.
     instructions: async (app, who, job) => (await import("../apps/app-job-instructions.js")).resolveJobInstructions(app, who, job),
     jobInstructions: async (jobId) => (await import("../agent-jobs/store.js")).agentJobAppInstructions(jobId),
+    //  «라이블리 MCP 만»(ai.mcp_only) — 앱 판 지시와 같은 판에서 읽고 · 이어받기 · 형식 재시도는 원래 작업 행의 값.
+    mcpOnly: async (app, who, job) => (await import("../apps/app-job-mcp-only.js")).resolveJobMcpOnly(app, who, job),
+    jobMcpOnly: async (jobId) => (await import("../agent-jobs/store.js")).agentJobMcpOnly(jobId),
+    //  작업별 라이블리 도구 허용 목록(ai.tools) — 같은 판에서 읽고 · 이어받기는 겹치는 것만 · 형식 재시도는 원래 작업 행의 목록.
+    toolAllowlist: async (app, who, job) => (await import("../apps/app-job-tools.js")).resolveJobTools(app, who, job),
+    jobToolAllowlist: async (jobId) => (await import("../agent-jobs/store.js")).agentJobToolAllowlist(jobId),
+    //  생각 깊이(effort) — 이어받기(안 주면) · 형식 재시도는 원래 작업 행의 값(판이 하네스에 실은 그 값).
+    jobEffort: async (jobId) => (await import("../agent-jobs/store.js")).agentJobEffort(jobId),
+    //  작업 행의 도구 호출 단계 — 작업 실행 하나 보기가 싣는다.
+    jobSteps: async (jobId) => (await import("../agent-jobs/store.js")).agentJobSteps(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,
@@ -150,23 +160,39 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     isAdmin,
     isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
     memberFacts: memberFactsOf,
+    //  #1639 — 앞단 서명 신원(사람의 브라우저 요청)에는 행이 없다. 도구 부르기 · 백그라운드 작업의 돌기 신원은 시작할 때 잰 표시를 읽는다.
+    appServerUnattended: async (user) => {
+      if (user.appCallId != null) return (await import("../apps/app-server-call-store.js")).appCallUnattended(user.appCallId);
+      if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobUnattended(user.appJobId);
+      return false;
+    },
   };
   return cached;
+}
+
+/** #1639 이 호출이 사람이 보지 않는 자리에서 왔나(service.callerUnattended) — 앱 도구 · 백그라운드 작업의 시작이 재서 그 행에 남긴다. */
+export async function appCallerUnattended(c: { member: string; tokenHashPrefix?: string | undefined; session?: string | undefined }): Promise<boolean> {
+  return callerUnattended(c, await liveAiRunDeps());
 }
 
 /**
  * #5101 이어받을 작업(앞 실행의 작업 행)의 사실 — 작업 폴더 · 모델 · 이을 대화가 남았나. 작업 행이 없으면(보존 정리로 지워짐) null.
  *  API 키 작업은 게이트웨이가 보관한 대화 기록이 그 작업의 대화 id 와 맞아야 잇는다(빈 설정 폴더는 끝나면 지워진다 — agent-jobs/plan.TRANSCRIPT_GZ_MAX).
- *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남는다 — 대화 id 만 본다.
+ *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남는다 — 대화 id 만 본다. 단 #5082 도커 실행면은 그 계정의 projects/ 를 작업마다 덮어 대화가 홈에
+ *  남지 않으니 API 키 작업과 같이 본다(agent-jobs/service.bundledTranscript · surface.subscriptionTranscripts).
+ *  o.subscriptionTranscripts — 시험이 실행면 대신 준다(없으면 이 배포의 실행면).
  */
-export async function resumeTargetOf(jobId: number): Promise<ResumeTarget | null> {
+export async function resumeTargetOf(jobId: number, o: { subscriptionTranscripts?: boolean } = {}): Promise<ResumeTarget | null> {
   const store = await import("../agent-jobs/store.js");
   const j = await store.getAgentJob(jobId);
   if (!j) return null;
   const base = { projectId: j.project_id, model: j.model, conversation: j.conversation_id };
   if (!j.conversation_id) return { ...base, resumable: false, why: "그 작업에 대화가 남지 않았습니다 — 하네스가 대화를 시작하기 전에 끝났습니다" };
-  if (j.account_kind === "api_key" && (await store.agentJobTranscriptConv(j.id)) !== j.conversation_id) {
-    return { ...base, resumable: false, why: "API 키 작업의 대화 기록이 없습니다 — 게이트웨이는 끝난 뒤 transcript_keep_days 동안만 두고, 이 기능 전에 끝난 작업 · 기록이 상한을 넘은 작업은 남지 않습니다" };
+  const { bundledTranscript } = await import("../agent-jobs/service.js");
+  const subscriptionTranscripts = o.subscriptionTranscripts ?? (j.account_kind === "subscription" && (await (await import("../agent-jobs/surface.js")).jobSurface()).subscriptionTranscripts);
+  const bundled = bundledTranscript(j.account_kind, { subscriptionTranscripts });
+  if (bundled && (await store.agentJobTranscriptConv(j.id)) !== j.conversation_id) {
+    return { ...base, resumable: false, why: "작업의 대화 기록이 없습니다 — 게이트웨이는 끝난 뒤 transcript_keep_days 동안만 두고, 이 기능 전에 끝난 작업 · 기록이 상한을 넘은 작업은 남지 않습니다" };
   }
   return { ...base, resumable: true, why: null };
 }

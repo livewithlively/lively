@@ -94,9 +94,17 @@ export async function applyLaneSkeleton(o: { drawers: SkeletonDrawer[]; cadence?
   return { created, skipped };
 }
 
+/** 서랍 레인의 서랍 key — 키에서 `liv-` 를 뗀 값. 서랍 레인이 아니면 null(일반 key · 안전망 · `liv-` 뒤가 빔). */
+export function drawerOfLane(key: string | null | undefined): string | null {
+  const k = String(key ?? "").trim();
+  if (!k.startsWith("liv-") || k === CATCH_ALL_KEY) return null;
+  return k.slice("liv-".length).trim() || null;
+}
+
 /**
- * 서랍 레인의 **목적지를 잃지 않게** 되살린다(#1631) — 키가 곧 목적지인 레인이라 빈 목적지는 정의상 고장이다.
+ * 서랍 레인의 목적지를 정한다(#1631 · #5235) — 저장이 통과하면 그 값이 실제로 저장되고, 뜻대로 못 하면 거절로 이유를 말한다.
  *
+ *  키가 곧 목적지인 레인이라, 서랍이 **있는데** 목적지가 비면 고장이다.
  *  ── 실측 (2026-08-31 dev, 감사 기록) ──
  *    17:22:52 insert (welcome)  (null) → d-21c2235a7d   enabled=false   ← 뼈대가 목적지를 넣었다
  *    17:42:36 update (web)      d-21c2235a7d → (null)   enabled=true    ← 리브가 **켜면서 지웠다**
@@ -104,19 +112,33 @@ export async function applyLaneSkeleton(o: { drawers: SkeletonDrawer[]; cadence?
  *   «이 서랍으로 모아 주세요» 가 조용히 사라지는 것이다. (같은 턴의 다른 레인들은 목적지를 지켰다 — 그래서
  *   부분 갱신 계약의 문제가 아니라 **한 호출이 빈 값을 실어 보낸** 문제다. 사람도 도구도 그럴 수 있다.)
  *
- *  ⚠ 되살리는 것은 **비었을 때뿐**이다. 다른 서랍을 명시적으로 가리키면 그 뜻을 존중한다(레인을 옮기는 것은
- *   정당한 조작이다). 안전망(liv-catch-all)은 스코프도 목적지도 비우는 것이 설계라 건드리지 않는다.
+ *  ── 되살리기만 하면 생기는 결함 둘 (#5235, 셀프호스트 고객 박스·olddev 실측) ──
+ *   ① 키에서 **없는 서랍을 지어냈다.** 빈 값은 목적지 검증(judgeTargetCategory)을 통과하고, 그 뒤에 되살아나 검증을 우회했다
+ *      (`liv-product-thread` 를 목적지 없이 만들면 없는 카테고리 `product-thread` 가 박혔다).
+ *   ② 비우는 저장이 200 인데 아무것도 안 바뀌었다. 없는 서랍이 박힌 레인을 고칠 길이 없어 다른 key 로 새 레인을 만들어야 했다.
  *
- * @param key   증류기 key
- * @param given 이번 저장에서 정해진 목적지(빈 값이면 되살린다)
- * @returns 저장할 목적지
+ *  | 이번 저장의 목적지 | 키의 서랍                 | 결과 |
+ *  |---|---|---|
+ *  | 있음               | —                         | 그대로 — 옮기는 것은 정당하다(명시한 값의 검증은 judgeTargetCategory) |
+ *  | 빔                 | 서랍 레인 아님            | 빈 채로 — 안전망은 스코프도 목적지도 비우는 것이 설계다 |
+ *  | 빔                 | 활성 카테고리가 아님      | 빈 채로 — 되살릴 서랍이 없다. 없는 서랍이 박힌 레인을 고치는 길이 이것이다 |
+ *  | 빔                 | 활성 · 비우려는 저장      | 거절 — 받아 주면 위 실측의 고장이 되고, 되살리면 조용한 무시가 된다 |
+ *  | 빔                 | 활성 · 그 밖              | 서랍으로 되살린다 |
+ *
+ * @param o.key      증류기 key
+ * @param o.given    이번 저장에서 정해진 목적지(명시한 값, 안 보냈으면 현재 값)
+ * @param o.clearing 빈 값을 명시해 목적지를 없애려는 저장인가. 이미 빈 목적지를 그대로 되돌려 보낸 것은 아니다 —
+ *                   켜고 끄는 화면이 현재 값을 통째로 되보내는데(distillers.ts settable), 그걸 거절하면 스위치가 막힌다.
+ * @param o.stateOf  카테고리 key → state(없으면 undefined)
+ * @returns 저장할 목적지, 또는 비울 수 없는 서랍(refuse)
  */
-export function keepDrawerTarget(key: string | null | undefined, given: string | null | undefined): string | null {
-  const k = String(key ?? "").trim();
-  const g = String(given ?? "").trim();
-  if (g) return g;                              // 명시된 목적지는 그대로 — 옮기는 것은 정당하다
-  if (!k.startsWith("liv-")) return null;        // 서랍 레인이 아니면 관여하지 않는다
-  if (k === CATCH_ALL_KEY) return null;          // 안전망은 목적지가 없는 것이 설계다
-  const drawer = k.slice("liv-".length).trim();
-  return drawer || null;
+export function settleDrawerTarget(o: {
+  key: string | null | undefined; given: string | null | undefined;
+  clearing: boolean; stateOf: (categoryKey: string) => string | undefined;
+}): { target: string | null } | { refuse: string } {
+  const given = String(o.given ?? "").trim();
+  if (given) return { target: given };
+  const drawer = drawerOfLane(o.key);
+  if (!drawer || o.stateOf(drawer) !== "active") return { target: null };
+  return o.clearing ? { refuse: drawer } : { target: drawer };
 }

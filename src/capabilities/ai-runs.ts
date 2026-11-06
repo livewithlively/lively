@@ -1,7 +1,7 @@
 // 앱 AI 실행 도구 (#4488 앱 v2-9) — 입구 하나 `app_ai_run`(= 앱 주소 `/_lively/ai/runs`) + 보기 · 목록 · 취소 · 대상 · 실행 계정 설정 · 상한.
 //  흐름·판정은 ai-runs/service.ts(살아 있는 의존은 live.ts), 여기는 입력과 표면뿐이다.
 //  앱 화면은 다리(/api/ui/apps/:id/tool-call)나 앱 주소의 /_lively/ai/*(#4482 app-front-api)로 부른다 — 매니페스트 permissions.ai_runs 를 선언하고 사람이 동의해야 한다.
-//  앱 서버는 능력 REST(/api/ui/ai-runs · 앱 서버 토큰 + 사람 신원)로 부른다 — 실행 계정이 구독이면 거절된다(구독은 사람이 앱 화면에서 보낸 것만).
+//  앱 서버는 능력 REST(/api/ui/ai-runs · 앱 서버 토큰 + 사람 신원)로 부른다 — 실행 계정이 구독이면 물은 사람이 그 구독의 주인 본인일 때만 받는다(#1639 · plan.subscriptionRefusal).
 //   예외: 공용 시트(#5081 — app_ai_service_seat_set 으로 관리자 승인 + 본인 동의)는 앱 서버가 사람 신원을 실어 보낸 요청도 받는다.
 import { z } from "zod";
 import type { Capability } from "./types.js";
@@ -15,6 +15,7 @@ import {
   serviceSeatConsented, type AiAccount, type AiAccountSettings, type SeatTarget,
 } from "../ai-runs/plan.js";
 import { APP_ID_RE } from "../agent-jobs/plan.js";
+import { EFFORT_LEVELS } from "../agent-jobs/runner.js";
 
 const deps = async () => (await import("../ai-runs/live.js")).liveAiRunDeps();
 const svc = () => import("../ai-runs/service.js");
@@ -30,8 +31,11 @@ const aiRunInput = {
   prompt: z.string().min(1).max(PROMPT_MAX).describe("AI 에게 줄 지시(전문). 단발이면 LLM 한 번, 에이전트 작업이면 하네스(claude -p)의 첫 말"),
   system: z.string().max(20_000).optional().describe("시스템 지시(선택)"),
   schema: z.record(z.unknown()).optional().describe("결과 JSON Schema(선택) — 주면 게이트웨이가 형식 지시를 붙이고 답을 검사한다. 어긋나면 «형식에 맞게 다시» 1회, 그래도 어긋나면 원문을 붙여 실패. 맞으면 result.json"),
-  job: z.string().regex(JOB_NAME_RE).optional().describe("작업 이름(매니페스트 ai.jobs 에 선언한 것) — 작업별 실행 계정을 쓴다. 생략하면 앱별 > 워크스페이스 기본값. 그 작업이 ai.instructions 를 선언했으면 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 지시 파일을 접수 때 읽어 시스템 지시로 싣는다 — 에이전트 작업은 그때 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다"),
+  job: z.string().regex(JOB_NAME_RE).optional().describe("작업 이름(매니페스트 ai.jobs 에 선언한 것) — 작업별 실행 계정을 쓴다. 생략하면 앱별 > 워크스페이스 기본값. 그 작업이 ai.instructions 를 선언했으면 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 지시 파일을 접수 때 읽어 시스템 지시로 싣는다 — 에이전트 작업은 그때 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다. 그 작업이 ai.mcp_only 에 있으면 에이전트 작업은 하네스 내장 도구(셸 · 파일 · 웹)를 끄고 라이블리 MCP 도구만 쓴다 — job 을 생략하거나 목록에 없는 작업이면 내장 도구가 열린다. 그 작업이 ai.tools 에 도구 목록을 두었으면 에이전트 작업의 라이블리 토큰은 그 목록 안의 도구만 쓴다(앱 동의와 둘 다) — job 을 생략하거나 목록을 두지 않은 작업이면 앱 동의 전체다"),
   model: z.string().regex(MODEL_RE).optional().describe("모델(선택). 단발은 워크스페이스 기본 모델, 에이전트 작업은 하네스 기본"),
+  effort: z.enum(EFFORT_LEVELS).optional().describe(
+    "하네스 생각 깊이(선택 · claude -p --effort) — 작업 컨테이너에서 도는 실행(에이전트 작업 · 구독으로 도는 단발)만 받는다. 단발 + 워크스페이스 API 키(LLM 프록시)에 주면 400. 생략하면 하네스 기본. " +
+    "요청한 깊이다 — 고른 모델이 받지 않는 깊이는 하네스가 낮추거나 빼고(예: 옛 모델 id), 실행 계정의 설정(maxEffortLevel)이 상한을 둘 수 있다. 실행 기록의 effort 도 요청한 값이다"),
   label: z.string().optional().describe(`짧은 이름(목록에 보인다). ${softCapHint(SOFT_CAPS.app_ai_run!.label!)}`),
   files: z.array(z.string().max(512)).max(50).optional().describe("관련 파일(작업 폴더 기준) — 주면 **에이전트 작업**(작업 컨테이너 · 파일 · 도구)이 된다"),
   project_id: z.number().int().positive().optional().describe("이 프로젝트 폴더에서 돈다(에이전트 작업 · 앱 폴더는 .lively/apps/<앱> 에 붙는다)"),
@@ -41,7 +45,7 @@ const aiRunInput = {
   resume_run_id: z.number().int().positive().optional().describe(
     "이 끝난 실행(done · failed)의 대화를 이어받아 prompt(고칠 점 · 사유)로 다시 시킨다 — 새 실행이 생기고 앞 실행은 그대로 남는다. 같은 앱 · 같은 요청자 · 같은 자리" +
     "(앱 화면에서 시작한 대화는 앱 화면에서, 앱 서버가 시작한 대화는 앱 서버에서)만. 실행 계정 · 작업 종류 · 작업 폴더 · 작업 이름 · system 은 앞 실행 것" +
-    "(schema 는 안 주면 앞 실행 것 · model 은 바꿀 수 있다). 한 질문(처음 실행)당 상한 max_resumes(app_ai_limits · 갈래 포함) — 넘으면 409 resume_limit"),
+    "(schema 는 안 주면 앞 실행 것 · model · effort 는 바꿀 수 있다 — 안 주면 앞 실행 것). 한 질문(처음 실행)당 상한 max_resumes(app_ai_limits · 갈래 포함) — 넘으면 409 resume_limit"),
   reason: z.string().optional().describe(`이어받는 까닭 — 실행 기록(resume.reason)에 남는 짧은 이름표(선택 · 안 주면 null — 사유 원문은 그 실행의 prompt). AI 에게는 prompt 가 간다. ${softCapHint(SOFT_CAPS.app_ai_run!.reason!)}`),
 };
 const AI_RUN_KEYS = Object.keys(aiRunInput);
@@ -51,7 +55,9 @@ const appAiRun: Capability = {
   title: "앱 AI 실행",
   description:
     "앱의 AI 작업 입구 하나(/_lively/ai/runs). 프롬프트(+결과 스키마 · 파일 · 작업 이름)를 보내면 게이트웨이가 실행 계정(작업별 > 앱별 > 워크스페이스 기본값 — API 키 또는 본인 구독)과 자리를 고른다: " +
-    "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만 — 앱 서버 · 자동화는 API 키. " +
+    "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. effort(low · medium · high · xhigh · max)는 작업 컨테이너 실행의 하네스 생각 깊이(claude -p --effort) — 프록시 실행에 주면 400. " +
+    "{id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만. " +
+    "앱 서버가 보낸 요청은 물은 사람이 그 구독의 주인 본인일 때만(사람 신원 · 앱 폴더에서만 · 작업 AI 의 토큰은 그 사람 ∩ 앱 동의 · 응답 app_server_own · 세션을 밝힌 위탁 · 상시 세션이나 작업 AI 가 부른 도구에서 온 신원은 거절) — 그 밖의 앱 서버 · 자동화는 API 키. " +
     "공용 시트(관리자 승인 + 그 계정 본인 동의 — app_ai_service_seat_set)로 지정된 구독은 워크스페이스 구성원 누구의 요청이든 받는다(앱 서버가 사람 신원을 실어 보낸 요청 포함 · 앱 폴더에서만 · 작업 AI 의 라이블리 신원은 물은 사람). " +
     "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits). " +
     "이어받기: 앱이 답을 검사하고 어긋나면 resume_run_id + prompt(사유)로 그 대화를 잇는 새 실행을 보낸다(응답 resume{of,root,depth,reason}).",
@@ -71,8 +77,9 @@ const appAiRun: Capability = {
 const appAiRunGet: Capability = {
   name: "app_ai_run_get",
   title: "앱 AI 실행 보기",
-  description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · result(text · json · model · usage · duration_ms · retries) · error · " +
-    "resume(이어받은 실행이면 {of: 이어받은 실행 · root: 처음 실행 · depth: 몇 번째 · reason}, 아니면 null). 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
+  description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · model · effort(요청한 생각 깊이 — 실제로 쓴 깊이는 모델 · 계정 설정에 따라 낮을 수 있다 · 없으면 null) · result(text · json · model · usage · duration_ms · retries) · error · " +
+    "resume(이어받은 실행이면 {of: 이어받은 실행 · root: 처음 실행 · depth: 몇 번째 · reason}, 아니면 null) · " +
+    "steps(작업 컨테이너 실행의 도구 호출 — [{id, name, input(앞 160자), started_at, ended_at(끝나지 않았으면 null), is_error}] · 최근 200개 · 형식 재시도가 있었으면 앞 작업의 단계를 앞에 잇는다 · 도는 동안에도 늘어난다 · 도구 결과 글은 없다). 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
   scope: null,
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-runs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },
@@ -82,7 +89,7 @@ const appAiRunGet: Capability = {
 const appAiRuns: Capability = {
   name: "app_ai_runs",
   title: "앱 AI 실행 목록",
-  description: "내 AI 실행 목록(최근 것부터 · 요약 — 전문은 app_ai_run_get). 앱 화면에서 부르면 그 앱의 내 실행만, 관리자는 워크스페이스 전체(남의 것은 상태·오류만). status · app_id 로 좁힌다.",
+  description: "내 AI 실행 목록(최근 것부터 · 요약 — 전문은 app_ai_run_get). 앱 화면에서 부르면 그 앱의 내 실행만, 관리자는 워크스페이스 전체(남의 것은 상태·오류만). status · app_id 로 좁힌다. 앱 서버가 내 구독으로 돌린 실행은 app_server_own:true 다.",
   scope: null,
   input: { app_id: z.string().optional(), status: z.string().optional().describe("queued · running · done · failed · canceled"), limit: z.number().int().min(1).max(100).optional() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-runs"], parse: (req) => {
@@ -149,7 +156,7 @@ const accountInput = {
 const appAiAccountSet: Capability = {
   name: "app_ai_account_set",
   title: "앱 AI 실행 계정 정하기",
-  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자 · 책임자는 제 앱을 워크스페이스 API 키로 돌리게도 할 수 있다 — 앱당 하루 토큰 상한이 울타리). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 예외: 공용 시트로 켜진 구독(app_ai_service_seat_set — 관리자 승인 + 본인 동의)은 관리자가 어느 자리에든 건다. 기본 모델은 관리자. 배포 없이 바로 먹는다.",
+  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자 · 책임자는 제 앱을 워크스페이스 API 키로 돌리게도 할 수 있다 — 앱당 하루 토큰 상한이 울타리). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 내 구독을 앱에 걸면 그 앱 서버가 내 신원으로 보낸 요청도 내 구독 · 내 자리(Claude 로그인)에서 돈다 — 믿는 앱에만 건다. 예외: 공용 시트로 켜진 구독(app_ai_service_seat_set — 관리자 승인 + 본인 동의)은 관리자가 어느 자리에든 건다. 기본 모델은 관리자. 배포 없이 바로 먹는다.",
   scope: null,
   input: accountInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/ai-account"], parse: (req) => pickBody((req.body ?? {}) as Record<string, unknown>, Object.keys(accountInput)) }] },

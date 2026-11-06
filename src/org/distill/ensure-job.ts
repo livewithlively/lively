@@ -14,6 +14,7 @@
 //  ── 규율 ──
 //  · 사람이 꺼 둔 잡을 되살리지 않는다(마스터킬 보존).
 //  · 운영자가 만든 잡의 params 를 말없이 고치지 않는다 — **처음 설정이 심은 잡만** 넓힌다.
+//  · 레인을 켠 사람은 무엇이 그 레인을 돌리는지 저장 응답(job_plan)에서 안다(#5235). 돌릴 잡이 없으면 없다고 말한다.
 //  · 판정(planDistillJob)은 순수 함수 — 엣지 표로 검증한다.
 import { LOCAL_DISTILL_JOB_ID, LOCAL_DISTILL_INTERVAL_SEC } from "./local-preset.js";
 
@@ -28,7 +29,8 @@ export interface DistillJobRow {
 }
 
 export type DistillJobPlan =
-  | { action: "none"; reason: string }
+  /** jobId = 이 레인을 맡는 잡. uncovered = 이 레인을 돌릴 잡이 **없다**(꺼진 잡을 되살리지 않았다). */
+  | { action: "none"; reason: string; jobId?: string; uncovered?: boolean }
   | { action: "widen"; jobId: string; reason: string }
   | { action: "create"; jobId: string; reason: string };
 
@@ -56,7 +58,7 @@ export function planDistillJob(jobs: readonly DistillJobRow[], distillerKey: str
   if (!key) return { action: "none", reason: "증류기 key 가 없어 판정하지 않았다" };
 
   const covering = jobs.find((j) => covers(j, key));
-  if (covering) return { action: "none", reason: `잡 '${covering.id}' 가 이미 접수한다` };
+  if (covering) return { action: "none", jobId: covering.id, reason: `잡 '${covering.id}' 가 이미 접수한다` };
 
   // 심은 잡이 켜진 채 다른 증류기에 묶여 있으면 그 묶음을 푼다 — 잡을 늘리지 않는다.
   const seeded = jobs.find((j) => j.id === LOCAL_DISTILL_JOB_ID && j.enabled && pinnedTo(j) !== "");
@@ -67,10 +69,19 @@ export function planDistillJob(jobs: readonly DistillJobRow[], distillerKey: str
   // 증류 잡이 아예 없다 → 전체 접수 잡을 만든다.
   if (!jobs.length) return { action: "create", jobId: ALL_LANES_JOB_ID, reason: "증류 잡이 없어 새로 만든다" };
 
+  //  (#5235) 전체 잡 id 가 이미 있는데 여기까지 왔다 = 꺼져 있거나(사람·브레이커) 다른 레인에 묶여 있다. 만들면 **그 잡을 덮어쓴다** —
+  //   레인을 하나 저장했을 뿐인데 사람이 끈 잡이 켜지고, 주기·params·브레이커 기록까지 초기화된다.
+  //   전용 잡만 켜 둔 워크스페이스에서 전체 잡을 끈 경우가 정확히 이 자리다(아래 «전부 꺼짐» 분기를 못 탄다).
+  const taken = jobs.find((j) => j.id === ALL_LANES_JOB_ID);
+  if (taken) {
+    const state = taken.enabled ? `'${pinnedTo(taken)}' 에 묶여` : "꺼져";
+    return { action: "none", jobId: taken.id, uncovered: true, reason: `'${taken.id}' 가 ${state} 있어 이 증류기를 돌릴 잡이 없다 — 사람이 정한 잡을 되살리거나 고치지 않는다` };
+  }
+
   // 심은 잡이 없고 운영자 잡만 있는데 그중 접수하는 것이 없다 → 남의 잡을 건드리지 않고 하나 만든다.
   //  단 **전부 꺼져 있다면** 사람이 증류를 통째로 꺼 둔 것이므로 되살리지 않는다.
   if (jobs.some((j) => j.enabled)) return { action: "create", jobId: ALL_LANES_JOB_ID, reason: "켜진 잡이 이 증류기를 접수하지 않아 전체 접수 잡을 만든다" };
-  return { action: "none", reason: "증류 잡이 전부 꺼져 있다 — 사람이 끈 것을 되살리지 않는다" };
+  return { action: "none", uncovered: true, reason: "증류 잡이 전부 꺼져 있어 이 증류기를 돌릴 잡이 없다 — 사람이 끈 것을 되살리지 않는다" };
 }
 
 /**
@@ -122,7 +133,7 @@ export async function readDistillJobs(): Promise<DistillJobRow[]> {
  */
 export async function ensureDistillJob(distillerKey: string, actor?: string | null): Promise<DistillJobPlan> {
   const { itemsPool } = await import("../../db/client.js");
-  const { upsertCronJob } = await import("../cron-store.js");
+  const { insertCronJobIfAbsent } = await import("../cron-store.js");
 
   let jobs: DistillJobRow[] = [];
   try {
@@ -139,15 +150,38 @@ export async function ensureDistillJob(distillerKey: string, actor?: string | nu
         `UPDATE org_cron SET params = COALESCE(params,'{}'::jsonb) - 'distiller', updated_at=now(), updated_by=$2
           WHERE id=$1`, [plan.jobId, actor ?? null]);
     } else if (plan.action === "create") {
-      await upsertCronJob({
+      //  없을 때만 만든다 — 판정과 쓰기 사이에 다른 저장이 같은 id 를 만들었으면 덮지 않는다(upsert 는 사람이 끈 잡을 되살린다).
+      const made = await insertCronJobIfAbsent({
         id: plan.jobId, label: "자료 증류 — 켜진 레인 전부", action: "distill_sources_headless",
         params: JSON.stringify({}), interval_sec: LOCAL_DISTILL_INTERVAL_SEC, cron_expr: null, enabled: true,
         note: "증류기를 켤 때 자동 등록(#2415). distiller 를 비워 켜진 증류기 전부를 각각 배치로 접수한다 — 레인마다 잡을 만들지 않는다.",
         run_once: null, actor: actor ?? null,
       });
+      //  다른 저장이 먼저 만들었다 — 그 잡이 꺼진 채일 수도 있으니 지금 행으로 다시 판정한다.
+      if (!made) {
+        const again = planDistillJob(await readDistillJobs(), distillerKey);
+        return again.action === "none" ? again : { action: "none", jobId: plan.jobId, reason: `'${plan.jobId}' 를 다른 저장이 먼저 만들었다` };
+      }
     }
   } catch (e) {
     return { action: "none", reason: `잡 정비 실패: ${(e as Error)?.message ?? e}` };
   }
   return plan;
+}
+
+/** 레인 저장 응답에 싣는 모양(#5235) — 잡이 생겼는지 · 무엇이 이 레인을 돌리는지 · 돌릴 잡이 없는지. */
+export interface LaneJobPlan {
+  action: DistillJobPlan["action"];
+  job_id: string | null;
+  uncovered: boolean;
+  /** 새로 만든 전체 잡의 주기(초). */
+  interval_sec?: number;
+  reason: string;
+}
+
+export function laneJobPlan(plan: DistillJobPlan): LaneJobPlan {
+  return {
+    action: plan.action, job_id: plan.jobId ?? null, uncovered: plan.action === "none" && plan.uncovered === true, reason: plan.reason,
+    ...(plan.action === "create" ? { interval_sec: LOCAL_DISTILL_INTERVAL_SEC } : {}),
+  };
 }

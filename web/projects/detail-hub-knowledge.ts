@@ -1,5 +1,5 @@
 // projects/detail-hub-knowledge.ts — 허브 «연결된 지식» 위젯(#4135, 5판 시안 2026-09-25 원준: «지식의 입구는 검색이다. 위젯이 분류를 정하지 않는다»).
-//   모든 크기 맨 위에 검색 상자(3×2 는 오른쪽 칸) — 치면 그 자리에서 의미검색(knowledge/semantic) 결과가 서고 [필요로 연결].
+//   모든 크기 맨 위에 검색 상자(3×2 는 오른쪽 칸) — 치면 그 자리에서 의미검색(knowledge-screen/search?semantic=1 — #5169 검색 제외도 표시를 달고 찾는다) 결과가 서고 [필요로 연결].
 //   1×1  필요·산출 줄 + 추천 하나           1×N  «필요 — 세션이 읽고 시작» 카드 · 추천 · «산출 — 이 프로젝트가 만든 것»
 //   2×1 · 3×1  필요 | 산출 두 단(추천은 필요 밑 점선)   2×2+  흐름: 필요 → [프로젝트 · 세션 N · 태스크 N] → 산출
 //   3×2+ 흐름 + 오른쪽 검색 칸
@@ -97,7 +97,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
         results.hidden = false; sw.hidden = true;
         results.replaceChildren(el('div', { class: 'pjh-stat', text: '찾는 중…' }));
         let ms: any[] = [];
-        try { ms = await api('/api/ui/knowledge/semantic?q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
+        try { ms = await api('/api/ui/knowledge-screen/search?semantic=1&q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
         if (my !== seq) return;
         results.replaceChildren(el('div', { class: 'pjh-grp' }, el('b', { text: '결과' }), el('span', { class: 'pjh-grp-n', text: String(ms.length) })));
         if (!ms.length) results.append(el('div', { class: 'pjh-stat', text: '찾는 지식이 없습니다 — 열어서 직접 작성할 수 있습니다.' }));
@@ -105,6 +105,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
           const name = knName(m);
           results.append(withMenu(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
             el('div', { class: 'pjh-kr-b' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
+              m.searchable === false ? el('div', { class: 'pjh-kr-s', text: '검색 제외' }) : null,
               m.snippet ? el('div', { class: 'pjh-kr-s', text: searchSnippet(m.snippet, f.modal ? 220 : 90) }) : null),
             linked.has(name) ? el('span', { class: 'pjh-kn-rel', text: '연결됨' })
               : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })) as HTMLElement, m, 'rec'));

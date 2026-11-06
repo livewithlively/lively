@@ -31,7 +31,7 @@ const r = await pool.query(
      content_hash=EXCLUDED.content_hash, version=org_hook.version+1, updated_at=now()
    RETURNING id, enabled, version, content_hash`,
   [ID, "관련 지식 자동 회수 (#172)", source,
-   "프롬프트와 의미적으로 가까운 팀 지식 인덱스를 주입(벡터검색 #172). knowledge_similar min_score 게이팅·fail-open·본문 미주입.",
+   "프롬프트와 의미적으로 가까운 팀 지식 인덱스를 주입(벡터검색 #172). knowledge_recall 이 기준선으로 게이팅·fail-open·본문 미주입.",
    enabled, hash]);
 console.log("org_hook upsert:", r.rows[0]);
 await pool.end();

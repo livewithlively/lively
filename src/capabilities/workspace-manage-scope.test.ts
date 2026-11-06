@@ -16,7 +16,7 @@ const scopeOf = (name: string): string | null | undefined => SNAP.find((o) => o.
 
 // 워크스페이스를 «어떻게 굴릴까» — 구성원이 한다.
 const MEMBER_OPS = [
-  "org_collector_upsert", "org_collector_sync_run", "org_connector_upsert",
+  "org_collector_upsert", "org_collector_sync_run", "org_pipeline_run_now", "org_connector_upsert",
   "org_slack_collect_set", "org_notion_collect_set", "org_google_collect_set",
   "org_github_collect_set", "org_clickup_collect_set", "org_figma_collect_set", "org_linear_collect_set", "org_gitlab_collect_set",
   "org_mcp_upsert", "org_app_tools_set_write", "org_app_set_enabled",

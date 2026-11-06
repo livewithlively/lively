@@ -413,7 +413,7 @@
   "rest": [
    "POST /api/ui/org/member/reset-password"
   ],
-  "input_hash": "4ed624ebe4f60b35"
+  "input_hash": "160459e1264b1b93"
  },
  {
   "name": "org_member_remove",
@@ -986,6 +986,16 @@
   "input_hash": "5a5bfb491e88557b"
  },
  {
+  "name": "org_embeddings_chunk_search",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/embeddings/chunk-search"
+  ],
+  "input_hash": "34f81246ef82b147"
+ },
+ {
   "name": "org_mcp_servers",
   "scope": null,
   "mcp": true,
@@ -1127,6 +1137,16 @@
   "input_hash": "4f06b4e0a6d2d369"
  },
  {
+  "name": "org_pipeline_run_now",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/pipeline/run-now"
+  ],
+  "input_hash": "d9df0adf5218ea95"
+ },
+ {
   "name": "org_collector_discover",
   "scope": "memory",
   "mcp": true,
@@ -1244,7 +1264,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "eca1f0a5ec9e48f2"
+  "input_hash": "a9b97ff4a5afeb00"
  },
  {
   "name": "org_distiller_remove",
@@ -1592,6 +1612,16 @@
   "mutates": false,
   "rest": [
    "GET /api/ui/me/welcome"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_welcome_setup",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/welcome/setup"
   ],
   "input_hash": "6c9f16e97bc4049d"
  },
@@ -2424,7 +2454,7 @@
   "rest": [
    "GET /api/ui/knowledge"
   ],
-  "input_hash": "0db257f76e10fe4f"
+  "input_hash": "bef2820c26df7562"
  },
  {
   "name": "knowledge_grep",
@@ -2444,7 +2474,7 @@
   "rest": [
    "GET /api/ui/knowledge/semantic"
   ],
-  "input_hash": "1770cb4d4670be03"
+  "input_hash": "08b82e5be661004b"
  },
  {
   "name": "knowledge_similar",
@@ -2475,6 +2505,16 @@
    "GET /api/ui/knowledge-tree"
   ],
   "input_hash": "1f1430ede859f49e"
+ },
+ {
+  "name": "knowledge_screen_search",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-screen/search"
+  ],
+  "input_hash": "a2ee42f9de54facd"
  },
  {
   "name": "knowledge_view_get",
@@ -2584,7 +2624,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "4681c4d31c0096be"
+  "input_hash": "486915572c4cbceb"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -2635,6 +2675,16 @@
    "POST /api/ui/knowledge/:name/fields"
   ],
   "input_hash": "4153f82a5d044aaf"
+ },
+ {
+  "name": "knowledge_set_searchable",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/searchable"
+  ],
+  "input_hash": "6e56031c5ac51982"
  },
  {
   "name": "knowledge_link_category",
@@ -2812,7 +2862,7 @@
   "mcp": true,
   "mutates": false,
   "rest": [],
-  "input_hash": "8eb98c3baa73c9cb"
+  "input_hash": "740f3343039250aa"
  },
  {
   "name": "source_trash_list",
@@ -3872,7 +3922,17 @@
   "rest": [
    "POST /api/ui/cron/:id/run"
   ],
-  "input_hash": "e9f5a6623f0f7ef5"
+  "input_hash": "7e3dfb45ed67a0f0"
+ },
+ {
+  "name": "cron_run_plan",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/cron/:id/run-plan"
+  ],
+  "input_hash": "c55c5e0068a50942"
  },
  {
   "name": "list_unmapped",
@@ -4283,6 +4343,16 @@
    "POST /api/ui/recall/route"
   ],
   "input_hash": "0ada1cb252b03de4"
+ },
+ {
+  "name": "knowledge_recall",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/knowledge/recall"
+  ],
+  "input_hash": "88f06d592b6612a0"
  },
  {
   "name": "me_credentials",
@@ -5614,7 +5684,7 @@
   "rest": [
    "POST /api/ui/ai-runs"
   ],
-  "input_hash": "ab6178e8ac14eee6"
+  "input_hash": "db9221ba20989c31"
  },
  {
   "name": "app_ai_run_get",
@@ -5764,7 +5834,7 @@
   "rest": [
    "POST /api/ui/agent-jobs"
   ],
-  "input_hash": "9add423ffeb85ac7"
+  "input_hash": "e7923309c8a52b2c"
  },
  {
   "name": "agent_job_get",

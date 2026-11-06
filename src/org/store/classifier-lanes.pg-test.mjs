@@ -11,6 +11,7 @@
 //   ④ 카테고리를 잃은 지식(제안 반려·카테고리 삭제·휴지통 복원)은 '봤다' 기록이 지워진다 — 안 지우면 그 레인은 영영 안 본다.
 //      아직 카테고리가 남은 지식의 기록은 그대로다.
 //   ⑤ 부팅 이관 — 옛 기본 이름(«기본 분류»·«미분류 지식 분류 (헤드리스)» …)은 새 말로 바뀌고, 사람이 고친 이름은 그대로다.
+//   ⑥ 레인의 confirm_threshold 가 서버 판정에 실제로 쓰인다(#5235 — T 번호는 사양의 행). 레인은 배치 기록(org_classifier_seen)으로 찾는다.
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/items/store.js`);
 const cls = await import(`${DIST}/org/store/classifiers.js`);
@@ -19,6 +20,7 @@ const cs = await import(`${DIST}/v6/category-store.js`);
 const { forgetClassifierSeen } = await import(`${DIST}/v6/knowledge-common.js`);
 const { initClassifierRegistry } = await import(`${DIST}/org/schema/connectors-ingest.js`);
 const { initSessionsInfra } = await import(`${DIST}/org/schema/sessions-infra.js`);
+const { classifiersCapabilities } = await import(`${DIST}/capabilities/delivery/classifiers.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -200,6 +202,82 @@ try {
     await itemsPool.query(`UPDATE org_cron SET label='우리 분류 잡' WHERE id=$1`, [CRON_H]);
     await initSessionsInfra(itemsPool);
     chk("⑤-g 사람이 고친 잡 이름은 그대로", (await row(CRON_H)).label === "우리 분류 잡", String((await row(CRON_H)).label));
+  }
+
+  // ── ⑥ 레인 문턱이 서버 판정에 쓰인다(#5235) — 상태는 응답이 아니라 저장된 행으로 잰다 ──
+  {
+    const stateOf = async (name) => (await itemsPool.query(`SELECT state FROM knowledge_category WHERE name=$1`, [name])).rows[0]?.state;
+    const seq = { n: 0 };
+    /** 미분류 지식 하나를 만들고, 레인들이 차례로 배치로 낸 뒤, 제안한다. */
+    const propose = async (lanes, opts) => {
+      const name = n(`t${++seq.n}`);
+      await mkKnowledge(name, TAG + "threshold");
+      for (const [i, lane] of lanes.entries()) {
+        await cls.markClassifierSeen(lane.id, [name], null);
+        //  한 트랜잭션 안의 now() 가 같아질 수 있어 순서를 명시한다 — 뒤에 낸 레인이 «가장 최근 배치» 다.
+        await itemsPool.query(`UPDATE org_classifier_seen SET seen_at = now() + ($3 || ' seconds')::interval WHERE classifier_id=$1 AND knowledge_name=$2`, [lane.id, name, i]);
+      }
+      const r = await ks.proposeKnowledgeCategory(name, cat, { evidence: "근거", ...opts }, { actor: "test", source: "test" });
+      return { name, r, saved: await stateOf(name) };
+    };
+    const mkLane = (key, th) => cls.upsertClassifier({ key: n(key), enabled: false, confirm_threshold: th }, "test", "test");
+    const low = await mkLane("th-low", 0.4), strict = await mkLane("th-strict", 0.9), zero = await mkLane("th-zero", 0);
+
+    let x = await propose([low], { confidence: 0.7 });
+    chk("⑥-T1 문턱 0.4 레인이 낸 지식 · 0.7 → confirmed(프로젝트 재현)", x.saved === "confirmed" && x.r.state === "confirmed", JSON.stringify(x));
+    chk("⑥-T1b 응답이 쓰인 문턱을 말한다", Math.abs(x.r.threshold - 0.4) < 1e-6, JSON.stringify(x.r));
+    x = await propose([low], { confidence: 0.39 });
+    chk("⑥-T2 문턱 0.4 · 0.39 → proposed", x.saved === "proposed", JSON.stringify(x));
+    x = await propose([low], { confidence: 0.4 });
+    chk("⑥-T3 경계 — 정확히 문턱이면 confirmed", x.saved === "confirmed", JSON.stringify(x));
+    x = await propose([strict], { confidence: 0.85 });
+    chk("⑥-T4 더 엄격한 문턱 0.9 도 듣는다 · 0.85 → proposed", x.saved === "proposed", JSON.stringify(x));
+    x = await propose([], { confidence: 0.8 });
+    chk("⑥-T5 낸 레인 없음 · 기본 문턱 경계 0.8 → confirmed", x.saved === "confirmed" && x.r.threshold === 0.8, JSON.stringify(x));
+    x = await propose([], { confidence: 0.79 });
+    chk("⑥-T6 낸 레인 없음 · 0.79 → proposed", x.saved === "proposed", JSON.stringify(x));
+    x = await propose([strict], { confidence: 0.1, state: "confirmed" });
+    chk("⑥-T7 state 를 명시하면 그 뜻이 앞선다(문턱을 안 쓴다)", x.saved === "confirmed" && x.r.threshold === undefined, JSON.stringify(x));
+    x = await propose([strict, low], { confidence: 0.7 });
+    chk("⑥-T8 두 레인이 봤으면 가장 최근 배치의 레인(0.9 다음 0.4) → confirmed", x.saved === "confirmed", JSON.stringify(x));
+    x = await propose([low, strict], { confidence: 0.7 });
+    chk("⑥-T8b 순서를 뒤집으면 결과도 뒤집힌다(0.4 다음 0.9) → proposed", x.saved === "proposed", JSON.stringify(x));
+    x = await propose([zero], {});
+    chk("⑥-T9 확신도가 없으면 문턱 0 이어도 자동 확정하지 않는다", x.saved === "proposed", JSON.stringify(x));
+    x = await propose([zero], { confidence: 0 });
+    chk("⑥-T10 경계 — 문턱 0 · 확신도 0 → confirmed", x.saved === "confirmed", JSON.stringify(x));
+
+    //  T11 — 레인이 사라지면 '봤다' 기록이 함께 사라져(FK CASCADE) 기본 문턱으로 돌아간다.
+    const gone = await mkLane("th-gone", 0.4);
+    const goneName = n("t-gone");
+    await mkKnowledge(goneName, TAG + "threshold");
+    await cls.markClassifierSeen(gone.id, [goneName], null);
+    await cls.removeClassifier(gone.id, "test", "test");
+    const g = await ks.proposeKnowledgeCategory(goneName, cat, { evidence: "근거", confidence: 0.7 }, { actor: "test", source: "test" });
+    chk("⑥-T11 레인이 사라지면 기본 문턱 → 0.7 은 proposed", (await stateOf(goneName)) === "proposed" && g.threshold === 0.8, JSON.stringify(g));
+
+    //  삭제 도구가 실제로 지우는지(#5235 — 위 T11 을 쓰다 드러났다). id 는 BIGSERIAL 이라 런타임에 문자열이고, 그걸 그대로 넘기면
+    //   key 로 찾다 못 찾아 아무것도 안 지운 채 { ok: true } 를 돌려줬다. 화면엔 «삭제했습니다» 가 떴다. 행으로 잰다.
+    const removeOp = classifiersCapabilities.find((c) => c.name === "org_distiller_category_remove");
+    const rows = async (key) => Number((await itemsPool.query(`SELECT count(*)::int AS n FROM org_classifier WHERE key=$1`, [key])).rows[0].n);
+    await mkLane("rm-by-key", 0.5);
+    await removeOp.handler({ key: n("rm-by-key") }, { userId: "test" }, {});
+    chk("⑥-삭제 key 로 지우면 행이 실제로 사라진다", (await rows(n("rm-by-key"))) === 0, `rows=${await rows(n("rm-by-key"))}`);
+    const byId = await mkLane("rm-by-id", 0.5);
+    await removeOp.handler({ id: Number(byId.id) }, { userId: "test" }, {});
+    chk("⑥-삭제 id 로 지워도 행이 실제로 사라진다", (await rows(n("rm-by-id"))) === 0, `rows=${await rows(n("rm-by-id"))}`);
+
+    //  같은 뿌리 — 수정 저장이 고친 레인을 돌려준다. 종전엔 문자열 id 로 다시 찾다 null 이 되어 응답의 레인이 비었다.
+    const edited = await cls.upsertClassifier({ key: n("th-low"), label: "이름 고침" }, "test", "test");
+    chk("⑥-수정 저장소가 고친 행을 돌려준다", edited?.label === "이름 고침" && typeof edited?.id === "number", JSON.stringify(edited));
+    const upsertOp = classifiersCapabilities.find((c) => c.name === "org_distiller_category_upsert");
+    const viaTool = await upsertOp.handler({ key: n("th-low"), label: "한 번 더" }, { userId: "test" }, {});
+    chk("⑥-수정 도구 응답에 레인이 있다", viaTool?.classifier?.label === "한 번 더" && viaTool?.lane?.key === n("th-low"), JSON.stringify(viaTool).slice(0, 160));
+    chk("⑥-id 목록의 id 도 숫자다", (await cls.listClassifiers()).every((c) => typeof c.id === "number"), "");
+
+    //  이미 카테고리가 있으면 건드리지 않는다 — 문턱을 낮춰도 기존 판정 불가침은 그대로다.
+    const skip = await ks.proposeKnowledgeCategory(n("t1"), cat, { evidence: "다시", confidence: 0.1 }, { actor: "test", source: "test" });
+    chk("⑥-불가침 이미 카테고리가 있으면 건너뛴다", skip.applied === false && skip.skipped === "already_has_category", JSON.stringify(skip));
   }
 } catch (e) {
   bad("예외", (e && e.stack) || String(e));

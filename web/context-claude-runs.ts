@@ -4,8 +4,7 @@
 //   확인할 수 있게 해줘 의사결정 돕게". 그래서 **지표와 손잡이를 한 화면**에 둔다 — 실패율·메모리 탓일 수 있는 실패·최고 메모리가
 //   상한에 얼마나 붙었나를 보면서, 같은 자리에서 상한·예약을 고친다. 고친 값은 다음 수집 실행부터 쓴다.
 //
-//  두 조각:
-//   · claudeRunsEntry — 수집기 설정 화면 맨 위의 한 줄 요약(관리자만). 누르면 아래 화면으로.
+//  화면:
 //   · renderClaudeRunsScreen — 기간(24시간·7일·30일) · 숫자 타일 · 실패 사유 · 메모리 · 크기 설정 · 날짜별 · 최근 실행.
 //  데이터: GET /api/ui/collect/claude-run-stats(collect_claude_run_stats — 관리자만) 하나. 저장: POST /api/ui/collect/session-policy
 //   {max_mb, request_mb} · 되돌리기 {reset:true}(collect_session_policy_set) — 범위·예약 ≤ 상한은 서버가 400 으로 알린다(여기서 다시 판정하지 않는다).
@@ -58,27 +57,6 @@ function ingestText(r: any): { text: string; title: string; fail: boolean } {
 async function fetchStats(d: number, recent: number): Promise<any> {
   const q = new URLSearchParams({ days: String(d), tz: tz(), recent: String(recent) });
   return api('/api/ui/collect/claude-run-stats?' + q);
-}
-
-// ── 수집기 설정 화면 맨 위 한 줄 ─────────────────────────────────────────────
-export async function claudeRunsEntry(host: HTMLElement): Promise<void> {
-  if (!hasScope('admin')) { replaceKids(host); return; }
-  let v: any = null;
-  try { v = await fetchStats(7, 0); } catch { replaceKids(host); return; }   // 못 읽으면 조용히 비운다 — 수집기 목록을 가리지 않게
-  const s = v.stats || {}, p = v.policy || {};
-  const facts: HTMLElement[] = [];
-  if (s.runs) {
-    facts.push(el('span', { text: '최근 7일 실행 ' + fmtNum(s.runs) + '회' }));
-    facts.push(el('span', { class: (s.failure_rate || 0) > 0 ? 'is-fail' : '', text: '실패율 ' + pct(s.failure_rate) }));
-    if (s.memory?.max_mb != null) facts.push(el('span', { text: '최고 메모리 ' + mb(s.memory.max_mb) }));
-  } else {
-    facts.push(el('span', { text: '최근 7일 실행 기록 없음' }));
-  }
-  facts.push(el('span', { text: '세션 크기 상한 ' + mb(p.max_mb) + ' · 예약 ' + mb(p.request_mb) }));
-  replaceKids(host, el('a', { class: 'cxcr-entry', href: '#/context/sources/claude' },
-    el('b', { text: 'Claude 커넥터 수집' }),
-    el('span', { class: 'cxcr-entry-facts' }, ...facts),
-    el('span', { class: 'cxcr-entry-go', text: '지표 · 크기 →' })));
 }
 
 // ── 상세 화면 ────────────────────────────────────────────────────────────────

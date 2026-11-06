@@ -251,7 +251,8 @@ await t("W-S1 실제 문 = openLiv(realDeps) · 넣기는 사람이 보낸 것�
   assert.match(SESSION, /if \(harness === null\) return null;/, "★ 로그인한 AI 가 없는데 기본 하네스로 연다");
   assert.match(SESSION, /const made = await openLivSession\(user, \{ prompt: text, label: LIV_CHAT_LABEL, harness \}\);/, "고른 하네스로 리브 세션을 안 연다");
   //  고른 하네스는 헤드리스(위탁) 지원표로 다시 거르지 않는다 — 그 표에 없는 opencode 로만 로그인한 사람에게 리브가 안 열리던 자리(503).
-  assert.match(SESSION, /const harness = String\(o\.harness \?\? ""\)\.trim\(\) \|\| await resolveHeadlessHarness\(userId, null\);/,
+  //  (2026-10-30) 고른 하네스가 없을 때의 폴백도 위탁 표(«모르면 claude»)가 아니다 — 로그인한 것·기억해 둔 것(resolveLivHarness).
+  assert.match(SESSION, /const harness = String\(o\.harness \?\? ""\)\.trim\(\) \|\| await resolveLivHarness\(userId, o\.remembered\);/,
     "★ 고른 하네스가 위탁 지원표(resolveHeadlessHarness explicit)로 걸러진다 — opencode 만 이은 사람에게 리브가 안 열린다");
 });
 

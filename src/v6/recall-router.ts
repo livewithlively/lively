@@ -186,6 +186,7 @@ async function loadDomains(): Promise<DomainRow[]> {
 
 // 도메인 HUB 대표지식 인덱스 — wiki핀 우선 → 최신. 본문 아님(포인터). exclude(세션 dedup) 제외.
 //  viewer(#1291): 포인터라도 **소환키와 제목**이라 그대로 새면 안 된다 — 이 결과는 훅이 세션 첫머리에 그대로 깐다.
+//  #5169 검색 제외는 뺀다 — 자동 소환이다. 앱이 자주 다시 올리는 재집계 문서는 «최신» 이라 이 자리를 먼저 차지한다.
 async function hubIndex(categoryId: number, exclude: string[], limit: number, viewer?: Viewer) {
   const params: unknown[] = [categoryId, exclude, limit];
   const vis = await knowledgeVisWhere(viewer, params);
@@ -193,7 +194,7 @@ async function hubIndex(categoryId: number, exclude: string[], limit: number, vi
     SELECT k.name, k.title, k.is_wiki
     FROM knowledge k
     JOIN knowledge_category kc ON kc.name=k.name AND kc.state<>'rejected'
-    WHERE kc.category_id=$1 AND k.lifecycle='active' AND NOT (k.name = ANY($2::text[])) AND ${vis}
+    WHERE kc.category_id=$1 AND k.lifecycle='active' AND k.searchable AND NOT (k.name = ANY($2::text[])) AND ${vis}
     ORDER BY k.is_wiki DESC, k.updated_at DESC
     LIMIT $3`, params);
   return rows.map((r) => ({ name: r.name, title: r.title, is_wiki: !!r.is_wiki }));

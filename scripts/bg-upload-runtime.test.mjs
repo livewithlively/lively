@@ -13,6 +13,10 @@
 //   B9 «다 올렸다» 판정(uploadVerdict) — 실패 0 · 더 보낼 것 없음 · 고른 수만큼 올라감(건너뜀 포함)일 때만 done.
 //      대기열이 빈 것만으로는 done 이 아니다(실패만 남음 · 새로고침으로 대기열을 잃음 · 고른 것 0)
 //   B10 건너뛰기 표지는 사람마다 — 같은 브라우저의 다른 계정이 올린 것을 «이미 올렸다» 로 건너뛰지 않는다
+//   B11 (#5167) 서버가 «자료로 안 만들었다»(skipped)고 답한 수를 센다 · 띠가 그 수와 «파일은 그대로» 를 말한다 · 그때는 띠를 저절로 걷지 않는다
+//       · [닫기]는 글 줄 안에 있다(진행 막대 아래 맨몸으로 떨어지지 않는다 — 격리 리뷰 2026-10-30)
+//   B12 (#5167) 둘째 줄(처음 설정 뒤 단계) — 올리기가 없어도 띠를 띄운다 · 같은 줄은 다시 그리지 않는다(닫은 띠가 안 되살아난다)
+//       · 닫은 단계는 다시 안 띄우고, 단계가 바뀌면 다시 띄운다 · null 이면 걷는다
 //  단언은 부작용으로 — 가짜 XHR 이 받은 요청(방법·주소·머리글·본문 이름)과 동시 수, beforeunload 를 건/뗀 횟수.
 //  fail-first(2026-10-27 · 신규 모듈이라 mutation): 동시 상한 10 → B1 · 끝나도 경고 안 뗌 → B2 · 건너뛰기 표지 무시 → B3 ·
 //   실패를 버림 → B4 · apiUrl 대신 날 경로 → B5 — 각각 그 행만 빨갛다(복원 뒤 전부 통과).
@@ -55,6 +59,7 @@ function PAGE_PREP() {
         const st = q && q.length ? q.shift() : 200;
         if (st === 0) { this.onerror && this.onerror(); return; }   // 네트워크 오류
         this.status = st;
+        this.responseText = (net.reply && net.reply[name]) || "";
         this.onload && this.onload();
       }, 40);
     }
@@ -130,6 +135,33 @@ async function PAGE_MAIN() {
   R.b10 = { added: r10.added, skipped: r10.skipped, sends: net.sent.length - b10Before };
   BG.state.me = null;
 
+  //  B11 — 서버가 자료로 안 만든 것(mp3 둘) · 하나는 자료(md)
+  net.reply = { "s1.mp3": JSON.stringify({ ok: true, skipped: "ext:mp3" }), "s2.mp3": JSON.stringify({ ok: true, skipped: "ext:mp3" }), "n.md": JSON.stringify({ ok: true, source_id: 7 }) };
+  const ns0 = BG.bgUploadState().notSource;
+  BG.bgUploadAdd([f("s1.mp3"), f("s2.mp3"), f("n.md")]);
+  await sleep(200);
+  const xBtn = Array.from(document.querySelectorAll(".bgup-btn")).find((b) => b.textContent === "닫기");
+  R.b11 = { notSource: BG.bgUploadState().notSource - ns0, text: barText(), xInLine: !!(xBtn && xBtn.parentElement && xBtn.parentElement.classList.contains("bgup-line")) };
+  await sleep(9000);
+  R.b11.stillShown = !document.querySelector(".bgup").hidden;
+
+  //  B12 — 둘째 줄
+  const bar = () => document.querySelector(".bgup");
+  const setupText = () => document.querySelector(".bgup-setup .bgup-text")?.textContent || "";
+  bar().hidden = true;
+  BG.bgSetupLine({ text: "리브가 곧", keep: true, key: "waiting" });
+  R.b12 = { shown1: !bar().hidden, text1: setupText() };
+  Array.from(document.querySelectorAll(".bgup-setup .bgup-btn")).find((b) => b.textContent === "닫기")?.click();
+  BG.bgSetupLine({ text: "리브가 곧", keep: true, key: "waiting" });
+  R.b12.sameAfterClose = !bar().hidden;
+  BG.bgSetupLine({ text: "리브가 곧!", keep: true, key: "waiting" });
+  R.b12.samePhaseNewText = !bar().hidden;
+  BG.bgSetupLine({ text: "승인이 필요해요", keep: true, key: "needs-ai" });
+  R.b12.newPhase = !bar().hidden;
+  R.b12.text2 = setupText();
+  BG.bgSetupLine(null);
+  R.b12.cleared = !setupText();
+
   //  B5′ — 워크스페이스 미선택(primary): 머리글 없음
   localStorage.removeItem("lively.workspace");
   BG.bgUploadAdd([f("primary.md")]);
@@ -159,7 +191,7 @@ t("B1 동시에 셋까지 · 전부 올라간다 · 다 비면 한 번 부른다
   assert.equal(R.b1.added, 10);
   assert.equal(R.b1.sent, 10, `다 안 보냈다: ${R.b1.sent}`);
   assert.equal(R.b1.peak, 3, `★ 동시 수가 셋이 아니다(넘치면 큰 파일끼리 회선을 나누고, 하나면 작은 파일 수천 개가 왕복에 묶인다): ${R.b1.peak}`);
-  assert.deepEqual({ ...R.b1.state }, { total: 10, done: 10, failed: 0, skipped: 0, running: false });
+  assert.deepEqual({ ...R.b1.state }, { total: 10, done: 10, failed: 0, skipped: 0, notSource: 0, running: false });
   assert.equal(R.b1.idle, 1, `다 비었을 때 부르기: ${R.b1.idle}`);
 });
 t("B2 도는 동안만 탭 닫기 경고 — 끝나면 뗀다", () => {
@@ -184,6 +216,21 @@ t("B8 일시 오류는 스스로 다시 보낸다 — 누르지 않아도 올라
 t("B9 «다 올렸다» 는 실패 0 · 고른 수만큼 올라갔을 때만", () => {
   assert.deepEqual(R.b9, ["done", "running", "running", "running", "done", "done", "running", "running"],
     "순서: 다 올림 · ★실패 남음 · 도는 중 · ★새로고침으로 대기열 잃음 · 전부 이미 올림 · 올림+건너뜀 · 고른 것 0 · ★수는 찼는데 실패가 남음(다시 고른 경우)");
+});
+t("B11 자료로 안 만든 수 · 띠가 그 이유를 말하고 안 걷힌다 · [닫기]는 글 줄 안", () => {
+  assert.equal(R.b11.notSource, 2, `★ 서버의 skipped 를 안 센다: ${R.b11.notSource}`);
+  assert.match(R.b11.text, /2개는 .*자료로 만들지 않았어요.*그대로/, R.b11.text);
+  assert.equal(R.b11.xInLine, true, "★ [닫기]가 글 줄 밖(진행 막대 아래)으로 떨어진다");
+  assert.equal(R.b11.stillShown, true, "자료로 안 만든 것을 말한 띠가 8초 뒤 저절로 걷힌다");
+});
+t("B12 둘째 줄 — 올리기 없이도 띄운다 · 닫은 단계는 안 되살리고 바뀐 단계는 다시 띄운다", () => {
+  assert.equal(R.b12.shown1, true, "올리기가 없으면 둘째 줄을 안 띄운다");
+  assert.equal(R.b12.text1, "리브가 곧");
+  assert.equal(R.b12.sameAfterClose, false, "★ 같은 줄을 다시 받자 닫은 띠가 되살아난다(15초마다)");
+  assert.equal(R.b12.samePhaseNewText, false, "★ 같은 단계의 숫자만 바뀌었는데 닫은 띠가 되살아난다");
+  assert.equal(R.b12.newPhase, true, "★ 단계가 바뀌었는데(승인 필요) 안 띄운다");
+  assert.equal(R.b12.text2, "승인이 필요해요");
+  assert.equal(R.b12.cleared, true, "null 인데 둘째 줄이 남는다");
 });
 t("B10 건너뛰기 표지는 사람마다", () => {
   assert.deepEqual(R.b10, { added: 1, skipped: 0, sends: 1 }, "★ 다른 계정이 올린 것을 «이미 올렸다» 로 건너뛴다");

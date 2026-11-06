@@ -17,7 +17,7 @@ import { compactPicker } from './projects/popover.js';
 import { memberPicker } from './projects/files.js';
 import { sectionHead } from './admin-widgets.js';
 
-//  bare(#5159) — [AI 주입 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 머리·카드 없이 안쪽만 그린다.
+//  bare(#5159) — [AI 주입기 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 머리·카드 없이 안쪽만 그린다.
 export async function sourceVisPolicyPanel(detail, opts: { bare?: boolean; onChange?: () => void } = {}): Promise<void> {
   const reload = () => { opts.onChange?.(); return sourceVisPolicyPanel(detail, opts); };
   const head = () => (opts.bare ? null : sectionHead('자료 공개범위',

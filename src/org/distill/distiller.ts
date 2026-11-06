@@ -11,6 +11,8 @@
 //
 // ⚠ org_ingest_policy(#638)와 직교 — 저건 '지식이 되고 나서 auto/confirm/drop 어디로 보내나'(허용선 밸브),
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
+import { BINARY_TRIAGE_RULE } from "./binary-triage.js";
+import { ENTRY_GENERATED } from "../../v6/source-group.js";
 import { itemsPool, q } from "../../db/client.js";
 import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
 import { sourceVisSql, resolveSourceViewer, S_LIST_SEL, AUD_KEY_SQL } from "../../v6/source-store.js";
@@ -410,6 +412,15 @@ export async function listStrandedSources(enabled: DistillerRow[], limit = 50, r
   const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
   const { sql, values } = buildStrandedQuery(enabled, viewer, limit);
   return q(itemsPool, sql, values);
+}
+
+/** 기본 기준 배치가 앞으로 집을 자료 수 — listStrandedSources 와 같은 술어·같은 신원을 상한 없이 센다(#5235 실행 전 안내). */
+export async function countStrandedSources(enabled: DistillerRow[], requester?: string | null): Promise<number> {
+  const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
+  const p = new Params();
+  const where = strandedWhereSql(enabled, p, viewer);
+  const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM source s WHERE ${where}`, p.values);
+  return Number(rows[0]?.n ?? 0);
 }
 
 /** 지금 이 워크스페이스에 남아 있는 미증류 자료 수 — «없다» 고 말하기 전에 실제로 세려고 쓴다. */
@@ -841,7 +852,7 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-// 커버리지 — 증류기별 잔량 + **어느 증류기에도 안 걸리는 자료**(그대로 두면 영영 증류 안 되는 사각지대).
+// 커버리지 — 증류기별 잔량 + **어느 증류기에도 안 걸리는 자료**(사각지대 — 레인을 지정하지 않은 잡이 돌 때 기본 기준으로 나간다 · #1631).
 //  관리탭이 이걸 그대로 보여준다: "증류기를 켰는데 왜 안 줄지?" 를 묻기 전에 사각지대가 먼저 보이도록.
 export async function distillerCoverage(): Promise<DistillerCoverage> {
   const all = await listDistillers();
@@ -992,7 +1003,8 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
   //  #1881 의 «개인 폴더(올린 사람만 봄)» 는 #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 사실이 아니어서 자리만 남긴다.
   const lock = s(r.visibility) === "members" ? "잠김(볼 수 있는 사람만 봄)" : "";
   const priv = s(f.root) === "personal" ? "개인 폴더" : "";
-  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`, ...issueMeta(r, f)].filter(Boolean).join(" · ");
+  const made = f.entry === ENTRY_GENERATED ? "AI 세션이 만든 파일" : "";
+  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, made, lock, tid && `thread=${tid}`, ...issueMeta(r, f)].filter(Boolean).join(" · ");
   const raw = s(r.body_md);
   const truncated = raw.length > DIGEST_PER_SOURCE;
   return {
@@ -1163,8 +1175,7 @@ export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o:
       return ["[절차]",
         "① 자료 본문은 **위에 이미 주어져 있다** — 그것부터 읽어라(source_get 재조회는 잘렸다고 표시된 것·못 실린 것만). "
         + "본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — "
-        + "스텁의 filename·mime·channel 로 볼 가치부터 판단하고(밈·UI캡처 등 노이즈면 fetch 없이 skip), 가치 있으면 "
-        + "source_artifact(source_id)로 원본을 받아 그 path 를 Read 해 내용을 확보한다(unavailable=삭제/이동이면 skip).",
+        + BINARY_TRIAGE_RULE,
         "② 위 기준에 걸리면 knowledge_similar 로 중복을 먼저 확인한다 — 이미 있으면 새로 만들지 말고 그 지식을 갱신한다.",
         "③ knowledge_save 로 저장한다(위 형식 규칙대로) — **derived_from: [이 지식이 나온 자료 id 전부]** 를 꼭 실어라. 저장과 자료↔지식 연결을 서버가 한 번에 한다"
         + "(source_link_knowledge 를 따로 부르지 마라 — 이 배치에서 derived_from 없는 저장은 거절된다). "

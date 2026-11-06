@@ -84,6 +84,7 @@ export interface LivelyApp {
      *  값은 `$1`·`$2` … 자리에 params 로 넘긴다(문자열을 이어 붙이지 마라). 매니페스트 permissions.tools 에 `store_sql` 이 있어야 한다.
      *  받지 않는 것: 표·칸 만들기(매니페스트로) · 조건 없는 UPDATE/DELETE · 주석 · 세미콜론 · 백슬래시 · 스키마 붙인 이름.
      *  결과는 최대 5,000행·5MB(넘으면 truncated), 문장 5초. 워크스페이스가 만든 앱에서만(기본 앱은 안 된다).
+     *  원래 id 로 넣기(시드·다른 DB 에서 옮기기)는 `INSERT … OVERRIDING SYSTEM VALUE` — id 시퀀스는 라이블리가 맞춘다(#5172).
      */
     sql<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{
       kind: "select" | "insert" | "update" | "delete";

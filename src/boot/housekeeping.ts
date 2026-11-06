@@ -359,7 +359,9 @@ function startBackgroundSweeps(): void {
   setInterval(() => {
     void perTenant("session-log-reap", () => getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days))
       //  검색 기록(#4530)도 같은 박자로 — 180일 넘은 검색어를 지운다. 앞의 정리가 실패해도 이건 돈다.
-      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ })));
+      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ }))
+      //  세션의 지식 찾기 기록(#5201)도 — 90일 넘은 줄을 지운다.
+      .finally(() => import("../v6/knowledge-search-log-store.js").then((m) => m.reapKnowledgeSearchLog()).catch(() => { /* 다음 판에 다시 */ })));
   }, 6 * 60 * 60_000).unref();
   // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
   setTimeout(() => { void perTenant("session-title-backfill", () => backfillSessionTitles()); }, 35_000).unref();
@@ -500,7 +502,7 @@ function startBackgroundSweeps(): void {
   setTimeout(() => { void perTenant("session-state-backfill", () => backfillSessionStates()); }, 40_000).unref();
 
   // #5082 — 에이전트 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비(요청 정비표에서 `housekeeping` 표시가 붙은 것). 매니지드는 그 표가 요청에 얹어
-  //  돌리는데 그 표는 여기(셀프호스트 · registry)서 무동작이라 이 자리가 유일한 길이다 — 없으면 박스 위 작업(LIVELY_AGENT_JOBS=host)의 시작 상한 ·
+  //  돌리는데 그 표는 여기(셀프호스트 · registry)서 무동작이라 이 자리가 유일한 길이다 — 없으면 셀프호스트 작업(LIVELY_AGENT_JOBS=docker · host)의 시작 상한 ·
   //  무응답 · 시간 초과 · 걷기 재시도 · 기다린 작업 배차가 안 돌고, 끝맺지 못한 작업이 동시 상한을 영영 먹는다(격리 리뷰).
   //  정의와 주기는 그 표의 것을 그대로 쓴다(두 벌이면 한쪽만 고쳐진다 · 주기 조정 env LIVELY_SWEEP_MS_<KEY> 도 같다). 작업을 안 띄우는 박스에선
   //  열린 행이 없어 조회 한 번이다. 주기가 1분보다 길면(보존 정리 6시간) 부팅 2분 반 뒤 1회를 따로 둔다 — 재기동이 주기보다 잦은 박스에서도 돌게(위 아웃박스와 같은 까닭).

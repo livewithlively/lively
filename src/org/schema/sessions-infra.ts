@@ -622,10 +622,26 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  #5081 shared_seat — 공용 시트로 도는 작업(앱 AI 실행이 접수). 자리(홈 · Claude 로그인)는 시트 계정 · 작업 AI 의 라이블리 신원은 보낸 사람.
   //   접수 때 정해지고 바뀌지 않는다. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts SHARED_SEAT_COL).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+  //  #1639 app_server_own — 앱 서버가 보낸, 물은 사람 본인의 구독 작업(앱 AI 실행이 접수). 자리는 그 사람의 홈 · 앱 폴더만 · 작업 AI 토큰은 앱 서버 급.
+  //   접수 때 정해지고 바뀌지 않는다. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts APP_SERVER_OWN_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_server_own BOOLEAN NOT NULL DEFAULT false`);
   //  #5082 app_instructions — 앱 판 지시(ai.instructions)의 글. 앱 AI 실행이 접수 때 부른 사람(주소)의 판에서 읽어 작업 행과 함께 적고, 판이 받아
   //   하네스 시스템 지시로 싣는다(작업 폴더 지시는 읽지 않는다). 접수 때 정해지고 바뀌지 않는다 — 형식 재시도도 같은 글을 싣는다.
   //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts APP_INSTRUCTIONS_COL).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_instructions TEXT`);
+  //  mcp_only — 앱이 «라이블리 MCP 만» 으로 선언한 작업(ai.mcp_only). 판이 내장 도구를 끄고 앱 토큰의 MCP 만 싣는다(runner.claudeJobArgv).
+  //   접수 때 정해지고 바뀌지 않는다 — 이어받기 · 형식 재시도도 같은 값. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다(agent-jobs/store.ts MCP_ONLY_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS mcp_only BOOLEAN NOT NULL DEFAULT false`);
+  //  tool_allowlist — 앱이 그 작업의 에이전트가 쓸 라이블리 도구를 좁힌 목록(ai.tools · JSON 글 배열). 판이 뜰 때 작업 토큰의 도구 상한으로 싣는다
+  //   (agent-jobs/service.onBoot → auth_token.tool_ceiling). NULL = 좁히지 않음.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS tool_allowlist JSONB`);
+  //  도구 호출 단계 — 판이 박동 · 결과에 싣는 최근 도구 호출(이름 · 입력 앞머리 · 시작 · 끝 · 오류 — agent-jobs/plan.ts AgentJobStep). 자기 작업 · 실행 보기가 준다.
+  //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽고 쓴다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts STEPS_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS steps JSONB`);
+  //  effort — 앱 AI 실행이 준 하네스 생각 깊이(`claude -p --effort` · agent-jobs/runner.EFFORT_LEVELS). 판이 하네스 인자로 싣는다(runner.claudeJobArgv).
+  //   NULL = 하네스 기본. 접수 때 정해지고 바뀌지 않는다 — 이어받기 · 형식 재시도는 앞 작업의 값을 잇는다.
+  //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts EFFORT_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS effort TEXT`);
   //  #5101 transcript — API 키 작업의 하네스 대화 기록(gzip). API 키 작업은 이 작업만의 빈 설정 폴더에서 돌고 그 폴더는 끝나면 지워져, 그 대화를
   //   이어받는 작업(형식 재시도 · 앱의 이어받기)이 읽을 기록이 남지 않는다 — 판이 끝에 올리고 이어받는 작업의 첫 말이 돌려받는다(agent-jobs/plan.TRANSCRIPT_GZ_MAX).
   //   transcript_conv = 그 기록의 대화 id · transcript_bytes = 풀었을 때 크기. 보존은 정책 transcript_keep_days(지나면 비운다 · 행은 남는다).

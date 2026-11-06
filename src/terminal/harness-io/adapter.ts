@@ -111,7 +111,9 @@ const opencodeIo: HarnessSessionAdapter = {
 const shellIo: HarnessSessionAdapter = {
   key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, convIdOk: null, parse: null, answer: null, screen: null, run: null,
   //  셸엔 선택지도 부팅 대화상자도 없다 — 미실측이 아니라 **없음**이다(값이 같아도 이유가 다르다).
-  term: TERM_UI_UNKNOWN,
+  //  #5332 — 단, 셸 pane 에선 무엇이든 돈다(손으로 띄운 claude 포함). ⌘C 다리와 «모드» 단추는 둘 다 **화면에서 본 것**으로만
+  //   움직이므로(관측한 앱 드래그 선택 · 상태 줄 글) 종전대로 둔다 — 셸 세션에서 손으로 연 claude 의 복사가 끊기지 않게.
+  term: { ...TERM_UI_UNKNOWN, copyBridge: true, permModes: true },
 };
 
 export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, cursorIo, shellIo];

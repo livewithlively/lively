@@ -10,12 +10,12 @@
 //  · 선택지가 두셋인 축(모드·승인)은 드롭다운 대신 **나란한 단추**(무엇을 고를 수 있는지가 안 눌러도 보인다).
 //  · confirmDialog 를 쓰지 않고 같은 겉모습(ov-back/ov-box)으로 직접 만든다 — 폭·머리·발 구성이 확인 창과 다르다.
 import { el, visAxisOn } from '../core.js';
-import { MODE_OPTS, WRITE_VIS_OPTS, saveSessionDefaults, sessionDefaults, type LivelyMode, type SessionDefaults } from './run-prefs.js';
+import { APPROVE_OPTS, MODE_OPTS, WRITE_VIS_OPTS, saveSessionDefaults, sessionDefaults, type ApproveMode, type LivelyMode, type SessionDefaults } from './run-prefs.js';
 
 /** 툴팁·요약용 한 줄 — «일반 · 확인 후 실행 · 기록 자동». 실행 컴퓨터는 줄의 칸이 이미 보여 주므로 넣지 않는다. */
 export function defaultsSummary(d: SessionDefaults): string {
   const mode = (MODE_OPTS.find((m) => m.key === d.mode) || MODE_OPTS[0]).lbl;
-  const parts = [mode, d.autoApprove ? '자동 승인' : '확인 후 실행'];
+  const parts = [mode, (APPROVE_OPTS.find((o) => o.v === d.approve) || APPROVE_OPTS[1]).t];
   if (d.mode === 'normal' && visAxisOn('session_cap')) parts.push('기록 ' + ((WRITE_VIS_OPTS.find((o) => o.v === d.writeVis) || WRITE_VIS_OPTS[0]).t));
   return parts.join(' · ');
 }
@@ -25,7 +25,8 @@ export function defaultsSummary(d: SessionDefaults): string {
 //   문구를 옮겨 적었는데, 기록 범위는 그 문구가 실제 동작과 달랐다 — «그 팀만 봅니다» 라고 적어 두고 실제로는
 //   보는 사람이 아니라 **기록할 수 있는 곳**을 제한하고 있었다(테스트 defaults-help.test.ts 가 이 어긋남을 잠근다).
 //   근거 좌표 — mode: capabilities/index.ts registerMcpCapabilities(인코그니토는 즉시 return, 읽기전용은 쓰기 툴 미등록) ·
-//   approve: terminal/sessions.ts 가 harness.autoApproveFlag 를 argv 에 넣는다 ·
+//   approve: terminal/sessions.ts 가 자동 승인이면 harness.autoApproveFlag, 오토모드(@auto_mode=1)면 autoModeArgv,
+//    확인 후 실행(@auto_mode=0)이면 askModeArgv 를 argv 에 넣는다(#5321 — 세 칸 모두 argv 로 말해 기기 설정이 이기지 못한다) ·
 //   vis: capabilities/activity.ts 가 유일한 강제 지점(작업 기록을 프로젝트에 붙일 때만).
 const HELP = {
   mode: [
@@ -34,9 +35,9 @@ const HELP = {
     '보통은 「일반」입니다. 회사에 남기면 안 되는 내용을 다룰 때 「읽기전용」, 라이블리와 완전히 분리해 AI 만 쓰고 싶을 때 「인코그니토」를 고르세요.',
   ],
   approve: [
-    'AI 가 파일을 고치거나 명령을 실행하기 전에 나에게 물어볼지 정해요.',
-    '「확인 후 실행」은 위험할 수 있는 일마다 먼저 물어보고, 내가 허락해야 진행해요. 「자동 승인」은 그 확인 절차를 끄고 바로 실행해요.',
-    '자동 승인은 빠르지만 잘못된 명령도 그대로 실행돼요. 여러 사람이 함께 쓰는 폴더에서는 「확인 후 실행」을 권해요.',
+    'AI 가 파일을 고치거나 명령을 실행하기 전에 나에게 물어볼지 정해요. 고른 값은 Claude·Codex 어느 AI 로 열어도 똑같이 적용돼요.',
+    '「확인 후 실행」은 실행할 때마다 먼저 물어보고, 내가 허락해야 진행해요. 「오토모드」는 AI 가 스스로 검토해서 진행하고, 위험해 보이는 일만 막아요 — 나에게는 묻지 않아요. 「자동 승인」은 검토 없이 전부 바로 실행해요.',
+    '보통은 「오토모드」를 권해요. 자동 승인은 가장 빠르지만 잘못된 명령도 그대로 실행돼요. 여러 사람이 함께 쓰는 폴더에서 하나하나 보고 싶다면 「확인 후 실행」을 고르세요.',
   ],
   vis: [
     'AI 가 내 확인 없이 남기는 작업 기록을, 어떤 프로젝트에까지 붙일 수 있는지 정해요.',
@@ -92,9 +93,10 @@ function field(title: string, help: string[], control: HTMLElement, hint?: HTMLE
 
 /**
  * 창을 열고, 저장했으면 true.
- *  hasAutoApprove = 지금 고른 AI 에 자동 승인 플래그가 있나(없으면 그 항목을 잠그고 이유를 적는다 — 효과 없는 컨트롤을 남기지 않는다).
+ *  caps = 지금 고른 AI 가 세 승인 방식을 argv 로 말할 수 있나(#5321). 못 하는 칸을 고르면 그 사실을 힌트로 적는다.
  */
-export function openSessionDefaults(opts: { hasAutoApprove: boolean }): Promise<boolean> {
+export interface ApproveCaps { hasAutoApprove: boolean; hasAutoMode: boolean; hasAskMode: boolean }
+export function openSessionDefaults(opts: { caps: ApproveCaps }): Promise<boolean> {
   return new Promise((resolve) => {
     const d = sessionDefaults();
     let done = false;
@@ -104,16 +106,21 @@ export function openSessionDefaults(opts: { hasAutoApprove: boolean }): Promise<
     let mode: LivelyMode = d.mode;
     const modeSeg = segmented('라이블리 모드', MODE_OPTS.map((m) => ({ v: m.key, t: m.lbl, d: m.sub })), mode, (v) => { mode = v as LivelyMode; syncVis(); });
 
-    // ── 실행 승인 ──
-    let auto = d.autoApprove;
-    const okSeg = segmented('실행 승인', [
-      { v: '', t: '확인 후 실행', d: '위험한 일은 물어봐요' },
-      { v: 'auto', t: '자동 승인', d: '묻지 않고 바로 실행' },
-    ], auto ? 'auto' : '', (v) => { auto = v === 'auto'; });
-    okSeg.disable(!opts.hasAutoApprove);
-    const okHint = el('div', { class: 'v2-def-hint', text: opts.hasAutoApprove
-      ? '자동 승인은 빠르지만 실수도 그대로 실행돼요. 여러 사람이 함께 쓰는 폴더에서는 「확인 후 실행」을 권해요.'
-      : '지금 고른 AI 에는 자동 승인 기능이 없어 고를 수 없어요.' });
+    // ── 실행 승인 ── (#5321 세 칸 — run-prefs.ts APPROVE_OPTS)
+    let approve: ApproveMode = d.approve;
+    const okHint = el('div', { class: 'v2-def-hint' });
+    const syncOk = (): void => {
+      const a = opts.caps;
+      //  고른 칸을 지금 AI 가 argv 로 말하지 못하면 사실대로 적는다(칸은 잠그지 않는다 — 기본값은 AI 를 바꿔도 남는 설정이다).
+      const unsupported = approve === 'bypass' ? !a.hasAutoApprove : approve === 'auto' ? !a.hasAutoMode : !a.hasAskMode;
+      okHint.textContent = unsupported
+        ? '지금 고른 AI 는 이 방식을 지원하지 않아, 그 AI 의 기본 설정으로 열려요.'
+        : approve === 'bypass' ? '자동 승인은 빠르지만 실수도 그대로 실행돼요. 보통은 「오토모드」를 권해요.'
+          : approve === 'auto' ? '나에게 묻지 않고 진행해요. 위험해 보이는 명령은 AI 가 스스로 막아요.'
+            : '명령마다 허락을 구해요. 오래 걸리는 일에는 자리를 지켜야 해요.';
+    };
+    const okSeg = segmented('실행 승인', APPROVE_OPTS.map((o) => ({ v: o.v, t: o.t, d: o.d })), approve, (v) => { approve = v as ApproveMode; syncOk(); });
+    syncOk();
 
     // ── 기록 범위 ──
     const visSel = el('select', { class: 'term-input v2-def-sel', 'aria-label': '기록 범위' }) as HTMLSelectElement;
@@ -129,7 +136,7 @@ export function openSessionDefaults(opts: { hasAutoApprove: boolean }): Promise<
 
     const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: '취소', onclick: () => finish(false) }) as HTMLButtonElement;
     const save = el('button', { class: 'btn btn-primary', type: 'button', text: '저장', onclick: () => {
-      saveSessionDefaults({ mode, autoApprove: opts.hasAutoApprove ? auto : d.autoApprove, writeVis: visSel.value });
+      saveSessionDefaults({ mode, approve, writeVis: visSel.value });
       finish(true);
     } }) as HTMLButtonElement;
     const close = el('button', { class: 'v2-def-x', type: 'button', 'aria-label': '닫기', text: '✕', onclick: () => finish(false) });

@@ -272,6 +272,43 @@ for (const [what, tables] of REJECTS_4483) {
   });
 }
 
+// ── 글자 칸을 가리키는 외래키(references.column) · 조건부 인덱스(where) ─────────────────────────────────
+test("references.column · indexes.where 를 받는다 — unique 칸(칸의 unique 또는 그 칸 하나짜리 unique 인덱스)을 같은 형으로", () => {
+  const m = parseAppManifest(withTables([
+    { name: "issuers", columns: [{ name: "code", type: "text", unique: true }] },
+    { name: "items", columns: [{ name: "code", type: "varchar(20)" }], indexes: [{ columns: ["code"], unique: true }] },
+    T([
+      { name: "issuer_code", type: "text", references: { table: "issuers", column: "code", on_delete: "cascade" } },
+      { name: "item_code", type: "varchar(20)", references: { table: "items", column: "code" } },
+      { name: "issuer_id", type: "bigint", references: { table: "issuers", column: "id" } },
+      { name: "address", type: "text" }, { name: "valid_to", type: "timestamptz" },
+    ], { indexes: [{ columns: ["address"], unique: true, where: "valid_to IS NULL" }, { columns: ["address"], unique: false }] }),
+  ]));
+  const t = m.data.tables[2];
+  assert.equal(t.columns[0].references?.column, "code");
+  assert.equal(t.columns[2].references?.column, "id");
+  assert.equal(t.indexes[0].where, "valid_to IS NULL");
+  assert.equal(t.indexes[1].where, undefined);
+});
+
+const REJECTS_REF_COLUMN: Array<[string, unknown[]]> = [
+  ["가리킬 칸이 그 표에 없음", [{ name: "c", columns: [{ name: "code", type: "text", unique: true }] }, T([{ name: "a", type: "text", references: { table: "c", column: "nope" } }])]],
+  ["가리킬 칸이 unique 가 아님", [{ name: "c", columns: [{ name: "code", type: "text" }] }, T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["조건부 unique 인덱스만 있는 칸", [{ name: "c", columns: [{ name: "code", type: "text" }, { name: "live", type: "bool" }], indexes: [{ columns: ["code"], unique: true, where: "live" }] },
+    T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["여러 칸 unique 인덱스에 든 칸", [{ name: "c", columns: [{ name: "code", type: "text" }, { name: "kind", type: "text" }], indexes: [{ columns: ["code", "kind"], unique: true }] },
+    T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["형이 다름(text → varchar(20))", [{ name: "c", columns: [{ name: "code", type: "varchar(20)", unique: true }] }, T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["배열 칸", [{ name: "c", columns: [{ name: "code", type: "text", unique: true }] }, T([{ name: "a", type: "text[]", references: { table: "c", column: "code" } }])]],
+  ["column 을 id 로 적었는데 글자 칸", [{ name: "c", columns: [{ name: "code", type: "text", unique: true }] }, T([{ name: "a", type: "text", references: { table: "c", column: "id" } }])]],
+  ["인덱스 where 에 세미콜론", [T([{ name: "a", type: "text" }], { indexes: [{ columns: ["a"], where: "a IS NULL; DROP TABLE x" }] })]],
+];
+for (const [what, tables] of REJECTS_REF_COLUMN) {
+  test(`references.column · where 거부 — ${what}`, () => {
+    assert.throws(() => parseAppManifest(withTables(tables)), /매니페스트 오류/, what);
+  });
+}
+
 // ── #4481 여러 파일 앱의 화면 폴더(web.root) — 최상위 칸이라 옛 코어(이 칸을 모름)로 되돌려도 매니페스트가 읽힌다 ─────────────
 test("#4481 web.root — 최상위 web 칸 · 정규 상대경로 · 맨 위는 \"\" · 틀린 꼴은 null", () => {
   const m = parseAppManifest({ ...base(), web: { root: "./dist/" } });
@@ -408,4 +445,100 @@ test("I2 다시 읽기는 뜻을 따지지 않는다 — 선언 안 한 작업 �
 
 test("I4 지시는 ai 바로 아래 자리다 — ai.jobs[] 안(strict)에 두면 거절(이 칸을 모르는 옛 코어가 ai 바로 아래는 무시한다 · 롤백 안전)", () => {
   assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer", instructions: "ai/answer.md" }] } }), /ai\.jobs\.0/);
+});
+
+// ── ai.mcp_only — 라이블리 MCP 만 쓰는 작업 이름(사양 S2 · S3) ──
+//  모양(글 목록 · 32개까지)만 본다 — 선언한 작업 이름인지(뜻)는 설치 · 판 저장 때 loader 가 본다(loader.test mcp_only S1).
+//  이게 틀리면: 저장된 매니페스트를 다시 읽는 자리가 400 으로 막히거나, 모양이 틀린 선언이 저장돼 그 작업이 도구를 연 채 돈다.
+const withMcpOnly = (mcpOnly: unknown): Record<string, unknown> => ({ ...base(), ai: { jobs: [{ name: "answer" }], mcp_only: mcpOnly } });
+const mcpOnlyIn = (m: unknown): unknown => (m as { ai?: { mcp_only?: unknown } }).ai?.mcp_only;
+const manifestErr = (e: unknown): boolean => e instanceof HttpError && e.status === 400 && /매니페스트|형식|mcp_only/.test(e.message);
+const names = (n: number): string[] => Array.from({ length: n }, (_, i) => `job-${i}`);
+
+test("mcp_only S2 글 목록은 그대로 실린다 · 32개(경계-최대)까지 통과", () => {
+  assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly(["answer"]))), ["answer"]);
+  assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly(names(32)))), names(32));
+});
+
+test("mcp_only S2 33개(경계-위)면 매니페스트 오류", () => {
+  assert.throws(() => parseAppManifest(withMcpOnly(names(33))), manifestErr);
+});
+
+test("mcp_only S2 배열이 아니거나 글이 아닌 항목이 있으면 매니페스트 오류", () => {
+  for (const bad of ["answer", { answer: true }, 1, true, null]) {
+    assert.throws(() => parseAppManifest(withMcpOnly(bad)), manifestErr, `배열 아님: ${JSON.stringify(bad)}`);
+  }
+  for (const bad of [[1], [null], [["answer"]], [{ name: "answer" }], ["answer", 2]]) {
+    assert.throws(() => parseAppManifest(withMcpOnly(bad)), manifestErr, `글 아닌 항목: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("mcp_only S2 선언 여부는 보지 않는다 — 선언 안 한 이름 · 작업 선언이 아예 없어도 저장된 그대로 읽힌다", () => {
+  assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { jobs: [], mcp_only: ["gone"] } })), ["gone"]);
+  assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { mcp_only: ["answer", "typo"] } })), ["answer", "typo"]);
+});
+
+test("mcp_only S3 없거나 빈 목록이면 종전대로 통과(«MCP 만» 작업 없음)", () => {
+  assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } })) ?? [], []);
+  assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly([]))) ?? [], []);
+});
+
+// ── ai.tools — 작업별 라이블리 도구 허용 목록(도구 허용 목록 사양 T1 · T3 · T4) ──
+//  모양(작업 이름 → 도구 이름 글 배열 · 배열마다 64개까지)만 본다 — 뜻(선언한 작업 · 정확한 이름 · 요청한 도구 · T2)은 설치 · 판 저장 때 loader 가 본다.
+//  이게 틀리면: 저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 400 으로 막히거나, 모양이 틀린 목록이 저장돼 작업 토큰이 엉뚱하게 좁혀진다.
+import { toolsOf } from "./app-job-tools.js";
+const withTools = (tools: unknown): Record<string, unknown> => ({ ...base(), ai: { jobs: [{ name: "answer" }, { name: "lookup" }], tools } });
+const toolsIn = (m: unknown): unknown => (m as { ai?: { tools?: unknown } }).ai?.tools;
+const toolsErr = (e: unknown): boolean => e instanceof HttpError && e.status === 400 && /매니페스트|형식|tools/.test(e.message);
+const toolNames = (n: number): string[] => Array.from({ length: n }, (_, i) => `tool_${i}`);
+
+test("T1 ai.tools — 작업 이름 → 도구 이름 배열이 그대로 실린다(작업 여럿)", () => {
+  const tools = { answer: ["store_sql", "knowledge_search"], lookup: ["knowledge_get"] };
+  assert.deepEqual(toolsIn(parseAppManifest(withTools(tools))), tools);
+});
+
+test("T1 배열마다 64개(경계-최대)까지 통과", () => {
+  assert.deepEqual(toolsIn(parseAppManifest(withTools({ answer: toolNames(64), lookup: toolNames(64) }))), { answer: toolNames(64), lookup: toolNames(64) });
+});
+
+test("T1 65개(경계-위)면 매니페스트 오류 — 다른 작업의 배열이 짧아도", () => {
+  assert.throws(() => parseAppManifest(withTools({ answer: toolNames(65) })), toolsErr);
+  assert.throws(() => parseAppManifest(withTools({ answer: ["store_sql"], lookup: toolNames(65) })), toolsErr);
+});
+
+test("T1 작업의 값이 배열이 아니면 매니페스트 오류", () => {
+  for (const bad of ["store_sql", { store_sql: true }, { 0: "store_sql", length: 1 }, 1, true, null]) {
+    assert.throws(() => parseAppManifest(withTools({ answer: bad })), toolsErr, `배열 아님: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T1 도구 이름이 문자열이 아닌 원소가 있으면 매니페스트 오류", () => {
+  for (const bad of [[1], [null], [["store_sql"]], [{ name: "store_sql" }], ["store_sql", 2]]) {
+    assert.throws(() => parseAppManifest(withTools({ answer: bad })), toolsErr, `문자열 아닌 원소: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T1 ai.tools 가 객체가 아니면(글 · 배열 · 수) 매니페스트 오류", () => {
+  for (const bad of ["store_sql", ["store_sql"], [["answer", ["store_sql"]]], 3]) {
+    assert.throws(() => parseAppManifest(withTools(bad)), toolsErr, `객체 아님: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T1 뜻(T2)은 보지 않는다 — 선언 안 한 작업 이름 · 글롭 · 이름 꼴 밖 · 요청하지 않은 도구 · 작업 선언이 없어도 저장된 그대로 읽힌다", () => {
+  const odd = { gone: ["store_*", "not requested", "a".repeat(200)], answer: ["never_requested_tool"] };
+  assert.deepEqual(toolsIn(parseAppManifest({ ...base(), ai: { jobs: [], tools: odd } })), odd, "작업 선언이 빈 앱");
+  assert.deepEqual(toolsIn(parseAppManifest({ ...base(), ai: { tools: { answer: ["store_sql"] } } })), { answer: ["store_sql"] }, "ai.jobs 가 아예 없는 앱");
+});
+
+test("T3 빈 배열(도구 0)도 그대로 실린다 — 목록 읽기에서 null 이 아니라 빈 목록", () => {
+  const m = parseAppManifest(withTools({ answer: [] }));
+  assert.deepEqual(toolsIn(m), { answer: [] });
+  assert.deepEqual(toolsOf(m, "answer"), [], "빈 목록 = 라이블리 도구를 하나도 쓰지 못한다");
+});
+
+test("T4 ai.tools 가 없거나 그 작업 이름이 키에 없으면 좁히지 않는다(종전 매니페스트 무회귀)", () => {
+  const none = parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } });
+  assert.equal(toolsOf(none, "answer"), null);
+  assert.equal(toolsOf(parseAppManifest(base()), "answer"), null, "ai 칸 자체가 없는 앱");
+  assert.equal(toolsOf(parseAppManifest(withTools({ lookup: ["knowledge_get"] })), "answer"), null, "다른 작업만 목록이 있다");
 });

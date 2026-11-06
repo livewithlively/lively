@@ -36,6 +36,7 @@ import { appInstallStepsHtml, desktopDownloader, desktopOs, openConnectSession, 
 import { mountAiList } from './onboarding-ai.js';
 //  (#5060) 처음 설정에서 고른 파일 — 다른 화면으로 옮겨 가도 계속 올라간다.
 import { bgUploadAdd, bgUploadOnChange, bgUploadState, uploadVerdict } from './bg-upload.js';
+import { startSetupWatch } from './setup-watch.js';
 import { upDirSupported, upDropZone, upFromInput, type UpItem } from '../projects/files-upload.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
@@ -97,7 +98,7 @@ export const OB_COPY = {
   uploadSkip: '올릴 파일이 없어요',
   //  (#5060) 서버에 AI 가 없으면 지식으로 바꿀 자리가 없다 — 올린 파일은 자료로만 남는다. 사실대로 말한다.
   uploadNoServerAi: '올리신 파일을 지식으로 정리하는 일은 라이블리 서버에 연결된 AI가 해요. 지금은 연결된 AI가 없어 파일은 자료로 보관돼요 — 나중에 [내 설정 ▸ AI 계정 연결]에서 연결하시면 정리를 시작할 수 있어요.',
-  uploadLater: '올리신 파일은 다 올라가면 리브가 읽고 카테고리와 정리 규칙을 세워 둘게요.',
+  uploadLater: '올리신 파일이 다 올라가면 리브가 바로 읽고 카테고리와 정리 규칙을 세워요. 어디까지 됐는지는 화면 오른쪽 아래에서 계속 보여 드릴게요.',
   uploadKept: '올리신 파일은 [자료]에 보관돼요.',
   connectTitle: '외부 앱을 연결하시겠어요?',
   connectHelp: '슬랙·노션·깃허브 같은 곳의 자료를 라이블리로 모읍니다.',
@@ -379,7 +380,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
 
   /**
    * AI 연결 장면을 잇는다 — 줄과 로그인 칸은 onboarding-ai.ts(mountAiList)가 그 자리에서 고친다. 여기는 [다음]·«PC에서 쓰는 AI로» 만 다룬다.
-   *  [다음]은 연결된 AI 가 하나라도 있을 때만 켠다. 띄울 AI 가 하나도 없으면 [다음]을 숨기고 PC 길을 주 버튼으로 세운다.
+   *  [다음]은 다 된 AI 가 하나라도 있을 때만 켠다 — 로그인 + (매니지드면) 자동 정리 승인까지(#5167 aiStepReady). 띄울 AI 가 하나도 없으면 [다음]을 숨기고 PC 길을 주 버튼으로 세운다.
    */
   function bindAi(el: HTMLElement) {
     const list = $('#aiList', el)!;
@@ -390,7 +391,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     mountAiList(list, {
       esc, noneText: OB_COPY.aiNone,
       alive: () => !destroyed && list.isConnected,
-      onRows: (anyConnected) => { next.hidden = false; next.disabled = !anyConnected; S.serverAi = anyConnected; save(); },
+      onRows: (ready) => { next.hidden = false; next.disabled = !ready; S.serverAi = ready; save(); },
       onEmpty: () => { next.hidden = true; pc.className = 'ob-btn ob-btn-pri'; },   // 남은 길이 이것뿐이다 — 조용한 링크로 두지 않는다
     });
   }
@@ -525,6 +526,8 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     try { if (state.me) (state.me as { welcome_pending?: boolean }).welcome_pending = false; } catch (_) { /* 비치명 */ }   // 홈의 «이어서 하기» 줄을 내린다(#2232)
     //  끝났으니 «하다 만 자리» 저장을 멈춘다(#2207). 늦게 도착한 push 하나가 자리표를 되살리면 다음 로그인이 다시 온보딩으로 간다.
     pushOff = true; if (pushT) clearTimeout(pushT); pushT = null;
+    //  (#5167) 파일을 올리고 끝냈다 — 그 파일이 지식이 되기까지를 화면 구석 띠가 잇는다(리브가 곧 · 정리 중 · 승인 필요).
+    if (S.uploaded) startSetupWatch();
     ctx.onDone && ctx.onDone();
     return true;
   }

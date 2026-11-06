@@ -274,12 +274,32 @@ test("P10·P11 DDL·TRUNCATE·SET/RESET ROLE·트랜잭션·MERGE·SELECT INTO �
   await rejects("DO $$ BEGIN END $$", /받지 않습니다/);
 });
 
-test("P10b WITH 안의 쓰기 · ON CONFLICT ON CONSTRAINT · OVERRIDING SYSTEM VALUE · CURRENT OF 는 거부", async () => {
+test("P10b WITH 안의 쓰기 · ON CONFLICT ON CONSTRAINT · CURRENT OF 는 거부", async () => {
   await rejects("WITH d AS (DELETE FROM contacts WHERE id = 1 RETURNING *) SELECT * FROM d", /WITH 안의.*묶음/);
   await rejects("WITH d AS (UPDATE contacts SET stage = 'x' WHERE id = 1 RETURNING *) SELECT 1", /WITH 안의/);
   await rejects("INSERT INTO contacts(email) VALUES ('a') ON CONFLICT ON CONSTRAINT contacts_email_key DO NOTHING", /ON CONFLICT \(칸/);
-  await rejects("INSERT INTO contacts OVERRIDING SYSTEM VALUE VALUES (1)", /OVERRIDING/);
   await rejects("UPDATE contacts SET stage = 'x' WHERE CURRENT OF c", /CURRENT OF|칸이 없습니다/);
+  // E2(#5172) 원래 id 로 넣는 문장이 WITH 안에 숨으면 여전히 거부된다.
+  await rejects("WITH n AS (INSERT INTO contacts (id, name) OVERRIDING SYSTEM VALUE VALUES (1, 'a') RETURNING id) SELECT * FROM n", /WITH 안의/);
+});
+
+test("P10c 원래 id 로 넣기(#5172 E1·E3) — INSERT … OVERRIDING SYSTEM VALUE 를 받고 setsId 로 표시한다(실행기가 그 표의 시퀀스를 맞춘다)", async () => {
+  const one = await plan("INSERT INTO contacts (id, name) OVERRIDING SYSTEM VALUE VALUES ($1, $2) RETURNING id");
+  assert.equal(one.kind, "insert");
+  assert.equal(one.setsId, true);
+  assert.deepEqual(one.targets, ["contacts"]);
+  assert.ok(one.sql.includes(`INSERT INTO ${A("contacts")} (id, name) OVERRIDING SYSTEM VALUE VALUES ($1, $2)`), one.sql);
+  // 다른 DB 에서 옮기는 모양 — jsonb 한 덩이 + 부모 조인 · upsert
+  const moved = await plan("INSERT INTO conversations (id, contact_id) OVERRIDING SYSTEM VALUE "
+    + "SELECT r.id, c.id FROM jsonb_to_recordset($1::jsonb) AS r(id bigint, src bigint) JOIN contacts c ON c.id = r.src");
+  assert.equal(moved.setsId, true);
+  assert.deepEqual(moved.targets, ["conversations"]);
+  assert.equal((await plan("INSERT INTO contacts (id, name) OVERRIDING SYSTEM VALUE VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name")).setsId, true);
+  // 시퀀스를 맞출 필요가 없는 문장은 setsId 가 false 다 — OVERRIDING USER VALUE 는 넘긴 id 를 버리고 시퀀스를 쓴다
+  for (const sql of ["INSERT INTO contacts (name) VALUES ('a')", "INSERT INTO contacts (id, name) OVERRIDING USER VALUE VALUES (5, 'a')",
+    "UPDATE contacts SET name = 'b' WHERE id = 1", "DELETE FROM contacts WHERE id = 1", "SELECT * FROM contacts"]) {
+    assert.equal((await plan(sql)).setsId, false, sql);
+  }
 });
 
 test("P12 조건 없는 UPDATE·DELETE, 칸 없는(늘 참인) 조건은 거부", async () => {

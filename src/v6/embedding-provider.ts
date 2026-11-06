@@ -61,7 +61,10 @@ export const EMBEDDING_OFF: EmbeddingConfig = {
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
 // 숫자 정규화 — 유효 정수면 [min,max]로 클램프, 아니면 fallback. (batch_size·request_timeout_ms 방어; DB JSONB/env 잡값 안전화)
+//  ⚠ 값이 없는 것(null·빈 글자)은 0 이 아니라 «미지정» 이다. Number(null)·Number("") 는 0 이라, 수로 먼저 바꾸면 하한으로 접힌다 —
+//   `.env` 로 켠 박스가 그렇게 배치 1건·시간 제한 1초로 돌아 긴 문서마다 시간 초과가 났고 백필이 0건에서 멈췄다.
 const clampInt = (v: unknown, fallback: number, min: number, max: number): number => {
+  if (typeof v !== "number" && !(typeof v === "string" && v.trim() !== "")) return fallback;
   const n = Math.floor(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 };
@@ -142,14 +145,17 @@ function isRetriableEmbedError(e: unknown): boolean {
   return name === "TimeoutError" || name === "AbortError" || e instanceof TypeError; // TypeError = undici 'fetch failed'(네트워크/바디 타임아웃)
 }
 
-// 4xx 중 유일한 예외(#669 포이즌 문서) — 모델 컨텍스트(토큰) 초과. 우리 입력 캡은 8000'자'라 한국어/코드 장문은
+// HTTP 오류 중 유일한 예외(#669 포이즌 문서) — 모델 컨텍스트(토큰) 초과. 우리 입력 캡은 8000'자'라 한국어/코드 장문은
 //  8192'토큰'을 넘을 수 있다(Ollama: "the input length exceeds the context length" · OpenAI: "maximum context length…"
 //  · TEI: "must have less than N tokens"). 이 오류는 배치 분할(포이즌 격리)·프리픽스 축약으로 해소 가능 → 재시도 대상.
 //  안 잡으면 pending 백필이 같은 문서를 매번 다시 집어 영구 정체(고객사 A 박스 86건 실사례).
+//  ⚠ llama.cpp 서버를 직접 붙이면 같은 뜻이 **500** 으로 온다("input (N tokens) is too large to process…") — 그래서 4xx 로 한정하지 않는다.
+//   Ollama 는 이 오류를 스스로 받아 잘라 다시 보낸다. 사이드카 로그의 이 문구만으로 응답이 실패했다고 읽지 않는다(응답은 200 이다).
+const CONTEXT_LENGTH_RE = /context length|context_length|maximum context|input length|too many tokens|less than \d+ tokens|too large to process/i;
 function isContextLengthError(e: unknown): boolean {
   const msg = String((e as Error | null | undefined)?.message ?? "");
-  if (!/embedding endpoint 4\d\d/.test(msg)) return false;
-  return /context length|context_length|maximum context|input length|too many tokens|less than \d+ tokens/i.test(msg);
+  if (!/embedding endpoint [45]\d\d/.test(msg)) return false;
+  return CONTEXT_LENGTH_RE.test(msg);
 }
 
 // ── OpenAI-compatible HTTP provider — 원격/로컬 사이드카 공통(fetch, 새 의존성 0; Node22 global fetch). ──
@@ -215,7 +221,7 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
 
   // 한 청크를 1회 요청. 타임아웃/네트워크 실패면 청크를 반으로 줄여 재귀 재시도(단건까지) — 느린 백엔드가 조금씩이라도 진행되게.
   //  단건까지 줄여도 타임아웃이면 throw(엔드포인트가 사실상 불가용 — 호출부가 unavailable/error 로 처리).
-  //  컨텍스트 초과(4xx, isContextLengthError)도 분할 대상 — 포이즌 문서를 단건으로 격리한 뒤 프리픽스 축약(#669).
+  //  컨텍스트 초과(isContextLengthError)도 분할 대상 — 포이즌 문서를 단건으로 격리한 뒤 프리픽스 축약(#669).
   private async embedChunk(texts: string[]): Promise<number[][]> {
     try {
       return await this.embedRequest(texts);
@@ -267,7 +273,8 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
       const body = await res.text().catch(() => "");
       // ★ 협상은 여기서 한 번만 — `dimensions` 를 모르는 서버(400/422)면 그 필드를 영구히 빼고 다시 부른다.
       //  이 갈래가 없으면 «차원 고정» 기능이 구형 백엔드를 쓰는 셀프호스팅 배포를 깨뜨린다(무회귀 요구).
-      if (withDims && (res.status === 400 || res.status === 422)) {
+      //  길이 초과 400 은 협상 대상이 아니다 — `dimensions` 탓이 아닌데 빼 버리면 뒤의 벡터가 모델 고유 차원으로 와서 vector(N) 저장이 깨진다.
+      if (withDims && (res.status === 400 || res.status === 422) && !CONTEXT_LENGTH_RE.test(body)) {
         this.dimsRejected = true;
         console.warn(`[embeddings] 업스트림이 dimensions 를 거부(${res.status}) — 그 필드 없이 재시도합니다(이후 생략).`);
         return this.embedRequest(texts);
@@ -311,12 +318,13 @@ export function embeddingInputText(k: { title?: string | null; summary?: string 
 }
 
 const HNSW_MAX_DIMS = 2000; // pgvector HNSW 인덱스 차원 한계(초과 시 컬럼만 — 작은 코퍼스는 seq-scan 으로 충분)
+const HALFVEC_TABLES = new Set(["knowledge_chunk"]);
 
 // 임베딩 컬럼을 얹을 수 있는 테이블 — 내부 상수만 넘긴다(knowledge·project). SQL 인터폴레이션 안전 가드.
 // category(#1153) — 분류의 **정의(should)** 를 벡터로 둔다. 소속 지식 벡터와의 거리가 곧 '정의-내용 불일치'다.
 //  (지식·프로젝트처럼 '검색 대상'이라서가 아니라, 그 분류 안 지식을 재는 **고정점**이라서 임베딩한다.)
 //  collect_unit = 수집 단위의 설명 벡터(#4213 T12 #4744 «단위 찾기» · 검색 실패 보조 안내).
-const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category", "session_card", "collect_unit"]);   // session_card = 세션 요약 카드(#4530 «뜻으로 찾기»)
+const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category", "session_card", "collect_unit", "knowledge_chunk"]);   // session_card = 세션 요약 카드(#4530 «뜻으로 찾기»)
 
 // 가드 마이그레이션 — pgvector 확장 + <table> 임베딩 컬럼/인덱스(embedding_vector/model/updated_at + <table>_embedding_hnsw).
 //  기본 table='knowledge'. 프로젝트 등 다른 임베딩 타깃도 같은 컬럼셋을 재사용(#631).
@@ -348,6 +356,18 @@ async function hasEmbeddingSchema(pool: pg.Pool, table: string, dim: number): Pr
   }
 }
 
+/**
+ * #5203 조각은 2바이트 소수(halfvec)로 둔다 — 조각 벡터 32,419개에서 인덱스 266MB → 89MB · 재현율 같음(측정). halfvec 이 없는 옛 pgvector(<0.7)면 vector 로 둔다 —
+ *  쓰는 쪽은 그대로다(vector → halfvec 은 암묵 변환이 있다). 칸이 이미 있으면 그 형을 따른다(인덱스 연산자가 칸의 형과 맞아야 한다).
+ */
+async function useHalfvec(pool: pg.Pool, table: string): Promise<boolean> {
+  if (!HALFVEC_TABLES.has(table)) return false;
+  const col = (await pool.query(
+    `SELECT format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname='embedding_vector' AND NOT attisdropped`, [table])).rows[0] as { t?: string } | undefined;
+  if (col?.t) return col.t === "halfvec";
+  return ((await pool.query(`SELECT 1 FROM pg_type WHERE typname='halfvec'`)).rowCount ?? 0) > 0;
+}
+
 export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, table = "knowledge"): Promise<boolean> {
   if (!EMBEDDABLE_TABLES.has(table)) {
     console.warn(`[embeddings] 알 수 없는 임베딩 테이블(${table}) — 스키마 준비 건너뜀`);
@@ -374,12 +394,13 @@ export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, t
     return false;
   }
   try {
-    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_vector vector(${dim})`);
+    const half = await useHalfvec(pool, table);
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_vector ${half ? "halfvec" : "vector"}(${dim})`);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_model TEXT`);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`);
     if (dim <= HNSW_MAX_DIMS) {
       await pool.query(
-        `CREATE INDEX IF NOT EXISTS ${table}_embedding_hnsw ON ${table} USING hnsw (embedding_vector vector_cosine_ops)`,
+        `CREATE INDEX IF NOT EXISTS ${table}_embedding_hnsw ON ${table} USING hnsw (embedding_vector ${half ? "halfvec_cosine_ops" : "vector_cosine_ops"})`,
       );
     } else {
       console.warn(`[embeddings] dimensions=${dim} > ${HNSW_MAX_DIMS}: HNSW 인덱스 생략(seq-scan). 작은 코퍼스 권장.`);

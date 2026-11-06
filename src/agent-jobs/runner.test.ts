@@ -8,7 +8,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, SYSTEM_PROMPT_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
+import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, SYSTEM_PROMPT_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, EFFORT_LEVELS, claudeJobArgv } from "./runner.js";
+import { parseSteps } from "./plan.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -76,6 +77,19 @@ process.stdin.on("end", () => {
   out({ type: "assistant", message: { content: [{ type: "text", text: "일하는 중" }, { type: "tool_use", name: "Bash" }] } });
   process.stderr.write("fake stderr line\\n");
   if (process.env.FAKE_MODE === "hang") { setInterval(() => {}, 1000); return; }
+  if (process.env.FAKE_MODE === "tools") {
+    //  도구 호출 단계 — 두 호출을 내고 150ms 뒤 결과(하나는 오류 · 모르는 id 하나)를 돌려준 다음, 끝나지 않는 호출 하나를 더 낸다.
+    out({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "toolu_1", name: "mcp__lively__knowledge_search", input: { q: "검색어", limit: 20 } },
+      { type: "tool_use", id: "toolu_2", name: "mcp__lively__knowledge_get", input: { name: "x".repeat(400) } }] } });
+    setTimeout(() => {
+      out({ type: "user", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "toolu_1", content: "도구 결과 글은 싣지 않는다" },
+        { type: "tool_result", tool_use_id: "toolu_2", is_error: true, content: "없는 문서" },
+        { type: "tool_result", tool_use_id: "toolu_unknown", content: "모르는 호출" }] } });
+      out({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_3", name: "Read", input: "plain" }] } });
+    }, 150);
+  }
   setTimeout(() => {
     out({ type: "result", subtype: "success", is_error: false, result: "끝난 답", num_turns: 2, duration_ms: 42, total_cost_usd: 0.01, usage: { input_tokens: 3 }, session_id: "0a1b2c3d-0000-4000-8000-000000000001" });
     process.exit(1);   // 답을 내고 1 로 끝나는 하네스도 있다 — 판은 종료코드를 그대로 보고한다
@@ -95,7 +109,7 @@ interface Seen {
 
 /** 가짜 게이트웨이 — 시나리오별 응답. */
 async function gateway(o: {
-  mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
+  mode: "ok" | "hang" | "tools"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
   /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기 · 머리만 주고 멈추기. */
   bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
   /** #5101 부트 응답에 더할 칸(transcriptMax · transcript …) · 하네스 env 에 더할 것(CLAUDE_CONFIG_DIR 자리표 · 가짜 하네스 모드). */
@@ -216,6 +230,32 @@ await t("R2 정상 — 박동 · 결과 한 번(답·대화 id·종료코드) ·
     assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
     assert.equal(h.mcpMode, 0o600);
     assert.ok(!fs.existsSync(h.argv[1]), "판이 끝나면 임시 폴더(프롬프트·MCP 파일)를 지운다");
+  } finally { await g.close(); }
+});
+
+await t("ST1 도구 호출 단계 — tool_use 를 본 때 시작 · 같은 id 의 tool_result 를 본 때 끝 · 오류 · 입력 앞머리만(결과 글 없음) · id 없는 · 끝나지 않은 호출은 끝 없음 · 박동과 결과에 함께", async () => {
+  const record = path.join(tmp, "st1.json");
+  const g = await gateway({ mode: "tools", timeoutMs: 20_000, record });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const r = g.seen.results[0] as Record<string, any>;
+    const steps = r.steps as Array<Record<string, any>>;
+    assert.deepEqual(steps.map((s) => s.name), ["Bash", "mcp__lively__knowledge_search", "mcp__lively__knowledge_get", "Read"]);
+    const [bash, search, get, read] = steps;
+    assert.equal(bash.id, null);
+    assert.equal(bash.ended_at, null, "id 없는 호출은 결과와 짝지을 수 없다");
+    assert.equal(search.id, "toolu_1");
+    assert.equal(search.input, JSON.stringify({ q: "검색어", limit: 20 }));
+    assert.equal(search.is_error, false);
+    const took = Date.parse(search.ended_at) - Date.parse(search.started_at);
+    assert.ok(took >= 100 && took < 5_000, `호출 시간 ${took}ms`);
+    assert.equal(get.is_error, true);
+    assert.equal(get.input.length, 160, "입력은 앞머리만");
+    assert.equal(read.input, "plain");
+    assert.equal(read.ended_at, null, "끝나지 않은 호출");
+    assert.ok(!JSON.stringify(steps).includes("도구 결과 글은 싣지 않는다"), "도구 결과 글은 싣지 않는다");
+    assert.deepEqual(parseSteps(steps), steps, "판이 보낸 모양을 게이트웨이 해석이 그대로 받는다 — 키 이름이 어긋나면 단계가 말없이 버려진다");
+    assert.ok(g.seen.ticks.length >= 1 && g.seen.ticks.every((k) => Array.isArray(k.steps)), "박동에도 단계가 실린다");
   } finally { await g.close(); }
 });
 
@@ -365,6 +405,154 @@ await t("claudeJobArgv — 훅 끔 · 멤버 MCP 안 실음 · MCP 자리표 · 
     assert.ok(!n.includes("--append-system-prompt-file") && !n.includes("--setting-sources"), JSON.stringify(o));
   }
   assert.ok(!a.includes("--setting-sources"), "지시가 없으면 종전 그대로(작업 폴더 설정을 읽는다)");
+});
+
+// ── 앱 AI 작업의 «라이블리 MCP 만»(매니페스트 ai.mcp_only) — 하네스 인자(사양 S17~S20 · S23) ──
+//  이게 틀리면: «MCP 만» 작업이 셸 · 파일 · 웹 같은 내장 도구(작업 폴더 설정의 명령까지)를 연 채 돌거나, 라이블리 MCP 까지 잃거나, 선언하지 않은 작업이 도구를 잃는다.
+/** 그 깃발들과 각각 바로 뒤 인자를 뺀 나머지 — «그것 말고는 종전 그대로» 를 대조한다. */
+const without = (a: string[], ...flags: string[]): string[] =>
+  flags.reduce((acc, f) => { const i = acc.indexOf(f); return i < 0 ? acc : [...acc.slice(0, i), ...acc.slice(i + 2)]; }, a);
+const count = (a: string[], flag: string): number => a.filter((x) => x === flag).length;
+const RESUME = "0a1b2c3d-0000-4000-8000-000000000001";
+
+await t("mcp_only S17 claudeJobArgv — «MCP 만» 은 `--tools` 바로 뒤 빈 문자열로 내장 도구를 모두 끈다 · 라이블리 MCP 자리표 · 그 밖의 인자는 종전 그대로(S23 설정 출처 말고)", () => {
+  const o = { model: "sonnet", resume: RESUME, mcp: true };
+  const a = claudeJobArgv({ ...o, mcpOnly: true });
+  const at = a.indexOf("--tools");
+  assert.ok(at > 0, JSON.stringify(a));
+  assert.equal(a[at + 1], "", "빈 문자열 인자 하나 — 도구 이름을 하나도 주지 않는다");
+  assert.equal(count(a, "--tools"), 1);
+  assert.equal(a[a.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER, "라이블리 MCP 는 그대로 싣는다");
+  for (const flag of ["-p", "--dangerously-skip-permissions", "--strict-mcp-config"]) assert.ok(a.includes(flag), flag);
+  assert.equal(a[a.indexOf("--output-format") + 1], "stream-json");
+  assert.equal(a[a.indexOf("--settings") + 1], JSON.stringify({ disableAllHooks: true }), "훅 끔 그대로");
+  assert.equal(a[a.indexOf("--model") + 1], "sonnet");
+  assert.equal(a[a.indexOf("--resume") + 1], RESUME);
+  assert.deepEqual(without(a, "--tools", "--setting-sources"), claudeJobArgv(o), "«MCP 만» 이 아닌 작업과 같다");
+  const n = claudeJobArgv({ mcp: true, mcpOnly: true });
+  assert.equal(n[n.indexOf("--tools") + 1], "");
+  assert.deepEqual(without(n, "--tools", "--setting-sources"), claudeJobArgv({ mcp: true }), "모델 · 이어받기가 없어도");
+});
+
+await t("mcp_only S18 claudeJobArgv — 단발(bare)은 종전처럼 도구 끔 + MCP 없음 · «MCP 만» 이 겹쳐도 `--tools` 는 한 번(그 밖은 단발 인자 그대로 · S23 설정 출처 말고)", () => {
+  for (const extra of [{}, { model: "sonnet" }, { resume: RESUME }]) {
+    const bare = claudeJobArgv({ ...extra, mcp: false, bare: true });
+    const both = claudeJobArgv({ ...extra, mcp: false, bare: true, mcpOnly: true });
+    assert.equal(count(both, "--tools"), 1, JSON.stringify(both));
+    assert.equal(both[both.indexOf("--tools") + 1], "");
+    assert.ok(!both.includes("--mcp-config"), "단발은 MCP 없음");
+    assert.deepEqual(without(both, "--setting-sources"), bare, JSON.stringify(extra));
+  }
+});
+
+await t("mcp_only S19 claudeJobArgv — «MCP 만» 이 아닌 에이전트 작업엔 `--tools` 가 없다(무회귀)", () => {
+  for (const o of [{ mcp: true }, { mcp: true, mcpOnly: false }, { mcp: true, mcpOnly: undefined }, { mcp: true, system: true, mcpOnly: false }, { mcp: true, model: "sonnet", resume: RESUME, mcpOnly: false }]) {
+    assert.ok(!claudeJobArgv(o).includes("--tools"), JSON.stringify(o));
+  }
+  assert.deepEqual(claudeJobArgv({ mcp: true, mcpOnly: false }), claudeJobArgv({ mcp: true }), "false 는 안 준 것과 같다");
+});
+
+await t("mcp_only S20 claudeJobArgv — 앱 판 지시와 함께 쓰면 지시 파일 자리표 · 설정 출처 user(한 번) · `--tools \"\"` 가 모두 실린다(단발 · MCP 작업 모두)", () => {
+  for (const o of [{ mcp: true }, { mcp: false, bare: true }]) {
+    const s = claudeJobArgv({ ...o, system: true, mcpOnly: true });
+    assert.equal(s[s.indexOf("--append-system-prompt-file") + 1], SYSTEM_PROMPT_PLACEHOLDER, JSON.stringify(o));
+    assert.equal(count(s, "--setting-sources"), 1, JSON.stringify(s));
+    assert.equal(s[s.indexOf("--setting-sources") + 1], "user", JSON.stringify(o));
+    assert.equal(count(s, "--tools"), 1, JSON.stringify(o));
+    assert.equal(s[s.indexOf("--tools") + 1], "", JSON.stringify(o));
+  }
+  const s = claudeJobArgv({ mcp: true, system: true, mcpOnly: true });
+  assert.equal(s[s.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+  assert.deepEqual(without(s, "--tools"), claudeJobArgv({ mcp: true, system: true }), "지시 인자는 지시만 있을 때와 같다");
+});
+
+await t("mcp_only S23 claudeJobArgv — «MCP 만» 은 앱 판 지시가 없어도 `--setting-sources user`(작업 폴더 설정이 명령을 못 돌리게) · 지시와 함께면 한 번 · 지시만이면 종전대로 · 둘 다 없으면 없다", () => {
+  const cases: Array<[Parameters<typeof claudeJobArgv>[0], number]> = [
+    [{ mcp: true, mcpOnly: true }, 1],
+    [{ mcp: true, mcpOnly: true, model: "sonnet", resume: RESUME }, 1],
+    [{ mcp: true, mcpOnly: true, system: true }, 1],
+    [{ mcp: false, bare: true, mcpOnly: true }, 1],
+    [{ mcp: false, bare: true, mcpOnly: true, system: true }, 1],
+    [{ mcp: true, system: true }, 1],
+    [{ mcp: true }, 0],
+    [{ mcp: true, mcpOnly: false }, 0],
+    [{ mcp: false, bare: true }, 0],
+  ];
+  for (const [o, want] of cases) {
+    const a = claudeJobArgv(o);
+    assert.equal(count(a, "--setting-sources"), want, `${JSON.stringify(o)} → ${JSON.stringify(a)}`);
+    if (want) assert.equal(a[a.indexOf("--setting-sources") + 1], "user", JSON.stringify(o));
+  }
+});
+
+await t("mcp_only S17·S23 판(진짜 노드) — 받은 하네스 인자의 `--tools` 와 빈 문자열 · 설정 출처를 빠뜨리지 않고 넘긴다 · 라이블리 MCP 는 자리표 대신 0600 파일로", async () => {
+  const record = path.join(tmp, "mo1.json");
+  const harness = claudeJobArgv({ mcp: true, mcpOnly: true }).slice(1);   // 판이 받는 그대로(맨 앞 claude 만 가짜 하네스로)
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, bootExtra: { argv: [process.execPath, FAKE, ...harness] } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    const at = h.argv.indexOf("--tools");
+    assert.ok(at >= 0, JSON.stringify(h.argv));
+    assert.equal(h.argv[at + 1], "", "빈 인자가 빠지면 다음 인자가 도구 목록이 된다");
+    assert.equal(h.argv[h.argv.indexOf("--setting-sources") + 1], "user");
+    assert.equal(h.argv.length, harness.length, "인자 수 그대로");
+    assert.notEqual(h.argv[h.argv.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+    assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
+    assert.equal(h.mcpMode, 0o600);
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
+});
+
+// ── 앱 AI 실행의 생각 깊이(effort — 하네스 `claude -p --effort <level>`) — 하네스 인자 ──
+//  이게 틀리면: 앱이 준 깊이가 하네스에 안 닿아 모든 판이 기본 깊이로 돌거나(깊이를 견주는 앱의 비교가 거짓이 된다), 목록 밖 글이 하네스 인자로 들어간다.
+const EFFORT_SHAPES: Array<Parameters<typeof claudeJobArgv>[0]> = [
+  { mcp: true }, { mcp: true, model: "sonnet", resume: RESUME }, { mcp: false, bare: true }, { mcp: true, mcpOnly: true, system: true }, { mcp: false, bare: true, mcpOnly: true },
+];
+
+await t("effort E1 claudeJobArgv — 준 값은 `--effort <값>` 한 쌍(다섯 값 모두 · 단발 · «MCP 만» · 지시 · 모델 · 이어받기와 함께) · 그 밖의 인자는 종전 그대로", () => {
+  assert.deepEqual([...EFFORT_LEVELS], ["low", "medium", "high", "xhigh", "max"], "claude 2.1.316 `--effort` 가 받는 다섯 값");
+  for (const effort of EFFORT_LEVELS) {
+    for (const o of EFFORT_SHAPES) {
+      const a = claudeJobArgv({ ...o, effort });
+      const what = `${effort} ${JSON.stringify(o)} → ${JSON.stringify(a)}`;
+      assert.equal(count(a, "--effort"), 1, what);
+      assert.equal(a[a.indexOf("--effort") + 1], effort, what);
+      assert.deepEqual(without(a, "--effort"), claudeJobArgv(o), `effort 말고는 같다 — ${what}`);
+    }
+  }
+});
+
+await t("effort E2 claudeJobArgv — 안 주면(생략 · null · 빈 글) `--effort` 가 없다(하네스 기본 · 무회귀)", () => {
+  for (const effort of [undefined, null, ""]) {
+    for (const o of EFFORT_SHAPES) {
+      const a = claudeJobArgv({ ...o, effort });
+      assert.ok(!a.includes("--effort"), `${JSON.stringify(effort)} ${JSON.stringify(o)} → ${JSON.stringify(a)}`);
+      assert.deepEqual(a, claudeJobArgv(o));
+    }
+  }
+});
+
+await t("effort E3 claudeJobArgv — 목록 밖 값은 던진다(다른 낱말 · 대문자 · 앞뒤 공백 · 플래그 · 숫자 · 셸 글자)", () => {
+  for (const bad of ["ultra", "HIGH", "Max", " high", "high ", "--dangerously-skip-permissions", "-p", "max;rm -rf /", "1", "high,max"]) {
+    assert.throws(() => claudeJobArgv({ mcp: true, effort: bad }), /effort/, JSON.stringify(bad));
+    assert.throws(() => claudeJobArgv({ mcp: false, bare: true, effort: bad }), /effort/, `단발도 — ${JSON.stringify(bad)}`);
+  }
+});
+
+await t("effort E4 판(진짜 노드) — 받은 하네스 인자의 `--effort <값>` 을 빠뜨리지 않고 그대로 하네스에 넘긴다", async () => {
+  const record = path.join(tmp, "ef1.json");
+  const harness = claudeJobArgv({ mcp: true, model: "sonnet", effort: "xhigh" }).slice(1);   // 판이 받는 그대로(맨 앞 claude 만 가짜 하네스로)
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, bootExtra: { argv: [process.execPath, FAKE, ...harness] } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.equal(count(h.argv, "--effort"), 1, JSON.stringify(h.argv));
+    assert.equal(h.argv[h.argv.indexOf("--effort") + 1], "xhigh");
+    assert.equal(h.argv[h.argv.indexOf("--model") + 1], "sonnet");
+    assert.equal(h.argv.length, harness.length, "인자 수 그대로");
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
 });
 
 await t("R6 결과를 올리는 동안에도 박동한다 — 게이트웨이가 결과를 늦게 받아도 «응답 없음» 으로 끊기지 않게", async () => {
@@ -590,6 +778,73 @@ await t("T4c(#5101) 파일이 상한(2000)보다 많으면 올리지 않는다 �
     assert.equal(await runBoot(g3.port), 0);
     assert.match(String(g3.seen.results[0]!.transcript_note), /transcript upload: 새로 받지 않았다/);
   } finally { await g3.close(); }
+});
+
+await t("T6(#5082) 구독 작업의 대화를 묶음으로 잇는 작업(transcriptRawMax · 빈 설정 폴더 자리표 없음)인데 설정 폴더의 projects/ 가 따로 붙은 자리(도커 실행면이 덮은 tmpfs)가 아니다 — 그 사람의 진짜 대화 폴더다: 하네스를 띄우지 않고(stage runner · 5) · 되돌리지도 · 비우지도 않는다(보관을 꺼 올리기 칸이 없어도 같다) / 묶음 칸이 없는 구독 작업은 종전대로 돈다", async () => {
+  //  되돌릴 묶음 — 꼴은 맞다(T3 와 같은 모양). 따로 붙은 자리가 아니니 놓으면 안 된다(놓다 실패하면 비우는 길이 그 사람의 대화를 지운다).
+  const prev: Bundle = { v: 1, cfg: "/old/cfg", files: [{ p: `-fake-cwd/${SID}.jsonl`, d: b64("앞 대화") }] };
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["resume", { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000, transcript: { conv: SID, gz: bundleB64(prev) } }],
+    ["keep0", { transcriptRawMax: 10_000_000 }],
+  ];
+  for (const [k, extra] of cases) {
+    const cfg = path.join(tmp, `t6-${k}-claude`);
+    const other = path.join(cfg, "projects", "-other-cwd");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, "앞_사람의_대화.jsonl"), "앞 사람의 질문");
+    const record = path.join(tmp, `t6-${k}.json`);
+    const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPT: "1", FAKE_RESUME_CONV: SID }, bootExtra: extra });
+    try {
+      assert.equal(await runBoot(g.port), 5, k);
+      assert.equal(g.seen.failed.length, 1, k);
+      assert.equal(g.seen.failed[0]!.body.stage, "runner", k);
+      assert.match(String(g.seen.failed[0]!.body.message), /대화 자리\(projects\/\)가 이 작업만의 자리로 덮여 있지 않아/, k);
+      assert.ok(!fs.existsSync(record), `${k}: 하네스를 띄우지 않았다`);
+      assert.equal(g.seen.transcripts.length + g.seen.results.length + g.seen.ticks.length, 0, k);
+      assert.equal(fs.readFileSync(path.join(other, "앞_사람의_대화.jsonl"), "utf8"), "앞 사람의 질문", `${k}: 그 사람의 대화를 지우지 않는다`);
+      assert.deepEqual(fs.readdirSync(path.join(cfg, "projects")), ["-other-cwd"], `${k}: 되돌리지 않았다`);
+    } finally { await g.close(); fs.rmSync(cfg, { recursive: true, force: true }); }
+  }
+  //  묶음 칸이 없는 구독 작업(매니지드 · 박스 위 — 대화가 홈에 남는다)은 종전대로 돌고, 그 projects/ 를 올리지 않는다.
+  const cfg3 = path.join(tmp, "t6-home-claude");
+  fs.mkdirSync(path.join(cfg3, "projects", "-other-cwd"), { recursive: true });
+  fs.writeFileSync(path.join(cfg3, "projects", "-other-cwd", "a.jsonl"), "앞 사람의 질문");
+  const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t6-home.json"), envExtra: { CLAUDE_CONFIG_DIR: cfg3, FAKE_TRANSCRIPT: "1" } });
+  try {
+    assert.equal(await runBoot(g3.port), 0);
+    assert.equal(g3.seen.results.length, 1);
+    assert.equal(g3.seen.transcripts.length, 0);
+    assert.equal(fs.readFileSync(path.join(cfg3, "projects", "-other-cwd", "a.jsonl"), "utf8"), "앞 사람의 질문");
+  } finally { await g3.close(); fs.rmSync(cfg3, { recursive: true, force: true }); }
+});
+
+await t("T7(#5082) 도커 실행면이 덮은 projects/(설정 폴더와 다른 장치 — 리눅스 /dev/shm 으로 흉내) — 구독 작업도 받은 묶음을 그 자리에 되돌리고 끝에 그 자리를 올린다 · 그 계정의 설정 폴더는 지우지 않는다", async () => {
+  if (process.platform !== "linux" || !fs.existsSync("/dev/shm")) { console.log("  (건너뜀 — 리눅스 /dev/shm 이 없다 · CI 가 잰다)"); return; }
+  const cfg = path.join(tmp, "t7-claude");
+  fs.mkdirSync(cfg, { recursive: true });
+  const shm = fs.mkdtempSync("/dev/shm/lvly-t7-");
+  fs.symlinkSync(shm, path.join(cfg, "projects"));
+  try {
+    if (fs.statSync(path.join(cfg, "projects")).dev === fs.statSync(cfg).dev) { console.log("  (건너뜀 — /dev/shm 이 설정 폴더와 같은 장치)"); return; }
+    const CONV_R = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const prev: Bundle = { v: 1, cfg: "/old/cfg", files: [{ p: `-fake-cwd/${CONV_R}.jsonl`, d: b64("앞 대화 R7\n") }] };
+    const record = path.join(tmp, "t7.json");
+    const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPT: "1", FAKE_RESUME_CONV: CONV_R },
+      bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000, transcript: { conv: CONV_R, gz: bundleB64(prev) } } });
+    try {
+      assert.equal(await runBoot(g.port), 0);
+      const h = JSON.parse(fs.readFileSync(record, "utf8"));
+      assert.ok(typeof h.restored === "string" && h.restored.startsWith("앞 대화 R7"), "하네스가 뜰 때 앞 대화가 그 자리에 있다");
+      assert.equal(g.seen.transcripts.length, 1, "끝에 올렸다");
+      const up = unbundle(g.seen.transcripts[0]!.body);
+      assert.equal(up.cfg, cfg, "이 작업의 설정 폴더(다음 작업이 되돌릴 때 바꿔 쓸 앞자리)");
+      const ps = up.files.map((f) => f.p).sort();
+      assert.ok(ps.includes(`-fake-cwd/${CONV_R}.jsonl`) && ps.includes(`-fake-cwd/${SID}.jsonl`), JSON.stringify(ps));
+      assert.equal(g.seen.results.length, 1);
+      assert.equal(g.seen.results[0]!.transcript_note, null);
+      assert.ok(fs.existsSync(path.join(cfg, "projects")), "그 계정의 설정 폴더는 지우지 않는다");
+    } finally { await g.close(); }
+  } finally { fs.rmSync(cfg, { recursive: true, force: true }); fs.rmSync(shm, { recursive: true, force: true }); }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

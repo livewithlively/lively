@@ -146,7 +146,7 @@ function figPipeline(): HTMLElement {
       place('src', '자료', '가져온 원문을 그대로 둡니다.'),
       machine('증류기', '지식으로 만듭니다'),
       place('wiki', '지식', '분류에 맞춰 위키에 저장합니다.'),
-      machine('주입 규칙', '세션에 넣습니다'),
+      machine('AI 주입기', '세션에 넣습니다'),
       place('chat', 'AI 세션', '시작할 때 읽고, 일하는 중에 검색합니다.')));
 }
 

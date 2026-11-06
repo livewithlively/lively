@@ -17,10 +17,12 @@
 //  ① 준비 한 덩이(단순 질의 프로토콜 — 여러 문장): BEGIN [READ ONLY] · 행 격리 값(app.tenant_id) · 시간·메모리 상한 ·
 //     search_path=pg_catalog · standard_conforming_strings=on(검사기의 렉서와 DB 렉서를 같게 고정) · SET LOCAL ROLE <앱 역할>
 //  ② 사용자 문장(확장 프로토콜 — 값은 바인딩, DB 도 여러 문장을 거부한다) — 묶음이면 문장마다 한 번
+//     id 를 직접 넣은 문장(INSERT … OVERRIDING SYSTEM VALUE)이 행을 넣었으면 그 표의 id 시퀀스를 맞추는 한 덩이를 더 보낸다(#5172 idResyncSql)
 //  ③ COMMIT(쓰기·잠금)/ROLLBACK(읽기)
 //  SET LOCAL 이라 트랜잭션이 끝나면 Postgres 가 전부 되돌린다 — 다음 차례가 앱 역할을 물려받지 않는다.
 //  ⚠ 역할로 내려가는 게 **사용자 SQL 보다 먼저**다. ① 이 실패하면(어느 한 줄이라도) ② 는 보내지 않는다.
-//  ⚠ ① 에 문자열로 끼우는 값은 행 격리 값 하나뿐이고, 그건 UUID 모양을 확인한 뒤에만 끼운다.
+//  ⚠ ① 에 문자열로 끼우는 값은 행 격리 값 하나뿐이고, 그건 UUID 모양을 확인한 뒤에만 끼운다. id 맞춤 한 덩이(#5172)에 끼우는
+//   표 이름도 인용 이름 모양을 확인한 뒤에만 끼운다.
 import pg from "pg";
 import { performance } from "node:perf_hooks";
 import { HttpError } from "../http-error.js";
@@ -28,6 +30,7 @@ import { logger } from "../log.js";
 import { itemsPool, boundTenantId } from "../db/client.js";
 import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
 import { wrapForCaps, WRAP_COLUMNS, type AppSqlPlan } from "./app-sql.js";
+import { qualifiedAppTable } from "./store-ddl.js";
 
 // ── 상한(환경변수로 조정) ─────────────────────────────────────────────────────────────────
 export interface AppSqlLimits {
@@ -391,6 +394,8 @@ function mapPgError(e: unknown, hide: (s: string) => string, l: AppSqlLimits): H
   const detail = err?.detail ? ` (${hide(String(err.detail))})` : "";
   if (code === "57014") return new HttpError(408, `${l.statementMs / 1000}초 안에 끝나지 않아 멈췄습니다 — 조건을 좁히거나 매니페스트에 인덱스를 선언하세요`, { cause: e });
   if (code === "55P03") return new HttpError(409, `다른 작업이 같은 행을 잡고 있어 ${l.lockMs / 1000}초 넘게 기다리다 멈췄습니다 — 잠시 뒤 다시 하세요`, { cause: e });
+  //  교착(서로 기다림) — 묶음끼리 같은 행·같은 표 id 맞춤(#5172)을 반대 순서로 잡으면 생긴다. 다시 하면 되는 일이라 500 이 아니다.
+  if (code === "40P01" || code === "40001") return new HttpError(409, "다른 작업과 서로를 기다리게 되어 멈췄습니다 — 잠시 뒤 다시 하세요", { cause: e, body: { pg_code: code } });
   if (code === "42501") return new HttpError(403, `권한이 없습니다 — 이 앱의 테이블만 쓸 수 있습니다(${msg})`, { cause: e });
   if (code === "25006") return new HttpError(400, `읽기 문장에서 쓰기를 할 수 없습니다(${msg})`, { cause: e });
   if (code.startsWith("23")) {
@@ -414,6 +419,44 @@ function prepSql(rw: boolean, tenantId: string, role: string, l: AppSqlLimits): 
     "SET LOCAL standard_conforming_strings = on",
     `SET LOCAL ROLE ${qid(role)}`,
   ].join(";\n");
+}
+
+/** idResyncSql 에 끼우는 표 이름 — 인용한 «스키마.표». 앱 id 는 숫자로 시작할 수 있어(store-ddl physicalAppPrefix) IDENT 보다 넓다. */
+const QUOTED_REL = /^"[a-z0-9_]+"\."[a-z0-9_]+"$/;
+/**
+ * id 를 직접 넣은 문장 뒤(#5172) — 그 표의 id 시퀀스를 **앞으로만** 맞춘다(왕복 1번 · 두 문장). 직접 넣은 id 는 시퀀스를 올리지
+ *  않아, 그대로 두면 다음 평범한 INSERT 가 그 id 를 받아 기본 키가 부딪친다(23505 — 넣은 id 수만큼 차례로).
+ *  앱 역할로 돈다 — 그 역할은 자기 표 id 시퀀스의 SELECT·UPDATE 를 받는다(store-schema ensureAppSqlRoleOn — UPDATE 는 DB 에서
+ *  nextval·setval 을 허락한다. 앱 SQL 이 그 함수를 부르는 것은 검사기가 막는다). 시퀀스는 서버가 표 이름으로 찾는다.
+ *   ① 같은 표를 맞추는 트랜잭션끼리 줄 세운다 — setval 은 트랜잭션과 무관하게 바로 반영돼, 둘이 엇갈리면 작은 값이 나중에 덮어
+ *      시퀀스가 뒤로 갈 수 있다. 잠금은 커밋·취소 때 풀린다.
+ *   ② 지금 위치(pg_sequence_last_value)보다 max(id) 가 클 때만 옮긴다 — 지운 맨 끝 id 를 다시 내주지 않는다. 정확성은 이 비교가
+ *      진다(잠금 다음 문장이라 앞서 커밋된 다른 쪽 행까지 보는 것은 덤).
+ *  ⚠ «앞으로만» 은 최선이다 — 원래 id 로 넣는 동안 같은 표에 평범한 INSERT 가 함께 들면, 그 INSERT 가 넣는 번호 범위 안의
+ *   번호를 먼저 받거나(23505 → 409) 위치를 읽고 옮기는 찰나에 끼어 시퀀스가 그만큼 되돌 수 있다. 옮기기는 표가 조용할 때 한다.
+ *  rel 은 qualifiedAppTable 이 만든 인용 이름이다 — 끼우기 전에 모양을 한 번 더 본다.
+ */
+function idResyncSql(rel: string): string {
+  if (!QUOTED_REL.test(rel)) throw new HttpError(500, "id 시퀀스를 맞출 표 이름이 모양에 맞지 않습니다");
+  const lit = `'${rel}'`;
+  return [
+    `SELECT pg_advisory_xact_lock(hashtextextended('lvly-app-id-seq:' || ${lit}, 0))`,
+    `SELECT setval(s.seq, s.top, true) FROM (SELECT pg_get_serial_sequence(${lit}, 'id')::regclass AS seq, (SELECT max(id) FROM ${rel}) AS top) s`
+      + " WHERE s.top > COALESCE(pg_sequence_last_value(s.seq), 0)",
+  ].join(";\n");
+}
+
+/** idResyncSql 을 보내고, 맞춤 잠금을 기다리다 멈춘 것은 그 까닭으로 말한다(같은 행을 잡은 것이 아니다). 표를 모르면 멈춘다 —
+ *  맞추지 않고 커밋하면 뒤의 평범한 INSERT 가 부딪친다. */
+async function resyncIds(client: pg.PoolClient, o: RunAppSqlBatchOpts, plan: AppSqlPlan, l: AppSqlLimits): Promise<void> {
+  if (!plan.targets.length) throw new HttpError(500, "원래 id 로 넣은 표를 계획에서 찾지 못해 id 시퀀스를 맞출 수 없습니다 — 취소했습니다");
+  try { await client.query(idResyncSql(qualifiedAppTable(o.schema, o.appId, plan.targets[0]))); }
+  catch (e) {
+    if ((e as { code?: string })?.code === "55P03") {
+      throw new HttpError(409, `같은 표에 원래 id 로 넣는 다른 작업이 끝나기를 ${l.lockMs / 1000}초 기다리다 멈췄습니다 — 잠시 뒤 다시 하세요`, { cause: e });
+    }
+    throw e;
+  }
 }
 
 export interface AppSqlItem { plan: AppSqlPlan; params: unknown[] }
@@ -507,6 +550,9 @@ async function execute(o: RunAppSqlBatchOpts, batch: boolean): Promise<{ results
           throw new HttpError(413, `결과가 상한(${l.maxRows.toLocaleString()}행 · ${Math.round(l.maxBytes / 1024 / 1024)}MB${batch ? " — 묶음 전체" : ""})을 넘습니다 — `
             + "LIMIT·OFFSET(Drizzle .limit()·.offset())으로 나눠 읽으세요. 쓰기였다면 취소했습니다", { body: { truncated: true } });
         }
+        //  #5172 원래 id 로 넣었으면 같은 트랜잭션에서 시퀀스를 맞춘다 — 묶음의 다음 문장부터 맞춰진 시퀀스를 쓴다.
+        //   0행이면(다시 돌린 시드의 ON CONFLICT DO NOTHING 등) 맞출 것이 없다 — 잠금도 잡지 않는다.
+        if (plan.setsId && shaped.result.changed !== 0) await resyncIds(client, o, plan, l);
         results.push(shaped.result);
       }
       at = -1;

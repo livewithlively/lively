@@ -9,7 +9,7 @@ import { dlvBox } from './lib/dlv.js';
 
 //  #5159 — 한 화면에 들도록 2단으로 다시 짰다: 왼쪽 「연결」(설정 폼) · 오른쪽 「지금 상태」(지식·프로젝트 임베딩 수 + 백필).
 //   성능 조절 세 칸(배치·타임아웃·메모리 게이트)은 접힘으로 — 처음 켤 때 손댈 일이 없는 값이다.
-//   bare 면 머리(sectionHead)·카드를 그리지 않는다 — [AI 주입 설정] 세부 페이지가 자기 머리를 그린다.
+//   bare 면 머리(sectionHead)·카드를 그리지 않는다 — [AI 주입기 설정] 세부 페이지가 자기 머리를 그린다.
 function embeddingsEditor(detail, data, opts: { bare?: boolean } = {}) {
   const canEdit = !!data.canEdit;
   const body = el('div', { class: 'emb-body' });

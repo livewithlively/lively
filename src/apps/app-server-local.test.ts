@@ -38,6 +38,15 @@ const key = ed25519FromSeed(crypto.createHash("sha256").update("app-server-local
 const SDK_URL = new URL("../../public/sdk/lively-db.mjs", import.meta.url).href;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const freePort = (): Promise<number> => new Promise((r) => { const s = net.createServer(); s.listen(0, "127.0.0.1", () => { const p = (s.address() as net.AddressInfo).port; s.close(() => r(p)); }); });
+/** 서로 다른 빈 포트 둘 — 둘을 쥔 채 고른다. 하나씩 고르면 앞 포트를 놓은 뒤라 같은 번호가 다시 나올 수 있다 — 그러면 검사 층이 제 포트를 앱 포트로 보고
+ *  곧바로 «준비됨» 이라 하고 앱은 EADDRINUSE 로 끝난다(CI 실측 run 41134673159 — 띄우기 116ms 뒤 exit 1). */
+const freePortPair = (): Promise<[number, number]> => new Promise((r) => {
+  const a = net.createServer(), b = net.createServer();
+  a.listen(0, "127.0.0.1", () => b.listen(0, "127.0.0.1", () => {
+    const pair: [number, number] = [(a.address() as net.AddressInfo).port, (b.address() as net.AddressInfo).port];
+    a.close(() => b.close(() => r(pair)));
+  }));
+});
 const exited = (p: ChildProcess): boolean => p.exitCode !== null || p.signalCode !== null;
 const waitExit = (p: ChildProcess): Promise<void> => exited(p) ? Promise.resolve() : new Promise((r) => p.once("exit", () => r()));
 async function until(what: string, ok: () => boolean | Promise<boolean>, ms = 10_000): Promise<void> {
@@ -57,6 +66,7 @@ class ProcDriver implements ContainerDriver {
   failRun: string | null = null;
   failRunOnce: string | null = null;   // 다음 runApp 한 번만 이 글로 실패(네트워크·이미지 사라짐 흉내)
   nets = 0;                            // ensureNetwork 가 불린 수(prepared 재준비 확인)
+  stopGapMs = 0;                       // 앱이 끝난 뒤 컨테이너가 멈출 때까지의 틈 — 그동안 검사 층이 살아 있다(진짜 컨테이너의 init 이 거두는 틈)
   async info(): Promise<{ memMb: number; cpus: number }> { return { memMb: 8192, cpus: 4 }; }
   async ensureImage(): Promise<void> { /* 없음 */ }
   async ensureNetwork(): Promise<void> { this.nets++; }
@@ -69,14 +79,17 @@ class ProcDriver implements ContainerDriver {
     const env = parseEnv(fs.readFileSync(spec.envFile, "utf8"));
     const code = spec.ro.find((m) => m.target === "/var/task")!.host;
     const opt = spec.ro.find((m) => m.target === "/opt/lively")!.host;
-    const port = await freePort(), appPort = await freePort();
+    const [port, appPort] = await freePortPair();
     const penv = { PATH: process.env.PATH ?? "", ...env, LIVELY_GUARD_HOST: "127.0.0.1", LIVELY_GUARD_PORT: String(port), PORT: String(appPort), LAMBDA_TASK_ROOT: code };
     const guard = spawn(process.execPath, [path.join(opt, "guard.cjs")], { env: penv, stdio: ["ignore", "pipe", "pipe"] });
     const app = spawn("/bin/sh", [path.join(code, env._HANDLER ?? "lively-run.sh")], { cwd: code, env: penv, stdio: ["ignore", "pipe", "pipe"] });
     const fc: FakeC = { spec, guard, app, port, appPort, running: true, exitCode: null, log: "", startedAt: new Date().toISOString(), env: penv };
     const cap = (d: Buffer): void => { fc.log = (fc.log + d.toString("utf8")).slice(-20_000); };
     for (const p of [guard, app]) { p.stdout!.on("data", cap); p.stderr!.on("data", cap); }
-    app.on("exit", (c) => { fc.running = false; fc.exitCode = c ?? 137; if (!exited(guard)) guard.kill("SIGKILL"); });
+    app.on("exit", (c) => {
+      const stop = (): void => { fc.running = false; fc.exitCode = c ?? 137; if (!exited(guard)) guard.kill("SIGKILL"); };
+      if (this.stopGapMs > 0) setTimeout(stop, this.stopGapMs); else stop();
+    });
     guard.on("exit", () => { if (fc.running) { fc.running = false; fc.exitCode = 1; if (!exited(app)) app.kill("SIGKILL"); } });
     this.c.set(spec.name, fc);
     return { port };
@@ -121,6 +134,7 @@ else {
       const u = new URL(req.url, "http://x");
       if (u.pathname === "/slow") await new Promise((r) => setTimeout(r, Number(u.searchParams.get("ms") || 1000)));
       if (u.pathname === "/die") process.exit(9);
+      if (u.pathname === "/reset") { req.socket.destroy(); return; }
       res.setHeader("set-cookie", ["a=1; Path=/", "b=2; Path=/"]);
       res.writeHead(Number(u.searchParams.get("status") || 200), { "content-type": "application/json", "x-app": "yes" });
       res.end(JSON.stringify({ method: req.method, url: req.url, headers: req.headers, body_b64: Buffer.concat(parts).toString("base64"),
@@ -603,6 +617,32 @@ t("L22 부르는 도중 컨테이너가 죽음(메모리 · 앱이 끝남) — L
   assert.match(g.log, /Status: error\tError Type: Runtime\.ExitError/);
   assert.equal(r.driver.c.has(containerNameOf(fn, version)), false, "죽은 컨테이너가 남았다");
   assert.notEqual(echo(await call(r, fn, personEvent("die-app", "/echo"))).pid, p1, "다음 부르기는 새 컨테이너");
+});
+
+t("L22b 부르는 도중 앱이 끝났는데 검사 층이 먼저 502 로 답함(컨테이너는 곧 멈춘다) — 끊긴 것과 같은 함수 오류 · 죽은 컨테이너 걷음 · 다음엔 새로", async () => {
+  const r = await setup();
+  const { fn, version } = await r.mkFn("gap-app");
+  const p1 = echo(await call(r, fn, personEvent("gap-app", "/echo"))).pid;
+  r.driver.stopGapMs = 300;   // 검사 층이 살아 있는 틈 — 이 틈이 없으면 누가 먼저냐는 운이다(이 행이 없을 때 L22 가 CI 에서 흔들렸다)
+  const g = await call(r, fn, personEvent("gap-app", "/die"));
+  r.driver.stopGapMs = 0;
+  assert.equal(g.error?.errorType, "Runtime.ExitError", JSON.stringify(g));
+  assert.match(g.error!.errorMessage, /exit status 9/);
+  assert.match(g.log, /Status: error\tError Type: Runtime\.ExitError/);
+  assert.equal(r.driver.c.has(containerNameOf(fn, version)), false, "죽은 컨테이너가 남았다");
+  assert.notEqual(echo(await call(r, fn, personEvent("gap-app", "/echo"))).pid, p1, "다음 부르기는 새 컨테이너");
+});
+
+t("L22c 컨테이너는 살아 있고 앱에만 못 닿음(앱이 소켓을 끊음) — 검사 층의 502 를 그대로 넘긴다 · 컨테이너를 걷지 않는다", async () => {
+  const r = await setup();
+  const { fn, version } = await r.mkFn("reset-app");
+  const p1 = echo(await call(r, fn, personEvent("reset-app", "/echo"))).pid;
+  const g = await call(r, fn, personEvent("reset-app", "/reset"));
+  assert.equal(g.error, undefined, JSON.stringify(g));
+  assert.equal(g.prelude?.statusCode, 502, JSON.stringify(g));
+  assert.equal(g.prelude?.headers["x-lively-guard"], "app-unreachable");
+  assert.equal(r.driver.c.has(containerNameOf(fn, version)), true, "살아 있는 컨테이너를 걷었다");
+  assert.equal(echo(await call(r, fn, personEvent("reset-app", "/echo"))).pid, p1, "다음 부르기도 같은 컨테이너");
 });
 
 t("L23 빌드 결과 받기 — 보통 파일만 · 크기 상한 · 지문은 코어가 잰다 · 아니면 zip 저장소에 아무것도 안 남김", async () => {

@@ -209,9 +209,9 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   const defined = (src, t) => new RegExp(`[{;\\s]--${t}\\s*:`).test(src);
   const undef = used.filter((t) => !defined(base, t));
   ok(undef.length === 0, `㉗ ★ 쓰는 토큰이 라이트 테마에 전부 정의돼 있다 (미정의: ${undef.join(", ") || "없음"})`);
-  //  on-fill(칠한 위의 글자색)·livc-mono(글꼴)는 테마와 무관해 다크에서 다시 정의하지 않는다.
+  //  on-fill(칠한 위의 글자색)·livc-mono(글꼴)·ic-stroke(선 아이콘 굵기)·hd-r/hd-b(#5319 머리 줄 높이 — 크기)는 테마와 무관해 다크에서 다시 정의하지 않는다.
   const noDark = used.filter((t) => defined(base, t) && !defined(dark, t)
-    && t !== "on-fill" && t !== "livc-mono");
+    && t !== "on-fill" && t !== "livc-mono" && t !== "ic-stroke" && t !== "hd-r" && t !== "hd-b");
   ok(noDark.length === 0, `㉘ ★ 다크 테마에도 정의돼 있다 (미정의: ${noDark.join(", ") || "없음"})`);
   ok(!/surface-1|surface-2/.test(mine),
     "㉙ ★ 정의된 적 없는 --surface-* 토큰을 안 쓴다 — #fff 폴백이 다크에서 흰 배경을 만든다");

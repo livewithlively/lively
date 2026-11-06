@@ -19,6 +19,7 @@
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ks = await import(`${DIST}/v6/knowledge-search.js`);
+const ksim = await import(`${DIST}/v6/knowledge-similar.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
 const ss = await import(`${DIST}/v6/source-store.js`);
 
@@ -157,7 +158,7 @@ try {
     const t = sim.find((r) => r.id === tArch);
     chk("S10b 유사 행에도 archived(뿌리)·parent_name", !!t && t.archived === true && t.parent_name === `zqa ${TAG} 보관된것`, JSON.stringify(t));
     const diag = {};
-    const none = await ks.findSimilarKnowledge({ text: "아무 글" }, undefined, diag);
+    const none = await ksim.findSimilarKnowledge({ text: "아무 글" }, undefined, diag);
     const cfg = (await itemsPool.query(`SELECT embedding_config FROM org_runtime_config WHERE id=1`)).rows[0]?.embedding_config;
     const offCfg = !cfg || cfg.provider === "off" || !cfg.provider;
     chk("S10c 지식 유사(text): 임베딩 off 면 diag.embeddings='off'(빈 결과의 까닭)",

@@ -231,11 +231,21 @@ async function withTab<T>(S: string, a: Record<string, any>, create: boolean, fn
 
 /** 처음 쓸 때(또는 5분 만에) 셸에게 «이 세션 웹 칸을 보이게» — 사람이 AI 가 무엇을 하는지 보게. 매번 화면을 뺏지는 않는다. */
 function revealOnce(t: BTab): void {
-  if (t.mode === 'docked') return;
   const last = revealedAt.get(t.key) || 0;
   if (Date.now() - last < 5 * 60_000) return;
   revealedAt.set(t.key, Date.now());
-  requestReveal(t);
+  reveal(t);
+}
+
+/** 같은 창은 로컬 사건으로, 다른 창은 서버 사건으로 보인다. 서버 전송 실패는 브라우저 명령을 막지 않는다. */
+function reveal(t: BTab): void {
+  if (t.mode !== 'docked') requestReveal(t);
+  const session = sessionOfKey(t.key);
+  const tab = tabNoOfKey(t.key);
+  if (session === SESSIONLESS || !session || !tab) return;
+  void api('/api/ui/browser/host/reveal', {
+    method: 'POST', body: JSON.stringify({ session, tab }),
+  }).catch(() => { /* 표시 힌트가 끊겨도 실제 브라우저 명령은 계속한다 */ });
 }
 
 function summary(t: BTab): Record<string, unknown> {
@@ -295,7 +305,7 @@ async function opTabs(S: string, a: Record<string, any>): Promise<unknown> {
     const t = ensureTab(key, 'about:blank');
     current.set(S, key);
     markAi(t);
-    requestReveal(t);
+    reveal(t);
     revealedAt.set(key, Date.now());
     if (u) {
       await within(t.ready, 15_000, '새 탭이 준비되지 않았습니다(15초)');
@@ -320,6 +330,7 @@ async function opTabs(S: string, a: Record<string, any>): Promise<unknown> {
     if (t.paused) throw new Error(PAUSED_MSG);
     current.set(S, t.key);
     markAi(t);
+    revealOnce(t);
   }
   return listTabs(S);
 }
@@ -722,7 +733,7 @@ async function opHandoff(S: string, a: Record<string, any>): Promise<unknown> {
   if (S === SESSIONLESS) throw new Error('browser_handoff 는 세션 안에서만 부를 수 있습니다 — 사람이 [완료]를 누를 자리가 그 세션 화면입니다.');
   const t = pickTab(S, a.tab, true);
   markAi(t);
-  requestReveal(t);
+  reveal(t);
   revealedAt.set(t.key, Date.now());
   const msg = String(a.message || '').slice(0, 500);
   notifyHuman(S, msg);

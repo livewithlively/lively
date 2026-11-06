@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { resolveColumnType, assertIdent, assertMatchIdent, assertMatchId, physicalTableName, physicalAppPrefix, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource, archiveSchemaName, archivedTableName, PG_IDENT_MAX } from "./store-ddl.js";
+import { createHash } from "node:crypto";
+import { resolveColumnType, assertIdent, assertMatchIdent, assertMatchId, physicalTableName, physicalAppPrefix, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource, archiveSchemaName, archivedTableName, PG_IDENT_MAX, appIndexName } from "./store-ddl.js";
 
 // 「입력 × 기대」 엣지 표 — 선언형 DDL 의 방어(임의 타입·식별자·예약컬럼·앱 네임스페이스).
 
@@ -169,12 +170,18 @@ test("assertIdent — 쓰는 쪽(row·set)은 여전히 id·created_at 을 거�
   for (const r of ["id", "created_at"]) assert.throws(() => assertIdent("column", r), /예약된 컬럼명/);
 });
 
-test("assertMatchId — 0 이상의 정수(숫자·숫자 문자열)만 · 그 밖은 400", () => {
+test("assertMatchId — bigint 범위의 정수(숫자·숫자 문자열)만 · 그 밖은 400 (#5172 원래 id 의 0·음수·19자리도 집는다)", () => {
   assert.equal(assertMatchId(12), "12");
   assert.equal(assertMatchId("12"), "12");
   assert.equal(assertMatchId(" 7 "), "7");
   assert.equal(assertMatchId(0), "0");
-  for (const bad of [-1, 1.5, "1 or 1=1", "abc", "", null, undefined, {}, [1], "tmp1712345", Number.MAX_SAFE_INTEGER + 2, "1234567890123456789"]) {
+  assert.equal(assertMatchId(-5), "-5");
+  assert.equal(assertMatchId("-5"), "-5");
+  assert.equal(assertMatchId("1234567890123456789"), "1234567890123456789");
+  assert.equal(assertMatchId("9223372036854775807"), "9223372036854775807");      // bigint 최댓값 — 경계
+  assert.equal(assertMatchId("-9223372036854775808"), "-9223372036854775808");    // bigint 최솟값 — 경계
+  for (const bad of [1.5, "1 or 1=1", "abc", "", null, undefined, {}, [1], "tmp1712345", Number.MAX_SAFE_INTEGER + 2,
+    "9223372036854775808", "-9223372036854775809", "12345678901234567890", "--1", "+1", "1e3", "-"]) {
     assert.throws(() => assertMatchId(bad), (e: unknown) => (e as { status?: number }).status === 400, `받으면 안 되는 값: ${String(bad)}`);
   }
 });
@@ -227,4 +234,15 @@ test("appConstraintName — 결정적 · 부분마다 다르다 · lvck_ 16hex",
   assert.equal(a, appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount >= 0"));
   assert.notEqual(a, appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount > 0"));
   assert.match(a, /^lvck_[0-9a-f]{16}$/);
+});
+
+test("appIndexName — 조건(where)이 없으면 종전 이름 그대로(깔린 앱의 인덱스를 다시 만들지 않는다) · 조건이 다르면 다른 이름", () => {
+  const old = "lvix_" + createHash("sha256").update("s\0p\0u\0\0a,b").digest("hex").slice(0, 16);
+  assert.equal(appIndexName("s", "p", { columns: ["a", "b"], unique: true }, false), old);
+  assert.equal(appIndexName("s", "p", { columns: ["a", "b"], unique: true, where: undefined }, false), old);
+  const w1 = appIndexName("s", "p", { columns: ["a", "b"], unique: true, where: "c IS NULL" }, false);
+  const w2 = appIndexName("s", "p", { columns: ["a", "b"], unique: true, where: "c IS NOT NULL" }, false);
+  assert.notEqual(w1, old);
+  assert.notEqual(w1, w2);
+  assert.match(w1, /^lvix_[0-9a-f]{16}$/);
 });

@@ -1,10 +1,14 @@
 // recall_route — 컨텍스트 라우팅 엔드포인트(#637). 훅 전용(주입은 훅이 포맷) → REST 전용(mcp:false).
 //  작업맥락(프롬프트 텍스트 + 최근 Read 파일경로)으로 (a) 도메인 HUB · (b) 파일→leaf 지식 포인터를 반환.
 //  로직 전부는 v6/recall-router.ts(게임코드) — 훅은 transcript 파싱 + 이 엔드포인트 호출 + 포맷만(dumb).
-//  scope=memory(현 knowledge-recall 훅이 쓰는 /knowledge/similar 와 동일 — 멤버 토큰이 이미 보유).
+//  scope=memory(knowledge-recall 훅이 쓰는 /knowledge/recall 과 동일 — 멤버 토큰이 이미 보유).
+//  knowledge_recall(#5204) — 그 훅의 입구. 기준선 · 건수 · 질의는 서버가 정한다(v6/knowledge-chunk-search.ts).
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import { routeRecall } from "../v6/recall-router.js";
+import { type RecallDiag, recallKnowledge } from "../v6/knowledge-chunk-search.js";
+import { logKnowledgeSearch } from "../v6/knowledge-search-log-store.js";
+import { isSessionCall } from "./knowledge/shared.js";
 
 const asStrArr = (v: unknown, cap: number): string[] | undefined =>
   Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, cap) as string[] : undefined;
@@ -54,4 +58,39 @@ const recallRoute: Capability = {
   handler: async (input, _user, ctx) => routeRecall(input, ctx?.viewer ?? null),
 };
 
-export const recallCapabilities: Capability[] = [recallRoute];
+// 자동 소환(#5204) — 사람 프롬프트에 넣을 지식을 고른다. 훅 전용(주입 형식은 훅이 만든다) → REST 전용. 프롬프트가 쿼리 문자열에 다 안 들어가서 POST 다.
+const knowledgeRecall: Capability = {
+  name: "knowledge_recall",
+  mutates: false, // 읽기전용: POST 지만 순수 읽기 — recall_route 와 같다.
+  title: "지식 자동 소환",
+  description:
+    "사람 프롬프트(text)와 앞 턴 사람 말(prev)로 그 프롬프트에 넣을 지식을 고른다. 기준선 · 건수 · 질의는 서버가 정한다. 조각으로 찾으면 맞은 절의 줄(line) · 경로(section) · 글(snippet)이 실린다. 훅 전용.",
+  scope: "memory",
+  input: {
+    text: z.string().min(1).max(8000),
+    prev: z.string().max(2000).optional(),
+  },
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/knowledge/recall"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { text: typeof b.text === "string" ? b.text.slice(0, 8000) : "", prev: typeof b.prev === "string" ? b.prev.slice(0, 2000) : undefined };
+      },
+    }],
+  },
+  handler: async (input, user, ctx) => {
+    const t0 = Date.now();
+    const { text, prev } = input as { text: string; prev?: string };
+    const diag: RecallDiag = {};
+    const entries = await recallKnowledge({ text, prev }, ctx?.viewer ?? null, diag);
+    //  프롬프트 원문은 남기지 않는다(knowledge-search-log-store 머리말) — 몇 건이 무엇이 나왔는지만 있으면 잴 수 있다.
+    if (isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "recall", member: user.userId, session: ctx?.session, route: diag.route, names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
+    const { route: _route, ...why } = diag;
+    return { entries, ...why };
+  },
+};
+
+export const recallCapabilities: Capability[] = [recallRoute, knowledgeRecall];

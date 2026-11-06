@@ -17,7 +17,8 @@
 //   테이블 주인이어야 한다. 묶음은 런타임 풀로 읽어 넘긴다(앱 DDL 역할은 본체 테이블 권한이 없다).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
-import { itemsPool, withTx } from "../db/client.js";
+import type pg from "pg";
+import { itemsPool } from "../db/client.js";
 import { getApp, listApps } from "../org/store/apps.js";
 import { isBuiltinSource, qualifiedAppTable, physicalTableName } from "./store-ddl.js";
 import { appSchemaFor, withOwnerConn, inTx } from "./store-schema.js";
@@ -71,7 +72,9 @@ export async function snapshotAppData(appId: string, reason: SnapshotReason, now
   }
   //  ★ 한 번 떠 두기 = 한 트랜잭션(격리 리뷰 2026-09-30). 묶음마다 따로 커밋하면 중간에 실패했을 때 앞 묶음만 남아
   //   «정상 떠 두기» 로 보이고, 그걸로 되돌리면 나머지 행이 지워진다(실측). 실패면 아무것도 남기지 않는다.
-  const counted = await withTx(async (client) => {
+  //  #5172 한 시점(REPEATABLE READ) — 조각 사이에 앱이 쓰는 행에 흔들리지 않아 «담은 행 = 표의 행» 을 확인할 수 있고,
+  //   표끼리도 같은 시점이라 외래키로 이어진 표를 함께 되돌릴 때 어긋나지 않는다.
+  const counted = await inSnapshotTx(present.map((p) => p.rel), async (client) => {
     const done: Array<{ table: string; rows: number }> = [];
     for (const { table, rel } of present) {
       done.push({ table, rows: await snapshotTable(client, appId, table, rel, reason, now) });
@@ -81,25 +84,52 @@ export async function snapshotAppData(appId: string, reason: SnapshotReason, now
   return { ...out, taken_at: now.toISOString(), tables: counted };
 }
 
-/** 테이블 하나를 1,000행 묶음으로 떠 둔다(주어진 트랜잭션 안에서). 반환 = 행 수. */
+/**
+ * 떠 두기 트랜잭션(#5172) — 표들을 먼저 ACCESS SHARE 로 잠근 **뒤** 시점(REPEATABLE READ)을 고정한다.
+ *  표를 다시 쓰는 DDL(칸 형 바꾸기 · TRUNCATE)은 MVCC 안전하지 않다 — 시점을 잡은 뒤 아직 안 읽은 표를 설치가 다시 쓰면 그 표가
+ *  비어 보이고, «담은 행 = 표의 행» 도 같은 시점이라 못 잡는다(빈 표가 담긴 사본 → 되돌리면 그 표가 지워진다). 잠가 두면 그 DDL 은
+ *  떠 두기가 끝날 때까지 기다린다(종전에도 읽은 표는 끝까지 잠겨 있었다).
+ *  BEGIN 과 LOCK 을 한 덩이로 보낸다 — 체크아웃 래퍼(db/client)가 BEGIN 덩이 **뒤에** 테넌트 바인딩(SELECT)을 붙이고, 시점은 그
+ *  첫 SELECT 에서 고정된다. rels = qualifiedAppTable 이 만든 인용 이름.
+ */
+async function inSnapshotTx<T>(rels: string[], fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query(`BEGIN ISOLATION LEVEL REPEATABLE READ;\nLOCK TABLE ${rels.join(", ")} IN ACCESS SHARE MODE`);
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** 테이블 하나를 1,000행 묶음으로 떠 둔다(주어진 트랜잭션 안에서). 반환 = 행 수.
+ *  #5172 가장 작은 id 부터 넘긴다 — 원래 id 로 넣기가 열려 0·음수 id 도 생긴다(종전엔 id > 0 부터라 그 행이 빠졌고,
+ *   그 사본으로 되돌리면 그 행이 지워졌다). 끝에 담은 행이 표의 행과 같은지 본다 — 같은 시점이라 정확히 같아야 한다. */
 async function snapshotTable(client: { query: typeof itemsPool.query }, appId: string, table: string, rel: string, reason: SnapshotReason, now: Date): Promise<number> {
-  let last = 0n, chunk = 0, rows = 0;
+  let last: string | null = null, chunk = 0, rows = 0;
   for (;;) {
-    const r = await client.query(
-      `WITH t AS (SELECT * FROM ${rel} WHERE id > $1 ORDER BY id LIMIT ${CHUNK}),
+    const r: { rows: Array<{ last?: unknown; n?: unknown }> } = await client.query(
+      `WITH t AS (SELECT * FROM ${rel} WHERE $1::bigint IS NULL OR id > $1::bigint ORDER BY id LIMIT ${CHUNK}),
             ins AS (
               INSERT INTO org_app_snapshot(app_id, taken_at, table_name, chunk, reason, row_count, rows)
               SELECT $2, $3, $4, $5, $6, (SELECT count(*) FROM t), (SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM t)
                WHERE $5 = 0 OR EXISTS (SELECT 1 FROM t)
               RETURNING row_count)
        SELECT (SELECT max(id) FROM t)::text AS last, (SELECT row_count FROM ins) AS n`,
-      [last.toString(), appId, now, table, chunk, reason]);
+      [last, appId, now, table, chunk, reason]);
     const n = Number(r.rows[0]?.n ?? 0);
     rows += n;
     if (n < CHUNK) break;
-    last = BigInt(String(r.rows[0]?.last ?? "0"));
+    last = String(r.rows[0]?.last);
     chunk++;
   }
+  const all = Number((await client.query(`SELECT count(*)::bigint AS n FROM ${rel}`)).rows[0]?.n ?? 0);
+  if (all !== rows) throw new Error(`'${table}' 떠 둔 행(${rows})이 표의 행(${all})과 다릅니다 — 떠 두기를 취소했습니다`);
   return rows;
 }
 

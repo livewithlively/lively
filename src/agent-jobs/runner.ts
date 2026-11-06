@@ -89,13 +89,20 @@ export interface RunnerJob {
   tailMax: number;
   resultMax: number;
   stderrMax: number;
+  /** 도구 호출 단계 — 싣는 최근 단계 수 · 단계 하나의 입력 앞머리 길이(plan.ts STEPS_MAX · STEP_INPUT_MAX). 없으면(옛 게이트웨이) 판의 기본값. */
+  stepsMax?: number;
+  stepInputMax?: number;
   /**
-   * #5101 API 키 작업만 — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다 먼저). 그 작업의 빈 설정 폴더는
-   *  끝나면 지워져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면 올리지 않는다. 없으면(구독 작업 — 대화가 홈에 남는다 ·
-   *  관리자가 보관을 끔) 올리지 않는다.
+   * #5101 API 키 작업(과 #5082 도커 실행면의 구독 작업) — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다
+   *  먼저). 그 작업의 빈 설정 폴더(구독 작업은 덮은 projects/)는 끝나면 사라져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면
+   *  올리지 않는다. 없으면(그 밖의 구독 작업 — 대화가 홈에 남는다 · 관리자가 보관을 끔) 올리지 않는다.
    */
   transcriptMax?: number;
-  /** 대화 기록 묶음을 풀 때 상한(바이트 — 압축 폭탄 막기 · 올리기 전 크기 재기). */
+  /**
+   * 대화 기록 묶음을 풀 때 상한(바이트 — 압축 폭탄 막기 · 올리기 전 크기 재기). 게이트웨이가 대화를 묶음으로 잇는 작업에만 싣는다(보관을 꺼도) —
+   *  빈 설정 폴더가 없는 작업(#5082 도커 실행면의 구독 작업)이면 «실행면이 projects/ 를 덮었다» 는 약속이라, 판은 그 자리가 덮여 있지 않으면 하네스를
+   *  띄우지 않는다.
+   */
   transcriptRawMax?: number;
   /** #5101 이어받는 API 키 작업 — 앞 작업의 대화 기록 묶음(conv = 이을 대화 id · gz = gzip 의 base64). 판이 빈 설정 폴더에 되돌려 놓는다. */
   transcript?: { conv: string; gz: string };
@@ -158,6 +165,19 @@ for (const k of Object.keys(env)) {
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
 }
 let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null, tNote = "";
+// #5082 도커 실행면의 구독 작업 — 하네스는 그 계정의 설정 폴더를 그대로 쓰고(로그인 파일 · 갱신 잠금을 사람 세션과 나눈다), 그 안의 projects/ 등
+//  기록 자리는 실행면이 덮은 이 작업만의 빈 자리다. 게이트웨이가 구독 작업의 대화를 묶음으로 잇는 것(transcriptRawMax)은 그런 실행면뿐이라
+//  (service.bundledTranscript · surface.subscriptionTranscripts) — 그 projects/ 로 API 키 작업과 같이 올리고 되돌린다.
+//  ★ projects/ 가 따로 붙은 자리(설정 폴더와 다른 장치)가 아니면 하네스를 띄우지 않는다 — 덮인다고 믿은 자리가 그 사람의 진짜 대화 폴더라는 뜻이고,
+//   그대로 돌면 작업 AI 가 앞 작업 · 사람 세션의 대화를 읽는다(격리 리뷰). 여기서 던지면 부트가 boot-failed 로 그 까닭을 알리고 작업이 끝난다.
+let convCfg = cfgDir;
+if (!convCfg && J.transcriptRawMax > 0) {
+  const c = env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), ".claude");
+  let own = false;
+  try { own = fs.statSync(path.join(c, "projects")).dev !== fs.statSync(c).dev; } catch (e) {}
+  if (!own) { fs.rmSync(dir, { recursive: true, force: true }); throw new Error("설정 폴더의 대화 자리(projects/)가 이 작업만의 자리로 덮여 있지 않아 하네스를 띄우지 않습니다"); }
+  convCfg = c;
+}
 // #5101 대화 기록 묶음 — 그 빈 설정 폴더의 projects/ 아래 파일 전부(대화 파일 · 큰 도구 결과 파일 <대화>/tool-results/* · 하위 에이전트 대화)를
 //  projects/ 기준 상대 경로 그대로 담는다: gzip(JSON {v:1, cfg:<이 작업의 설정 폴더>, files:[{p, d(base64)}]}). 큰 도구 결과는 대화 파일에
 //  «<설정 폴더>/projects/…/tool-results/x.txt 에 저장했다» 는 안내문으로만 남는다(collect-run-script 머리말 · 매니지드 실측 2026-10-16) — 그래서 파일까지
@@ -168,7 +188,7 @@ const CONV_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SEG_RE = /^[A-Za-z0-9._-]{1,200}$/;
 const BUNDLE_FILES_MAX = 2000;
 const RAW_MAX = J.transcriptRawMax || 67108864;
-const projDir = () => path.join(cfgDir, "projects");
+const projDir = () => path.join(convCfg, "projects");
 const safeRel = (rel) => typeof rel === "string" && rel.length < 1024 && rel.split("/").every((s) => SEG_RE.test(s) && s !== "." && s !== "..");
 const listProjectFiles = () => {
   const out = [];
@@ -183,7 +203,7 @@ const listProjectFiles = () => {
   walk(projDir(), "");
   return out;
 };
-if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
+if (convCfg && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
   try {
     const b = JSON.parse(zlib.gunzipSync(Buffer.from(String(J.transcript.gz), "base64"), { maxOutputLength: RAW_MAX }).toString("utf8"));
     if (!b || b.v !== 1) throw new Error("묶음 형식(v " + String(JSON.stringify(b && b.v)).slice(0, 40) + ")을 모른다");
@@ -195,7 +215,7 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
     for (const f of files) {
       if (!f || !safeRel(f.p)) continue;
       let data = Buffer.from(String(f.d || ""), "base64");
-      if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(cfgDir + "/"), "utf8");
+      if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(convCfg + "/"), "utf8");
       if ((written += data.length) > RAW_MAX) throw new Error("되돌릴 크기가 상한(" + RAW_MAX + ")을 넘는다");
       put.push([f.p, data]);
       if (f.p.endsWith("/" + J.transcript.conv + ".jsonl")) found = true;
@@ -208,8 +228,9 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
     if (!found) tNote += "transcript restore: 그 대화 파일이 묶음에 없다\n";
   } catch (e) {
     tNote += "transcript restore: " + (e && e.message) + "\n";
-    //  쓰다가 실패했어도(디스크 가득 · 이름 겹침) 반쯤 놓인 것을 남기지 않는다 — 이 작업만의 빈 설정 폴더라 projects/ 를 통째로 비워도 된다.
-    try { fs.rmSync(projDir(), { recursive: true, force: true }); } catch (e2) {}
+    //  쓰다가 실패했어도(디스크 가득 · 이름 겹침) 반쯤 놓인 것을 남기지 않는다 — 이 작업만의 자리(빈 설정 폴더 · 덮은 tmpfs)라 projects/ 안을
+    //   비워도 된다. 자리 자체는 남긴다(덮은 자리는 지울 수 없다).
+    try { for (const n of fs.readdirSync(projDir())) fs.rmSync(path.join(projDir(), n), { recursive: true, force: true }); } catch (e2) {}
   }
 }
 // #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
@@ -218,7 +239,7 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
 //   «기록이 없습니다» 로 거절될 때 어느 상한이었는지 그 작업으로 찾는다(격리 리뷰). stderr_tail 에 섞지 않는다 — 실패 글은 그 끝 세 줄을 쓴다.
 const skipTranscript = (why) => { tNote += "transcript skipped: " + why + "\n"; };
 const saveTranscript = async () => {
-  if (!cfgDir || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
+  if (!convCfg || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
   let gz = null;
   try {
     const files = listProjectFiles();
@@ -226,7 +247,7 @@ const saveTranscript = async () => {
     let total = 0;
     for (const r of files) total += fs.statSync(path.join(projDir(), r)).size;
     if (total > RAW_MAX * 0.7) return skipTranscript("풀린 크기 " + total + " > " + Math.floor(RAW_MAX * 0.7));
-    const bundle = { v: 1, cfg: cfgDir, files: files.map((r) => ({ p: r, d: fs.readFileSync(path.join(projDir(), r)).toString("base64") })) };
+    const bundle = { v: 1, cfg: convCfg, files: files.map((r) => ({ p: r, d: fs.readFileSync(path.join(projDir(), r)).toString("base64") })) };
     gz = zlib.gzipSync(Buffer.from(JSON.stringify(bundle), "utf8"));
   } catch (e) { return skipTranscript(String(e && e.message)); }
   if (gz.length > J.transcriptMax) return skipTranscript("압축 " + gz.length + " > " + J.transcriptMax);
@@ -236,6 +257,23 @@ const saveTranscript = async () => {
 };
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
+// 도구 호출 단계 — tool_use 를 본 때 시작, 같은 id 의 tool_result 를 본 때 끝(하네스가 줄을 내는 대로 읽으므로 그 사이가 곧 호출에 걸린 시간이다).
+//  이름 · 입력 앞머리 · 시각 · 오류만 싣는다(도구 결과 글은 싣지 않는다). 최근 STEPS_MAX 개만 — 넘치면 오래된 것부터 버린다. 박동 · 결과에 함께 보낸다.
+const STEPS_MAX = J.stepsMax > 0 ? J.stepsMax : 200, STEP_INPUT_MAX = J.stepInputMax > 0 ? J.stepInputMax : 160;
+const steps = [], stepById = new Map();
+const preview = (v) => { let t = ""; try { t = typeof v === "string" ? v : JSON.stringify(v); } catch (e) {} return String(t == null ? "" : t).slice(0, STEP_INPUT_MAX); };
+const onToolUse = (c) => {
+  const st = { id: typeof c.id === "string" ? c.id : null, name: String(c.name || "?").slice(0, 120), input: preview(c.input), started_at: new Date().toISOString(), ended_at: null, is_error: false };
+  steps.push(st);
+  if (st.id) stepById.set(st.id, st);
+  while (steps.length > STEPS_MAX) { const old = steps.shift(); if (old.id) stepById.delete(old.id); }
+};
+const onToolResult = (c) => {
+  const st = typeof c.tool_use_id === "string" ? stepById.get(c.tool_use_id) : null;
+  if (!st || st.ended_at) return;
+  st.ended_at = new Date().toISOString();
+  st.is_error = c.is_error === true;
+};
 const onLine = (line) => {
   if (!line.trim()) return;
   events++;
@@ -245,8 +283,11 @@ const onLine = (line) => {
   if (ev && ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
     for (const c of ev.message.content) {
       if (c && c.type === "text" && c.text) pushTail(c.text);
-      else if (c && c.type === "tool_use") pushTail("▸ " + c.name);
+      else if (c && c.type === "tool_use") { pushTail("▸ " + c.name); onToolUse(c); }
     }
+  }
+  if (ev && ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
+    for (const c of ev.message.content) if (c && c.type === "tool_result") onToolResult(c);
   }
 };
 let child;
@@ -273,14 +314,14 @@ const finish = async (code, signal) => {
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
   await saveTranscript();
-  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null }, 24);
+  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null, steps }, 24);
   clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   process.exit(0);
 };
 const deadline = setTimeout(() => kill("timeout"), J.timeoutMs);
 const ticker = setInterval(async () => {
-  const r = await call("tick", { events, tail: tail.join("\n"), conversation_id: conv, model }, 1);
+  const r = await call("tick", { events, tail: tail.join("\n"), conversation_id: conv, model, steps }, 1);
   if (r && (r.cancel === true || r.gone === true)) kill("canceled");
 }, J.tickMs);
 if (!child) { finish(127, null); }
@@ -296,6 +337,16 @@ else {
 
 /** 하네스 모델 이름 모양 — 별칭(sonnet·opus·haiku)이나 전체 id. `-` 로 시작하면 플래그로 읽히므로 막는다. */
 export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
+
+/**
+ * 하네스의 생각 깊이(`claude -p --effort <level>`)가 받는 값 — 실측(2026-11-02, claude 2.1.316 `claude --help`: low, medium, high, xhigh, max).
+ *  앱 AI 실행이 받는 값(capabilities/ai-runs 의 effort)과 판이 하네스에 넘기는 값이 이 한 목록이다. 사람 세션 폼 · 위탁의 화이트리스트가 쓰는
+ *  claude 하네스 카탈로그(terminal/catalog.ts 의 --effort 선택지)와 같은 다섯 값이다 — 하네스가 값을 늘려 한쪽만 고치면 ai-runs/effort-wiring.test EI0 가 잡는다.
+ */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORT_LEVELS)[number];
+/** (순수) 하네스가 받는 effort 값인가 — 목록 밖의 글(플래그처럼 보이는 것 포함)이 하네스 인자에 들어가지 않게. */
+export const isEffort = (v: unknown): v is Effort => typeof v === "string" && (EFFORT_LEVELS as readonly string[]).includes(v);
 
 /**
  * (순수) 작업용 claude 인자.
@@ -315,18 +366,33 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *  · 이어받기는 늘 갈라서 잇는다(`--fork-session` · #5101) — 앞 작업의 대화 파일은 그대로 두고 새 대화 id 로 이어 쓴다. 같은 대화를 잇는 작업이 둘 겹쳐도
  *    한 파일에 같이 쓰지 않고, 앞 실행에서 몇 번이든 다시 갈라 이을 수 있다(실측 2026-10-29 · claude 2.1.312: 새 id · 앞 파일 내용 그대로 ·
  *    요청에 앞 대화가 다 실림 — 빈 설정 폴더에 되돌려 놓은 기록에서도 같다).
+ *  · 앱이 «라이블리 MCP 만» 으로 선언한 작업(mcpOnly — 매니페스트 ai.mcp_only)은 내장 도구를 끄고 MCP 는 그대로 싣는다(`--tools ""` + `--mcp-config`).
+ *    `--dangerously-skip-permissions` 로 도는 판은 실행 계정이 읽을 수 있는 박스의 다른 폴더(다른 프로젝트 · 앱)까지 읽고 셸을 돌린다 — 앱 토큰으로 좁힌
+ *    도구만 쓰게 해야 하는 앱(예: 정답지가 같은 박스에 있는 질의응답 앱)은 이 길밖에 없다. 실측(2026-10-30, claude 2.1.314): init 이벤트 tools 가
+ *    MCP 도구만(mcp__t__ping) · 그 도구는 그대로 불린다.
+ *    작업 폴더 설정도 읽지 않는다(`--setting-sources user` — 지시가 없어도). 도구를 꺼도 작업 폴더의 .claude/settings*.json 은 셸 명령을 돌릴 수 있다
+ *    (apiKeyHelper 등 — 실측 2026-10-30, claude 2.1.314: tools [] 인데 그 명령이 돌고, user 만 주면 돌지 않는다). 앱 폴더는 구성원 · 작업 AI 가 고칠 수 있다.
+ *    ⚠ 위 앱 판 지시의 ⚠ 와 같이 user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 그 계정으로 도는 다른 작업(도구가 열린 작업)이 그 settings 에
+ *     apiKeyHelper 를 심으면 이 작업도 그 명령을 돌린다. «MCP 만» 은 이 작업의 AI 를 막는 것이지, 같은 계정의 다른 작업이 남긴 설정까지 막지는 않는다.
+ *  · effort(앱 AI 실행이 준 생각 깊이 — `--effort <level>`)는 준 작업에만 싣는다. 안 주면 인자가 없다(하네스 · 실행 계정의 기본 그대로).
+ *    같은 에이전트를 깊이만 바꿔 재 보는 앱(정책 질의응답의 high · xhigh · max 비교)이 이 인자로 잰다 — 빠지면 모든 판이 기본 깊이로 돌아 비교가 거짓이 된다.
+ *    단발(bare)도 싣는다 — 구독 단발도 작업 컨테이너의 하네스로 돈다. 값은 EFFORT_LEVELS 중 하나만(모델 이름과 같은 까닭 — 접수가 이미 거르지만 여기서 한 번 더).
  */
-export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean }): string[] {
+export function claudeJobArgv(o: { model?: string | null; effort?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean; mcpOnly?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
+  if (o.effort && !isEffort(o.effort)) throw new Error(`effort 값 형식 밖: ${JSON.stringify(o.effort)} — ${EFFORT_LEVELS.join(" · ")} 중 하나`);
   return [
     "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
     "--settings", JSON.stringify({ disableAllHooks: true }),
     "--strict-mcp-config",
     //  #4488 단발 — 도구 없이 글만(`--tools ""` = 내장 도구 전부 끔 · 실측 2026-10-16 claude 2.1.301: init 이벤트 tools []). 파일 · 셸에 닿지 않는다.
-    ...(o.bare ? ["--tools", ""] : []),
+    //  MCP 만 쓰는 작업도 같은 인자다 — 단발과 달리 아래 --mcp-config 는 남는다.
+    ...(o.bare || o.mcpOnly ? ["--tools", ""] : []),
     ...(o.mcp ? ["--mcp-config", MCP_CONFIG_PLACEHOLDER] : []),
-    ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER, "--setting-sources", "user"] : []),
+    ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER] : []),
+    ...(o.system || o.mcpOnly ? ["--setting-sources", "user"] : []),
     ...(o.model ? ["--model", o.model] : []),
+    ...(o.effort ? ["--effort", o.effort] : []),
     ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];
 }

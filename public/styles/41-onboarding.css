@@ -100,6 +100,11 @@
 .ob-ai .ob-ai-ok{font-size:13px; font-weight:600; color:var(--ob-mint-ic); white-space:nowrap}
 .ob-ai .aiacct-login{margin-top:8px}
 .ob-ai .ob-ai-note{margin:10px 0 0}
+/* #5167 자동 정리 승인 칸 — 로그인을 마친 줄 바로 아래. 단추는 글 옆이 아니라 아래에 한 줄로 둔다(좁은 폭에서 접히지 않게). */
+.ob-ai .ob-ai-hl{margin:8px 0 0 12px; padding-left:12px; border-left:2px solid var(--line)}
+.ob-ai .ob-ai-hl .ob-q-help{margin:0}
+.ob-ai .ob-ai-hl .ob-btn{display:inline-block; width:auto; margin-top:8px; padding:7px 14px; font-size:13px}
+.ob-ai .ob-ai-hl-ok{font-size:13px; font-weight:600; color:var(--ob-mint-ic)}
 .ob-btn{display:block; width:100%; text-align:center; border-radius:8px; padding:10px 14px; font-weight:600; font-size:14px; margin-top:18px}
 .ob-btn-pri{background:var(--blue-fill); color:var(--ob-on-fill)}
 .ob-btn-pri:hover{background:var(--blue-fill-deep)}
@@ -225,6 +230,8 @@
   #v2-root.ob-ghost.has-topbar.topbar-web:not(.app-ctx) .ob-root { top: 0; }
   /* #4533 — 사이드바를 닫아 둔 기기에서도 줄이 전폭이다(①-d) — app-ctx 와 같은 이유로 줄 아래에서 선다. */
   #v2-root.ob-ghost.has-topbar.topbar-web.side-closed .ob-root { top: var(--v2-tb-h, 42px); }
+  /* #5319 4차 — 레일이 보이면 사이드바를 닫아도 줄은 레일 칸 위에만 선다(47-v2-rail.css) — 기둥은 다시 창 꼭대기부터. 레일까지 걷으면 ①-d(전폭) 그대로. */
+  #v2-root.ob-ghost.has-topbar.topbar-web.side-closed:not(.rail-hidden) .ob-root { top: 0; }
   #v2-root.ob-ghost .ob-root .ob-crumb { width: min(560px, 92%); margin: 0 auto; padding-left: 0; padding-right: 0; }
   #v2-root.ob-ghost .ob-root[data-scene="sources"] .ob-crumb { width: min(820px, 94%); }
 }

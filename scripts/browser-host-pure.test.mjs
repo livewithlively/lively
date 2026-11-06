@@ -22,6 +22,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
 const { sessionOfKey, tabNoOfKey, keyOfTab, slotOfKey, dockScale } = await import(join(root, "public/app/v2/browser-tabs.js"));
 const { evalSource, callSource } = await import(join(root, "public/app/lib/browser-page.js"));
 const { loadAndWait, captureFrame, scrollPlan, hostErrorKind, PAUSED_MSG, NO_TAB_MSG, missingTabMsg, shotStuckMessage } = await import(join(root, "public/app/v2/browser-host-kit.js"));
+const { BrowserRevealHub, BROWSER_REVEAL_REPLAY_MS, browserRevealSlot } = await import(join(root, "public/app/lib/browser-reveal.js"));
 
 // panes-kit 의 저장 열쇠 규칙(같은 규칙을 글로 옮긴 것 — panes-kit 은 DOM 을 끌어와 node 에서 못 부른다).
 //  ⚠ panes-kit.ts slotStoreKey 가 바뀌면 이 줄도 같이 바꿔야 한다(그때 이 표가 왕복을 다시 잰다).
@@ -41,6 +42,30 @@ eq([keyOfTab(S, 2), keyOfTab(S, "3"), keyOfTab(S, 3.7)], [S + "#2", S + "#3", S 
 eq([slotOfKey(S), slotOfKey(S + "#4")], ["web", "web#4"], "K7 첫 탭 'web' · 넷째 'web#4'");
 for (const k of [S, S + "#2", S + "#9"]) eq(slotStoreKey(S, slotOfKey(k)), k, `K8 왕복 — 웹 칸 저장 열쇠로 되돌리면 같은 탭(${k.slice(-3)})`);
 eq(keyOfTab(S, tabNoOfKey(S + "#5")), S + "#5", "K8 번호 왕복 — keyOf(세션, tabNo(열쇠)) = 열쇠");
+
+// ── ①-b 다른 창 표시 사건 — 탭 매핑과 마운트 순서 차이 재생 ───────────────────────
+const reveal = (session, tab) => ({ type: "browser", kind: "reveal", session, tab: String(tab) });
+eq([browserRevealSlot(reveal(S, 1), S), browserRevealSlot(reveal(S, 4), S)], ["web", "web#4"], "R1 탭 1·4 → 웹 칸 web·web#4");
+eq([browserRevealSlot(reveal(S, 2), "box-other-12345678"), browserRevealSlot(reveal(S, 0), S)], [null, null], "R2 다른 세션·비정상 탭은 열지 않는다");
+{
+  const hub = new BrowserRevealHub();
+  const got = [];
+  hub.push(reveal(S, 2), 1_000);
+  const off = hub.subscribe((ev) => got.push(ev.tab), 1_000 + BROWSER_REVEAL_REPLAY_MS);
+  eq(got, ["2"], "R3 재생 유효시간 경계 안은 마운트 때 한 번 재생한다");
+  hub.push(reveal(S, 3), 7_000);
+  eq(got, ["2", "3"], "R4 구독 뒤 사건은 즉시 받는다");
+  off();
+  hub.push(reveal(S, 4), 8_000);
+  eq(got, ["2", "3"], "R5 해지 뒤 사건은 받지 않는다");
+}
+{
+  const hub = new BrowserRevealHub();
+  const got = [];
+  hub.push(reveal(S, 2), 1_000);
+  hub.subscribe((ev) => got.push(ev.tab), 1_001 + BROWSER_REVEAL_REPLAY_MS);
+  eq(got, [], "R6 재생 유효시간 경계 밖은 마운트 때 재생하지 않는다");
+}
 
 // ── ② JS 실행 원문 ───────────────────────────────────────────────────────────
 //  원문은 async IIFE 식이다 — 간접 eval 로 평가해 페이지에서 executeJavaScript 가 받는 것과 같은 값을 본다.
@@ -357,6 +382,21 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
   const findIf = (n) => { if (ts.isIfStatement(n) && n.expression.getText(sf).replace(/\s+/g, " ") === "!t && makeNumbered") ifs.push(n.thenStatement.getText(sf)); ts.forEachChild(n, findIf); };
   findIf(sf);
   eq([ifs.length, ifs.some((x) => /current\.set/.test(x))], [1, false], "T2'' 번호를 짚어 만든 탭은 AI 기본 탭(current)이 아니다");
+
+  //  T3 — 화면을 실제로 쓰기 시작하는 명령만 표시한다. tabs list·close 와 상태 보고는 사람의 칸을 뺏지 않는다.
+  const reveals = [];
+  const findReveal = (n, fn) => {
+    if (ts.isFunctionDeclaration(n) && n.name) fn = n.name.text;
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && (n.expression.text === "reveal" || n.expression.text === "revealOnce")) {
+      reveals.push(`${fn}:${n.expression.text}`);
+    }
+    ts.forEachChild(n, (c) => findReveal(c, fn));
+  };
+  findReveal(sf, null);
+  eq(reveals, ["withTab:revealOnce", "revealOnce:reveal", "opTabs:reveal", "opTabs:revealOnce", "opHandoff:reveal"],
+    "T3 읽기·조작(withTab), 탭 생성·선택, 사람에게 넘기기만 웹 칸을 표시한다");
+  ok(/api\('\/api\/ui\/browser\/host\/reveal'/.test(HOST) && /if \(t\.mode !== 'docked'\) requestReveal\(t\)/.test(HOST),
+    "T4 표시는 같은 창의 로컬 사건과 다른 창의 서버 사건을 함께 쓴다");
 }
 
 console.log(`\n${pass} 통과`);

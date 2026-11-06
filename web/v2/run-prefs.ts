@@ -165,15 +165,38 @@ export const WRITE_VIS_OPTS: { v: string; t: string; d: string }[] = [
   { v: 'audience', t: '공개 프로젝트 제외', d: '전체 공개 프로젝트에는 기록 안 함' },
   { v: 'private', t: '공개 프로젝트 제외 (같음)', d: '위와 동작이 같음' },
 ];
-export interface SessionDefaults { nodeDefault: string; mode: LivelyMode; autoApprove: boolean; writeVis: string }
-/** 새 세션 기본값 — 기억이 없거나 모르는 값이면 안전한 쪽(규칙대로 · 일반 · 확인 후 실행 · 자동). */
+/**
+ * 「실행 승인」 세 칸(#5321, 원준 2026-11-04 «자동실행인데 코덱스가 계속 승인을 물어»).
+ *  · ask    확인 후 실행 — 하네스의 «묻기» 를 argv 로 못 박는다(catalog askModeArgv: claude --permission-mode manual · codex 검토자=사람)
+ *  · auto   오토모드 — 승인 요청을 AI 가 스스로 검토해 넘긴다(autoModeArgv: claude --permission-mode auto · codex --approve-for-me)
+ *  · bypass 자동 승인 — 확인을 전부 건너뛴다(autoApproveFlag)
+ *  종전엔 두 칸(확인 후 실행 · 자동 승인)뿐이었고 «확인 후 실행» 은 argv 에 아무것도 안 실어 **기기 설정**을 따랐다. 그래서 같은 값으로
+ *  연 세션이 Claude 는 묻지 않고(~/.claude defaultMode=auto) Codex 는 명령마다 물었다 — 화면이 말한 값과 실제 동작이 하네스마다 갈렸다.
+ *  기본은 오토모드다: 자동 승인(전부 건너뜀)보다 좁고, 사람이 매 명령 엔터를 치지 않아도 된다.
+ */
+export type ApproveMode = 'ask' | 'auto' | 'bypass';
+export const APPROVE_OPTS: { v: ApproveMode; t: string; d: string }[] = [
+  { v: 'ask', t: '확인 후 실행', d: '실행 전마다 나에게 물어봐요' },
+  { v: 'auto', t: '오토모드', d: 'AI 가 스스로 검토하고, 위험한 일만 막아요' },
+  { v: 'bypass', t: '자동 승인', d: '검토 없이 전부 바로 실행' },
+];
+const isApprove = (v: unknown): v is ApproveMode => v === 'ask' || v === 'auto' || v === 'bypass';
+export interface SessionDefaults { nodeDefault: string; mode: LivelyMode; approve: ApproveMode; autoApprove: boolean; writeVis: string }
+/**
+ * 새 세션 기본값 — 기억이 없거나 모르는 값이면 규칙대로 · 일반 · 오토모드 · 자동.
+ *  승인 기억의 옮겨 읽기: approveMode 가 있으면 그 값, 없고 옛 autoApprove=true 면 자동 승인(고른 사람의 뜻 그대로), 나머지는 오토모드.
+ *  ⚠ 옛 «false» 는 «확인 후 실행» 으로 읽지 않는다 — 그 값은 클래식 폼이 손대지 않아도 남기던 기본이었고, 그 시절 «확인 후 실행» 은
+ *   실제로는 기기 설정(대부분 Claude auto)으로 돌았다. 그대로 ask 로 옮기면 지금까지 묻지 않던 Claude 세션이 갑자기 묻기 시작한다.
+ */
 export function sessionDefaults(): SessionDefaults {
   const p = runPrefs();
   const mode = MODE_OPTS.some((m) => m.key === p.mode) ? (p.mode as LivelyMode) : 'normal';
   const writeVis = WRITE_VIS_OPTS.some((o) => o.v === p.writeVis) ? String(p.writeVis) : '';
-  return { nodeDefault: typeof p.nodeDefault === 'string' ? p.nodeDefault : '', mode, autoApprove: p.autoApprove === true, writeVis };
+  const approve: ApproveMode = isApprove(p.approveMode) ? p.approveMode : p.autoApprove === true ? 'bypass' : 'auto';
+  return { nodeDefault: typeof p.nodeDefault === 'string' ? p.nodeDefault : '', mode, approve, autoApprove: approve === 'bypass', writeVis };
 }
-/** [⚙] 창이 저장하는 셋 — 실행 컴퓨터(nodeDefault)는 줄의 칸이 따로 저장하므로 여기서 건드리지 않는다. */
-export function saveSessionDefaults(d: Omit<SessionDefaults, 'nodeDefault'>): void {
-  saveRunPrefs({ mode: d.mode, autoApprove: d.autoApprove, writeVis: d.mode === 'normal' ? d.writeVis : '' });
+/** [⚙] 창이 저장하는 셋 — 실행 컴퓨터(nodeDefault)는 줄의 칸이 따로 저장하므로 여기서 건드리지 않는다.
+ *  autoApprove 도 함께 맞춰 둔다 — 같은 키를 읽는 클래식 폼의 체크가 «자동 승인» 일 때만 켜지도록. */
+export function saveSessionDefaults(d: Omit<SessionDefaults, 'nodeDefault' | 'autoApprove'>): void {
+  saveRunPrefs({ mode: d.mode, approveMode: d.approve, autoApprove: d.approve === 'bypass', writeVis: d.mode === 'normal' ? d.writeVis : '' });
 }

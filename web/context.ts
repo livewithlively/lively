@@ -24,13 +24,13 @@ import { stageHealthDetails } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
 import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)
 import { renderCollectors } from './context-collectors.js';
-import { claudeRunsEntry, renderClaudeRunsScreen } from './context-claude-runs.js';   // #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기
+import { renderClaudeRunsScreen } from './context-claude-runs.js';   // #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기
 import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
-import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 수집기 ▸ 자료를 볼 사람 (AI 주입 설정 ▸ 공개범위에도 선다)
+import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 수집기 ▸ 자료를 볼 사람 (AI 주입기 설정 ▸ 공개범위에도 선다)
 import { ingestPolicyPanel } from './review.js';                       // 지식 검토 정책(#638) — 증류기 화면의 「사람 승인」 절
-import { DELIVER_ALIAS, DELIVER_PAGES, renderDeliver } from './context-deliver.js';   // #5159 AI 주입 설정 — 왼쪽 목차 + 세부 페이지
+import { DELIVER_ALIAS, DELIVER_PAGES, renderDeliver } from './context-deliver.js';   // #5159 AI 주입기 설정 — 왼쪽 목차 + 세부 페이지
 import { loadAdmin } from './admin-rerender.js';
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
@@ -88,7 +88,7 @@ const STAGES: CtxStage[] = [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
       { key: 'presets', label: '새 소스 만들기', draw: (b) => presetsScreen(b) },
       { key: 'source-vis', label: '자료를 볼 사람', adminOnly: true, draw: async (b) => { await sourceVisPolicyPanel(b); } },
-      //  #4213 T11 — 수집 실행 지표(실패율·메모리)와 수집 세션 크기. 수집기 설정 화면 맨 위 한 줄에서 들어온다.
+      //  #4213 T11 — 수집 실행 지표(실패율·메모리)와 수집 세션 크기. 수집기 설정 화면 맨 위 한 줄(입구)은 걷어냈다 — 주소로 연다.
       { key: 'claude', label: 'Claude 커넥터 수집', adminOnly: true, draw: (b) => renderClaudeRunsScreen(b) },
     ],
   },
@@ -126,9 +126,9 @@ async function stack(b: HTMLElement, parts: Array<(h: HTMLElement) => Promise<vo
 /** 수집기 — 목록 하나. 「새 소스 만들기」(직접 정의하는 방식)는 만들기 흐름 안의 링크로만 들어간다(#3830 — 비개발자
  *  화면에서 개발자용 입구를 상시 카드로 세우지 않는다). */
 async function sourcesScreen(b: HTMLElement): Promise<void> {
-  //  #4213 T11 — 맨 위 한 줄: Claude 커넥터 수집의 최근 7일(관리자만 — 아니면 빈 자리). 누르면 지표·크기 화면.
-  //   기다리지 않는다 — 통계 읽기가 수집기 목록을 늦추지 않게(그 줄은 다 읽히면 제자리에 선다).
-  await stack(b, [(h) => { void claudeRunsEntry(h); }, (h) => renderCollectors(h)]);
+  //  #4213 T11 의 맨 위 한 줄(Claude 커넥터 수집 최근 7일 요약)은 원준 2026-10-30 요청으로 걷어냈다 — "통째로 날려".
+  //   지표·크기 화면 자체(#/context/sources/claude)는 그대로 둔다.
+  await stack(b, [(h) => renderCollectors(h)]);
 }
 
 /** 새 소스 만들기(수집 방식 프리셋) — 수집기 화면의 하위 갈래. 돌아갈 길을 화면이 준다. */
@@ -195,7 +195,7 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
     return;
   }
   if (sub === 'checks' && sub2 === 'findings') { location.replace('#/context/inbox'); return; }
-  //  #5159 — AI 주입 설정의 옛 화면 키(#1618: injection · embeddings · visibility)는 세부 페이지로 넘긴다.
+  //  #5159 — AI 주입기 설정의 옛 화면 키(#1618: injection · embeddings · visibility)는 세부 페이지로 넘긴다.
   if (sub === 'deliver' && sub2 && DELIVER_ALIAS[sub2]) { location.replace('#/context/deliver/' + DELIVER_ALIAS[sub2]); return; }
   const stage = STAGES.find((s) => s.key === sub) ?? STAGES[0];
   // adminOnly 화면(#1618)은 비-admin 에게 **주소로도** 열리지 않는다 — 그 탭의 첫 볼 수 있는 화면으로 떨군다.
@@ -208,10 +208,11 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
   const body = el('div', { class: 'ctx-body' },
     //  현황·수집기·증류기는 화면이 자기 머리(제목 + 한 줄 설명)를 갖고 있어 정의 한 줄이 두 번 선다(#3830) — 거기선 뺀다.
-    //  AI 주입 설정(#5159)도 세부 페이지마다 자기 머리를 갖는다.
+    //  AI 주입기 설정(#5159)도 세부 페이지마다 자기 머리를 갖는다.
     ['home', 'sources', 'distill', 'runs', 'deliver'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
     host);
-  view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
+  //  data-stage — 화면별 여백을 CSS 가 고를 수 있게(#5159: 실시간 현황은 한 화면에 들게 바닥 여백을 줄인다).
+  view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap', 'data-stage': stage.key },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));
   void paintStageHealth(view);
 
@@ -235,7 +236,9 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   //   앱 이름은 탭 줄 왼쪽 문패로 들어가고(세로 구분선 하나), 탭이 그 오른쪽에 잇는다. 정의 한 줄(hint)은
   //   화면 안 캡션으로 내려간다 — 현황은 지도 캡션이 그 일을 이미 하고, 나머지 탭은 아래 renderContext 가 붙인다.
   const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': CTX_APP_NAME });
-  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
+  //  #5147(원준 2026-10-30) — 앱 이름은 **첫 화면(실시간 현황)으로 가는 링크**다. 종전엔 글자뿐이라, 처음 화면으로 돌아가려는 사람이
+  //   이 이름을 누르고 아무 일도 안 일어나는 일이 반복됐다(앱 이름 = 그 앱의 처음 화면, 웹의 로고 링크와 같은 약속).
+  tabs.append(el('a', { class: 'ctx-hd-app', href: '#/context', title: CTX_TAB.home + '으로 갑니다' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
   for (const s of STAGES) {
     if (s.tray || s.parent) continue;   // 확인할 것 — 아래 트레이가 대신 선다 · 하위 화면은 탭이 아니다
     const on = s.key === selStage.key || s.key === selStage.parent;

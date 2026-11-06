@@ -346,6 +346,16 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-board-wrap { max-width: none; }
 .ctx-board { margin-bottom: 18px; }
 .ctx-board .ctx-body { max-width: none; padding: 6px 0 28px; }
+/* 실시간 현황(#5159, 원준 2026-10-31) — 바닥 여백 셋(main 64 · 카드 18 · 본문 28)이 겹쳐 110px 이 남아 화면이 괜히 스크롤됐다.
+   이 화면은 지도 + 자동 실행 한 판이 전부라 바닥을 줄여 한 화면에 들게 한다. 다른 화면은 그대로. */
+body[data-route="context"] main:has(> * > .ctx-board-wrap[data-stage="home"]), body[data-route="context"] main:has(> .ctx-board-wrap[data-stage="home"]) { padding-bottom: 4px; }
+.ctx-board-wrap[data-stage="home"] > .ctx-board { margin-bottom: 0; }
+.ctx-board-wrap[data-stage="home"] .ctx-body { padding-top: 12px; padding-bottom: 2px; }
+/*  1440×900(셸 안 858) 에 «자동 실행» 다섯 줄까지 들게 — 지도↔패널 사이(14 + 16), 지도 안 위아래(20), 패널 머리(13)를 조금씩 줄인다. */
+.ctx-board-wrap[data-stage="home"] .cxm { gap: 10px; }
+.ctx-board-wrap[data-stage="home"] .cxm-floor { padding-top: 14px; padding-bottom: 14px; }
+.ctx-board-wrap[data-stage="home"] .cxr { margin-top: 0; }
+.ctx-board-wrap[data-stage="home"] .cxr > .cxr-head { padding-top: 9px; padding-bottom: 9px; }
 .ctx-board .ctx-body > .section-head:first-child { margin-top: 8px; }
 .ctx-crumb-leaf { display: inline-flex; align-items: center; gap: 7px; }
 .ctx-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; stroke-width: var(--ic-stroke); }
@@ -499,10 +509,13 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxm-cap > span { font-size: 13px; color: var(--muted); word-break: keep-all; }
 /* 바닥 한 판 — 지도 전체를 한 덩어리로 묶는다(카드 일곱이 허공에 흩어져 있던 것이 산만함의 절반이었다). */
 .cxm-floor { padding: 20px; border-radius: 16px; background: var(--bg-tint); }
-.cxm-lane { display: flex; align-items: stretch; gap: 0; overflow-x: auto; }
+.cxm-lane { display: flex; align-items: stretch; justify-content: center; gap: 0; overflow-x: auto; }
 
 /* ── 역(장소) — 흰 카드. 해부 4칸: 문패(유리 아이콘·이름·수) / 정의 / 실물 / 발치 ── */
-.cxm-st { flex: 1 1 0; min-width: 176px; display: flex; flex-direction: column; align-items: stretch;
+/*  #5147(원준 2026-10-30) — 넓은 창에서 늘어날 몫은 **역보다 관(기계가 선 구간)** 이 더 갖는다. 종전엔 역만 늘고 관은
+    134px 고정이라, 흰 카드는 쓸데없이 길어지고 기계 칩과 화살표는 카드 사이에 끼어 «어디를 거쳐 가는지» 가 안 읽혔다.
+    역 : 관 = 3 : 2 로 늘리되 역은 340px, 관은 300px 에서 멈추고, 남는 폭은 양옆으로 비운다(justify-content: center). */
+.cxm-st { flex: 3 1 0; min-width: 176px; max-width: 340px; display: flex; flex-direction: column; align-items: stretch;
   padding: 14px 14px 12px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
   text-decoration: none; color: inherit; transition: border-color .15s, box-shadow .15s; }
 .cxm-st:hover { border-color: var(--blue); box-shadow: 0 4px 14px color-mix(in srgb, var(--ink) 8%, transparent); }
@@ -524,9 +537,10 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxm-empty { font-size: 11.5px; color: var(--muted); text-align: center; word-break: keep-all; }
 
 /* 실물 ① 외부 앱 — **공식 서비스 로고**(svc-icons .svc-tile). 글자 한 자로 흉내내지 않는다(원준 2026-08-21 그 지적). */
-.cxm-svts { display: grid; grid-template-columns: repeat(3, 30px); gap: 8px; justify-content: center; align-content: center; height: 100%; }
-.cxm-svts .svc-tile { width: 30px; height: 30px; border-radius: 9px; }
-.cxm-svts .svc-tile svg { width: 18px; height: 18px; }
+/*  #5147 — 30px 에선 로고가 너무 작았다(원준 2026-10-30). 실물 칸 높이(118px) 안에 두 줄(40 + 10 + 40)이 든다. */
+.cxm-svts { display: grid; grid-template-columns: repeat(3, 40px); gap: 10px; justify-content: center; align-content: center; height: 100%; }
+.cxm-svts .svc-tile { width: 40px; height: 40px; border-radius: 11px; }
+.cxm-svts .svc-tile svg { width: 24px; height: 24px; }
 /* 빈 글이 든 칸은 격자를 푼다(#4233). 세 칸 격자(30px)에 글을 넣으면 한 칸에 갇혀 한 낱말씩 줄이 바뀐다. */
 .cxm-svts:has(.cxm-empty) { display: flex; align-items: center; justify-content: center; padding: 0 6px; }
 /* 실물 ② 자료 — 출처별 원문 수(자료 앱 나무와 같은 숫자). */
@@ -546,21 +560,10 @@ a.ctx-preview-t:hover { color: var(--blue); }
   height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .cxm-kn-t { font-size: 11.5px; font-weight: 800; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cxm-kn-m { font-size: 11px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
-/* 실물 ④ AI 세션 — 대화 한 토막. 답하는 쪽에 그 AI 의 마크가 선다. */
-.cxm-sess { display: flex; flex-direction: column; gap: 6px; justify-content: center; height: 100%; }
-.cxm-sess-u { align-self: flex-end; max-width: 88%; padding: 5px 9px; border-radius: 9px 9px 2px 9px;
-  background: var(--bg-tint-2); font-size: 11px; font-weight: 700; color: var(--ink); }
-.cxm-sess-row { display: flex; align-items: flex-start; gap: 6px; }
-.cxm-sess-ai { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
-  background: var(--bg-tint); font-style: normal; font-size: 9px; font-weight: 800; color: var(--muted-head); }
-.cxm-sess-ai svg { display: block; width: 12px; height: 12px; }
-.cxm-sess-a { min-width: 0; padding: 5px 9px; border-radius: 9px 9px 9px 2px; border: 1px solid var(--line);
-  background: var(--bg); font-size: 11px; color: var(--ink-sub); line-height: 1.45; }
-.cxm-sess-ref { display: inline-block; margin-left: 2px; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--bg); font-style: normal; font-size: 9.5px; font-weight: 800; color: var(--blue); white-space: nowrap; }
+/* 실물 ④ AI 세션 — 이 계정에 연결된 AI 의 로고(#5147). 외부 앱과 같은 .cxm-svts 격자를 쓴다. */
 
 /* ── 관(선로) + 기계 칩 ── */
-.cxm-duct { flex: none; width: 134px; position: relative; }
+.cxm-duct { flex: 2 1 0; min-width: 134px; max-width: 300px; position: relative; }
 .cxm-wire { position: absolute; left: -2px; right: -2px; top: calc(50% - 1px); height: 3px; border-radius: 2px; }
 .cxm-wire.is-still { background: repeating-linear-gradient(90deg, var(--line-net-2) 0 8px, transparent 8px 14px); }
 /*  도는 구간 — 파선이 오른쪽으로 흐른다. 장식 모션이 아니라 **상태의 표현**이라 이 규칙만 애니메이션을 갖는다. */
@@ -571,9 +574,10 @@ a.ctx-preview-t:hover { color: var(--blue); }
 @keyframes cxm-flow { from { background-position: 0 0; } to { background-position: 22px 0; } }
 .cxm-arr { position: absolute; right: -3px; top: calc(50% - 6px); width: 13px; height: 13px;
   fill: none; stroke: var(--node-blue-soft); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.cxm-duct-c { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; }
+.cxm-duct-c { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex;
+  width: clamp(116px, 66%, 172px); }   /* 관이 넓어지면 기계 칩도 함께 커진다(#5147) */
 /*  기계 — 어두운 판 위 밝은 글자(--chip-dark 는 라이트·다크 양쪽에서 '떠 있는 판'이다, ui-design-system-v2 §2.7). */
-.cxm-mc { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 116px;
+.cxm-mc { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%;
   padding: 10px 8px 9px; border-radius: 11px; background: var(--chip-dark); color: var(--on-fill);
   text-align: center; text-decoration: none; box-shadow: 0 4px 14px rgba(var(--shadow-ink), .14);
   transition: box-shadow .15s, transform .15s; }
@@ -725,6 +729,9 @@ button.cxm-mc { border: 0; font: inherit; cursor: pointer; }
 .cxr-stp-lbl small { font-size: 12px; font-weight: 600; color: var(--muted); }
 .cxr-more-link { margin-left: auto; padding: 6px 8px; border-radius: 8px; color: var(--blue); font-size: 13px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .cxr-more-link:hover { background: var(--bg-note); }
+/* «지금 수집» · «지금 증류»(#5147) — 머리 오른쪽, 「자세히 보기」 바로 앞. 자리를 오른쪽으로 미는 일은 이 묶음이 맡는다. */
+.cxr-now { margin-left: auto; display: inline-flex; gap: 6px; }
+.cxr-now + .cxr-more-link { margin-left: 0; }
 .cxr-body { position: relative; min-height: 110px; transition: opacity .2s; }
 .cxr.is-loading .cxr-body, .cxr.is-loading .cxr-feed { opacity: .45; }
 .cxr-legend .cxr-lgf { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
@@ -740,6 +747,34 @@ a.cxr-row { box-sizing: border-box; display: grid; grid-template-columns: 74px 3
 a.cxr-row:hover { background: var(--bg-tint); }
 a.cxr-row .cxr-t { white-space: nowrap; }
 .cxr-chev { font-size: 16px; line-height: 1; color: var(--muted-3); }
+/* 기계 한 줄 요약(#5159) — 바뀐 실행이 없어도 그 기계가 돌았다는 사실을 다섯 줄 안에 남긴다 */
+a.cxr-row.is-sum .cxr-n b { font-weight: 600; color: var(--ink-sub); }
+a.cxr-row.is-sum .cxr-n .cxr-dot { flex: none; }
+a.cxr-row.is-sum .cxr-s { color: var(--muted); }
+/* 점을 누르면 — 목록 자리에 그 실행의 내용(#5159). 높이는 목록이 쓰던 그대로(스크립트가 잠근다), 넘치는 줄은 «외 n건» */
+.cxr-feed.is-peek { overflow: hidden; }
+.cxr-feed.is-lock { overflow: hidden; }
+/* 줄을 누르면 그 아래로 펼친다(#5159 원준 2026-10-31) — 목록 높이는 잠그고, 펼친 줄이 맨 위로 미끄러져 올라간다 */
+.cxr-x { height: 0; overflow: hidden; transition: height .3s cubic-bezier(.2,.8,.2,1); }
+.cxr-x-in { box-sizing: border-box; display: flex; flex-direction: column; }
+.cxr-x-in .cxr-pk-il { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 4px 10px 0 126px; }
+.cxr-x-in .cxr-pk-il li.is-more a { color: var(--blue); font-weight: 700; }
+.cxr-x-in .cxr-pk-il li.cxr-pk-err { color: var(--danger-deep); font-weight: 700; white-space: normal; }
+.cxr-it.is-open > a.cxr-row { background: var(--bg-tint); }
+a.cxr-row .cxr-chev { transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.cxr-it.is-open > a.cxr-row .cxr-chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .cxr-x, a.cxr-row .cxr-chev { transition: none; } }
+.cxr-pk { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; animation: cxr-in .3s cubic-bezier(.2,.8,.2,1) both; }
+.cxr-pk-h { display: grid; grid-template-columns: 74px 30px minmax(0, 1fr) auto 28px; gap: 12px; align-items: center; padding: 8px 10px;
+  border-radius: 10px; background: var(--bg-tint); }
+.cxr-pk-x { width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; display: grid; place-items: center; }
+.cxr-pk-x:hover { background: var(--gray-bg); color: var(--ink); }
+.cxr-pk .cxr-pk-il { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 4px 10px 0 126px; }
+.cxr-pk .cxr-pk-il li.is-more a { color: var(--blue); font-weight: 700; }
+.cxr-pk .cxr-pk-il li.cxr-pk-err { color: var(--danger-deep); font-weight: 700; white-space: normal; }
+.cxr-pk-f { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 0 2px 126px; }
+.cxr-pk-hint { font-size: 12px; color: var(--muted-3); }
+.cxr-pk-f .cxr-more-link { margin-left: auto; }
 .cxr-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface);
   font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); text-decoration: none; cursor: pointer; transition: background .2s; }
 .cxr-btn:hover { background: var(--bg-tint); }
@@ -873,13 +908,13 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 
 /*  창이 좁아지면 **관을 먼저 줄인다**(정보가 가장 적은 칸) — 역 넷이 먼저 눌리면 실물이 잘린다.
     1280·1180 실측에서 각각 40px·140px 씩 넘치던 것이 이 두 단계로 0 이 된다. */
-@media (max-width: 1400px) { .cxm-duct { width: 112px; } .cxm-st { min-width: 168px; } }
+@media (max-width: 1400px) { .cxm-duct { min-width: 112px; } .cxm-st { min-width: 168px; } }
 /*  ⚠ 좁아질 때 **이름은 절대 줄이지 않는다** — 처음엔 이름·수가 한 줄이라 1180 에서 「지.」·「AI …」로 잘렸다
     (실측). 이름은 그 역의 정체다. 그래서 문패를 두 줄로 접는다: [아이콘 이름] / [수]. */
 @media (max-width: 1240px) {
-  .cxm-duct { width: 96px; }
+  .cxm-duct { min-width: 96px; }
   .cxm-st { min-width: 156px; padding: 12px 12px 10px; }
-  .cxm-mc { width: 104px; }
+  .cxm-duct-c { width: 104px; }
   .cxm-st-h { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 8px; align-items: center; min-height: 0; }
   .cxm-st-gi { width: 24px; height: 24px; grid-row: 1; }
   .cxm-st-t { grid-column: 2; grid-row: 1; }
@@ -933,7 +968,10 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 /* ── #3830 머리 한 줄 — [▽ 맥락 관리 │ 현황 수집기 … ‖ 확인할 것 n]. 종전 3층(빵부스러기/탭/캡션)을 접었다. ── */
 .ctx-hd-app { display: inline-flex; align-items: center; gap: 8px; flex: none; height: 20px;
   padding-right: 14px; margin-right: 6px; border-right: 1px solid var(--line);
-  font-size: 15px; font-weight: 800; color: var(--ink); white-space: nowrap; }
+  font-size: 15px; font-weight: 800; color: var(--ink); white-space: nowrap; text-decoration: none; }
+/* 앱 이름 = 실시간 현황으로 가는 링크(#5147). 누를 수 있다는 것만 보이게 — 탭처럼 밑줄·켜짐 표시는 두지 않는다. */
+.ctx-hd-app:hover { color: var(--blue); }
+.ctx-hd-app:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
 .ctx-board .ctx-vtabs { align-items: center; }
 /* 정의 한 줄이 머리에서 화면 안으로 내려온 자리(현황은 지도 캡션이 대신한다). */
 .ctx-hint { margin: 0 0 14px; font-size: 13px; color: var(--muted); word-break: keep-all; }
@@ -1099,7 +1137,7 @@ a.cxc-name:hover { color: var(--blue); }
 /* ══ 증류기 목록 4차(#3830) — 흐름 카드: [읽는 곳] ══▶ [남길 기준] ══▶ [지식이 가는 곳] ═══════════════
  *  표지 지도의 문법(흰 역 · 선로 · 켜진 구간만 흐름)을 증류기 한 장 안에 그대로 옮겼다. 증류기가 무엇을 하는 기계인지
  *  글이 아니라 그림이 먼저 말한다. 색은 상태점·리브 표식·흐르는 선로 셋뿐. */
-.dsl-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 2px 0 18px; }
+.dsl-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 2px 0 18px; }
 .dsl-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
 .dsl-stat-n { font-size: 22px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); line-height: 1.15; }
 .dsl-stat-l { font-size: 12px; font-weight: 600; color: var(--muted-head); }
@@ -1287,12 +1325,6 @@ a.cxc-name:hover { color: var(--blue); }
 .rvp-one-sp { flex: 1; }
 
 /* ── #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기(web/context-claude-runs.ts) ─────────────── */
-.cxcr-entry { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: 13px; }
-.cxcr-entry:hover { border-color: var(--blue); }
-.cxcr-entry > b { font-size: 13px; font-weight: 800; }
-.cxcr-entry-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
-.cxcr-entry-facts .is-fail { color: var(--danger-deep); font-weight: 700; }
-.cxcr-entry-go { margin-left: auto; color: var(--blue); font-weight: 700; white-space: nowrap; }
 .cxcr { min-width: 0; }
 .cxcr-periods { display: flex; gap: 6px; flex-wrap: wrap; }
 .cxcr-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -1357,7 +1389,7 @@ a.cxc-name:hover { color: var(--blue); }
   .cxcr-day > .cxcr-muted { display: none; }
 }
 
-/* ── AI 주입 설정(#5159) — 왼쪽 목차 + 오른쪽 세부 페이지 하나 ───────────────────────────────
+/* ── AI 주입기 설정(#5159) — 왼쪽 목차 + 오른쪽 세부 페이지 하나 ───────────────────────────────
  *  고치기 전 실측(1440×900): 다섯 시점 + 의미 검색 + 공개범위 둘을 한 판에 세로로 쌓아 5,577px.
  *  목차가 층위를 맡고(세션 주입 ▸ 시작 → 작업 중 → 종료 · 키트 · 기타 / 검색 · 공개범위), 오른쪽은 고른
  *  페이지 하나만 2단으로 그려 한 화면에 들인다. 토큰만 쓴다. radius 6/8/12/999. */
@@ -1447,15 +1479,67 @@ a.cxc-name:hover { color: var(--blue); }
 .dlv-token-b { flex: 1; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; font-size: 13px; color: var(--ink-sub); }
 .dlv-token-b b { color: var(--ink); font-weight: 700; }
 
-/* 커스텀 훅 — 모노 이름 + 하네스·매처. 기타 이벤트 페이지는 두 칸으로 흘린다. */
+/* 커스텀 훅 — 전체 폭 한 줄씩(#5159 후속): 이름(모노) + 조건 / 하는 일 한 줄 · 오른쪽에 출처 배지 + 켜짐.
+   작업 중처럼 이벤트가 여럿이면 이벤트마다 묶음 제목(.dlv-hooks-g)이 선다. */
 .dlv-hooks { display: flex; flex-direction: column; }
-.dlv-hooks-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; padding-top: 6px; padding-bottom: 6px; }
-.dlv-hook { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; padding: 7px 0; border-top: 1px solid var(--line-row); min-width: 0; }
-.dlv-hooks > .dlv-hook:first-child { border-top: 0; }
-.dlv-hooks-2 > .dlv-hook:nth-child(2) { border-top: 0; }
-.dlv-hook-id { font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
-.dlv-hook-m { font-size: 12px; color: var(--muted-head); overflow-wrap: anywhere; }
-.dlv-hook.off .dlv-hook-id { color: var(--ink-sub); }
+.dlv-hooks-g { display: flex; align-items: center; gap: 8px; margin: 14px 0 2px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+  font-size: 13px; font-weight: 800; color: var(--ink); }
+.dlv-hooks-g:first-child { margin-top: 2px; }
+.dlv-hook { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line-row); min-width: 0; }
+.dlv-hooks > .dlv-hook:first-child, .dlv-hooks-g + .dlv-hook { border-top: 0; }
+.dlv-hook-b { flex: 1 1 auto; min-width: 0; }
+.dlv-hook-t { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.dlv-hook-id { flex: none; font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
+.dlv-hook-m { min-width: 0; font-size: 12px; color: var(--muted-head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlv-hook-s { margin-top: 1px; font-size: 13px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-hook-a { flex: none; display: flex; align-items: center; gap: 8px; }
+.dlv-hook-st { min-width: 2.2em; font-size: 12.5px; font-weight: 700; color: var(--green-ink, var(--ink)); text-align: right; }
+.dlv-hook-st.off { color: var(--muted); font-weight: 600; }
+.dlv-hook.off .dlv-hook-id, .dlv-hook.off .dlv-hook-s { color: var(--muted); }
+/* 출처·성질 배지 — 낮은 대비의 알약. is-warn 은 주의(자동승인). */
+.dlv-tag { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-tint);
+  font-size: 11.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; }
+.dlv-tag.is-warn { border-color: transparent; background: var(--bg-note); color: var(--coral); }
+/* 세션 종료 「언제 뜨나」 — 세 단계를 한 줄로(넓을 때). */
+.dlv-steps-row { flex-direction: row; flex-wrap: wrap; gap: 4px 28px; }
+.dlv-steps-row > li { flex: 1 1 200px; }
+/* 작업 중 편집 칸 — 셋이면 마지막 하나는 한 줄을 다 쓴다. */
+.dlv-grid-2 > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* MCP 도구 — 검색 + 전체 폭 목록. 줄 = 이름(모노)·표시 이름 / 설명 한 줄 · 오른쪽에 성질 + 스위치. */
+/* 목록 머리 — 찾기 칸 + 정렬 세그먼트(사용 많은 순 · 이름순) + 횟수 뜻. */
+.dlv-lbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 0 0 8px; }
+.dlv-search { flex: 1 1 260px; min-width: 0; box-sizing: border-box; }
+.dlv-seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-tint); }
+.dlv-seg-b { height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: none; font: inherit; font-size: 12.5px; font-weight: 700;
+  color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.dlv-seg-b[aria-pressed="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+.dlv-seg-b:disabled { opacity: .45; cursor: default; }
+.dlv-lbar-n { font-size: 12px; color: var(--muted-head); white-space: nowrap; }
+.dlv-uses { min-width: 4.5em; font-size: 12.5px; font-weight: 700; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dlv-uses:empty { display: none; }
+.dlv-tools { display: flex; flex-direction: column; }
+.dlv-tool { border-top: 1px solid var(--line-row); min-width: 0; }
+.dlv-tools > .dlv-tool:first-child { border-top: 0; }
+.dlv-tool[hidden] { display: none; }
+.dlv-tool-main { display: flex; align-items: center; gap: 12px; padding: 9px 0; min-width: 0; }
+.dlv-tool-b { flex: 1 1 auto; min-width: 0; }
+.dlv-tool-n { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none;
+  font: inherit; text-align: left; color: var(--ink); cursor: pointer; }
+.dlv-tool-n.is-static { cursor: default; }
+.dlv-tool-n code { flex: none; font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); }
+.dlv-tool-n span { min-width: 0; font-size: 12.5px; color: var(--muted-head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.dlv-tool-n:hover code { color: var(--blue); }
+.dlv-tool-s { margin-top: 1px; font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlv-tool-a { flex: none; display: flex; align-items: center; gap: 10px; }
+.dlv-tool-m { font-size: 12px; color: var(--muted-head); white-space: nowrap; }
+.dlv-tool.off .dlv-tool-n code, .dlv-tool.off .dlv-tool-s { color: var(--muted); }
+.dlv-sel { height: 30px; font-size: 12.5px; }
+.dlv-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; cursor: pointer; }
+.dlv-chk input { margin: 0; }
+.dlv-tool-more { margin: 0 0 10px; padding: 8px 12px; border-left: 2px solid var(--line); }
+.dlv-tool-more[hidden] { display: none; }
+.dlv-tool-desc { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-sub); white-space: pre-wrap; word-break: keep-all; }
 
 /* 외부 맥락 툴 — 접두어 추가 칩 */
 .dlv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
@@ -1496,8 +1580,10 @@ a.cxc-name:hover { color: var(--blue); }
   .dlv-nav-i { flex: none; min-height: 40px; }
   .dlv-nav-t, .dlv-nav-m { white-space: nowrap; }
   .dlv-nav-i.flow + .dlv-nav-i.flow::before { display: none; }
-  .dlv-grid-2, .dlv-hooks-2 { grid-template-columns: minmax(0, 1fr); }
-  .dlv-hooks-2 > .dlv-hook:nth-child(2) { border-top: 1px solid var(--line-row); }
+  .dlv-grid-2 { grid-template-columns: minmax(0, 1fr); }
+  /* 도구 줄 — 오른쪽 조작이 아래 줄로 내려간다. */
+  .dlv-tool-main { flex-wrap: wrap; row-gap: 6px; }
+  .dlv-tool-a { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; row-gap: 6px; }
 }
 @media (max-width: 640px) {
   .dlv-ph { flex-wrap: wrap; }

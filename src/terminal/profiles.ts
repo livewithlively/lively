@@ -35,7 +35,7 @@ export const memberOsUser = (memberId: string): string => osUsername(slug(member
 
 // 격리(#524) 루트 베이스 — 세션이 멤버 uid 로 돌면 작업 디렉터리도 그 uid 로 접근가능해야 한다.
 //  personal = 멤버 홈 하위(box_<slug> 소유), shared = lively-shared 그룹 공유 dir(게이트웨이·멤버 공동 rw).
-const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";              // useradd -m -d /home/box_<slug>
+export const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";       // useradd -m -d /home/box_<slug>
 const PERSONAL_SUBDIR = "box";                                                        // 멤버 홈/box = '개인 폴더'
 const SHARED_ISOLATED_BASE = process.env.LIVELY_SHARED_DIR || "/srv/lively/shared";   // root:lively-shared 2775(setgid)
 
@@ -109,7 +109,7 @@ export async function rootRelOf(user: LivelyUser, abs: string): Promise<{ root: 
 //    인증되는 구멍이었다(fail-open 임퍼스네이션). 그래서 공유 폴백을 폐기했다: 자기 dir 을 가리키면 claude /login
 //    자격도 lively MCP(멤버 토큰, provisionProfile 이 구움)도 이 멤버 dir 에만 격리된다.
 //    LIVELY_MULTIPROFILE=0 이면 전면 비활성(항상 공유) — 단일-유저 박스 전용 kill-switch(계정이 하나라 임퍼스네이션 위험 0).
-const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+export const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
 export function profileConfigDir(user: LivelyUser): string {
   return path.join(PROFILES_ROOT, userSlug(user), "claude");
 }

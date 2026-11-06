@@ -7,7 +7,7 @@
 //   세션 안: 조직 지식 본문 열람(knowledge_get) · 조직 DB 조회(db_access_log) · 프로젝트 맥락 적재 ·
 //            하네스를 넘나든 연속 작업(mcp_call_log.harness).
 //   세션 밖: 커넥터 수집 실행 · 증류 · 자동 분류 · 내가 남긴 지식이 **남의 세션**에서 회수된 것.
-//  ⚠ 회수(훅 자동주입)는 여기 안 잡힌다 — 훅은 REST(/api/ui/knowledge/similar)를 부르는데 logToolCall 은
+//  ⚠ 회수(훅 자동주입)는 여기 안 잡힌다 — 훅은 REST(/api/ui/knowledge/recall)를 부르는데 logToolCall 은
 //   server.ts 의 MCP registerTool wrap 에서만 돈다(REST 미기록). 그래서 이 집계의 '열람'은 **모델이 본문을
 //   실제로 연 것**(knowledge_get)만이다. 주입됐지만 안 쓴 것은 애초에 데이터가 없어 과대계상되지 않는다.
 //  ⚠ mcp_call_log 에 session_id 가 없다 — '이 세션에서'가 아니라 '이 기간에'로만 묶인다(#1570 후속 과제).

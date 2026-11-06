@@ -120,7 +120,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "**로드 — 필요한 맥락을 그때 소환한다 (전부 미리 읽지 않는다).**",
   "- 위 **카테고리** 목록에서 관련 주제를 찾는다.",
-  "- 지식: `knowledge_search`(의미·자연어 — 벡터+grep RRF 하이브리드; 임베딩 off 면 grep 폴백) · `knowledge_grep`(정확 토큰/정규식 grep) · `knowledge_list`(category·injection 필터) · `knowledge_get`(name→전문, 부분읽기).",
+  "- 지식: `knowledge_search`(찾기의 기본 — 자연어든 키워드든 식별자든. 낱말+뜻 하이브리드) · `knowledge_grep`(글자 그대로의 일치 · 정규식 · 건수) · `knowledge_list`(category·injection 필터) · `knowledge_get`(name→전문, 부분읽기).",
   "- 도메인맵: `category_list` / `category_get`(should·is·debt·의존 엣지) · `category_edge_list`.",
   "- 프로젝트: `project_list_v6` / `project_get_v6`(태스크 위계·필요/산출지식).",
   "- 라이브 데이터(코드·DB): `db_query`(admin이면 별도 등록 없이 내장 `self` 소스로 이 라이블리 DB=지식·프로젝트·카테고리·도메인맵을 읽기전용 SQL 조회) · `context_overview`.",

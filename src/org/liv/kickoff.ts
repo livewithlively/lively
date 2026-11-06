@@ -23,8 +23,8 @@ export const LIV_HREF = "#/liv";
 
 export interface LivKickoffResult { session_id: string; href: string; harness: string; label: string }
 
-export async function livKickoff(user: LivelyUser, o: { prompt: string; harness?: string | null }): Promise<LivKickoffResult> {
+export async function livKickoff(user: LivelyUser, o: { prompt: string; harness?: string | null; remembered?: readonly string[] | null }): Promise<LivKickoffResult> {
   if (!o.prompt?.trim()) throw new Error("첫 지시가 비어 있습니다");
-  const made = await openLivSession(user, { prompt: o.prompt, label: LIV_SESSION_LABEL, harness: o.harness ?? null });
+  const made = await openLivSession(user, { prompt: o.prompt, label: LIV_SESSION_LABEL, harness: o.harness ?? null, remembered: o.remembered ?? null });
   return { session_id: made.session_id, href: LIV_HREF, harness: made.harness, label: made.label };
 }

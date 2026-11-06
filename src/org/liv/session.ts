@@ -102,22 +102,50 @@ export async function currentLivSessionId(userId: string, o: { heal?: boolean } 
 export interface OpenedLivSession { session_id: string; harness: string; label: string; session: LaunchedSession }
 
 /**
+ * (순수) 리브 세션을 띄울 하네스 — 지금 로그인이 확인된 것(usable) 가운데 세션으로 띄울 수 있는 것. 처음 설정 때 기억해 둔 것
+ *  (remembered — welcome.harnesses)이 그 안에 있으면 그것을 먼저 쓴다. 지금 로그인을 못 재면(usable 이 빔 — 중계 실패·프로브 실패) 기억해 둔 것.
+ *  둘 다 없으면 null — **claude 로 접지 않는다**(원준님 2026-10-30 «코덱스만 연결했는데 첫 AI 세션이 클로드로 됨»): 로그인 안 한 claude 로
+ *  열면 세션이 로그인 화면에 멈춰 첫 지시가 영영 안 들어간다. 헤드리스 잡의 «모르면 claude»(headless-harness.ts ③)를 여기선 쓰지 않는다.
+ */
+export function pickLivSessionHarness(i: { usable: readonly string[]; launchable: readonly string[]; remembered?: readonly string[] | null }): string | null {
+  const ok = (k: string): boolean => !!k && k !== "shell" && i.launchable.includes(k);
+  const usable = i.usable.filter(ok);
+  const remembered = (i.remembered ?? []).filter(ok);
+  if (usable.length) return remembered.find((k) => usable.includes(k)) ?? usable[0];
+  return remembered[0] ?? null;
+}
+
+/** 리브 세션 하네스를 정한다(pickLivSessionHarness 의 입력을 잰다). 못 정하면 던진다 — 부르는 쪽이 사유를 남긴다. */
+export async function resolveLivHarness(userId: string, remembered?: readonly string[] | null): Promise<string> {
+  const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
+  const { HARNESSES } = await import("../../terminal/catalog.js");
+  const usable = await memberUsableHarnesses(userId).catch((err) => {
+    logger.warn({ err, member: userId }, "리브 하네스 — 로그인 확인 실패(기억해 둔 하네스로 고른다)");
+    return [] as string[];
+  });
+  const picked = pickLivSessionHarness({ usable, launchable: HARNESSES.map((h) => h.key), remembered });
+  logger.info({ member: userId, usable, remembered: remembered ?? null, harness: picked }, "리브 세션 하네스 선택");
+  if (!picked) throw new Error("로그인한 AI 를 확인하지 못했습니다 — AI 를 연결한 뒤 다시 열어 주세요");
+  return picked;
+}
+
+/**
  * 리브 세션을 **새로** 연다 — 홈 입력창과 같은 문(launchSession: 세션 생성 → 워크스페이스 맵 → 앱 인스턴스).
  *  첫 지시는 initialPrompt 로 넘긴다(입력창이 뜨면 아웃박스가 넣는다 — 여기서 send-keys 를 치지 않는다).
  *  연 세션을 이 워크스페이스의 리브 좌표로 적는다. 실패는 던진다(부르는 쪽이 사람에게 이유를 말한다).
  */
-export async function openLivSession(user: LivelyUser, o: { prompt: string; label: string; harness?: string | null }): Promise<OpenedLivSession> {
+export async function openLivSession(user: LivelyUser, o: { prompt: string; label: string; harness?: string | null; remembered?: readonly string[] | null }): Promise<OpenedLivSession> {
   const userId = user?.userId;
   if (!userId) throw new Error("인증된 사용자가 아닙니다");
   const prompt = String(o.prompt ?? "").trim();
   if (!prompt) throw new Error("첫 지시가 비어 있습니다");
   // 동적 import — terminal/* 는 tmux·pty 를 끌고 오는 무거운 모듈이고 org/* 에서 정적으로 걸면 순환(check-imports) 위험.
-  const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
   const { launchSession } = await import("../../terminal/session-launch.js");
   //  하네스는 그 사람이 **로그인한 것**(claude 하드코딩 금지, #1884). 비용 주체 = 사용자.
   //  (#4970) 부르는 쪽이 고른 하네스(me_liv_open — 로그인한 것 가운데 세션으로 띄울 수 있는 첫 번째)는 **그대로** 쓴다. 리브 세션은 보통
   //   대화형 세션이라 헤드리스(위탁) 지원표로 거르지 않는다 — 거르면 그 표에 없는 하네스(opencode)로만 로그인한 사람에게 리브가 안 열린다(503).
-  const harness = String(o.harness ?? "").trim() || await resolveHeadlessHarness(userId, null);
+  //  고른 하네스가 없으면(처음 설정 2턴 스윕 · 리브 탭) 로그인한 것으로 정한다 — 모르면 claude 로 접지 않고 던진다(resolveLivHarness).
+  const harness = String(o.harness ?? "").trim() || await resolveLivHarness(userId, o.remembered);
   //  (#4970) 모델·추론강도는 새 세션 화면의 기본과 같게 지정한다(catalog.sessionFlagDefaults) — 비우면 그 계정의 CLI 기본으로 떠서
   //   무엇으로 도는지 라이블리가 말할 수 없었다. 사람이 보면서 하는 대화라 무인 자동화 기본(AUTOMATION_DEFAULTS)이 아니다.
   //  (#5058 원준님 2026-10-27 «오토모드로») 리브 세션은 **오토모드**로 연다 — 그 하네스의 autoModeArgv(claude --permission-mode auto ·
@@ -167,7 +195,7 @@ export interface EnsuredLivSession { session_id: string; created: boolean; sessi
 export interface EnsureLivOpts {
   /**
    * 새로 열 때만 부른다 — 그 세션을 띄울 하네스. null 이면 로그인한 AI 가 없다는 뜻이라 **열지 않고** null 을 돌려준다
-   *  (화면이 «쓰는 AI 에서 하기» 를 그린다). 생략하면 resolveHeadlessHarness 의 기본을 쓴다.
+   *  (화면이 «쓰는 AI 에서 하기» 를 그린다). 생략하면 resolveLivHarness 로 정한다(모르면 claude 로 접지 않고 던진다).
    *  로그인 확인은 비싸다(자격 파일이 없을 때 프로브 — 실측 4.3초·상한 25초) — 그래서 세션이 이미 있으면 묻지 않는다.
    */
   harness?: () => Promise<string | null>;

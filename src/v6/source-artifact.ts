@@ -3,13 +3,14 @@
 //  내용을 확보한다. 저장은 transient(mtime TTL opportunistic GC) — eager 전량 저장의 스토리지 폭발 회피.
 //  커넥터 무관: connectors[external_system].fetchArtifact(external_id) 로 dispatch. 크기 캡은 여기(도구)가 단일정책으로 강제.
 import { createWriteStream } from "node:fs";
-import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import path from "node:path";
 import { getSource } from "./source-store.js";
 import { connectors } from "../connectors/index.js";
 import { stateDir } from "../ops/state-dir.js";
+import { HEIC_READ_MAX_EDGE, PREVIEW_MAX_EDGE, imageFormatOf, renderImage } from "../ingest/image-transform.js";
 
 const TTL_MS = 6 * 60 * 60 * 1000; // 임시 아티팩트 수명(6h) — Read 직후 무의미해지므로 짧게. mtime 기준 GC.
 const MAX_ARTIFACT_BYTES = 50_000_000; // 단일 캡(50MB) — 커넥터는 상한 미적용, 여기서 size 선검사 + 스트리밍 abort.
@@ -88,11 +89,41 @@ export interface MaterializedArtifact {
   mime: string;
   bytes: number;
   expires_at: string;
+  /** 작게 줄인 미리보기를 돌려줬다 — 내용을 다 읽으려면 preview 없이 다시 부른다. */
+  preview?: boolean;
+  /** 받은 원본 크기(변환했을 때만 — bytes 는 변환본 크기다). */
+  original_bytes?: number;
+  /** 미리보기를 못 만들어 원본을 돌려줬다(GIF·WEBP·PDF 는 사유 없이 원본). */
+  preview_error?: string;
+}
+
+// 받아 둔 원본 → AI 가 읽을 꼴. HEIC 는 Read 가 못 읽으니 항상 JPEG 로, 미리보기를 청하면 작은 JPEG 로 바꾼다.
+//  미리보기 실패는 원본으로 물러선다(판정이 멈추면 안 된다). HEIC 변환 실패는 읽을 길이 없으니 throw → 그 자료 skip.
+export async function readableArtifact(
+  a: MaterializedArtifact, opts: { preview?: boolean },
+): Promise<MaterializedArtifact> {
+  const format = imageFormatOf(a.mime);
+  const heic = format === "heic";
+  if (!format || (!heic && !opts.preview)) return a;
+  const maxEdge = opts.preview ? PREVIEW_MAX_EDGE : HEIC_READ_MAX_EDGE;
+  try {
+    const out = await renderImage(await readFile(a.path), format, maxEdge);
+    const outPath = `${a.path}.${opts.preview ? "preview" : "read"}.jpg`;
+    await writeFile(outPath, out.bytes);
+    return {
+      path: outPath, mime: "image/jpeg", bytes: out.bytes.length, expires_at: a.expires_at, original_bytes: a.bytes,
+      ...(opts.preview ? { preview: true } : {}),
+    };
+  } catch (e) {
+    const why = (e as Error)?.message ?? String(e);
+    if (heic) throw new Error(`HEIC 변환 실패 — ${why}`);
+    return { ...a, preview_error: why };
+  }
 }
 
 // source_id → 커넥터에서 원본 on-demand 페치 → 임시경로 저장 → {path, mime, bytes, expires_at}.
 //  unavailable(삭제/이동/미지원)·과대는 throw(도구가 에러 반환 → distill 이 그 자료 skip).
-export async function materializeSourceArtifact(sourceId: number): Promise<MaterializedArtifact> {
+export async function materializeSourceArtifact(sourceId: number, opts: { preview?: boolean } = {}): Promise<MaterializedArtifact> {
   const src = await getSource(sourceId);
   if (!src) throw new Error(`자료 #${sourceId} 없음`);
   const system = typeof src.external_system === "string" ? src.external_system : "";
@@ -124,5 +155,5 @@ export async function materializeSourceArtifact(sourceId: number): Promise<Mater
   const outPath = path.join(dir, `${safeId}.${extFromMime(art.mime)}`);
   const bytes = await writeCapped(art.stream, outPath, MAX_ARTIFACT_BYTES);
 
-  return { path: outPath, mime: art.mime, bytes, expires_at: new Date(Date.now() + TTL_MS).toISOString() };
+  return readableArtifact({ path: outPath, mime: art.mime, bytes, expires_at: new Date(Date.now() + TTL_MS).toISOString() }, opts);
 }

@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MOD_URL = pathToFileURL(process.env.LINEEDIT_MOD || path.resolve(here, "..", "standalone", "line-edit.js")).href;
 const mod: any = await import(MOD_URL);
-const { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } = mod;
+const { decideKey, UndoStack, countTyped, isCaretMove, SEQ, nativeUndoOk } = mod;
 
 interface Ctx { mac: boolean; hasSel: boolean; select: boolean; inputActive?: boolean }
 const MAC: Ctx = { mac: true, hasSel: false, select: true, inputActive: true };
@@ -49,10 +49,13 @@ t("A7 ⌘A 첫 번은 입력 전체 선택, 웹 선택이 있으면 두 번째�
   assert.deepEqual(decideKey(k("a", { metaKey: true }), { ...MAC, inputActive: false }), { k: "pass" });
 });
 t("A8 ⌘↑/⌘↓는 입력의 처음·끝 이동, ⇧를 더하면 같은 경계까지 선택 확장", () => {
-  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true }), MAC), { k: "send", seq: SEQ.home });
-  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true }), MAC), { k: "send", seq: SEQ.end });
-  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
-  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+  //  #5332 — «지금 줄» 이 아니라 **입력 전체**의 경계다(여러 줄 입력에서 종전엔 그 줄 머리·끝에서 멈췄다).
+  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true }), MAC), { k: "caretInput", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true }), MAC), { k: "caretInput", dir: 1 });
+  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true, shiftKey: true }), MAC), { k: "extendInput", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true, shiftKey: true }), MAC), { k: "extendInput", dir: 1 });
+  //  ⌘←/→ 는 그대로 «지금 줄»
+  assert.deepEqual(decideKey(k("ArrowLeft", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
 });
 t("A9 ⌥Fn⌫는 커서 뒤 한 단어를 지운다", () => {
   assert.deepEqual(decideKey(k("Delete", { altKey: true }), MAC), { k: "send", seq: SEQ.wordDelForward, kill: true });
@@ -62,10 +65,10 @@ t("A10 Windows Ctrl+A도 첫 번은 입력 전체 선택, 다음 번은 터미�
   assert.deepEqual(decideKey(k("a", { ctrlKey: true }), WINSEL), { k: "selectAll" });
 });
 t("A11 Windows Ctrl+Home/End와 Ctrl+Shift+Home/End는 입력 경계 이동·선택이다", () => {
-  assert.deepEqual(decideKey(k("Home", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.home });
-  assert.deepEqual(decideKey(k("End", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.end });
-  assert.deepEqual(decideKey(k("Home", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
-  assert.deepEqual(decideKey(k("End", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+  assert.deepEqual(decideKey(k("Home", { ctrlKey: true }), WIN), { k: "caretInput", dir: -1 });
+  assert.deepEqual(decideKey(k("End", { ctrlKey: true }), WIN), { k: "caretInput", dir: 1 });
+  assert.deepEqual(decideKey(k("Home", { ctrlKey: true, shiftKey: true }), WIN), { k: "extendInput", dir: -1 });
+  assert.deepEqual(decideKey(k("End", { ctrlKey: true, shiftKey: true }), WIN), { k: "extendInput", dir: 1 });
 });
 t("A12 Windows Ctrl+좌우·Ctrl+Shift+좌우는 단어 이동·선택이다", () => {
   assert.deepEqual(decideKey(k("ArrowLeft", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.wordLeft });
@@ -158,10 +161,20 @@ t("C7d Shift+화살표 위/아래는 입력 처음·끝까지 선택을 확장�
   assert.deepEqual(decideKey(k("ArrowUp", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.home, unit: "line", dir: -1, cross: true });
   assert.deepEqual(decideKey(k("ArrowDown", { shiftKey: true }), SEL), { k: "extend", seq: SEQ.end, unit: "line", dir: 1, cross: true });
 });
-t("C7e 선택이 없거나 처리 대상이 아닌 Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ⌘V 붙여넣기)", () => {
+t("C7e 선택이 없거나 처리 대상이 아닌 Ctrl/⌘ + 글자는 줄을 건드리는 명령이라 선택을 거둔다(^C 중단 · ^U)", () => {
   assert.deepEqual(decideKey(k("c", { ctrlKey: true }), SEL), { k: "clear" });
   assert.deepEqual(decideKey(k("u", { ctrlKey: true }), SEL), { k: "clear" });
-  assert.deepEqual(decideKey(k("v", { metaKey: true }), SEL), { k: "clear" });
+});
+t("C7f #5332 ⌘V(Windows Ctrl+V)는 선택을 거두지 않는다 — 뒤따르는 붙여넣기가 그 선택을 갈아친다", () => {
+  assert.deepEqual(decideKey(k("v", { metaKey: true }), SEL), { k: "pass" });
+  assert.deepEqual(decideKey(k("v", { ctrlKey: true }), WINSEL), { k: "pass" });
+  assert.deepEqual(decideKey(k("v", { ctrlKey: true }), SEL), { k: "clear" });   // 맥의 Ctrl+V 는 붙여넣기가 아니다
+});
+t("C7g #5332 ⌥⌫ 는 앞 단어 kill — 되돌리기 스택이 알도록 표를 거친다(맥·Windows 공통)", () => {
+  assert.deepEqual(decideKey(k("Backspace", { altKey: true }), MAC), { k: "send", seq: SEQ.wordDelBack, kill: true });
+  assert.deepEqual(decideKey(k("Backspace", { altKey: true }), WIN), { k: "send", seq: SEQ.wordDelBack, kill: true });
+  assert.deepEqual(decideKey(k("Backspace", { altKey: true }), SEL), { k: "del" });
+  assert.deepEqual(decideKey(k("Backspace", { altKey: true, isComposing: true }), MAC), { k: "pass" });   // 조합 중 — 종전 경로
 });
 t("C8 선택이 없으면 ⌫ 는 손대지 않는다", () => {
   assert.deepEqual(decideKey(k("Backspace"), MAC), { k: "pass" });
@@ -304,6 +317,26 @@ t("N7 형식이 어긋나면(2.1 · v2.1.267) 합성", () => {
 });
 
 let pass = 0; const fails: string[] = [];
+// ── #5332 캐럿 이동이면 합성 되돌리기 기록을 버린다 ──────────────────────────────────────────
+t("U20 #5332 캐럿만 옮기는 바이트 — 방향키·Home/End·단어 이동·Ctrl+A/E/B/F, 같은 것의 반복", () => {
+  for (const d of ["\x1b[D", "\x1b[C", "\x1b[A", "\x1b[B", "\x1bOD", "\x1b[H", "\x1b[F", "\x1b[1~", "\x1b[4~", "\x1b[1;5D", "\x1bb", "\x1bf", "\x01", "\x05", "\x02", "\x06"]) {
+    assert.equal(isCaretMove(d), true, JSON.stringify(d));
+  }
+  assert.equal(isCaretMove(SEQ.left.repeat(7)), true, "걷기(walkCursor)는 같은 방향키를 여러 번 한 덩이로 보낸다");
+  assert.equal(isCaretMove(SEQ.left + SEQ.home), true, "⇧↑ 넘기기(← + Ctrl+A)");
+});
+t("U21 #5332 지우기·글자·Enter·붙여넣기·kill 은 이동이 아니다", () => {
+  for (const d of ["", "a", "\r", "\x7f", "\x1b[3~", "\x17", "\x15", "\x0b", "\x19", "\x1bd", "\x1b\r", "\x1b[200~x\x1b[201~", "\x1b[D" + "a", "\x1b", "\x03"]) {
+    assert.equal(isCaretMove(d), false, JSON.stringify(d));
+  }
+});
+t("U22 #5332 «hello» ⌘← ⌘Z — 이동 뒤 기록을 버려서 백스페이스를 엉뚱한 자리에 보내지 않는다(터미널의 reset 규칙)", () => {
+  const u = new UndoStack();
+  u.typeText("hello");
+  if (isCaretMove(SEQ.home)) u.reset();   // terminal.ts sendInput · handleTermData 가 이 규칙을 건다
+  assert.equal(u.pop(), null);
+});
+
 for (const [name, fn] of tests) {
   try { fn(); pass++; console.log("ok  " + name); }
   catch (e) { fails.push(name); console.log("FAIL " + name + "\n     " + String((e as Error).message).split("\n")[0]); }

@@ -128,10 +128,18 @@ const aiJobSchema = z.object({
 //    (ai 는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다 — web.root 와 같은 까닭).
 //   ★ 여기는 모양(글 → 글)만 본다. 뜻(선언한 작업 이름인가 · 묶음 안 상대 경로인가 · 파일 · 크기 · 글자)은 설치 · 판 저장 때 loader 가 본다 —
 //    저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 많아, 옛 코어가 저장한 매니페스트 하나로 그 자리들이 400 으로 막히지 않게(격리 리뷰 N4 · #5050 과 같다).
+//  작업별 «라이블리 MCP 만»(ai.mcp_only — 작업 이름 목록). 에이전트 작업은 권한 묻기 없이 하네스 내장 도구(셸 · 파일 · 웹)를 다 쥐고 돌아, 실행 계정이
+//   읽을 수 있는 박스의 다른 폴더까지 닿는다. 앱 토큰으로 좁힌 도구만 쓰게 해야 하는 앱이 그 작업 이름을 여기 적으면 판이 내장 도구를 끄고 MCP 만 싣는다
+//   — 작업 폴더 설정도 읽지 않는다(도구를 꺼도 .claude/settings*.json 의 apiKeyHelper 등은 셸을 돌린다 · runner.claudeJobArgv).
+//   instructions 와 같은 자리 · 같은 까닭으로 ai 바로 아래에 두고, 뜻(선언한 작업 이름인가)은 loader 가 본다.
 const aiSchema = z.object({
   jobs: z.array(aiJobSchema).max(32).default([]),
   instructions: z.record(z.string(), z.string()).optional()
     .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글 · NUL 없이). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"),
+  mcp_only: z.array(z.string()).max(32).optional()
+    .describe("내장 도구 없이 라이블리 MCP 도구만 쓰는 작업 이름(ai.jobs[].name) 목록(예: [\"answer\"]). 그 작업으로 도는 에이전트 작업은 하네스 내장 도구(셸 · 파일 읽기 · 쓰기 · 웹)를 끄고 앱 토큰의 라이블리 MCP 도구(permissions.tools · 동의로 좁혀진 것)만 본다 — 실행 계정이 읽을 수 있는 박스의 다른 폴더에 닿지 않는다. 접수 때 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 읽는다. 형식 재시도는 앞 작업의 값을 그대로 쓰고, 이어받기는 앞 작업이나 지금 판 중 하나라도 MCP 만이면 MCP 만이다. 작업 이름(job) 없이 부른 실행 · 목록에 없는 작업 이름으로 부른 실행에는 걸리지 않는다 — 앱 코드가 job 을 정해 부를 것. 단발은 원래 도구가 없다. 작업 폴더의 설정(.claude/settings*.json · CLAUDE.md)도 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다 — 같은 계정으로 도는 다른 작업이 고칠 수 있는 자리다)"),
+  tools: z.record(z.string(), z.array(z.string()).max(64)).optional()
+    .describe("작업 이름(ai.jobs[].name) → 그 작업의 에이전트가 쓸 수 있는 라이블리 도구 이름 목록(예: { \"answer\": [\"knowledge_get\", \"knowledge_search\"] }). 그 작업으로 도는 에이전트 작업의 라이블리 신원(작업 토큰)은 이 목록 안의 도구만 쓴다 — 앱 동의(permissions.tools)에 있어도 목록 밖은 도구 목록에 안 보이고 부르면 거절된다. 앱 서버가 쓰려고 동의에 넣은 도구(앱 표 SQL 등)를 에이전트에게는 닫을 때 쓴다. 그 작업 토큰은 앱 도구의 문(능력 API · MCP)에서만 받는다 — 세션 · 파일 · 프로젝트 길은 열리지 않는다. 도구 이름은 글롭이 아닌 정확한 이름(대소문자까지)이고 permissions.tools · ext_tools(글롭 포함)에 맞아야 한다. 빈 목록이면 라이블리 도구를 하나도 쓰지 못한다. 이 목록은 라이블리 신원만 좁힌다 — 하네스 내장 도구(셸 · 파일)를 연 작업은 실행 계정이 읽을 수 있는 다른 자격에 닿을 수 있으니 ai.mcp_only 와 함께 쓴다. 목록에 넣은 도구로 시킨 일(예: app_job_start 의 앱 서버 작업)에는 이 상한이 따라가지 않는다. 접수 때 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 읽는다. 형식 재시도는 앞 작업의 목록을 그대로 쓰고, 이어받기는 조이는 쪽으로만 합친다(앞 작업과 지금 판의 목록이 둘 다 있으면 겹치는 것만, 하나만 있으면 그것). 작업 이름(job) 없이 부른 실행 · 목록에 없는 작업 이름으로 부른 실행에는 걸리지 않는다 — 앱 코드가 job 을 정해 부를 것"),
 }).passthrough().optional();
 
 const uiPageSchema = z.object({
@@ -215,6 +223,8 @@ const dataColumnSchema = z.object({
   check: z.string().min(1).max(1000).optional(),     // 검사 식 — 설치 때 검사기가 해석한다(그 표의 칸만 · 위험 함수 거부)
   references: z.object({
     table: z.string().regex(IDENT_RE, "references.table 은 같은 앱의 테이블 이름"),
+    //  가리킬 칸 — 없으면 id. 그 표에서 unique 로 선언한 칸이고 형이 같아야 한다(글자 코드로 잇는 표 — 예 `code`).
+    column: z.string().regex(IDENT_RE, "references.column 은 가리킬 표의 칸 이름").optional(),
     on_delete: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
   }).strict().optional(),
   values: z.array(z.string().min(1).max(200)).min(1).max(200).optional(),   // type: enum 의 값
@@ -226,6 +236,9 @@ const dataColumnSchema = z.object({
 const dataIndexSchema = z.object({
   columns: z.array(z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "인덱스 칸 이름은 소문자 영숫자/_")).min(1).max(8),
   unique: z.boolean().default(false),
+  //  조건부 인덱스 — 조건에 맞는 행만 담는다(그 표의 칸만 쓰는 식 하나 · 설치 때 검사기가 해석한다).
+  //   unique 와 함께면 «조건에 맞는 행끼리만» 겹치지 않는다(예 열린 판은 칸마다 하나 — `valid_to IS NULL`).
+  where: z.string().min(1).max(1000).optional(),
 }).strict();
 
 const dataTableSchema = z.object({
@@ -502,7 +515,8 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
       }
       if (c.references) {
         if (!tableNames.has(c.references.table)) throw new HttpError(400, `${where(c.name)}: references.table '${c.references.table}' 는 이 앱이 선언한 테이블이 아닙니다`);
-        if (!ty.integer) throw new HttpError(400, `${where(c.name)}: references 칸은 정수형(int · bigint · int4 · smallint)이어야 합니다 — 가리키는 표의 id 와 맞춥니다`);
+        //  id 를 가리키면 정수형 — 다른 칸(references.column)을 가리키면 그 칸과 같은 형인지 아래(표를 다 읽은 뒤)에서 본다.
+        if ((c.references.column ?? "id") === "id" && !ty.integer) throw new HttpError(400, `${where(c.name)}: references 칸은 정수형(int · bigint · int4 · smallint)이어야 합니다 — 가리키는 표의 id 와 맞춥니다`);
         if (c.references.on_delete === "set null" && c.not_null) throw new HttpError(400, `${where(c.name)}: on_delete 'set null' 과 not_null 은 함께 쓸 수 없습니다`);
       }
       if (c.renamed_from !== undefined && (c.renamed_from === c.name || t.columns.some((o) => o.name === c.renamed_from))) {
@@ -524,9 +538,26 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
         if (!cols.has(c)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: '${c}' 는 이 테이블의 칸이 아닙니다`);
       }
       if (new Set(ix.columns).size !== ix.columns.length) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 칸을 두 번 적었습니다(${ix.columns.join(", ")})`);
-      const key = `${ix.unique ? "u" : "i"}:${ix.columns.join(",")}`;
+      if (ix.where !== undefined && /;/.test(ix.where)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: where 는 식 하나입니다(세미콜론 없이)`);
+      const key = `${ix.unique ? "u" : "i"}:${ix.columns.join(",")}${ix.where !== undefined ? `:${ix.where}` : ""}`;
       if (seen.has(key)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 인덱스가 두 번 있습니다(${ix.columns.join(", ")})`);
       seen.add(key);
+    }
+    //  references.column — 가리킬 칸이 그 표에 있고, unique(칸의 unique 또는 그 칸 하나짜리 조건 없는 unique 인덱스)이며, 형이 같아야 한다.
+    //   외래키는 가리키는 쪽 값이 늘 하나로 정해져야 걸린다(Postgres 는 대상 칸에 유일 제약을 요구한다).
+    for (const c of t.columns) {
+      const tc = c.references?.column;
+      if (!c.references || tc === undefined || tc === "id") continue;
+      const loc = `매니페스트 오류 [data.tables.${t.name}.columns.${c.name}]`;
+      const target = m.data.tables.find((x) => x.name === c.references!.table)!;
+      const tcol = target.columns.find((x) => x.name === tc);
+      if (!tcol) throw new HttpError(400, `${loc}: references.column '${tc}' 는 '${target.name}' 의 칸이 아닙니다`);
+      const uniq = tcol.unique === true || target.indexes.some((ix) => ix.unique && ix.where === undefined && ix.columns.length === 1 && ix.columns[0] === tc);
+      if (!uniq) throw new HttpError(400, `${loc}: references.column '${target.name}.${tc}' 는 unique 로 선언한 칸이어야 합니다(칸의 unique: true 또는 그 칸 하나짜리 unique 인덱스)`);
+      const a = parseColumnType(c.type), b = parseColumnType(tcol.type);
+      if (a.array || b.array || a.canonical !== b.canonical) {
+        throw new HttpError(400, `${loc}: 형(${c.type})이 가리키는 칸 '${target.name}.${tc}' 의 형(${tcol.type})과 같아야 합니다`);
+      }
     }
   }
   assertUniqueKeys("sections", m.sections.map((s) => s.key));

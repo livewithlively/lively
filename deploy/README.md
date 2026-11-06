@@ -127,9 +127,9 @@ Environment variables: `LIVELY_DOMAIN` (automatic HTTPS when set — see [TLS](#
 
 Off by default (search = grep fallback). Once the provider is on, the gateway fills in unembedded items (**including existing knowledge**) with an automatic backfill sweep (30 s after boot · every 10 min · after connector syncs — #669; can be paused from the admin screen). The paths below run the **existing-knowledge backfill** right away instead of waiting for that cycle.
 
-- **Existing box, one shot:** `bash deploy/enable-embeddings.sh` — start the local Ollama sidecar (bge-m3) → `.env` `EMBEDDINGS_PROVIDER=http` → restart the gateway → backfill existing knowledge. On a 4GB box the RAM guard stops it (→ upsize / external endpoint / `FORCE=1`).
+- **Existing box, one shot:** `bash deploy/enable-embeddings.sh` — start the local Ollama sidecar (bge-m3) and wait for the model pull → `.env` `EMBEDDINGS_PROVIDER=http` → restart the gateway → backfill existing knowledge (about 5 minutes; the gateway fills in the rest). If the backfill fails the script exits 1 and the `.env` settings stay in place. On a 4GB box the RAM guard stops it (→ upsize / external endpoint / `FORCE=1`).
   - External endpoint (no sidecar): `EMBEDDINGS_BASE_URL=<host> EMBEDDINGS_MODEL=<m> [EMBEDDINGS_AUTH_ENV=<name-of-env-var-holding-the-key>] bash deploy/enable-embeddings.sh --external`
-- **Web UI (admins):** the ‘의미 검색 (임베딩)’ (semantic search / embeddings) section under [수집 · 증류 ▸ AI 주입 설정] (Collect · Distill ▸ AI injection settings) — save provider/base_url/model/dim (no restart) + the [기존 지식 임베딩(백필)] (embed existing knowledge / backfill) button (with progress) + pause/resume of the automatic backfill.
+- **Web UI (admins):** the ‘의미 검색 (임베딩)’ (semantic search / embeddings) section under [수집 · 증류 ▸ AI 주입기 설정] (Collect · Distill ▸ AI injection settings) — save provider/base_url/model/dim (no restart) + the [기존 지식 임베딩(백필)] (embed existing knowledge / backfill) button (with progress) + pause/resume of the automatic backfill.
 - **From the start:** `WITH_EMBEDDINGS=1 bash deploy/install.sh`.
 
 Turning it off: `bash deploy/disable-embeddings.sh` (provider off + sidecar down — vector data is kept). Swapping models: after changing `EMBEDDINGS_MODEL`, run `node --env-file-if-exists=.env scripts/backfill-embeddings.mjs --model-changed` (`--all` if the dimension differs).

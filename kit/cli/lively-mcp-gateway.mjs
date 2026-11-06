@@ -52,6 +52,11 @@ const CACHE_FILE = join(LIVELY, "mcp-tools-cache.json");
 //  게이트웨이가 멎으면 10분을 매단다. 짧게 잡되, 오래 걸리는 게 정상인 툴은 아래 callTimeoutFor 가 예외로 뺀다.
 const LIST_TIMEOUT_MS = Number(process.env.LIVELY_MCP_LIST_TIMEOUT_MS || 8_000);
 const CALL_TIMEOUT_MS = Number(process.env.LIVELY_MCP_CALL_TIMEOUT_MS || 60_000);
+// 위 타임아웃은 «아무것도 오지 않은 시간»이다 — SSE 응답은 바이트가 올 때마다 다시 잰다. 앱이 선언한 백그라운드 도구는
+//  게이트웨이가 진행 알림(notifications/progress)을 BG_PROGRESS_SEC(10초)마다 흘리며 BG_WAIT_SEC(200초)까지 붙잡으므로
+//  (src/apps/app-server-call.ts runServerToolJob), 처음부터 끝까지를 60초로 재면 그 도구는 늘 끊겨 작업 번호를 잃었다.
+//  끝없이 흐르는 응답을 막는 상한은 따로 둔다.
+const CALL_MAX_MS = Number(process.env.LIVELY_MCP_CALL_MAX_MS || 15 * 60_000);
 // delegate_run 전용 — 서버가 wait 모드에서 wait_sec 만큼 붙잡는다(src/capabilities/delegate.ts).
 //  그 상한을 넘겨 우리가 먼저 끊으면 '완주한 위탁의 결과를 잃는' 회귀가 되므로 여유를 얹어 맞춘다.
 const DELEGATE_DEFAULT_WAIT_SEC = 120;   // = delegate.ts DEFAULT_WAIT_SEC
@@ -265,44 +270,100 @@ function upstreamHeaders() {
   return h;
 }
 
+// SSE 한 줄 → JSON-RPC 메시지(data: 줄만 · 부분 프레임은 null). 통째 읽기(parseUpstreamBody)와 흘려 읽기(readUpstreamSse)가 같은 규칙을 쓴다.
+function sseMessage(line) {
+  if (!line.startsWith("data:")) return null;
+  const payload = line.slice(5).trim();
+  if (!payload) return null;
+  try { const m = JSON.parse(payload); return m && typeof m === "object" ? m : null; } catch { return null; /* 부분 프레임 — 무시 */ }
+}
+const isResponse = (m) => m.result !== undefined || m.error !== undefined;
+
 // SSE(text/event-stream) 또는 JSON 응답에서 JSON-RPC 메시지를 뽑는다.
 //  무상태 단일 요청이라 보통 프레임 하나지만, 여러 개 오면 **응답(result/error)** 인 마지막 것을 쓴다.
 function parseUpstreamBody(text, contentType) {
   if (contentType.includes("text/event-stream")) {
     let last = null;
     for (const line of text.split(/\r?\n/)) {
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload) continue;
-      try {
-        const m = JSON.parse(payload);
-        if (m && (m.result !== undefined || m.error !== undefined)) last = m;
-      } catch { /* 부분 프레임 — 무시 */ }
+      const m = sseMessage(line);
+      if (m && isResponse(m)) last = m;
     }
     return last;
   }
   try { return JSON.parse(text); } catch { return null; }
 }
 
+// SSE 응답을 흘러오는 대로 읽는다 — 응답(result/error) 프레임이 오면 거기서 멈춘다(무상태 /mcp 는 응답 뒤에 보낼 것이 없다 ·
+//  그 뒤 연결이 끊기거나 열린 채 남아도 받은 응답을 잃지 않게). 알림(method 있고 id 없음)은 onNotification 으로 곧바로 넘기고,
+//  바이트가 올 때마다 onBytes(응답 없음 시계를 다시 잰다). 덜 끝난 줄은 조각으로 모아 두고 새로 온 글에서만 줄끝을 찾는다
+//  (한 프레임이 수 MB 여도 다시 훑지 않게).
+async function readUpstreamSse(stream, { onBytes, onNotification } = {}) {
+  const dec = new TextDecoder();
+  let pending = [];
+  let response = null;
+  const take = (line) => {
+    const m = sseMessage(line.replace(/\r$/, ""));
+    if (!m) return;
+    if (isResponse(m)) { response = m; return; }
+    if (typeof m.method === "string" && m.id === undefined && onNotification) {
+      try { onNotification(m); } catch { /* 알림 전달 실패가 응답을 막지 않는다 */ }
+    }
+  };
+  const feed = (text) => {
+    let from = 0;
+    let i;
+    while (!response && (i = text.indexOf("\n", from)) >= 0) {
+      pending.push(text.slice(from, i));
+      take(pending.join(""));
+      pending = [];
+      from = i + 1;
+    }
+    if (!response && from < text.length) pending.push(text.slice(from));
+  };
+  try {
+    for await (const chunk of stream) {
+      if (onBytes) onBytes();
+      feed(dec.decode(chunk, { stream: true }));
+      if (response) return response;   // 나머지는 읽지 않는다(반복을 끝내면 스트림을 닫는다)
+    }
+  } catch (e) {
+    if (!response) throw e;
+  }
+  feed(dec.decode());
+  if (!response && pending.length) take(pending.join(""));
+  return response;
+}
+
 // 상류로 JSON-RPC 한 건을 보낸다. 반환: {ok:true, message} | {ok:false, reason}
 //  네트워크·타임아웃·HTTP 오류를 **전부 여기서 삼킨다**(throw 금지 — 서버가 죽으면 안 된다).
-async function callUpstream(body, timeoutMs) {
+//  idle: true(tools/call)면 timeoutMs 는 «아무것도 오지 않은 시간»이다 — SSE 는 바이트가 올 때마다 다시 재고, CALL_MAX_MS 가 전체 상한이다.
+//   그 밖(tools/list · 복구 확인 · 위임)은 종전처럼 처음부터 끝까지를 잰다 — 목록은 하네스가 기다리다 포기하기 전에 스냅샷으로라도 답해야 한다(#1079).
+//  onNotification 을 주면 응답 앞에 흘러온 상류 알림(진행 알림 등)을 그대로 넘긴다.
+async function callUpstream(body, timeoutMs, { onNotification, idle = false } = {}) {
   const gw = gateway();
   if (!gw) return { ok: false, reason: "게이트웨이 주소를 모릅니다(lively login 필요)" };
   if (!token()) return { ok: false, reason: "로그인이 필요합니다(lively login)" };
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  let cut = "silence";
+  let timer = setTimeout(() => ctl.abort(), timeoutMs);
+  const rearm = () => { clearTimeout(timer); timer = setTimeout(() => ctl.abort(), timeoutMs); };
+  const capMs = Math.max(timeoutMs, CALL_MAX_MS);
+  const cap = idle ? setTimeout(() => { cut = "cap"; ctl.abort(); }, capMs) : null;
   try {
     const res = await fetch(gw + "/mcp", { method: "POST", signal: ctl.signal, headers: upstreamHeaders(), body: JSON.stringify(body) });
-    const text = await res.text();
-    if (!res.ok) return { ok: false, reason: `게이트웨이 ${res.status}` };
-    const msg = parseUpstreamBody(text, String(res.headers.get("content-type") || ""));
+    const contentType = String(res.headers.get("content-type") || "");
+    if (!res.ok) { await res.text().catch(() => ""); return { ok: false, reason: `게이트웨이 ${res.status}` }; }
+    const msg = contentType.includes("text/event-stream") && res.body
+      ? await readUpstreamSse(res.body, { onBytes: idle ? rearm : undefined, onNotification })
+      : parseUpstreamBody(await res.text(), contentType);
     if (!msg) return { ok: false, reason: "게이트웨이 응답을 해석하지 못했습니다" };
     return { ok: true, message: msg };
   } catch (e) {
     const m = String((e && e.message) || e);
-    return { ok: false, reason: /abort/i.test(m) ? `게이트웨이 응답 없음(${timeoutMs}ms 초과)` : `게이트웨이에 닿지 못했습니다: ${m}` };
-  } finally { clearTimeout(timer); }
+    if (!/abort/i.test(m)) return { ok: false, reason: `게이트웨이에 닿지 못했습니다: ${m}` };
+    if (cut === "cap") return { ok: false, reason: `게이트웨이 응답이 전체 상한 ${capMs}ms 안에 끝나지 않았습니다(진행 알림은 오고 있었습니다)` };
+    return { ok: false, reason: idle ? `게이트웨이 응답 없음(${timeoutMs}ms 넘게 아무것도 오지 않았습니다)` : `게이트웨이 응답 없음(${timeoutMs}ms 초과)` };
+  } finally { clearTimeout(timer); if (cap) clearTimeout(cap); }
 }
 
 // 상류 tools/list — 성공 시 툴 배열, 실패 시 null.
@@ -447,7 +508,9 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
       }
 
       if (method === "tools/call") {
-        const r = await callUpstream({ jsonrpc: "2.0", id: id ?? "gw-call", method: "tools/call", params }, callTimeoutFor(params));
+        //  진행 알림은 하네스에 그대로 넘긴다 — 하네스가 실은 progressToken 이 그대로 돌아온다(게이트웨이는 그 토큰이 있을 때만 알린다).
+        const r = await callUpstream({ jsonrpc: "2.0", id: id ?? "gw-call", method: "tools/call", params }, callTimeoutFor(params),
+          { idle: true, onNotification: (n) => { if (n.method === "notifications/progress") send(n); } });
         if (r.ok && r.message) {
           upstreamDown = false;
           if (r.message.error) { okr(id, { content: [{ type: "text", text: `오류: ${r.message.error.message || "게이트웨이 오류"}` }], isError: true }); return; }

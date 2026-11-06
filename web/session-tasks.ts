@@ -30,7 +30,7 @@ import { dockHead, elapsed, visibleTasks, type TaskInfo } from './session-tasks-
 import {
   answersReady, applySlash, askChoices, askDetail, askHeadline, askIsRisky, askKind, askWhy,
   buildAnswers, factChips, isQuestion,
-  slashMatches, slashQuery, terminalOnlyNote, usageLine, usageTight,
+  slashMatches, slashQuery, staleAskIds, terminalOnlyNote, usageLine, usageTight,
   type AskInfo, type FactsInfo, type UsageInfo,
 } from './session-surface-view.js';
 
@@ -54,6 +54,11 @@ export interface SessionTasksOpts {
    *  ⚠ 터미널에선 `/` 를 치면 목록이 뜬다 — 웹에 그게 없으면 그건 **기능 없음**이지 «디자인 차이» 가 아니다.
    */
   input?: HTMLTextAreaElement | null;
+  /**
+   * 이 도크가 사는 **세션 화면의 바깥 틀** — 그 화면이 안 보이는 동안은 상태 통로를 끊어 둔다(#5398, session-events.ts ★).
+   *  ⚠ 도크 자신(host)을 주지 마라: 도는 작업이 없으면 도크는 숨는다 — 그러면 화면이 보이는데도 승인이 안 온다.
+   */
+  anchor?: Element | null;
 }
 
 //  토큰은 주소가 아니라 헤더로 — EventSource 를 못 쓰는 이유이자, 이 한 줄이 그 대가를 갚는 자리다.
@@ -308,12 +313,19 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
   }
 
   function handle(ev: unknown): void {
-    const e = ev as { t?: string; tasks?: TaskInfo[]; ask?: AskInfo; id?: string; facts?: FactsInfo; usage?: UsageInfo };
+    const e = ev as { t?: string; tasks?: TaskInfo[]; ask?: AskInfo; id?: string; ids?: unknown; facts?: FactsInfo; usage?: UsageInfo };
     //  ★ 서버가 접어서 스냅샷으로 준다 — 화면은 접지 않는다.
     if (e?.t === 'tasks.snapshot' && Array.isArray(e.tasks)) { tasks = e.tasks; paint(); return; }
     if (e?.t === 'permission.asked' && e.ask?.id) { if (o.drawAsks !== false) drawAsk(e.ask); return; }
     //  다른 창에서 답했거나 시간이 지나 닫혔다 — 이 화면의 카드도 함께 접는다(죽은 버튼을 남기지 않는다).
     if (e?.t === 'permission.resolved' && e.id) { settleAsk(e.id, '닫힘'); return; }
+    //  #5398 — 붙을 때마다 서버가 «지금 걸린 물음 전부» 를 준다. 끊겨 있던 동안(숨은 화면 · 재접속) 닫힌 물음은
+    //   `permission.resolved` 를 못 받았으니 여기서 접는다. 답을 보내는 중인 카드는 그 답이 접는다(라벨을 덮지 않는다).
+    if (e?.t === 'permission.pending') {
+      const cards = [...askCards].map(([id, card]) => [id, card.classList.contains('is-busy')] as const);
+      for (const id of staleAskIds(cards, e.ids)) settleAsk(id, '닫힘');
+      return;
+    }
     if (e?.t === 'facts' && e.facts) {
       //  ⚠ **덮어쓰지 않고 겹친다** — 하네스는 사실을 조각조각 보낸다(모델 따로, MCP 따로).
       //   통째로 갈면 방금 받은 슬래시 목록이 다음 조각에 지워진다.
@@ -334,7 +346,9 @@ export function mountSessionTasks(host: HTMLElement, o: SessionTasksOpts): Sessi
   //  ── 스트림 ────────────────────────────────────────────────────────────────────
   //  연결은 **세션당 한 벌**이다(web/session-events.ts) — 같은 세션을 보는 다른 표면(대화창의 대화 파일
   //   통보, #3699)과 같은 SSE 를 나눠 쓴다. 재접속·침묵 판정·프레임 자르기는 그 층이 쥔다.
-  const offEvents = onSessionEvents(o.sessionId, handle);
+  //  #5398 — 화면이 안 보이는 동안은 끊긴다. 다시 붙으면 서버가 작업 목록 · 걸린 물음(과 그 전체 목록) · 사실 · 사용량을
+  //   첫머리에 다시 주므로 이 도크는 위 handle 그대로 지금 상태로 돌아온다.
+  const offEvents = onSessionEvents(o.sessionId, handle, { anchor: o.anchor ?? null });
 
   return {
     destroy(): void {

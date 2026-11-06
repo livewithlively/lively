@@ -3,7 +3,8 @@
 //  상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만» 조건을 단다 — 청/녹 두 슬롯·감시·판 보고가 겹쳐도 한 번만 넘어간다.
 import crypto from "node:crypto";
 import { itemsPool, q, withTx } from "../db/client.js";
-import { planClaims, PRUNE_BATCH, type AgentJobStatus, type ClaimCandidate } from "./plan.js";
+import { planClaims, PRUNE_BATCH, type AgentJobStatus, type AgentJobStep, type ClaimCandidate } from "./plan.js";
+import { EFFORT_LEVELS, isEffort, type Effort } from "./runner.js";
 import { AGENT_JOB_POLICY_RANGE, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
 export interface AgentJobRow {
@@ -104,10 +105,32 @@ export interface NewAgentJob {
    */
   sharedSeat: boolean;
   /**
+   * #1639 앱 서버가 보낸, 물은 사람 본인의 구독 작업 — 자리는 그 사람의 홈(로그인)이고 공용 시트와 같은 울타리다(앱 폴더만 · 작업 AI 토큰은 앱 서버 급 · 키트를 심지 않는다).
+   *  필수다(homeless · sharedSeat 와 같은 까닭 — 빠지면 앱 서버가 부린 AI 가 그 사람 이름의 세션 · 파일 · 계정 길을 연다).
+   */
+  appServerOwn: boolean;
+  /**
    * #5082 앱 판 지시 — 판이 하네스 시스템 지시로 싣는 글(앱 AI 실행이 접수 때 읽어 준다). 있으면 작업 폴더의 지시 · 설정을 읽지 않는다
    *  (runner.claudeJobArgv). 없으면 null · 생략.
    */
   appInstructions?: string | null;
+  /**
+   * 앱이 «라이블리 MCP 만» 으로 선언한 작업(매니페스트 ai.mcp_only) — 판이 내장 도구(셸 · 파일 · 웹)를 끄고 앱 토큰의 라이블리 MCP 만 싣는다
+   *  (runner.claudeJobArgv). 앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 준다(이어받기 · 형식 재시도는 앞 작업 행 것).
+   *  필수다(homeless · sharedSeat 와 같은 까닭) — 접수하는 자리가 빠뜨리면 그 작업이 내장 도구를 연 채 돈다.
+   */
+  mcpOnly: boolean;
+  /**
+   * 앱이 그 작업의 에이전트가 쓸 라이블리 도구를 좁힌 허용 목록(매니페스트 ai.tools) — 판이 뜰 때 작업 토큰의 도구 상한으로 싣는다
+   *  (service.onBoot → mintMcpToken). null = 좁히지 않음 · 빈 배열 = 도구 없음. 앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 준다
+   *  (이어받기 · 형식 재시도는 앞 작업 행 것). 필수다(mcpOnly 와 같은 까닭) — 접수하는 자리가 빠뜨리면 그 작업이 앱 동의 전체로 돈다.
+   */
+  toolAllowlist: string[] | null;
+  /**
+   * 하네스 생각 깊이(`--effort` · runner.EFFORT_LEVELS) — 앱 AI 실행이 받아 준다(이어받기 · 형식 재시도 · agent_job_run 이어받기는 앞 작업 행 것). null = 하네스 기본.
+   *  필수다 — 접수하는 자리가 하나라도 빠뜨리면 그 턴은 말없이 기본 깊이로 돈다(깊이를 견주는 앱의 비교가 거짓이 된다).
+   */
+  effort: Effort | null;
 }
 
 /**
@@ -126,16 +149,28 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
     //  #5082 app_instructions 칸도 같은 까닭으로 지시가 있을 때만 적는다(APP_INSTRUCTIONS_COL 머리말).
+    //  mcp_only 칸도 같다 — MCP 만 쓰는 작업일 때만 적는다(MCP_ONLY_COL 머리말). tool_allowlist 칸도 목록이 있을 때만(TOOL_ALLOWLIST_COL 머리말).
+    //  #1639 app_server_own 칸도 같은 까닭으로 그 작업일 때만 적는다(APP_SERVER_OWN_COL 머리말). effort 칸도 값을 준 작업일 때만(EFFORT_COL 머리말).
     const shared = j.sharedSeat === true;
+    const appServerOwn = j.appServerOwn === true;
     const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
-    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instr != null ? `, ${APP_INSTRUCTIONS_COL}` : ""}`;
-    const extraVals = `${shared ? ", true" : ""}${instr != null ? ", $16" : ""}`;
+    const mcpOnly = j.mcpOnly === true;
+    const tools = Array.isArray(j.toolAllowlist) ? JSON.stringify(j.toolAllowlist) : null;
+    const effort = j.effort ? j.effort : null;
+    //  더하는 칸의 값 — 아래 VALUES 의 $1..$15 뒤에 넣는 차례대로 자리 번호를 받는다(칸 차례와 값 차례가 같게 한 자리에서).
+    const extra: string[] = [];
+    const param = (v: string): string => { extra.push(v); return `$${15 + extra.length}`; };
+    const instrRef = instr != null ? param(instr) : null;
+    const toolsRef = tools != null ? param(tools) : null;
+    const effortRef = effort != null ? param(effort) : null;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${appServerOwn ? `, ${APP_SERVER_OWN_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}${effortRef ? `, ${EFFORT_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${appServerOwn ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}${effortRef ? `, ${effortRef}` : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
                                  resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15${extraVals}) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, ...(instr != null ? [instr] : [])]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, ...extra]);
     return { row: norm(rows[0])! };
   });
 }
@@ -178,18 +213,97 @@ export async function agentJobAppInstructions(id: number): Promise<string | null
 }
 
 /**
+ * 작업별 라이블리 도구 허용 목록(org_agent_job.tool_allowlist)도 COLS 에 넣지 않고 따로 읽는다(agentJobToolAllowlist) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  목록이 있는 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 목록을 실은 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 앱 동의 전체로 돌지 않는다(닫힌 쪽). 부르는 쪽이 503 으로 다시 보내라고 한다.
+ *  칸의 값이 글 배열이 아니면(손상) 빈 목록 — 아무 도구도 허락하지 않는다(닫힌 쪽). 칸의 JSON null 은 SQL NULL 과 같이 읽혀 «좁히지 않음» 이다
+ *  (쓰는 쪽은 배열만 적는다). 잘못된 id 도 null 이다 — 부르는 쪽은 모두 DB 에서 읽은 작업 행의 id 를 넘긴다(형제 함수들과 같다).
+ */
+export const TOOL_ALLOWLIST_COL = "tool_allowlist";
+export async function agentJobToolAllowlist(id: number): Promise<string[] | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await q(itemsPool, `SELECT ${TOOL_ALLOWLIST_COL} AS t FROM org_agent_job WHERE id=$1`, [id]);
+    const t = r[0]?.t;
+    if (t == null) return null;
+    return Array.isArray(t) && t.every((x) => typeof x === "string") ? (t as string[]) : [];
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * 하네스 생각 깊이(org_agent_job.effort)도 COLS 에 넣지 않고 따로 읽는다(agentJobEffort) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  값을 준 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 effort 를 실은 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 말없이 기본 깊이로 돌지 않는다. 부르는 쪽이 503 으로 다시 보내라고 한다.
+ *  칸의 값이 EFFORT_LEVELS 밖이면(손상 · 이 판이 모르는 값) 던진다 — 판이 뜰 때면 그 작업은 돌지 않고(service.onBoot), 이어받기 · 형식 재시도는
+ *  그 깊이를 모른 채 잇지 않는다. 잘못된 id 는 null 이다(형제 함수들과 같다).
+ */
+export const EFFORT_COL = "effort";
+export async function agentJobEffort(id: number): Promise<Effort | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  let v: unknown;
+  try {
+    v = (await q(itemsPool, `SELECT ${EFFORT_COL} AS e FROM org_agent_job WHERE id=$1`, [id]))[0]?.e;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+  if (v == null) return null;
+  if (!isEffort(v)) throw new Error(`작업 #${id} 의 effort 값이 형식 밖입니다: ${JSON.stringify(v).slice(0, 40)} — ${EFFORT_LEVELS.join(" · ")} 중 하나`);
+  return v;
+}
+
+/**
+ * #1639 앱 서버의 본인 구독 표시(org_agent_job.app_server_own)도 COLS 에 넣지 않고 따로 읽는다(agentJobAppServerOwn) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  그 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) false 다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 그런 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다(닫힌 쪽) — 부르는 쪽이 503 으로 다시 보내라고 한다.
+ */
+export const APP_SERVER_OWN_COL = "app_server_own";
+export async function agentJobAppServerOwn(id: number): Promise<boolean> {
+  if (!Number.isSafeInteger(id) || id < 1) return false;
+  try {
+    const r = await q(itemsPool, `SELECT ${APP_SERVER_OWN_COL} AS own FROM org_agent_job WHERE id=$1`, [id]);
+    return r[0]?.own === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * «라이블리 MCP 만» 표시(org_agent_job.mcp_only)도 COLS 에 넣지 않고 따로 읽는다(agentJobMcpOnly) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  MCP 만 쓰는 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) false 다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 그런 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 내장 도구를 연 채 돌지 않는다(닫힌 쪽). 부르는 쪽이 503 으로 다시 보내라고 한다.
+ */
+export const MCP_ONLY_COL = "mcp_only";
+export async function agentJobMcpOnly(id: number): Promise<boolean> {
+  if (!Number.isSafeInteger(id) || id < 1) return false;
+  try {
+    const r = await q(itemsPool, `SELECT ${MCP_ONLY_COL} AS m FROM org_agent_job WHERE id=$1`, [id]);
+    return r[0]?.m === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
  * #5101 API 키 작업의 대화 기록(org_agent_job.transcript · transcript_conv · transcript_bytes) — 판이 끝에 올린 하네스 대화 파일(gzip)과 그 대화 id.
  *  그 대화를 이어받는 API 키 작업의 첫 말(onBoot)에 돌려준다(빈 설정 폴더에 되돌려 놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말).
  *  SHARED_SEAT_COL 과 같은 까닭(롤 창)으로 COLS 에 넣지 않고 따로 읽고 쓴다 — 칸이 아직 없으면(42703) 적지 않고(false) · 없는 것으로 읽는다(null).
- *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남으므로 적지 않는다(account_kind 조건). 도는 중일 때만 · 한 번만 적는다(판은 결과보다 먼저 한 번
+ *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남으므로 적지 않는다(account_kind 조건) — #5082 도커 실행면은 그 계정의 projects/ 를 작업마다 덮어
+ *  대화가 홈에 남지 않으니 부르는 쪽이 o.subscription 으로 알린다. 도는 중일 때만 · 한 번만 적는다(판은 결과보다 먼저 한 번
  *  올린다 — 같은 비밀로 되풀이해 큰 본문을 다시 쓰게 하지 않는다 · 격리 리뷰).
  */
 const undefinedColumn = (e: unknown): boolean => (e as { code?: string })?.code === "42703";
-export async function setAgentJobTranscript(id: number, conv: string, gz: Buffer, rawBytes: number): Promise<boolean> {
+export async function setAgentJobTranscript(id: number, conv: string, gz: Buffer, rawBytes: number, o: { subscription?: boolean } = {}): Promise<boolean> {
   try {
+    //  구독 작업은 o.subscription(#5082 도커 실행면 — 대화가 홈에 남지 않는다)일 때만 적는다.
     const r = await q(itemsPool,
       `UPDATE org_agent_job SET transcript=$2, transcript_conv=$3, transcript_bytes=$4, updated_at=now()
-        WHERE id=$1 AND status='running' AND account_kind='api_key' AND transcript IS NULL RETURNING id`, [id, gz, conv, rawBytes]);
+        WHERE id=$1 AND status='running' AND (account_kind='api_key' OR (account_kind='subscription' AND $5::boolean)) AND transcript IS NULL RETURNING id`, [id, gz, conv, rawBytes, o.subscription === true]);
     return r.length > 0;
   } catch (e) {
     if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)
@@ -219,6 +333,33 @@ export async function agentJobTranscriptConv(id: number): Promise<string | null>
     throw e;
   }
 }
+
+/**
+ * 도구 호출 단계(org_agent_job.steps — 판이 박동 · 결과에 싣는 plan.AgentJobStep 목록)도 COLS 에 넣지 않고 따로 읽고 쓴다 — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  칸이 아직 없으면(42703) 적지 않고(false) · 없는 것으로 읽는다(null). 도는 작업에만 적는다 — 결과 보고는 끝내기 전에 적어, 끝난 작업의 단계는 바뀌지 않는다.
+ */
+export const STEPS_COL = "steps";
+export async function setAgentJobSteps(id: number, steps: AgentJobStep[]): Promise<boolean> {
+  try {
+    const r = await q(itemsPool, `UPDATE org_agent_job SET ${STEPS_COL}=$2::jsonb, updated_at=now() WHERE id=$1 AND status='running' RETURNING id`, [id, JSON.stringify(steps)]);
+    return r.length > 0;
+  } catch (e) {
+    if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+/** 그 작업의 도구 호출 단계 — 판이 아직 보내지 않았거나(옛 판 · 도구를 안 씀) 없는 작업이면 null. */
+export async function agentJobSteps(id: number): Promise<AgentJobStep[] | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const v = (await q(itemsPool, `SELECT ${STEPS_COL} AS s FROM org_agent_job WHERE id=$1`, [id]))[0]?.s;
+    return Array.isArray(v) ? v as AgentJobStep[] : null;
+  } catch (e) {
+    if (undefinedColumn(e)) return null;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
 /**
  * 보존 기간(정책 transcript_keep_days)이 지난 대화 기록을 비운다 — 행은 남는다(행째 지우기는 keep_days · pruneAgentJobs). 돌려주는 것: 비운 행 수.
  *  끝난 작업만(도는 작업의 기록은 끝난 뒤에야 센다). keepDays 0 = 보관 안 함 — 끝난 작업의 기록을 모두 비운다(관리자가 보관을 끈 뒤 남은 것). 음수는 아무것도 안 한다.

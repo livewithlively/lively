@@ -25,7 +25,7 @@ const agentJobRunInput = {
   timeout_min: z.number().int().positive().optional().describe("실행 시간 상한(분) — 생략하면 워크스페이스 기본, 넘으면 최대로 접는다"),
   model: z.string().max(64).optional().describe("하네스 모델(sonnet·opus·haiku 또는 전체 id). 생략하면 그 사람 기본"),
   label: z.string().optional().describe(`짧은 이름(목록에 보인다). ${softCapHint(SOFT_CAPS.agent_job_run!.label!)}`),
-  resume_job_id: z.number().int().positive().optional().describe("이 끝난 작업의 대화를 이어받는다(갈라서 잇는다 — 새 대화 id · 앞 작업의 대화는 그대로 · 같은 사람·같은 앱 · 작업 폴더도 그 작업 것)"),
+  resume_job_id: z.number().int().positive().optional().describe("이 끝난 작업의 대화를 이어받는다(갈라서 잇는다 — 새 대화 id · 앞 작업의 대화는 그대로 · 같은 사람·같은 앱 · 작업 폴더도 그 작업 것 · 앞 작업이 «라이블리 MCP 만»(앱 ai.mcp_only)이었으면 이 작업도 내장 도구 없이 돈다 · 앞 작업에 도구 허용 목록(앱 ai.tools)이 있었으면 이 작업의 라이블리 토큰도 그 목록으로 좁혀진다 · 앞 작업에 생각 깊이(앱 AI 실행의 effort)가 있었으면 이 작업도 그 깊이로 돈다)"),
 };
 
 const agentJobRun: Capability = {
@@ -35,7 +35,7 @@ const agentJobRun: Capability = {
   description:
     "에이전트 작업을 별도 작업 컨테이너에서 돌린다(사람 세션이 없어도 돈다) — **보낸 사람 본인으로**(본인 Claude 구독·홈) 돈다. 작업 폴더는 project_id 또는 app_id(앱 화면이면 그 앱 폴더). " +
     "곧바로 {id,status} 를 돌려준다 — 결과는 agent_job_get. 동시 상한을 넘으면 기다리고 대기열이 차면 429. " +
-    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드와, 관리자가 켠 셀프호스트 박스(LIVELY_AGENT_JOBS=host)에서 돈다 — 그 밖은 501.",
+    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드와, 관리자가 켠 셀프호스트 박스(LIVELY_AGENT_JOBS=docker · host)에서 돈다 — 그 밖은 501.",
   scope: "context",
   input: agentJobRunInput,
   expose: {
@@ -59,7 +59,7 @@ const agentJobGet: Capability = {
   name: "agent_job_get",
   title: "에이전트 작업 보기",
   description: "에이전트 작업 하나의 상태·결과 — status(queued·starting·running·done·failed·timeout·canceled) · result(text·is_error·num_turns·cost_usd·usage) · error · " +
-    "output_tail(진행 요지) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
+    "output_tail(진행 요지) · steps(도구 호출 — [{id, name, input(앞 160자), started_at, ended_at, is_error}] · 최근 200개 · 도구 결과 글은 없다) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
   scope: "context",
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/agent-jobs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },
@@ -119,9 +119,9 @@ const agentJobLimits: Capability = {
   description: "작업 컨테이너의 워크스페이스 상한 — max_running(동시) · max_running_per_member(실행 계정당 동시 — 공용 시트 작업은 보낸 사람당) · " +
     "max_running_per_service_seat(공용 시트 하나로 동시 — #5081 · 안 적으면 기본값을 max_running 으로 접는다) · max_queued(대기열) · queue_wait_min(대기 상한) · " +
     "default_timeout_min · max_timeout_min(실행 시간) · silent_sec(판 무응답) · start_timeout_sec(시작 상한) · keep_days(끝난 작업 기록 보존 일수 — 지나면 행째 지움 · 0 = 무기한 · 앱 AI 실행 기록은 따로 남음) · " +
-    "transcript_keep_days(API 키 작업의 대화 기록 보관 일수 — 앱 AI 실행 이어받기 · 형식 재시도용 · 그 작업 AI 가 읽은 글이 다 들어 있다 · 지나면 기록만 비움 · 0 = 보관 안 함) · " +
-    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트 격리 박스에서 cgroup 으로 건다 · 걸 수 없으면 그 작업을 띄우지 않는다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
-    "surface 는 이 배포의 실행면(broker 매니지드 · host 셀프호스트 박스 위 · none 못 띄움 — unavailable 에 까닭) · 박스 위 판의 계정(runs_as member · gateway) · 메모리 상한을 실제로 거는지다. " +
+    "transcript_keep_days(API 키 작업 · 도커 실행면 구독 작업의 대화 기록 보관 일수 — 앱 AI 실행 이어받기 · 형식 재시도용 · 그 작업 AI 가 읽은 글이 다 들어 있다 · 지나면 기록만 비움 · 0 = 보관 안 함) · " +
+    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트에서 건다: 박스 위는 격리 박스의 cgroup · 도커는 컨테이너 메모리(스왑 없이) · 걸 수 없으면 그 작업을 띄우지 않는다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
+    "surface 는 이 배포의 실행면(broker 매니지드 · docker 셀프호스트 작업마다 컨테이너 · host 셀프호스트 박스 위 · none 못 띄움 — unavailable 에 까닭) · 셀프호스트 작업의 계정(runs_as member · gateway) · 메모리 상한을 실제로 거는지다. " +
     "고치기는 관리자 agent_job_limits_set. 구성원 누구나.",
   scope: null,
   input: {},

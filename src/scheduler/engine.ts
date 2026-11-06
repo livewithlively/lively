@@ -8,7 +8,7 @@
 //  R16: 액션 구현·프롬프트는 registry.ts(선언+run 합류)·actions/* 로 — 여기는 틱·due 판정·실행 기록만(액션명 분기 없음).
 import { itemsPool, q } from "../db/client.js";
 import { parseCron, nextCronTime } from "./cron-expr.js";
-import { cronDue } from "./cron-due.js";
+import { cronDue, runOnceDue } from "./cron-due.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 cron 벽시계 = 조직 시간대(서버 로컬 TZ 아님)
 import { CRON_ACTIONS, type CronJob } from "./registry.js";
 import { cronBreakerDecision } from "./cron-breaker.js";
@@ -79,6 +79,12 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
     let res: { status: string; summary: unknown };
     try { res = await runJob(job); }
     catch (e) { res = { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
+    //  (#5235) 실행하지 않았다 — 증류 줄에서 차례를 못 얻었다. 위 `running` 의 건너뜀과 같은 뜻이라 기록하지 않는다.
+    //   기록하면 1회성이 한 번도 안 돌고 꺼지고, 주기 잡은 한 주기를 통째로 잃는다. 잡은 due 로 남아 다음 틱이 다시 본다.
+    if (res.status === "deferred") {
+      logger.info({ job: job.id, action: job.action }, "증류 줄이 막혀 이번엔 돌지 않았다 — 다음 틱이 다시 본다");
+      return { status: "skipped", summary: res.summary };
+    }
     const nextIso = computeNextRun(job, await orgTimezone());
     // #1675 ④ — 연속 실패 서킷 브레이커. 판정은 순수 함수(cron-breaker)가, 기록은 여기가 한다.
     //  임계가 컬럼에 없으면(구 DB) 기본 5 로 본다 — 스키마 마이그레이션 전에도 보호가 걸리게.
@@ -107,7 +113,8 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
 
 // 잡이 지금 due 인가 — cron_expr(절대) 또는 interval_sec(상대). tz(#778) = cron 벽시계 기준 = 조직 시간대.
 function isDue(job: CronJob, now: number, tz: string): boolean {
-  if (job.run_once) return !job.last_run_at; // 1회성 — 아직 안 돌았으면 due(다음 틱 실행), 실행되면 executeAndRecord 가 비활성화
+  //  1회성 — 시각이 있으면 저장 뒤 첫 매치에, 없으면 다음 틱에. 실행되면 executeAndRecord 가 비활성화.
+  if (job.run_once) return runOnceDue({ expr: job.cron_expr, lastRunAt: job.last_run_at, savedAt: job.updated_at, now, tz });
   //  절대(벽시계): «마지막 실행 이후 첫 매치가 지났나»(#3994 T4 · cron-due.ts).
   //   종전엔 «지금이 매치 분인가» 였는데 그건 30초 틱을 전제한 판정이라, 매니지드의 5분 격자 틱
   //   (CP 가 HTTP 로 부른다 — web.ts:115)에서 `30 4 * * *` 같은 잡이 그 분을 영영 못 만났다(실측 10일).
@@ -159,10 +166,12 @@ async function tick(): Promise<void> {
 }
 
 // 즉시 실행(온디맨드 'refresh now') — cron_run_now capability 가 호출. 스케줄과 무관하게 1회.
-export async function runCronById(id: string): Promise<{ status: string; summary: unknown }> {
+//  params(#5235) — **이번 1회에만** 잡 params 위에 얹는 값이다. 잡 행은 바꾸지 않는다.
+export async function runCronById(id: string, params?: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const rows = await q(itemsPool, `SELECT * FROM org_cron WHERE id=$1`, [id]);
   if (!rows.length) return { status: "error", summary: { error: "no such cron job: " + id } };
-  return executeAndRecord(rows[0]);
+  const job = rows[0] as CronJob;
+  return executeAndRecord(params ? { ...job, params: { ...(job.params ?? {}), ...params } } : job);
 }
 
 let timer: NodeJS.Timeout | null = null;

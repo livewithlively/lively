@@ -103,7 +103,7 @@ export type { ManagerRow, ManagerKind, ManagerUpsertInput, FindingRow } from "./
 // ── 자동 인입 라인(org_ingest_policy · org_distiller · 게이트 관측) ──
 export {
   listIngestPolicies, upsertIngestPolicy, removeIngestPolicy,
-  pickDistillerField, upsertDistiller, removeDistiller, recordDistillerRun,
+  pickDistillerField, upsertDistiller, saveDistiller, removeDistiller, recordDistillerRun,
   ingestObservability,
 } from "./store/ingest.js";
 export type {

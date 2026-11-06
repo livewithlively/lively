@@ -13,8 +13,8 @@ import {
   enqueueAgentJob, publicJob,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
-import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX } from "./plan.js";
-import { MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE, SYSTEM_PROMPT_PLACEHOLDER } from "./runner.js";
+import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX, STEP_INPUT_MAX, STEPS_MAX, type AgentJobStep } from "./plan.js";
+import { EFFORT_LEVELS, MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE, SYSTEM_PROMPT_PLACEHOLDER, type Effort } from "./runner.js";
 import { hashJobSecret, secretMatches, type AgentJobRow, type NewAgentJob } from "./store.js";
 import { DEFAULT_AGENT_JOB_POLICY, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
@@ -38,6 +38,8 @@ interface World {
   launched: Array<{ id: number; boot: string; sid: string | null }>;
   killed: string[];
   minted: number[];
+  /** 작업 토큰 굽기에 넘어간 도구 상한(부를 때마다 · 작업 번호와 함께) — 판이 뜰 때 작업 행의 목록이 상한으로 가는지 본다(도구 허용 목록 T19). */
+  mintCeilings: Array<{ id: number; toolCeiling: readonly string[] | null }>;
   revoked: string[];
   later: Array<{ fn: () => Promise<unknown>; ms: number }>;
   setNow(ms: number): void;
@@ -76,6 +78,10 @@ interface World {
   /** #5101 API 키 작업의 대화 기록(COLS 밖 칸 — 행 모양에 없다) · 기록 정리가 넘긴 보존 일수들. */
   transcripts: Map<number, { conv: string; gz: Buffer; raw: number }>;
   prunedTranscriptsWith: number[];
+  /** 도구 호출 단계(COLS 밖 칸 — 행 모양에 없다) · 적기 · 읽기가 던지나. */
+  steps: Map<number, AgentJobStep[]>;
+  stepsWriteThrows: boolean;
+  stepsReadThrows: boolean;
   drain(maxMs?: number): Promise<void>;
 }
 /** 가짜 작업 토큰 해시 — 진짜처럼 64자 16진(작업 토큰 판별이 앞자리로 대조한다). */
@@ -214,12 +220,23 @@ function world(): World {
       if (w.policyRowError) throw new Error("db 가 잠깐 막혔다");
       return { ...w.policy };
     },
-    //  #5101 실 SQL(store.setAgentJobTranscript)의 조건을 흉내 낸다 — 도는 API 키 작업만 · 한 번만(조건 자체는 store.pg-test 블록 TR).
-    async setAgentJobTranscript(id, conv, gz, raw) {
+    //  #5101 실 SQL(store.setAgentJobTranscript)의 조건을 흉내 낸다 — 도는 API 키 작업만(#5082 o.subscription 이면 구독 작업도) · 한 번만(조건 자체는 store.pg-test 블록 TR).
+    async setAgentJobTranscript(id, conv, gz, raw, o) {
       const r = rows.get(id);
-      if (!r || r.status !== "running" || r.account_kind !== "api_key" || w.transcripts.has(id)) return false;
+      if (!r || r.status !== "running" || (r.account_kind !== "api_key" && o?.subscription !== true) || w.transcripts.has(id)) return false;
       w.transcripts.set(id, { conv, gz, raw });
       return true;
+    },
+    //  실 SQL(store.setAgentJobSteps)의 조건을 흉내 낸다 — 도는 작업에만(조건 자체는 store.pg-test 블록 I5).
+    async setAgentJobSteps(id, steps) {
+      if (w.stepsWriteThrows) throw new Error("db 가 잠깐 막혔다");
+      if (rows.get(id)?.status !== "running") return false;
+      w.steps.set(id, steps);
+      return true;
+    },
+    async agentJobSteps(id) {
+      if (w.stepsReadThrows) throw new Error("db 가 잠깐 막혔다");
+      return w.steps.get(id) ?? null;
     },
     async agentJobTranscript(id) { const x = w.transcripts.get(id); return x ? { conv: x.conv, gz: x.gz } : null; },
     async agentJobTranscriptConv(id) { return w.transcripts.get(id)?.conv ?? null; },
@@ -232,10 +249,11 @@ function world(): World {
     },
   };
   Object.assign(w, {
-    rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
+    rows, launched: [], killed: [], minted: [], mintCeilings: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
     mintError: null, onMint: null, beforeFinish: null, beforeFailBoot: null, policyRowError: false, claims: 0, claimSeats: [], inserted: [], sharedSeats: new Set<string>(), listening: 0, bootRace: false, available: true,
     policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(), prunedWith: [],
     transcripts: new Map(), prunedTranscriptsWith: [],
+    steps: new Map(), stepsWriteThrows: false, stepsReadThrows: false,
     setNow: (ms: number) => { now = ms; },
   });
   w.deps = {
@@ -253,8 +271,9 @@ function world(): World {
       if (job.app_id && !w.usable.has(`${job.account_member}:${job.app_id}`)) throw new HttpError(403, `앱 '${job.app_id}' 사용 동의(grant)가 없습니다`);
     },
     listeningSince: () => w.listening,
-    mintMcpToken: async (job) => {
+    mintMcpToken: async (job, opts) => {
       w.minted.push(job.id);
+      w.mintCeilings.push({ id: job.id, toolCeiling: opts.toolCeiling });
       w.onMint?.(job.id);
       if (w.mintError) throw new HttpError(403, w.mintError);
       return { token: `tok-${job.id}`, tokenHash: tokHash(job.id) };
@@ -265,6 +284,9 @@ function world(): World {
     later: (fn, ms) => { w.later.push({ fn, ms }); },
     workspaceSlug: () => "acme-1234",
     sharedSeats: async () => { if (w.sharedSeats === "error") throw new Error("설정을 못 읽었다(가짜)"); return w.sharedSeats; },
+    jobMcpOnly: async () => false,   // 작업 행의 «MCP 만» 값(필수 의존성) — 기본은 종전 작업. 필요한 시험이 덮어 쓴다.
+    jobToolAllowlist: async () => null,   // 작업 행의 도구 허용 목록(필수 의존성) — 기본은 종전 작업(목록 없음). 필요한 시험이 덮어 쓴다.
+    jobEffort: async () => null,   // 작업 행의 생각 깊이(필수 의존성) — 기본은 종전 작업(하네스 기본). 필요한 시험이 덮어 쓴다.
     hex8: () => (++hex).toString(16).padStart(8, "0"),
     now: () => now,
   };
@@ -529,6 +551,55 @@ await t("박동 — 비밀이 맞을 때만 · 진행 꼬리·대화 id 를 싣�
   assert.equal(w.rows.get(id)!.conversation_id, "0a1b2c3d-0000-4000-8000-000000000001");
   await w.deps.store.requestCancelAgentJob(id);
   assert.deepEqual(await onTick(id, job.secret, {}, w.deps), { cancel: true });
+});
+
+await t("ST2 도구 호출 단계 — 박동 · 결과가 판이 보낸 단계를 걸러 적고(안 보내면 · 비었으면 그대로) · 결과는 끝내기 전에 적는다 · 본인 하나 보기에만 싣는다 · 판에 상한을 넘긴다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.equal((job as any).stepsMax, STEPS_MAX);
+  assert.equal((job as any).stepInputMax, STEP_INPUT_MAX);
+  const s1 = { id: "toolu_1", name: "mcp__lively__knowledge_search", input: "{\"q\":\"x\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false };
+  await onTick(id, job.secret, { tail: "진행", steps: [s1, { name: "", started_at: "x" }] }, w.deps);
+  assert.deepEqual(w.steps.get(id), [s1], "모양이 틀린 단계는 버린다");
+  await onTick(id, job.secret, { tail: "진행 2" }, w.deps);
+  assert.deepEqual(w.steps.get(id), [s1], "단계를 안 보낸 박동(옛 판)은 저장된 단계를 덮지 않는다");
+  await onTick(id, job.secret, { tail: "진행 3", steps: [] }, w.deps);
+  assert.deepEqual(w.steps.get(id), [s1], "빈 단계는 적을 것이 없다");
+  const done1 = { ...s1, ended_at: "2026-11-02T08:00:01.500Z" };
+  await onResult(id, job.secret, { exit_code: 0, result: { text: "답", is_error: false }, steps: [done1] }, w.deps);
+  assert.deepEqual(w.steps.get(id), [done1], "결과의 단계는 끝내기 전에 적는다 — 끝난 작업엔 적기가 막힌다(가짜 · 실 SQL 모두 도는 작업에만)");
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "done");
+  assert.ok(!("steps" in row), "행 모양에는 없다(COLS 밖 — store.STEPS_COL)");
+  const mine = await getAgentJobFor(id, human("alice"), w.deps);
+  assert.deepEqual(mine.steps, [done1], "본인 하나 보기에 싣는다");
+  assert.ok(!("steps" in (await getAgentJobFor(id, human("root", ["context", "admin"]), w.deps))), "남(관리자)에게는 싣지 않는다");
+  assert.ok(!("steps" in publicJob(row, { own: true })), "읽지 않은 자리(접수 · 취소 응답)는 칸을 싣지 않는다 — 빈 배열로 거짓말하지 않는다");
+  assert.ok(!("steps" in publicJob(row, { own: false, steps: [done1] })), "남에게는 넘겨도 싣지 않는다");
+  assert.deepEqual(publicJob(row, { own: true, steps: null }).steps, [], "단계가 없으면 빈 배열");
+});
+
+await t("ST2b 단계는 곁기록이다 — 못 적어도 박동 · 결과가 그대로 가고(답이 사라지지 않는다) · 못 읽어도 하나 보기가 된다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  const s = { id: "toolu_1", name: "Read", input: "", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false };
+  const warned: string[] = [];
+  const warn = logger.warn;
+  (logger as { warn: unknown }).warn = (_o: unknown, m: string) => { warned.push(m); };
+  try {
+    w.stepsWriteThrows = true;
+    assert.deepEqual(await onTick(id, job.secret, { tail: "진행", steps: [s] }, w.deps), { cancel: false });
+    assert.equal(w.rows.get(id)!.output_tail, "진행");
+    const out = await onResult(id, job.secret, { exit_code: 0, result: { text: "답", is_error: false }, steps: [s] }, w.deps);
+    assert.deepEqual(out, { ok: true, status: "done" });
+    assert.equal((w.rows.get(id)!.result as { text?: string })?.text, "답");
+    assert.equal(w.steps.has(id), false);
+    assert.equal(warned.filter((m) => /단계를 적지 못했다/.test(m)).length, 2, "못 적은 사실은 로그에 남긴다");
+  } finally { (logger as { warn: unknown }).warn = warn; }
+  w.stepsReadThrows = true;
+  assert.deepEqual((await getAgentJobFor(id, human("alice"), w.deps)).steps, [], "못 읽으면 빈 배열");
 });
 
 await t("X2 결과 — 끝 상태와 답을 적고, 걷기는 조금 뒤(kill · 토큰 폐기), 다음 대기 작업을 띄운다", async () => {
@@ -1138,7 +1209,7 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
 async function endedJob(w: World, prompt: string, endedAgoDays: number): Promise<number> {
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
-    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false, sharedSeat: false,
+    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
   }, { ...w.policy, max_queued: 500 });
   assert.ok("row" in r);
   const row = w.rows.get(r.row.id)!;
@@ -1260,7 +1331,7 @@ await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(
   const w = world();
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true, sharedSeat: false,
+    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
   }, w.policy, w.deps);
   assert.equal(row.homeless, true);
   assert.equal(publicJob(row, { own: true }).homeless, true);
@@ -1273,7 +1344,7 @@ await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(
 await t("SS1 공용 시트(#5081) — 배차가 시트 묶음을 자리 주기에 넘긴다(보낸 사람당 + 시트 전체) · 못 읽으면 빈 묶음 · 사람 도구 접수는 표시 false", async () => {
   const shared = (requester: string): NewAgentJob => ({
     requester, accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: `${requester} 의 질문`, resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true,
+    model: null, label: null, prompt: `${requester} 의 질문`, resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
   });
   const w = world();
   w.policy = { ...w.policy, max_running: 4, max_running_per_member: 1, max_running_per_service_seat: 2 };
@@ -1304,7 +1375,7 @@ await t("SS2 공용 시트(#5081) 작업 보기 — 시트 계정(구독 주인)
   const w = world();
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "앨리스의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true,
+    model: null, label: null, prompt: "앨리스의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
   }, w.policy);
   assert.ok("row" in r);
   const id = r.row.id;
@@ -1319,7 +1390,7 @@ await t("SS2 공용 시트(#5081) 작업 보기 — 시트 계정(구독 주인)
   //  공용 시트가 아닌 구독(초대받은 사람이 주인 세션에서 보냄)은 주인이 여전히 보고 끊는다.
   const inv = await w.deps.store.insertAgentJob({
     requester: "bob", accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "밥의 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false,
+    model: null, label: null, prompt: "밥의 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
   }, { ...w.policy, max_queued: 50 });
   assert.ok("row" in inv);
   assert.equal((await getAgentJobFor(inv.row.id, human("seat"), w.deps)).status, "queued", "공용 시트가 아닌 구독 주인은 본다");
@@ -1373,7 +1444,7 @@ async function keyJob(w: World, o: { account?: "api_key" | "subscription"; resum
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: account, accountMember: account === "subscription" ? "alice" : null, appId: null, projectId: 1, cwd: "/work/shared/project/1",
     harness: "claude", model: null, label: null, prompt: "일", resumeConversation: o.resumeConv ?? null, resumeJobId: o.resumeJobId ?? null, timeoutSec: 900,
-    homeless: false, sharedSeat: false,
+    homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
   }, w.policy, w.deps);
   await w.drain(0);
   return { id: row.id, boot: w.launched.find((x) => x.id === row.id)!.boot };
@@ -1455,6 +1526,61 @@ await t("T5~T8(#5101) 판의 대화 기록 보고 — 비밀 틀림 401 · gzip 
   await assert.rejects(onTranscript(job.id, b.secret, body, CONV_A, w.deps), httpErr(410));
 });
 
+await t("B4(#5082) 도커 실행면의 구독 작업 — projects/ 를 작업마다 덮어 대화가 홈에 남지 않는다: 올리기 켜짐 · 이어받으면 보관한 기록을 돌려준다 · 없으면 돌리지 않는다 · 받는 문은 구독 작업도 받는다", async () => {
+  const w = world();
+  w.deps.subscriptionTranscripts = true;
+  const first = await keyJob(w, { account: "subscription" });
+  const fj = await onBoot(first.id, first.boot, w.deps);
+  assert.equal(fj.transcriptMax, TRANSCRIPT_GZ_MAX, "구독 작업도 끝에 대화 기록을 올린다");
+  assert.equal(fj.transcriptRawMax, TRANSCRIPT_RAW_MAX);
+  assert.equal(fj.transcript, undefined, "새 대화는 되돌릴 기록이 없다");
+  assert.deepEqual(await transcriptGate(first.id, fj.secret, w.deps), { take: true }, "받는 문이 구독 작업도 받는다");
+  assert.deepEqual(await onTranscript(first.id, fj.secret, gz('{"type":"user"}\n'), CONV_A, w.deps), { ok: true, stored: true });
+  await w.deps.store.finishAgentJob(first.id, { status: "done", error: null, conversationId: CONV_A });
+  const next = await keyJob(w, { account: "subscription", resumeJobId: first.id, resumeConv: CONV_A });
+  const nj = await onBoot(next.id, next.boot, w.deps);
+  assert.equal(nj.transcript?.conv, CONV_A, "형식 재시도 · 앱의 이어받기는 보관한 그 대화를 되돌려 잇는다");
+  assert.equal(zlibSync.gunzipSync(Buffer.from(nj.transcript!.gz, "base64")).toString("utf8"), '{"type":"user"}\n');
+  const i = nj.argv.indexOf("--resume");
+  assert.ok(i > 0 && nj.argv[i + 1] === CONV_A && nj.argv[i + 2] === "--fork-session");
+  //  기록이 없으면 — 홈에도 없으니 돌리지 않는다(하네스가 «대화 없음» 으로 죽기 전에 까닭을 남긴다).
+  const lone = await keyJob(w, { account: "subscription" });
+  await onBoot(lone.id, lone.boot, w.deps);
+  await w.deps.store.finishAgentJob(lone.id, { status: "done", error: null, conversationId: CONV_B });
+  const orphan = await keyJob(w, { account: "subscription", resumeJobId: lone.id, resumeConv: CONV_B });
+  await assert.rejects(onBoot(orphan.id, orphan.boot, w.deps), httpErr(410));
+  assert.match(w.rows.get(orphan.id)!.error!, /이어받을 대화 기록이 없습니다/);
+  //  끄면 종전 그대로(B3 와 같다) — 받는 문도 구독 작업은 안 받는다.
+  w.deps.subscriptionTranscripts = false;
+  const off = await keyJob(w, { account: "subscription" });
+  const ob = await onBoot(off.id, off.boot, w.deps);
+  assert.equal(ob.transcriptMax, undefined);
+  assert.deepEqual(await transcriptGate(off.id, ob.secret, w.deps), { take: false });
+  assert.deepEqual(await onTranscript(off.id, ob.secret, gz("x"), CONV_A, w.deps), { ok: true, stored: false });
+});
+
+await t("V1b(#5082) 사람 도구의 이어받기 — 구독 작업의 기록 자리를 덮는 실행면(도커)이면 게이트웨이가 보관한 그 대화 기록이 있어야 접수한다(없거나 다른 대화면 409 — 띄운 뒤 부트에서야 실패하지 않게) · 끄면 종전대로(대화가 홈에 남는다)", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  w.policy = { ...w.policy, max_running: 5, max_running_per_member: 5 };
+  w.deps.subscriptionTranscripts = true;
+  const a = await submitAgentJob({ prompt: "처음" }, appUser("alice", "memo"), w.deps, UI);
+  const id = a.id as number;
+  Object.assign(w.rows.get(id)!, { status: "done", conversation_id: CONV_A });
+  const before = w.rows.size;
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI), httpErr(409, /이어받을 대화 기록이 없습니다.*transcript_keep_days/));
+  w.transcripts.set(id, { conv: CONV_B, gz: gz("x"), raw: 1 });
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI), httpErr(409, /이어받을 대화 기록이 없습니다/));
+  assert.equal(w.rows.size, before, "접수하지 않았다(행 없음)");
+  w.transcripts.set(id, { conv: CONV_A, gz: gz("x"), raw: 1 });
+  const b = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(b.id as number)!.resume_job_id, id);
+  w.deps.subscriptionTranscripts = false;
+  w.transcripts.delete(id);
+  const c = await submitAgentJob({ prompt: "또", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(c.id as number)!.resume_conversation, CONV_A, "끄면 기록 없이 접수(종전)");
+});
+
 await t("P1(#5101) 대화 기록 정리 — transcript_keep_days(기본 14)로 기록만 비운다 · keep_days 0(행 무기한)이어도 돈다 · 0(보관 안 함)이면 끝난 작업의 기록을 다 비운다", async () => {
   const w = world();
   const old = await endedJob(w, "20일 전", 20);
@@ -1492,6 +1618,429 @@ await t("G1(#5101) 대화 기록 받기 전 문 — 비밀 틀림 401 · 끝난 
   assert.deepEqual(await transcriptGate(job.id, b.secret, w.deps), { take: false }, "이미 받음");
   await w.deps.store.finishAgentJob(job.id, { status: "done", error: null });
   await assert.rejects(transcriptGate(job.id, b.secret, w.deps), httpErr(410));
+});
+
+// ══ 앱 AI 작업의 «라이블리 MCP 만»(매니페스트 ai.mcp_only) — 판이 뜰 때 하네스 인자(사양 S17 · S18 · S20~S23) · 사람이 보내는 작업의 이어받기(S24) ══
+//  값은 접수 때 작업 행에 실렸다 — 판이 뜰 때는 그 행의 값(jobMcpOnly)만 읽는다.
+//  이게 틀리면: «MCP 만» 작업이 셸 · 파일 · 웹을 연 채 돌거나(값을 못 읽고도 띄움 · 작업 폴더 설정의 명령), 선언하지 않은 작업이 도구를 잃는다.
+/** 그 깃발들과 각각 바로 뒤 인자를 뺀 나머지 — «그것 말고는 같다» 를 대조한다. */
+const without = (a: string[], ...flags: string[]): string[] =>
+  flags.reduce((acc, f) => { const i = acc.indexOf(f); return i < 0 ? acc : [...acc.slice(0, i), ...acc.slice(i + 2)]; }, a);
+const count = (a: string[], flag: string): number => a.filter((x) => x === flag).length;
+
+await t("mcp_only S17·S22 «MCP 만» 작업(값 true) — `--tools` 바로 뒤 빈 문자열 · 라이블리 MCP(자리표 · 작업 토큰) 그대로 · 그 밖의 인자는 값 false 인 같은 작업과 같다(S23 설정 출처 말고)", async () => {
+  const boot = async (mcpOnly: boolean) => {
+    const w = world();
+    const asked: number[] = [];
+    w.deps.jobMcpOnly = async (job) => { asked.push(job.id); return mcpOnly; };
+    const s = await startedJob(w);
+    return { w, id: s.id, asked, job: await onBoot(s.id, s.boot, w.deps) };
+  };
+  const on = await boot(true), off = await boot(false);
+  assert.ok(on.asked.length >= 1 && on.asked.every((x) => x === on.id), `그 작업의 값을 읽는다: ${JSON.stringify(on.asked)}`);
+  const a = on.job.argv;
+  const at = a.indexOf("--tools");
+  assert.ok(at > 0, JSON.stringify(a));
+  assert.equal(a[at + 1], "", "빈 문자열 인자 하나로 내장 도구를 모두 끈다");
+  assert.equal(count(a, "--tools"), 1);
+  assert.equal(a[a.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+  assert.ok(a.includes("--strict-mcp-config"));
+  assert.equal(a[a.indexOf("--settings") + 1], JSON.stringify({ disableAllHooks: true }));
+  const lv = (on.job.mcp as any).mcpServers.lively;
+  assert.equal(lv.headers.Authorization, `Bearer tok-${on.id}`, "작업 토큰으로 붙는 라이블리 MCP 는 그대로");
+  assert.equal(on.w.rows.get(on.id)!.status, "running");
+  assert.ok(!off.job.argv.includes("--tools"), `S19 «MCP 만» 이 아니면 없다: ${JSON.stringify(off.job.argv)}`);
+  assert.deepEqual(without(a, "--tools", "--setting-sources"), off.job.argv);
+});
+
+await t("mcp_only S22 판이 뜰 때 값이 false 면 종전 인자 — `--tools` · `--setting-sources` 없음 · 라이블리 MCP 그대로", async () => {
+  const w = world();
+  w.deps.jobMcpOnly = async () => false;
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.ok(!job.argv.includes("--tools"), JSON.stringify(job.argv));
+  assert.ok(!job.argv.includes("--setting-sources"), `S23 앱 판 지시도 없으면 없다: ${JSON.stringify(job.argv)}`);
+  assert.equal(job.argv[job.argv.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+  assert.equal(w.rows.get(id)!.status, "running");
+});
+
+await t("mcp_only S22·S16 값을 읽는 자리(jobMcpOnly) · 접수 입력의 «MCP 만» 값은 필수 — 빠지면 타입 검사가 잡는다(빠진 배선이 조용히 «도구 열림» 이 되지 않게)", () => {
+  const w = world();
+  const needsDeps = (_: AgentJobDeps): void => undefined;
+  needsDeps(w.deps);
+  // @ts-expect-error 작업 행 읽기가 빠졌다
+  needsDeps({ ...w.deps, jobMcpOnly: undefined });
+  const needsJob = (_: NewAgentJob): void => undefined;
+  const job: NewAgentJob = {
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null, effort: null,
+  };
+  needsJob(job);
+  // @ts-expect-error 접수 입력에 «MCP 만» 값이 없다
+  needsJob({ ...job, mcpOnly: undefined });
+});
+
+await t("mcp_only S20 앱 판 지시와 함께 — system · 지시 파일 자리표 · 설정 출처 user(한 번) · `--tools \"\"` · 라이블리 MCP 가 모두 실린다", async () => {
+  const w = world();
+  w.deps.jobSystem = async () => "정책 표를 조회해 답하라";
+  w.deps.jobMcpOnly = async () => true;
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.equal(job.system, "정책 표를 조회해 답하라");
+  assert.equal(job.argv[job.argv.indexOf("--append-system-prompt-file") + 1], SYSTEM_PROMPT_PLACEHOLDER);
+  assert.equal(count(job.argv, "--setting-sources"), 1, JSON.stringify(job.argv));
+  assert.equal(job.argv[job.argv.indexOf("--setting-sources") + 1], "user");
+  assert.equal(count(job.argv, "--tools"), 1, JSON.stringify(job.argv));
+  assert.equal(job.argv[job.argv.indexOf("--tools") + 1], "");
+  assert.equal(job.argv[job.argv.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+});
+
+await t("mcp_only S23 «MCP 만» 작업은 앱 판 지시가 없어도 `--setting-sources user`(작업 폴더 설정이 명령을 못 돌리게) · 둘 다면 한 번 · 지시만이면 종전대로 · 둘 다 없으면 없다", async () => {
+  const argvOf = async (mcpOnly: boolean, system: string | null): Promise<string[]> => {
+    const w = world();
+    w.deps.jobMcpOnly = async () => mcpOnly;
+    if (system !== null) w.deps.jobSystem = async () => system;
+    const s = await startedJob(w);
+    return (await onBoot(s.id, s.boot, w.deps)).argv;
+  };
+  for (const [mcpOnly, system, want] of [[true, null, 1], [true, "판 지시", 1], [false, "판 지시", 1], [false, null, 0]] as const) {
+    const a = await argvOf(mcpOnly, system);
+    const what = `MCP 만 ${mcpOnly} · 지시 ${system !== null}: ${JSON.stringify(a)}`;
+    assert.equal(count(a, "--setting-sources"), want, what);
+    if (want) assert.equal(a[a.indexOf("--setting-sources") + 1], "user", what);
+  }
+});
+
+await t("mcp_only S18 단발(bare) 작업 — «MCP 만» 이어도 `--tools` 는 한 번 · MCP 없음 · 그 밖의 인자는 종전 단발과 같다(S23 설정 출처 말고)", async () => {
+  const bootArgv = async (mcpOnly: boolean): Promise<string[]> => {
+    const w = world();
+    w.usable.add("alice:memo");
+    w.deps.jobMcpOnly = async () => mcpOnly;
+    const row = await enqueueAgentJob({
+      requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+      model: null, label: null, prompt: "요약", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, bare: true, mcpOnly, toolAllowlist: null, effort: null,
+    }, w.policy, w.deps);
+    await w.drain(0);
+    return (await onBoot(row.id, w.launched.find((x) => x.id === row.id)!.boot, w.deps)).argv;
+  };
+  const both = await bootArgv(true), bare = await bootArgv(false);
+  assert.equal(count(both, "--tools"), 1, JSON.stringify(both));
+  assert.equal(both[both.indexOf("--tools") + 1], "");
+  assert.ok(!both.includes("--mcp-config"), "단발은 MCP 없음");
+  assert.ok(count(both, "--setting-sources") <= 1, JSON.stringify(both));
+  assert.deepEqual(without(both, "--setting-sources"), without(bare, "--setting-sources"));
+});
+
+await t("mcp_only S21 판이 뜰 때 «MCP 만» 값을 못 읽으면(던짐) 그 작업은 돌지 않는다 — 실패(사유) · 만든 토큰 폐기 · 410", async () => {
+  const w = world();
+  w.deps.jobMcpOnly = async () => { throw new Error("작업 행의 «MCP 만» 칸을 읽지 못했습니다(가짜)"); };
+  const { id, boot } = await startedJob(w);
+  await assert.rejects(onBoot(id, boot, w.deps), httpErr(410));
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.ok((row.error ?? "").trim().length > 0, "사유가 남는다");
+  assert.deepEqual(w.minted.filter((m) => !w.revoked.includes(tokHash(m))), [], "판에 안 간 토큰을 남기지 않는다");
+});
+
+// ── S24 사람이 보내는 작업의 이어받기 — 앱 AI 실행이 «MCP 만» 으로 시작한 대화를 이 길로 이어도 도구를 열지 않는다 ──
+/** 앱 AI 실행이 넣은 것과 같은 끝난 작업(alice · memo 앱 · 구독) 하나 — 그 행에 «MCP 만» 값을 싣는다. */
+async function priorJob(w: World, mcpOnly: boolean): Promise<number> {
+  w.usable.add("alice:memo");
+  const row = await enqueueAgentJob({
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly, toolAllowlist: null, effort: null,
+  }, w.policy, w.deps);
+  Object.assign(w.rows.get(row.id)!, { status: "done", conversation_id: "0a1b2c3d-0000-4000-8000-00000000000a" });
+  return row.id;
+}
+/** 작업 행에 실린 값(가짜) — 넣은 차례가 곧 작업 번호다. 읽은 작업 번호를 적는다. */
+function rowMcpOnly(w: World): number[] {
+  const read: number[] = [];
+  w.deps.jobMcpOnly = async (job) => { read.push(job.id); return w.inserted[job.id - 1]?.mcpOnly === true; };
+  return read;
+}
+
+await t("mcp_only S24 사람이 보내는 작업의 이어받기 — 앞 작업이 «MCP 만» 이면 새 작업도 · 아니면 false · 이어받기가 아닌 새 작업은 false", async () => {
+  for (const prev of [true, false]) {
+    const w = world();
+    const read = rowMcpOnly(w);
+    const id = await priorJob(w, prev);
+    const out = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+    assert.equal(w.rows.get(out.id as number)!.resume_job_id, id, "앞 작업을 잇는다(관측 장치)");
+    assert.equal(w.inserted.at(-1)!.mcpOnly, prev, `앞 작업 «MCP 만» ${prev} — 읽은 작업: ${JSON.stringify(read)}`);
+  }
+  const w = world();
+  w.usable.add("alice:memo");
+  w.deps.jobMcpOnly = async () => true;   // 무엇을 읽든 «MCP 만» — 그래도 이어받기가 아니면 false
+  await submitAgentJob({ prompt: "새 일" }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.inserted.at(-1)!.mcpOnly, false, "이어받기가 아닌 새 작업(작업 이름을 다는 앱 AI 실행만 ai.mcp_only 를 쓴다)");
+});
+
+await t("mcp_only S24b 사람이 보내는 작업의 이어받기 — 앞 작업의 값을 못 읽으면(던짐) 접수 실패 · 작업을 만들지 않는다", async () => {
+  const w = world();
+  const id = await priorJob(w, true);
+  const rows = w.rows.size;
+  w.deps.jobMcpOnly = async () => { throw new Error("작업 행의 «MCP 만» 칸을 읽지 못했습니다(가짜)"); };
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI));
+  assert.equal(w.rows.size, rows, "작업 행을 만들지 않았다");
+});
+
+// ══ 앱 AI 작업의 도구 허용 목록(매니페스트 ai.tools) — 판이 뜰 때 작업 토큰의 도구 상한(사양 T19~T21) · 사람이 보내는 작업의 이어받기(T18) ══
+//  목록은 접수 때 작업 행에 실렸다 — 판이 뜰 때는 그 행의 목록(jobToolAllowlist)을 읽어 토큰 굽기(mintMcpToken)에 상한으로 넘긴다.
+//  가짜 작업 행 읽기는 넣은 차례(= 작업 번호)대로 그 작업에 실린 목록을 돌려준다(작업 행에 실린 값 그대로 — DB 읽기만 바꿔 끼운다).
+//  이게 틀리면: 목록을 둔 작업의 AI 가 앱 동의 전체(store_sql 등)를 쥔 토큰으로 돌거나, 목록을 못 읽고도 상한 없는 토큰을 굽는다.
+/** 작업 행에 실린 목록(가짜) — 읽은 작업 번호를 적는다. */
+function rowTools(w: World): number[] {
+  const read: number[] = [];
+  w.deps.jobToolAllowlist = async (job) => { read.push(job.id); const l = w.inserted[job.id - 1]?.toolAllowlist; return l == null ? null : [...l]; };
+  return read;
+}
+/** 앱 AI 실행이 넣은 것과 같은 작업(alice · memo 앱 · 구독)을 그 목록으로 넣고 띄운다. */
+async function toolJob(w: World, list: string[] | null): Promise<{ id: number; boot: string }> {
+  w.usable.add("alice:memo");
+  const row = await enqueueAgentJob({
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
+    toolAllowlist: list, effort: null,
+  }, w.policy, w.deps);
+  await w.drain(0);
+  return { id: row.id, boot: w.launched.find((x) => x.id === row.id)!.boot };
+}
+
+await t("T19 판이 뜰 때 그 작업 행의 목록을 읽어 작업 토큰 굽기에 «도구 상한»으로 넘긴다 — 목록 그대로 · 빈 목록은 빈 상한 · null 은 상한 없음", async () => {
+  for (const list of [["store_sql", "knowledge_search"], [], null]) {
+    const w = world();
+    const read = rowTools(w);
+    const { id, boot } = await toolJob(w, list);
+    const job = await onBoot(id, boot, w.deps);
+    assert.ok(read.length >= 1 && read.every((x) => x === id), `그 작업의 행을 읽는다: ${JSON.stringify(read)}`);
+    assert.deepEqual(w.mintCeilings, [{ id, toolCeiling: list }], `목록 ${JSON.stringify(list)} → 상한`);
+    assert.equal(w.rows.get(id)!.status, "running");
+    assert.equal((job.mcp as any).mcpServers.lively.headers.Authorization, `Bearer tok-${id}`, "그 상한으로 구운 토큰이 판의 라이블리 MCP 에 실린다");
+  }
+});
+
+await t("T19 종전 작업(사람 도구로 보낸 작업 · 행 읽기가 null) — 상한 없이 굽는다(무회귀)", async () => {
+  const w = world();
+  const read = rowTools(w);
+  const { id, boot } = await startedJob(w);
+  await onBoot(id, boot, w.deps);
+  assert.deepEqual(read, [id], "그 작업의 행을 읽는다(관측 장치)");
+  assert.deepEqual(w.mintCeilings, [{ id, toolCeiling: null }]);
+});
+
+await t("T20 판이 뜰 때 작업 행의 목록을 못 읽으면(던짐) 그 작업은 돌지 않는다 — 실패(사유) · 410 · 토큰을 굽지 않는다", async () => {
+  const w = world();
+  const { id, boot } = await toolJob(w, ["store_sql"]);
+  w.deps.jobToolAllowlist = async () => { throw new Error("작업 행의 도구 허용 목록 칸을 읽지 못했습니다(가짜)"); };
+  await assert.rejects(onBoot(id, boot, w.deps), httpErr(410));
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.ok((row.error ?? "").trim().length > 0, "사유가 남는다");
+  assert.deepEqual(w.minted, [], "상한을 모른 채 토큰을 굽지 않는다");
+  assert.equal(row.mcp_token_hash, null, "행에 작업 토큰이 걸리지 않는다");
+});
+
+await t("T21·T17 토큰 굽기의 상한 인자 · 작업 행의 목록 읽기(jobToolAllowlist) · 작업 행 입력의 목록 칸은 필수 — 빠지면 타입 검사가 잡는다", () => {
+  const w = world();
+  const needsDeps = (_: AgentJobDeps): void => undefined;
+  needsDeps(w.deps);
+  // @ts-expect-error 작업 행의 목록 읽기가 빠졌다
+  needsDeps({ ...w.deps, jobToolAllowlist: undefined });
+  //  부르지 않는 함수 — 타입 검사만 본다.
+  const typeOnly = (d: AgentJobDeps, row: AgentJobRow): void => {
+    void d.mintMcpToken(row, { toolCeiling: null });
+    void d.mintMcpToken(row, { toolCeiling: ["store_sql"] });
+    // @ts-expect-error 상한 인자가 빠졌다
+    void d.mintMcpToken(row);
+    // @ts-expect-error 상한 칸이 빠졌다
+    void d.mintMcpToken(row, {});
+  };
+  void typeOnly;
+  const needsJob = (_: NewAgentJob): void => undefined;
+  const job: NewAgentJob = {
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
+    toolAllowlist: null, effort: null,
+  };
+  needsJob(job);
+  // @ts-expect-error 작업 행 입력에 목록 칸이 없다
+  needsJob({ ...job, toolAllowlist: undefined });
+});
+
+// ── T18 사람이 보내는 작업(agent_job_run)의 이어받기 — 앱 AI 실행이 목록을 두고 시작한 대화를 이 길로 이어도 도구가 넓어지지 않는다 ──
+/** 앞 작업(끝남 · alice · memo 앱 · 구독)을 그 목록으로 넣는다. */
+async function priorToolJob(w: World, list: string[] | null): Promise<number> {
+  w.usable.add("alice:memo");
+  const row = await enqueueAgentJob({
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
+    toolAllowlist: list, effort: null,
+  }, w.policy, w.deps);
+  Object.assign(w.rows.get(row.id)!, { status: "done", conversation_id: "0a1b2c3d-0000-4000-8000-00000000000b" });
+  return row.id;
+}
+
+await t("T18 이어받기(resume_job_id) — 앞 작업의 목록을 그대로 잇는다(목록 · 빈 목록 · null)", async () => {
+  for (const prev of [["store_sql", "knowledge_search"], [], null]) {
+    const w = world();
+    const read = rowTools(w);
+    const id = await priorToolJob(w, prev);
+    const out = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+    assert.equal(w.rows.get(out.id as number)!.resume_job_id, id, "앞 작업을 잇는다(관측 장치)");
+    assert.deepEqual(w.inserted.at(-1)!.toolAllowlist, prev, `앞 작업 목록 ${JSON.stringify(prev)} — 읽은 작업: ${JSON.stringify(read)}`);
+  }
+});
+
+await t("T18 이어받은 작업이 뜰 때 — 이은 목록이 그 작업 토큰의 상한이 된다(접수 → 행 → 판 부트 사슬)", async () => {
+  const w = world();
+  rowTools(w);
+  const id = await priorToolJob(w, ["knowledge_search"]);
+  const out = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  const next = out.id as number;
+  const boot = w.launched.find((x) => x.id === next)!.boot;
+  await onBoot(next, boot, w.deps);
+  assert.deepEqual(w.mintCeilings, [{ id: next, toolCeiling: ["knowledge_search"] }]);
+});
+
+await t("T18 이어받기가 아닌 새 작업은 null — 행 읽기가 무엇을 주든", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  w.deps.jobToolAllowlist = async () => ["store_sql"];   // 무엇을 읽든 목록 — 그래도 이어받기가 아니면 null
+  await submitAgentJob({ prompt: "새 일" }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.inserted.length, 1, "접수했다(관측 장치)");
+  assert.equal(w.inserted.at(-1)!.toolAllowlist, null);
+});
+
+await t("T18 이어받기에서 앞 작업의 목록을 못 읽으면(던짐) 접수 실패 · 작업을 만들지 않는다", async () => {
+  const w = world();
+  const id = await priorToolJob(w, ["store_sql"]);
+  const rows = w.rows.size;
+  w.deps.jobToolAllowlist = async () => { throw new Error("작업 행의 도구 허용 목록 칸을 읽지 못했습니다(가짜)"); };
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI));
+  assert.equal(w.rows.size, rows, "작업 행을 만들지 않았다");
+});
+
+// ══ 앱 AI 실행의 생각 깊이(effort — 하네스 `claude -p --effort`) — 판이 뜰 때 작업 행의 값을 하네스 인자로 · 사람이 보내는 작업의 이어받기 ══
+//  깊이는 접수 때 작업 행에 실렸다 — 판이 뜰 때는 그 행의 값(jobEffort)을 읽어 하네스 인자로 싣는다.
+//  가짜 작업 행 읽기는 넣은 차례(= 작업 번호)대로 그 작업에 실린 값을 돌려준다(작업 행에 실린 값 그대로 — DB 읽기만 바꿔 끼운다).
+//  이게 틀리면: 앱이 준 깊이가 하네스에 안 닿아 기본 깊이로 돌거나, 값을 못 읽고도 기본 깊이로 띄우거나, agent_job_run 이어받기가 깊이를 잃는다.
+/** 작업 행에 실린 깊이(가짜) — 읽은 작업 번호를 적는다. */
+function rowEffort(w: World): number[] {
+  const read: number[] = [];
+  w.deps.jobEffort = async (job) => { read.push(job.id); return w.inserted[job.id - 1]?.effort ?? null; };
+  return read;
+}
+/** 앱 AI 실행이 넣은 것과 같은 작업(alice · memo 앱 · 구독)을 그 깊이로 넣는다 — done 이면 끝난 작업(이어받을 대화가 있다), 아니면 띄운다. */
+async function effortJob(w: World, effort: Effort | null, o: { bare?: boolean; done?: boolean } = {}): Promise<{ id: number; boot: string | null }> {
+  w.usable.add("alice:memo");
+  const row = await enqueueAgentJob({
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false,
+    bare: o.bare === true, mcpOnly: false, toolAllowlist: null, effort,
+  }, w.policy, w.deps);
+  if (o.done) {
+    Object.assign(w.rows.get(row.id)!, { status: "done", conversation_id: "0a1b2c3d-0000-4000-8000-00000000000c" });
+    return { id: row.id, boot: null };
+  }
+  await w.drain(0);
+  return { id: row.id, boot: w.launched.find((x) => x.id === row.id)!.boot };
+}
+
+await t("effort F1 판이 뜰 때 그 작업 행의 깊이를 읽어 하네스 인자(`--effort <값>`)로 싣는다 — 다섯 값 · 에이전트 작업 · 단발(bare) 모두", async () => {
+  for (const effort of EFFORT_LEVELS) {
+    for (const bare of [false, true]) {
+      const w = world();
+      const read = rowEffort(w);
+      const { id, boot } = await effortJob(w, effort, { bare });
+      const job = await onBoot(id, boot!, w.deps);
+      const what = `${effort} bare=${bare} → ${JSON.stringify(job.argv)}`;
+      assert.deepEqual(read, [id], `그 작업의 행을 읽는다 — ${what}`);
+      assert.equal(count(job.argv, "--effort"), 1, what);
+      assert.equal(job.argv[job.argv.indexOf("--effort") + 1], effort, what);
+      assert.equal(job.env.CLAUDE_CODE_EFFORT_LEVEL, "", `물려받은 깊이 변수를 지운다(하네스가 인자보다 앞세운다) — ${what}`);
+      assert.equal(w.rows.get(id)!.status, "running", what);
+    }
+  }
+});
+
+await t("effort F1b 깊이가 없는 작업(행 읽기 null — 사람 도구로 보낸 작업 · 종전 작업) — `--effort` 없이 띄운다(무회귀)", async () => {
+  const w = world();
+  const read = rowEffort(w);
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.deepEqual(read, [id], "그 작업의 행을 읽는다(관측 장치)");
+  assert.ok(!job.argv.includes("--effort"), JSON.stringify(job.argv));
+  assert.ok(!("CLAUDE_CODE_EFFORT_LEVEL" in job.env), "깊이를 정하지 않은 작업은 환경을 건드리지 않는다(종전 그대로)");
+  assert.equal(w.inserted.at(-1)!.effort, null, "사람 도구로 보낸 새 작업은 null(effort 는 앱 AI 실행이 받는다)");
+});
+
+await t("effort F2 판이 뜰 때 깊이를 못 읽으면(던짐 — DB 막힘 · 손상 값) 그 작업은 돌지 않는다 — 실패(사유) · 만든 토큰 폐기 · 410", async () => {
+  const w = world();
+  const { id, boot } = await effortJob(w, "max");
+  w.deps.jobEffort = async () => { throw new Error("작업 #1 의 effort 값이 형식 밖입니다(가짜)"); };
+  await assert.rejects(onBoot(id, boot!, w.deps), httpErr(410));
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /effort/, "사유가 남는다");
+  assert.deepEqual(w.minted.filter((m) => !w.revoked.includes(tokHash(m))), [], "판에 안 간 토큰을 남기지 않는다");
+});
+
+await t("effort F3 사람이 보내는 작업(agent_job_run)의 이어받기 — 앞 작업의 깊이를 잇는다(다섯 값 · null) · 이어받기가 아닌 새 작업은 null", async () => {
+  for (const prev of [...EFFORT_LEVELS, null]) {
+    const w = world();
+    const read = rowEffort(w);
+    const { id } = await effortJob(w, prev, { done: true });
+    const out = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+    assert.equal(w.rows.get(out.id as number)!.resume_job_id, id, "앞 작업을 잇는다(관측 장치)");
+    assert.equal(w.inserted.at(-1)!.effort, prev, `앞 작업 깊이 ${prev} — 읽은 작업: ${JSON.stringify(read)}`);
+  }
+  const w = world();
+  w.usable.add("alice:memo");
+  w.deps.jobEffort = async () => "max";   // 무엇을 읽든 깊이가 있다 — 그래도 이어받기가 아니면 null
+  await submitAgentJob({ prompt: "새 일" }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.inserted.at(-1)!.effort, null);
+});
+
+await t("effort F3b 이어받은 작업이 뜰 때 — 이은 깊이가 하네스 인자가 된다(접수 → 행 → 판 부트 사슬)", async () => {
+  const w = world();
+  rowEffort(w);
+  const { id } = await effortJob(w, "high", { done: true });
+  const out = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  await w.drain(0);
+  const next = out.id as number;
+  const job = await onBoot(next, w.launched.find((x) => x.id === next)!.boot, w.deps);
+  assert.equal(job.argv[job.argv.indexOf("--effort") + 1], "high", JSON.stringify(job.argv));
+  assert.equal(job.argv[job.argv.indexOf("--resume") + 1], "0a1b2c3d-0000-4000-8000-00000000000c", "그 대화를 갈라 잇는다(관측 장치)");
+});
+
+await t("effort F3c 이어받기에서 앞 작업의 깊이를 못 읽으면(던짐) 접수 실패 · 작업을 만들지 않는다", async () => {
+  const w = world();
+  const { id } = await effortJob(w, "xhigh", { done: true });
+  const rows = w.rows.size;
+  w.deps.jobEffort = async () => { throw new Error("작업 행의 effort 칸을 읽지 못했습니다(가짜)"); };
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI));
+  assert.equal(w.rows.size, rows, "작업 행을 만들지 않았다");
+});
+
+await t("effort F4 작업 행의 깊이 읽기(jobEffort) · 작업 행 입력의 effort 칸은 필수 — 빠지면 타입 검사가 잡는다", () => {
+  const w = world();
+  const needsDeps = (_: AgentJobDeps): void => undefined;
+  needsDeps(w.deps);
+  // @ts-expect-error 작업 행의 깊이 읽기가 빠졌다
+  needsDeps({ ...w.deps, jobEffort: undefined });
+  const needsJob = (_: NewAgentJob): void => undefined;
+  const job: NewAgentJob = {
+    requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
+    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
+    toolAllowlist: null, effort: "high",
+  };
+  needsJob(job);
+  // @ts-expect-error 작업 행 입력에 effort 칸이 없다
+  needsJob({ ...job, effort: undefined });
+  // @ts-expect-error 목록 밖 값은 타입이 막는다
+  needsJob({ ...job, effort: "ultra" });
 });
 
 console.log(`# ${pass} pass`);

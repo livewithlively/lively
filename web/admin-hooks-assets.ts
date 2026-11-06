@@ -173,7 +173,7 @@ function hookForm(root, h, data, detail, isNew, locked) {
   const hSumIn = el('input', { type: 'text', value: h.summary || '', placeholder: '예: 세션이 끝날 때 기록을 남겼는지 점검합니다' });
   const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok', 'cursor'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = h.harness || 'all';
-  const eventSel = el('select', {}, ...['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification'].map((x) => el('option', { value: x, text: x })));
+  const eventSel = el('select', {}, ...['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification', 'PreCompact', 'PostCompact'].map((x) => el('option', { value: x, text: x })));
   eventSel.value = h.event || 'PostToolUse';
   const matcherIn = el('input', { type: 'text', value: h.matcher || '', placeholder: '예: Bash (PreToolUse/PostToolUse 의 도구 매처)' });
   const codeTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '#!/usr/bin/env node\n// 훅 입력은 stdin(JSON), 응답은 stdout / exit code' });

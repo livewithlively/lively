@@ -14,9 +14,14 @@
 //  · innerHTML 을 쓰지 않는다(레포 불변식). 모든 글자는 textContent.
 //  · 스트림이 끊겨도 대화는 안 끊긴다 — 파일 폴링이 정본이라, 여기서는 조용히 다시 붙는다.
 //  · 승인은 **세 갈래**만 둔다(허용 / 이 세션 동안 / 거부). codex 의 결정값이 그 셋이고, 넷째는 고를 것만 늘린다.
+//  · ★ **화면이 안 보이면 스트림을 끊는다** (#5398) — 숨은 브라우저 탭이든 셸이 숨긴 세션이든. 평문 http 는 같은 주소에
+//    연결이 6개뿐이라 숨은 화면이 물고 있으면 새로 연 화면이 «연결 준비 중…» 에 선다(session-events.ts ★ 와 같은 규칙).
+//    다시 보이면 곧바로 붙고, 서버의 hello(도는 중 · 지금 걸린 승인 목록)와 뒤따르는 재생(승인 · 사용량)으로 따라잡는다.
 import { apiUrl, el, TOKEN_KEY, toast } from './core.js';
 import type { ChatTurn, ChatView } from './chat-view.js';
 import { splitSse } from './sse-frames.js';
+import { watchShown } from './lib/shown.js';
+import { staleAskIds } from './session-surface-view.js';   // #5398 — 끊긴 동안 닫힌 승인 카드를 고르는 판정(순수 — 작업 도크와 한 벌)
 
 export interface CodexLiveOpts {
   sessionId: string;
@@ -31,6 +36,11 @@ export interface CodexLiveOpts {
   onState?: (s: { running: boolean; waiting: number }) => void;
   /** 턴이 끝났다(런타임이 말했다) — 화면이 그 턴을 마감한다. 파일의 마감 줄을 기다리지 않는다. */
   onSettled?: () => void;
+  /**
+   * 이 층이 사는 **세션 화면의 바깥 틀** — 그 화면이 안 보이는 동안은 스트림을 끊어 둔다(#5398).
+   *  ⚠ dock 을 주지 마라: 승인이 없으면 비어 있는 자리라 화면이 보이는데도 끊길 수 있다. 안 주면 문서만 본다.
+   */
+  anchor?: Element | null;
 }
 
 export interface CodexLive {
@@ -42,7 +52,8 @@ export interface CodexLive {
 }
 
 type Ev =
-  | { kind: 'hello'; running?: boolean }
+  //  approvals — 붙는 순간 **지금 걸린 승인 id 전부**(#5398). 끊긴 동안 닫힌 승인을 접는 근거다. 옛 서버엔 없다(그땐 안 접는다).
+  | { kind: 'hello'; running?: boolean; approvals?: string[] }
   | { kind: 'delta'; text: string }
   | { kind: 'line'; line: any }
   | { kind: 'status'; running: boolean }
@@ -159,6 +170,16 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
       }
       case 'hello':
       case 'status': {
+        if (ev.kind === 'hello') {
+          //  #5398 — 붙었다(처음이든 숨었다 돌아왔든 재접속이든). 끊긴 동안의 글자 조각은 못 받았으니 미리보기에 이어 붙이면
+          //   앞뒤가 빠진 글이 된다 — 걷고, 그동안 파일에 떨어진 완성본을 지금 읽게 한다.
+          clearPreview();
+          o.poke();
+          //  끊긴 동안 닫힌 승인은 approval-done 을 못 받았다 — 서버가 준 «지금 걸린 것» 에 없는 카드는 접는다.
+          //   답을 보내는 중인 카드는 그 답이 접는다(고른 라벨을 «닫힘» 으로 덮지 않는다).
+          const shownCards = [...cards].map(([id, card]) => [id, card.classList.contains('is-busy')] as const);
+          for (const id of staleAskIds(shownCards, ev.approvals)) settleCard(id, '닫힘');
+        }
         isRunning = !!(ev as any).running;
         if (!isRunning) {
           clearPreview();                        // 턴이 끝났다 — 남은 조각은 파일이 그린다
@@ -208,20 +229,51 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
    */
   const SILENCE_MS = 40_000;
 
+  //  #5398 — 화면이 보이나(머리말 ★). 안 보이게 되면 도는 시도를 끊고, 다시 보이는 순간 기다림(멈춤이든 백오프든)을 깨운다
+  //   — 사람이 막 다시 본 화면은 백오프만큼 묵지 않는다(session-events.ts reconcile ★ 와 같은 규칙).
+  let attempt: AbortController | null = null;
+  let hidAbort = false;                    // 숨어서 끊었다(실패가 아니다) — 다음 바퀴는 백오프 없이 곧바로
+  let wake: (() => void) | null = null;
+  const shown = watchShown(o.anchor ?? null, (now) => {
+    if (closed) return;
+    if (now) { const w = wake; wake = null; w?.(); }
+    else if (attempt) { hidAbort = true; attempt.abort(); }
+  });
+  /** 기다린다 — ms 가 지나거나(false), 다시 보여 깨우거나(true), 화면이 닫히면(false). ms 가 무한이면 «멈춤». */
+  const nap = (ms: number): Promise<boolean> => new Promise<boolean>((resolve) => {
+    if (closed) { resolve(false); return; }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (woke: boolean): void => {
+      if (timer) clearTimeout(timer);
+      ctl.signal.removeEventListener('abort', onClose);
+      if (wake === onWake) wake = null;
+      resolve(woke);
+    };
+    const onWake = (): void => finish(true);
+    const onClose = (): void => finish(false);
+    wake = onWake;
+    ctl.signal.addEventListener('abort', onClose);
+    if (Number.isFinite(ms)) timer = setTimeout(() => finish(false), ms);
+  });
+
   async function pump(): Promise<void> {
     let wait = 1000;                       // 끊기면 다시 붙되, 간격을 늘려 폭주하지 않게(게이트웨이 재기동·프록시 타임아웃)
     while (!closed) {
-      const attempt = new AbortController();
-      const onAbortAll = (): void => attempt.abort();
+      //  ★ 안 보이면 붙지 않고 기다린다 — 숨은 화면이 연결 자리를 물지 않게(머리말 ★).
+      if (!shown.shown()) { await nap(Infinity); continue; }
+      const mine = new AbortController();
+      attempt = mine;
+      hidAbort = false;
+      const onAbortAll = (): void => mine.abort();
       ctl.signal.addEventListener('abort', onAbortAll);
       let silence: ReturnType<typeof setTimeout> | null = null;
       const beat = (): void => {
         if (silence) clearTimeout(silence);
-        silence = setTimeout(() => attempt.abort(), SILENCE_MS);   // 조용하면 끊고 새로 붙는다
+        silence = setTimeout(() => mine.abort(), SILENCE_MS);   // 조용하면 끊고 새로 붙는다
       };
       try {
         const res = await fetch(apiUrl(`/api/ui/terminal/sessions/${encodeURIComponent(o.sessionId)}/codex-chat/events`), {
-          headers: authHeaders({}), signal: attempt.signal, credentials: 'same-origin',
+          headers: authHeaders({}), signal: mine.signal, credentials: 'same-origin',
         });
         if (!res.ok || !res.body) throw new Error(`스트림 실패 (${res.status})`);
         wait = 1000;
@@ -245,9 +297,15 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
       } finally {
         if (silence) clearTimeout(silence);
         ctl.signal.removeEventListener('abort', onAbortAll);
+        if (attempt === mine) attempt = null;
       }
       if (closed) return;
-      await new Promise((r) => setTimeout(r, wait));
+      //  숨어서 끊었다 — 실패가 아니므로 백오프 없이 다음 바퀴로 간다. 아직 숨어 있으면 위에서 멈추고, 그새(같은 틱에)
+      //   다시 보였으면 곧바로 붙는다(그 «다시 보임» 은 이미 지나가 아무도 깨워 주지 않는다).
+      const byHide = hidAbort;
+      hidAbort = false;
+      if (byHide || !shown.shown()) continue;
+      if (await nap(wait)) { wait = 1000; continue; }       // 다시 보여 깨웠다 — 기다리지 않는다
       // 상한을 짧게 둔다 — 이 통로가 나르는 것은 **승인**이라, 공백이 길면 그만큼 턴이 서 있는다.
       //  프록시가 장수 연결을 주기적으로 끊는 환경(dev 실측)에서는 끊김이 정상 상태에 가깝다.
       wait = Math.min(wait * 2, 5_000);
@@ -258,7 +316,7 @@ export function mountCodexLive(o: CodexLiveOpts): CodexLive {
   return {
     running: () => isRunning,
     waiting: () => cards.size,
-    destroy: () => { closed = true; ctl.abort(); clearPreview(); usage.remove(); asks.remove(); },
+    destroy: () => { closed = true; shown.stop(); ctl.abort(); clearPreview(); usage.remove(); asks.remove(); },
   };
 }
 

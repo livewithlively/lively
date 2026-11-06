@@ -10,24 +10,35 @@
 //   작업은 앞 작업의 대화를 갈라 잇는다(API 키 작업은 게이트웨이가 보관한 대화 기록을 판이 되돌려 놓는다 — agent-jobs/plan.TRANSCRIPT_GZ_MAX).
 //
 //  누가 보내나: 앱 화면(app-ui · app-front — runAppTool 의 같은 판정) · 앱 서버(앱 서버 토큰 + 사람 신원 — 능력 REST) · 사람(도구 호출 · app_id 지정).
-//   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보내면 그 사람의 자리(홈)에서,
-//   앱 서버가 보내면 «홈 없는 작업 컨테이너»(#4891 — 전용 계정 · 빈 홈 · 앱 폴더만)에서 돈다 — 앱 서버 코드가 사람의 홈(자격 · 토큰)을 쓰는
-//   작업을 띄우지 못하게(agent-jobs/launch.ts 머리말).
+//   구독 실행은 그 구성원 본인이 보낸 것 · 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이
+//   보내면 그 사람의 자리(홈)에서, 앱 서버가 보내면 «홈 없는 작업 컨테이너»(#4891 — 전용 계정 · 빈 홈 · 앱 폴더만)에서 돈다 — 앱 서버 코드가 사람의
+//   홈(자격 · 토큰)을 쓰는 작업을 띄우지 못하게(agent-jobs/launch.ts 머리말).
 //  공용 시트(#5081 · 상민 2026-10-28): 관리자가 지정하고 그 계정 본인이 동의한 구독은 워크스페이스 구성원 누구의 요청이든 받는다 — 앱 서버가 사람
 //   신원을 실어 보낸 요청도. 그 실행은 시트 계정의 홈(Claude 로그인)에서 돌고(홈 없는 자리가 아니다), 작업 AI 의 라이블리 신원은 **물은 사람**이다
 //   (제안자 = 물은 사람 · 그 사람이 못 보는 것은 작업도 못 본다 — agent-jobs/live.mintMcpToken). 시트 홈은 구성원 모두가 함께 쓰므로 앱 폴더에서만 돈다.
+//  앱 서버가 보낸 본인 요청(#1639 · 상민 2026-11-02): 앱 서버가 실은 사람 신원이 구독 주인 본인이면 그 구독으로 돈다 — 자리는 그 사람의 홈(Claude 로그인이
+//   거기 있다 · 홈 없는 자리엔 구독 로그인이 없다). 공용 시트와 같은 울타리다: 앱 폴더에서만 · 작업 AI 토큰은 앱 서버 급(그 사람 ∩ 앱 동의) · 홈에 키트를 새로 심지
+//   않는다. 다른 것 둘 — 시트의 «기본 권한뿐» 조건은 없다(제 계정에 제 질문이다 · 높은 권한 구성원도 된다) · 앱당 하루 토큰 상한을 탄다(공용 시트는 안 탄다).
+//   그 신원이 사람이 보지 않는 자리(세션을 밝힌 위탁 · 상시 세션 · 작업 AI)에서 왔으면 거절한다(callerUnattended).
+//   ★ 백그라운드 작업(돌기 신원)당 실행 수 상한은 두지 않는다 — 사람당 동시(기본 2) · 앱당 분당(30) · 앱당 하루 토큰이 이미 묶는다. 작업 한 번은 15분이고 작업이 다음
+//    작업을 시작하면 깊이 3까지 이어진다. 앞단 서명 신원도 수명(최대 15분) 동안 같은 꼴이라 작업에만 건 상한은 그쪽을 못 막는다.
+//  생각 깊이(effort — 하네스 `claude -p --effort`): 작업 컨테이너 실행만 받는다(프록시는 하네스가 없어 400). 작업 행에 적어 판이 하네스 인자로 싣고
+//   실행 행에도 기록한다(보기 · 목록). 이어받기 · 형식 재시도는 앞 작업 행의 값을 잇는다(model 과 같다 — 이어받기는 주면 바꾼다).
 //  관리자는 남의 실행의 상태·오류만 본다(지시·답은 보낸 사람 것 — 작업 컨테이너와 같은 규칙).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { Viewer } from "../apps/visibility.js";
+import { narrowAllowlist } from "../apps/app-job-tools.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
-import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
+import { EFFORT_LEVELS, RUNNER_GATEWAY_URL, isEffort, type Effort } from "../agent-jobs/runner.js";
+import { STEPS_MAX } from "../agent-jobs/plan.js";
 import { RateWindow } from "../apps/app-chat-send.js";
+import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import {
-  DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, RESUME_REASON_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
+  DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, RESUME_REASON_MAX, SYSTEM_MAX, executorFor, isAppServerOwn, isEndedRun, judgeOutput, overDailyBudget,
   resolveAccount, resumeHistory, resumeInputError, resumeLabel, resumeLimitRefusal, resumeRefusal, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction,
   seatShared, serviceSeatConsented, subscriptionRefusal, waitSecOf,
   type AiAccount, type AiAccountSettings, type ChatTurn, type ResumeLink, type RunKind, type SeatTerms, type SessionTie,
@@ -51,10 +62,30 @@ export interface SubmitJobInput {
    */
   sharedSeat: boolean;
   /**
+   * #1639 앱 서버가 보낸, 물은 사람 본인의 구독 실행 — 그 사람의 홈(로그인)에서 돌되 공용 시트와 같은 울타리다(앱 폴더만 · 작업 AI 토큰은 앱 서버 급 · 키트를 심지 않는다).
+   *  필수다 — 접수하는 자리(첫 접수 · 이어받기 · 형식 재시도)가 하나라도 빠뜨리면 앱 서버가 부린 AI 가 그 사람 이름의 세션 · 파일 · 계정 길을 연다.
+   */
+  appServerOwn: boolean;
+  /**
    * #5082 앱 판 지시(ai.instructions)의 글 — 작업 행에 함께 적어 판이 하네스 시스템 지시로 싣는다(작업 폴더 지시는 읽지 않는다). 없으면 null.
    *  필수다 — 형식 재시도가 빠뜨리면 그 턴은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다.
    */
   appInstructions: string | null;
+  /**
+   * 앱이 «라이블리 MCP 만» 으로 선언한 작업(ai.mcp_only) — 작업 행에 적어 판이 내장 도구를 끄고 앱 토큰의 MCP 만 싣는다(runner.claudeJobArgv).
+   *  필수다 — 접수하는 자리(첫 접수 · 이어받기 · 형식 재시도)가 하나라도 빠뜨리면 그 턴은 내장 도구를 연 채 박스의 폴더에 닿는다.
+   */
+  mcpOnly: boolean;
+  /**
+   * 작업별 라이블리 도구 허용 목록(ai.tools) — 작업 행에 적어 판이 뜰 때 작업 토큰의 도구 상한으로 싣는다(agent-jobs/service.onBoot). null = 좁히지 않음.
+   *  필수다(mcpOnly 와 같은 까닭) — 접수하는 자리가 하나라도 빠뜨리면 그 턴의 에이전트가 앱 동의 전체(앱 서버용 SQL 등)를 쓴다.
+   */
+  toolAllowlist: string[] | null;
+  /**
+   * 하네스 생각 깊이(`--effort`) — 작업 행에 적어 판이 하네스 인자로 싣는다(runner.claudeJobArgv). null = 하네스 기본.
+   *  필수다 — 접수하는 자리(첫 접수 · 이어받기 · 형식 재시도)가 하나라도 빠뜨리면 그 턴은 말없이 기본 깊이로 돈다(깊이를 견주는 앱의 비교가 거짓이 된다).
+   */
+  effort: Effort | null;
 }
 
 /**
@@ -65,7 +96,8 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
   return {
     requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
     harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
-    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat, appInstructions: j.appInstructions,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat, appServerOwn: j.appServerOwn, appInstructions: j.appInstructions, mcpOnly: j.mcpOnly,
+    toolAllowlist: j.toolAllowlist, effort: j.effort,
   };
 }
 
@@ -74,8 +106,8 @@ export interface ResumeTarget { projectId: number | null; model: string | null; 
 
 export interface AiRunDeps {
   store: Pick<Store, "insertAiRun" | "getAiRun" | "getAiRunByToken" | "getAiRunByJob" | "setAiRunJob" | "setAiRunProxyToken" | "markAiRunRunning" | "retryAiRun"
-    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "aiRunSharedSeat"
-    | "aiRunResumeLink" | "resumeCountOfRoot" | "insertResumedAiRun">;
+    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "appServerOwnTokensToday" | "aiRunSharedSeat"
+    | "aiRunResumeLink" | "resumeCountOfRoot" | "insertResumedAiRun" | "aiRunEffort">;
   /** #5101 이어받을 작업(앞 실행의 작업 행)의 사실 — 작업 행이 없으면(보존 정리로 지워짐) null. */
   resumeTarget(jobId: number): Promise<ResumeTarget | null>;
   policy(): Promise<AiRunPolicy>;
@@ -100,6 +132,21 @@ export interface AiRunDeps {
   instructions?(app: OrgApp, who: Viewer, job: string): Promise<string | null>;
   /** #5082 그 작업 행에 실린 앱 판 지시(agent-jobs/store.agentJobAppInstructions) — 형식 재시도가 같은 글을 싣는다. 없으면 null. */
   jobInstructions?(jobId: number): Promise<string | null>;
+  /** 그 작업 이름이 «부른 사람(주소)의 판» 의 ai.mcp_only 에 있나(apps/app-job-mcp-only.resolveJobMcpOnly). 앱을 볼 수 없으면 던진다.
+   *  필수다 — 배선이 빠지면 «MCP 만» 으로 선언한 작업이 내장 도구를 연 채 돈다(빠진 배선을 컴파일이 잡게 · 앱 판 지시의 선택 배선과 다르다). */
+  mcpOnly(app: OrgApp, who: Viewer, job: string): Promise<boolean>;
+  /** 그 작업 행의 «라이블리 MCP 만» 표시(agent-jobs/store.agentJobMcpOnly) — 이어받기 · 형식 재시도가 싣는다. 필수다(위와 같은 까닭). */
+  jobMcpOnly(jobId: number): Promise<boolean>;
+  /** 그 작업 이름의 라이블리 도구 허용 목록(«부른 사람(주소)의 판» 의 ai.tools — apps/app-job-tools.resolveJobTools). 없으면 null. 앱을 볼 수 없으면 던진다.
+   *  필수다(위와 같은 까닭) — 배선이 빠지면 목록을 선언한 작업이 앱 동의 전체로 돈다. */
+  toolAllowlist(app: OrgApp, who: Viewer, job: string): Promise<string[] | null>;
+  /** 그 작업 행의 허용 목록(agent-jobs/store.agentJobToolAllowlist) — 이어받기 · 형식 재시도가 싣는다. 필수다(위와 같은 까닭). */
+  jobToolAllowlist(jobId: number): Promise<string[] | null>;
+  /** 그 작업 행의 생각 깊이(agent-jobs/store.agentJobEffort) — 이어받기(안 주면) · 형식 재시도가 싣는다. 못 읽으면 던진다.
+   *  필수다 — 배선이 빠지면 이어받은 턴 · 재시도 턴이 말없이 기본 깊이로 돈다. */
+  jobEffort(jobId: number): Promise<Effort | null>;
+  /** 그 작업 행의 도구 호출 단계(agent-jobs/store.agentJobSteps) — 작업 실행 하나 보기가 싣는다. 없으면 null. */
+  jobSteps(jobId: number): Promise<unknown[] | null>;
   /** 지금 열린 프록시 호출 수를 세는 자리(워크스페이스 동시 상한). */
   inflight: { take(key: string, max: number): boolean; release(key: string): void; count(key: string): number };
   rate: RateWindow;
@@ -120,6 +167,11 @@ export interface AiRunDeps {
    *  없는 사람(앱 서버 id 포함)은 { active: false, elevated: false }. 공용 시트 판정(시트 계정 · 보낸 사람)이 쓴다.
    */
   memberFacts(member: string): Promise<{ active: boolean; elevated: boolean }>;
+  /**
+   * #1639 이 앱 서버 호출의 사람 신원이 사람이 보지 않는 자리에서 왔나 — 돌기 신원(도구 부르기 · 백그라운드 작업)이면 그 행의 표시(callerUnattended 가 잰 값),
+   *  앞단 서명 신원이면 아니다. 앱 서버의 본인 구독 판정에만 묻는다.
+   */
+  appServerUnattended(user: Pick<LivelyUser, "appCallId" | "appJobId">): Promise<boolean>;
 }
 
 export const ACCOUNT_UNAVAILABLE = "account_unavailable";
@@ -133,18 +185,22 @@ export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
 const memberOf = (u: LivelyUser | undefined): string => String(u?.userId || "");
 
 export interface SubmitInput {
-  app_id?: unknown; prompt?: unknown; system?: unknown; schema?: unknown; job?: unknown; model?: unknown; label?: unknown;
+  app_id?: unknown; prompt?: unknown; system?: unknown; schema?: unknown; job?: unknown; model?: unknown; effort?: unknown; label?: unknown;
   files?: unknown; project_id?: unknown; cwd?: unknown; agent?: unknown; timeout_min?: unknown; max_tokens?: unknown; wait?: unknown;
   /** #5101 이 끝난 실행의 대화를 이어받는다(prompt = 고칠 점 · 사유) · reason = 실행 기록에 남길 까닭 이름표(선택). */
   resume_run_id?: unknown; reason?: unknown;
 }
 
 // ── 공개 모양 ──
-function head(r: AiRunRow | AiRunSummaryRow): Record<string, unknown> {
+/** effort — 그 실행에 요청한 생각 깊이(실행 행의 기록 · store.RUN_EFFORT_COL — 행 모양 밖이라 부르는 쪽이 따로 읽어 준다 · 없으면 null). model 옆에 싣는다.
+ *  하네스가 실제로 쓴 깊이가 아니다 — 모델이 받지 않는 깊이는 하네스가 낮추거나 빼고, 하네스 기록(stream-json)에는 쓴 깊이 칸이 없어 게이트웨이가 확인할 수 없다. */
+function head(r: AiRunRow | AiRunSummaryRow, effort: string | null): Record<string, unknown> {
   return {
     id: r.id, status: r.status, app_id: r.app_id, requester: r.requester, requester_kind: r.requester_kind, job: r.job_name, kind: r.kind,
     account: r.account_kind === "subscription" ? { kind: "subscription", member: r.account_member } : { kind: "api_key" },
-    executor: r.executor, job_id: r.job_id, model: r.model, label: r.label, error: r.error, retries: r.retries,
+    executor: r.executor, job_id: r.job_id, model: r.model, effort, label: r.label, error: r.error, retries: r.retries,
+    //  #1639 앱 서버 경유 · 본인 구독 — 구독 주인이 앱이 뒤에서 쓴 제 구독을 목록에서 가려 본다(그 밖의 실행엔 칸이 없다).
+    ...(isAppServerOwn(r) ? { app_server_own: true } : {}),
     usage: r.input_tokens != null || r.output_tokens != null ? { input_tokens: r.input_tokens, output_tokens: r.output_tokens } : null,
     created_at: r.created_at, started_at: r.started_at, ended_at: r.ended_at,
   };
@@ -152,17 +208,20 @@ function head(r: AiRunRow | AiRunSummaryRow): Record<string, unknown> {
 /**
  * 앱이 보는 실행 — 답·지시는 보낸 사람(own)에게만.
  *  resume(#5101) — 이 실행이 이어받은 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭). 준 자리(접수 · 하나 보기)에만 싣는다 — 까닭은 지시처럼 보낸 사람에게만.
+ *  effort — 실행 행의 기록(store.aiRunEffort). 필수다 — 실행을 돌려주는 자리(접수 · 보기 · 취소)가 빠뜨리면 준 깊이가 없는 것처럼 보인다.
  */
-export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null }): Record<string, unknown> {
+export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null; effort: string | null; steps?: unknown[] | null }): Record<string, unknown> {
   return {
-    ...head(r),
+    ...head(r, o.effort),
     ...(o.own ? { result: r.result, session_note: r.session_note } : { has_result: r.result !== null }),
+    //  작업 컨테이너 실행의 도구 호출 단계(작업 행 steps — 이름 · 입력 앞머리 · 시작 · 끝 · 오류). 본인에게만, 하나 보기(getRunFor)가 줄 때만.
+    ...(o.own && Array.isArray(o.steps) ? { steps: o.steps } : {}),
     ...(o.own && o.withPrompt ? { prompt: r.prompt, system: r.system_prompt, schema: r.schema } : {}),
     ...(o.resume !== undefined ? { resume: o.resume ? { of: o.resume.of, root: o.resume.root, depth: o.resume.depth, ...(o.own ? { reason: o.resume.reason } : {}) } : null } : {}),
   };
 }
 export function publicRunSummary(r: AiRunSummaryRow, o: { own: boolean }): Record<string, unknown> {
-  return { ...head(r), prompt_preview: o.own ? r.prompt_preview : null, has_result: r.has_result };
+  return { ...head(r, r.effort), prompt_preview: o.own ? r.prompt_preview : null, has_result: r.has_result };
 }
 
 // ── 접수 ──
@@ -204,6 +263,24 @@ async function sessionTieOf(ctx: { session?: string }, who: { member: string; ki
   const sid = typeof ctx.session === "string" ? ctx.session.trim() : "";
   if (!sid) return null;
   return d.sessionTie(sid, who.member).catch(() => ({ owner: null, participant: false, human: false }));
+}
+
+/**
+ * 이 호출이 사람이 보지 않는 자리에서 왔나(#1639) — 앱 서버의 사람 신원이 정말 «그 사람이 물은 것» 인지 가르는 사실이다. 앱 도구 부르기 · 백그라운드 작업을 시작할 때 재서
+ *  그 행에 남기고, 앱 서버가 그 신원으로 본인 구독 실행을 보낼 때 읽는다(AiRunDeps.appServerUnattended · plan.subscriptionRefusal).
+ *  · 작업 AI 의 토큰 — 작업이 앱 도구를 거쳐 작업을 낳으면 사람 없이 구독이 끝없이 돈다(submitRun 머리의 거절이 못 보는 길이다 · 그 호출은 앱 서버 토큰으로 온다).
+ *  · 사람 세션이 아닌 세션(위탁 · 크론 · 상시 · 앱 · 로그인) · 모르는 세션(조회 실패 포함) — sessionTieOf · subscriptionRefusal 의 tie 와 같은 자.
+ *  · 세션을 안 실은 연결(claude.ai)은 가릴 길이 없어 사람으로 본다(subscriptionRefusal 머리말 한계 ③과 같다). 세션은 그 연결이 밝힌 값이라 밝히지 않으면 걸러지지 않는다.
+ *  · 외부 실행 id(`claude-…`)도 사람으로 본다. 라이블리가 띄우지 않은 Claude Code 의 MCP 프록시가 자기 세션 id 로 싣는 값이라(kit/cli/lively-mcp-gateway.mjs sessionHeaderValue)
+ *    개인 PC 에서 사람이 쓰는 가장 흔한 모양이다. 게이트웨이에 상태 행이 없어 사람과 자동화를 가릴 길이 없고, 막으면 그 사람이 자기 구독으로 자기 앱을 못 쓴다.
+ *    게이트웨이가 띄운 세션은 늘 `box-…` 를 실어 위탁 · 상시 세션은 여기 들지 않는다. ⚠ 사람의 앱 화면 경로(sessionTieOf)는 같은 id 를 «모르는 세션» 으로 거절한다 — 이 판정이 그보다 넓다.
+ */
+export async function callerUnattended(c: { member: string; tokenHashPrefix?: string | undefined; session?: string | undefined }, d: Pick<AiRunDeps, "isJobToken" | "sessionTie">): Promise<boolean> {
+  if (c.tokenHashPrefix && (await d.isJobToken(c.tokenHashPrefix))) return true;
+  const sid = typeof c.session === "string" ? c.session.trim() : "";
+  if (!sid || isExternalExecutionSessionId(sid)) return false;
+  const tie = await d.sessionTie(sid, c.member).catch((): SessionTie => ({ owner: null, participant: false, human: false }));
+  return tie.owner === null || !tie.human;
 }
 
 /**
@@ -275,7 +352,7 @@ async function resumeChainOf(parent: AiRunRow, d: Pick<AiRunDeps, "store">): Pro
 
 /**
  * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 이어받기(#5101 — 404 · 409 resume_* · 400 어긋난 입력) → 작업 이름(400)
- *  → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501)
+ *  → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(앱 서버 에이전트 작업 + project_id 400 · 프록시 + effort 400 — 작업 컨테이너가 없는 배포면 띄울 때 501)
  *  → 상한(429) → (이어받는 단발) 앞 대화(409) → 앱 판 지시(404 · 409 — #5082) → 행(이어받기 상한 409 · 롤 창 503) → 띄움(대기열 429 · 501 · 롤 창 503).
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
@@ -302,6 +379,13 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   const label = rawLabel ? rawLabel.slice(0, LABEL_MAX) : null;
   const model = typeof input.model === "string" && input.model.trim() ? input.model.trim() : null;
   if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model 이름 형식이 아닙니다");
+  //  생각 깊이 — 생략 · null · ""(REST 의 생략 관례)는 안 준 것. 다섯 값 밖이면 400. MCP · 앱 주소는 입력 스키마가 먼저 거르지만, REST 어댑터의 enum 가드는
+  //   쉼표 글(«high,max»)과 배열을 낱낱이 보고 원래 값을 넘긴다 — 그 꼴은 여기가 실제로 막는 자리다(service.test effort E1).
+  let effort: Effort | null = null;
+  if (input.effort !== undefined && input.effort !== null && input.effort !== "") {
+    if (!isEffort(input.effort)) throw new HttpError(400, `effort 는 ${EFFORT_LEVELS.join(" · ")} 중 하나입니다`);
+    effort = input.effort;
+  }
   //  #5101 이어받기 — 앞 실행이 대화 자리를 정한다(작업 이름 · 작업 종류 · 작업 폴더 · 실행 계정 · system · 안 주면 schema). 한 질문당 상한(정책)이 필요해 정책을 먼저 읽는다.
   const p = await d.policy();
   const resume = await resumeOf(input, who, appId, p.max_resumes, d);
@@ -338,33 +422,46 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   }
   //  #5081 공용 시트 — 지정(두 동의)이 있으면 시트 계정과 보낸 사람의 사실을 모은다. 켜져 있으면(plan.seatShared) 본인 · 초대 조건 대신 «활성 구성원» 을 본다.
   const seat = await seatTermsOf(settings, account, who, d);
-  const refusal = subscriptionRefusal(account, who, await sessionTieOf(ctx, who, account, d), seat);
+  const sharedSeat = account.kind === "subscription" && !!seat && seatShared(seat.facts);
+  //  #1639 앱 서버가 보낸 본인 요청 — 사람이 보지 않는 자리에서 온 신원이면 아래에서 거절된다. 공용 시트가 켜진 구독이면 이 갈래가 아니다(시트 홈 · 시트 상한 · #5081 그대로).
+  const appServerOwn = !sharedSeat && isAppServerOwn({ requester: who.member, requester_kind: who.kind, account_kind: account.kind, account_member: account.kind === "subscription" ? account.member : null });
+  const unattended = appServerOwn && (await d.appServerUnattended(user));
+  const refusal = subscriptionRefusal(account, { ...who, unattended }, await sessionTieOf(ctx, who, account, d), seat);
   if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
   if (account.kind === "api_key" && !key) throw new HttpError(409, "이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   const executor = executorFor(kind, account);
   if (resume && executor !== resume.parent.executor) {
     throw new HttpError(409, "이어받을 실행의 자리가 맞지 않습니다 — 새 실행으로 보내세요", { body: { code: "resume_not_resumable" } });
   }
-  const sharedSeat = account.kind === "subscription" && !!seat && seatShared(seat.facts);
+  //  effort 는 하네스(`claude -p --effort`)의 인자라 작업 컨테이너 실행만 받는다. 프록시(단발 + API 키)는 Messages API 를 한 번 부르고 끝나 받을 자리가 없다 —
+  //   말없이 버리면 앱은 먹은 줄 알고 깊이를 견준다(같은 깊이의 답을 서로 다른 깊이로 잰 줄 안다). 그래서 거절한다(Messages API 의 다른 손잡이로 옮기지 않는다).
+  if (effort && executor === "proxy") {
+    throw new HttpError(400, "effort 는 작업 컨테이너에서 도는 실행(에이전트 작업 · 구독으로 도는 단발)에만 먹습니다 — 단발 + 워크스페이스 API 키 실행은 LLM 프록시로 한 번 묻고 끝나 하네스(claude -p --effort)가 없습니다. effort 를 빼거나 에이전트 작업(agent:true)으로 보내세요");
+  }
   //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
-  //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 위에서 이미 거절됐다(앱 서버는 사람이 아니다) — 한 겹 더 본다.
+  //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 아래 두 예외 말고는 위에서 이미 거절됐다 — 한 겹 더 본다.
   //   #5081 예외 — 공용 시트는 앱 서버의 사람 대리 요청도 시트 계정의 홈(Claude 로그인)에서 돈다(홈 없는 자리엔 구독 로그인이 없다 · 상민 2026-10-28).
-  const homeless = executor === "job" && who.kind === "app_server" && !sharedSeat;
+  //   #1639 예외 — 앱 서버가 보낸 본인 요청도 그 사람의 홈(Claude 로그인)에서 돈다. 실행 계정에 구독을 거는 것은 그 사람 본인이다(plan.accountSetRefusal).
+  const homeless = executor === "job" && who.kind === "app_server" && !sharedSeat && !appServerOwn;
   if (homeless && account.kind !== "api_key") throw new HttpError(403, "앱 서버가 보낸 에이전트 작업은 워크스페이스 API 키로만 돕니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   //  이어받기는 앞 실행의 작업 폴더를 그대로 쓴다 — 사람이 프로젝트 폴더에서 돌린 대화를 앱 서버가 · 공용 시트로 잇지 못한다(그 자리는 앱 폴더뿐이다).
   const projectGap = resume ? "이 실행은 프로젝트 폴더에서 돌았습니다 — 이 자리(앱 서버 · 공용 시트)에서는 그 대화를 이어받을 수 없습니다(앱 폴더 실행만)" : null;
   if (homeless && projectId != null) throw new HttpError(400, projectGap ?? "앱 서버가 보낸 에이전트 작업은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
   //  #5081 — 공용 시트의 홈은 구성원 모두가 함께 쓴다(대화 기록 · 홈의 파일이 다음 작업에 남는다). 프로젝트 폴더(사람 경계)를 그 자리에 붙이지 않는다.
   if (sharedSeat && projectId != null) throw new HttpError(400, projectGap ?? "공용 시트로 도는 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요(시트 계정의 홈은 구성원 모두가 함께 씁니다)");
+  //  #1639 — 앱 서버 코드가 시킨 일이다. 그 사람의 프로젝트 폴더(사람 경계)를 붙이지 않는다.
+  if (appServerOwn && projectId != null) throw new HttpError(400, projectGap ?? "앱 서버가 보낸 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
 
-  // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
+  // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키 · 앱 서버의 본인 구독 #1639) 앱당 하루 토큰.
   const tenant = d.tenant();
   if (!d.rate.take(`${tenant}\0${appId}`, d.now())) throw new HttpError(429, `이 앱이 AI 실행을 너무 자주 보내고 있습니다(분당 ${p.app_per_minute}회) — 요청을 모아 한 번에 보내세요`);
   //  세고 → 넣는 두 단계라 같은 사람이 동시에 여럿 보내면 상한을 조금 넘길 수 있다 — 소프트 상한이다(앱당 분당 상한이 먼저 걸려 폭이 작다 · 격리 리뷰 note).
   if ((await d.store.openRunCountOf(who.member)) >= p.max_running_per_member) {
     throw new HttpError(429, `${who.member}님의 AI 실행이 이미 ${p.max_running_per_member}개 돌고 있습니다 — 끝난 뒤 다시 보내세요`);
   }
-  if (account.kind === "api_key" && overDailyBudget(await d.store.tokensUsedTodayByApp(appId), p.daily_tokens_per_app)) {
+  //  구독 작업은 프록시를 지나지 않아 tokensUsedTodayByApp 이 못 센다 — 앱 서버의 본인 구독 실행은 실행 행에 남은 토큰을 더한다(앱이 뒤에서 쓰는 구독의 끝).
+  const dailyLimited = account.kind === "api_key" || appServerOwn;
+  if (dailyLimited && overDailyBudget(await d.store.tokensUsedTodayByApp(appId) + (appServerOwn ? await d.store.appServerOwnTokensToday(appId) : 0), p.daily_tokens_per_app)) {
     throw new HttpError(429, `이 앱의 오늘 토큰 상한(${p.daily_tokens_per_app.toLocaleString()})을 다 썼습니다 — 내일 다시, 또는 관리자가 상한을 올립니다(app_ai_limits_set)`);
   }
   if (executor === "proxy" && d.inflight.count(tenant) >= p.max_inflight) {
@@ -381,6 +478,9 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //  이어받기 — schema 는 안 주면 앞 실행 것(같은 모양의 답을 다시 받는다) · model 은 주면 바꾼다(더 센 모델로 다시 시키기) · 안 주면 앞 실행 것.
   const runSchema = resume && (input.schema === undefined || input.schema === null) ? resume.parent.schema : schema;
   const runModel = model ?? (resume ? (executor === "proxy" ? resume.parent.model : resume.target?.model ?? null) : null);
+  //  effort 도 model 과 같은 규칙 — 주면 그 값(같은 대화를 다른 깊이로 다시 시키기) · 안 주면 이어받기는 앞 작업 행의 값(같은 대화는 같은 깊이로 잇는다).
+  //   새 질문이면 null(하네스 기본). 앞 작업 행의 값을 못 읽으면 던진다 — 깊이를 모른 채 기본 깊이로 잇지 않는다(프록시는 위에서 거절해 늘 null 이다).
+  const runEffort: Effort | null = effort ?? (resume && executor === "job" && resume.parent.job_id != null ? await d.jobEffort(resume.parent.job_id) : null);
 
   //  #5082 — 작업 이름이 앱 판 지시를 선언했으면 지금 그 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 한 번 읽는다(표 · 도구와 같은 판 — viewerOf).
   //   실행은 이 글로 돈다 — 단발은 곧바로 쓰고, 작업은 작업 행에 함께 적어 판이 받는다(접수 뒤 판이 바뀌어도 · 형식 재시도도 같은 글 · 격리 리뷰 B1 · N2).
@@ -390,6 +490,19 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   const instructions = resume && executor === "job" && resume.parent.job_id != null
     ? (d.jobInstructions ? await d.jobInstructions(resume.parent.job_id) : null)
     : jobName && d.instructions ? await d.instructions(app, viewerOf(user, who), jobName) : null;
+  //  «라이블리 MCP 만»(ai.mcp_only) — 앱 판 지시와 같은 판 · 같은 때 읽는다. 에이전트 작업만 뜻이 있다(단발은 원래 도구가 없다).
+  //   이어받기는 조이는 쪽만 따른다 — 앞 작업이 MCP 만이었으면 그대로(같은 대화를 그 사이 연 도구로 잇지 않는다), 앞 작업이 열려 있었어도
+  //   지금 판이 MCP 만이면 MCP 만(앱이 나중에 선언해도 열린 대화가 열린 채 이어지지 않는다).
+  const mcpOnly = executor === "job" && kind !== "single"
+    && ((resume != null && resume.parent.job_id != null && await d.jobMcpOnly(resume.parent.job_id))
+      || (!!jobName && await d.mcpOnly(app, viewerOf(user, who), jobName)));
+  //  작업별 라이블리 도구 허용 목록(ai.tools) — 같은 판 · 같은 때 읽는다. 에이전트 작업만 뜻이 있다(단발은 라이블리 MCP 가 없다).
+  //   이어받기는 조이는 쪽만 — 앞 작업 행과 지금 판의 목록이 둘 다 있으면 겹치는 것만, 하나만 있으면 그것(앱이 나중에 선언해도 열린 채 잇지 않는다).
+  const toolAllowlist = executor === "job" && kind !== "single"
+    ? narrowAllowlist(
+      resume != null && resume.parent.job_id != null ? await d.jobToolAllowlist(resume.parent.job_id) : null,
+      jobName ? await d.toolAllowlist(app, viewerOf(user, who), jobName) : null)
+    : null;
 
   const n: NewAiRun = {
     appId, requester: who.member, requesterKind: who.kind, source: ctx.source ?? null, jobName, kind,
@@ -397,14 +510,15 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     model: runModel ?? (executor === "proxy" ? settings.default_model ?? DEFAULT_MODEL : null),
     label: label ?? (resume ? resumeLabel(resume.parent.label, resume.link.root, resume.link.depth) : null),
     prompt, systemPrompt: resume ? resume.parent.system_prompt : system, schema: runSchema,
-    status: executor === "proxy" ? "running" : "queued", sharedSeat, resume: resume?.link ?? null,
+    status: executor === "proxy" ? "running" : "queued", sharedSeat, resume: resume?.link ?? null, effort: runEffort,
   };
   //  #5101 이어받은 실행은 그 질문의 잠금 안에서 세고 넣는다(store.insertResumedAiRun — 동시에 여럿 이어도 한 질문당 상한을 넘지 않는다).
   const put = await (resume ? d.store.insertResumedAiRun({ ...n, resume: resume.link }, p.max_resumes) : d.store.insertAiRun(n).then((row) => ({ row }))).catch((e) => {
     //  #5081 롤 창 — 새 게이트웨이가 공용 DB 마이그레이션보다 먼저 받는 몇 분 동안 공용 시트 실행은 «없는 칸»(42703)으로 실패한다
     //   (store.RUN_SHARED_SEAT_COL 머리말). 막힌 게 아니라 아직 준비 중이니 다시 보내라고 말한다. #5101 이어받기(store.RUN_RESUME_COLS)도 같다.
-    if ((sharedSeat || resume) && (e as { code?: string })?.code === "42703") {
-      throw new HttpError(503, `${resume ? "이어받기를" : "공용 시트 실행을"} 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요`);
+    //   effort(store.RUN_EFFORT_COL)도 같다 — 칸이 없다고 effort 를 빼고 넣으면 기록도 실행도 말없이 기본 깊이가 된다.
+    if ((sharedSeat || resume || runEffort) && (e as { code?: string })?.code === "42703") {
+      throw new HttpError(503, `${resume ? "이어받기를" : sharedSeat ? "공용 시트 실행을" : "effort 를 실은 실행을"} 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요`);
     }
     throw e;
   });
@@ -413,7 +527,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     throw new HttpError(r.status, r.message, { body: { code: r.code } });
   }
   const row = put.row;
-  logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor, ...(resume ? { resumeOf: resume.link.of, depth: resume.link.depth } : {}) }, "[ai-run] 접수");
+  logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor, ...(appServerOwn ? { appServerOwn } : {}), ...(resume ? { resumeOf: resume.link.of, depth: resume.link.depth } : {}) }, "[ai-run] 접수");
 
   if (executor === "proxy") {
     d.later(() => runProxy(row, p, d, instructions, history), 0);
@@ -424,14 +538,20 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
         prompt: jobPrompt(row, input.files, { resumed: !!resume }), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single",
         //  #5101 — 앞 실행의 마지막 작업(형식 재시도가 있었으면 그 작업)의 대화를 갈라 잇는다(runner.claudeJobArgv --fork-session).
         resumeJobId: resume ? resume.parent.job_id : null,
-        homeless, sharedSeat, appInstructions: instructions,
+        homeless, sharedSeat, appServerOwn, appInstructions: instructions, mcpOnly, toolAllowlist, effort: runEffort,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
       //  #5082 롤 창 — 공용 DB 마이그레이션 전이면 작업 행에 지시 칸이 없다(agent-jobs/store APP_INSTRUCTIONS_COL). 막힌 게 아니라 준비 중이다 —
-      //   실행 행에도 DB 원문(«column … does not exist») 대신 그 까닭을 적는다.
-      const rollGap = !!instructions && (e as { code?: string })?.code === "42703";
-      const notReady = "앱 지시를 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요";
+      //   실행 행에도 DB 원문(«column … does not exist») 대신 그 까닭을 적는다. «라이블리 MCP 만» 칸(MCP_ONLY_COL)도 같다.
+      //   도구 허용 목록 칸(TOOL_ALLOWLIST_COL)도 같다 — «도구 제한» 으로 묶어 말한다(내장 도구 끄기와 라이블리 도구 좁히기는 사람에게 같은 뜻이다).
+      //   #1639 앱 서버의 본인 구독 표시 칸(APP_SERVER_OWN_COL)도 같다. effort 칸(EFFORT_COL)도 같다(받은 깊이를 버리고 기본 깊이로 돌리지 않는다).
+      const toolsLimited = mcpOnly || toolAllowlist != null;
+      const rollGap = (!!instructions || toolsLimited || appServerOwn || runEffort != null) && (e as { code?: string })?.code === "42703";
+      //  effort 를 함께 실었으면 그것도 적는다(앞선 것 하나만 적으면 effort 를 함께 실은 실행이 «앱 지시를…»으로만 보였다).
+      const base = appServerOwn ? "앱 서버의 본인 구독 표시를" : instructions && toolsLimited ? "앱 지시 · 도구 제한을" : instructions ? "앱 지시를" : toolsLimited ? "앱 도구 제한을" : null;
+      const carried = base && runEffort ? `${base.replace(/[을를]$/, "")} · effort 를` : base ?? "effort 를";
+      const notReady = `${carried} 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요`;
       const why = e instanceof Error ? e.message : String(e);
       await d.store.finishAiRun(row.id, { status: "failed", result: null, error: rollGap ? notReady : `작업 컨테이너에 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);
       if (rollGap) throw new HttpError(503, notReady);
@@ -440,7 +560,8 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   }
   const waitSec = waitSecOf(input.wait);
   const latest = waitSec > 0 ? await waitForRun(row.id, waitSec, d) : await d.store.getAiRun(row.id);
-  return publicRun(latest ?? row, { own: true, resume: resume?.link ?? null });
+  //  effort 는 방금 넣은 값이다(넣기가 됐으면 칸에 적혔다 — 다시 읽지 않는다).
+  return publicRun(latest ?? row, { own: true, resume: resume?.link ?? null, effort: runEffort });
 }
 
 /** 끝날 때까지 기다린다(상한 안) — 끝나지 않으면 지금 상태 그대로. */
@@ -600,19 +721,28 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
   const judged = judgeOutput(text, run.schema);
   if (judged.ok) return finish({ status: "done", result: { ...base, ...(judged.json !== undefined ? { json: judged.json } : {}) }, error: null });
   //  #5101 — API 키 작업의 대화는 게이트웨이가 보관한 기록뿐이다(빈 설정 폴더는 끝나면 지워진다). 기록이 없으면(올리지 못함 · 상한 초과) 다시 묻지 않고
-  //   원문을 붙여 실패한다 — 띄워 봐야 하네스가 «대화 없음» 으로 끝나 원문 대신 그 오류가 남는다.
-  const resumable = !!job.conversation_id && (run.account_kind !== "api_key" || !!(await d.resumeTarget(job.id).catch(() => null))?.resumable);
+  //   원문을 붙여 실패한다 — 띄워 봐야 하네스가 «대화 없음» 으로 끝나 원문 대신 그 오류가 남는다. 구독 작업도 이어받을 판정(resumeTarget)에 묻는다 —
+  //   #5082 도커 실행면은 구독 작업의 대화도 보관한 기록뿐이다(그 밖의 실행면은 대화 id 만 보고 «된다» 고 답한다).
+  const resumable = !!job.conversation_id && !!(await d.resumeTarget(job.id).catch(() => null))?.resumable;
   if (run.retries === 0 && run.schema && resumable) {
     try {
+      const sharedSeat = await d.store.aiRunSharedSeat(run.id);
       const retry = await d.submitJob({
         requester: run.requester, accountKind: run.account_kind, accountMember: run.account_member, appId: run.app_id, projectId: job.project_id,
         model: job.model, label: `${run.label ?? `AI 실행 #${run.id}`} (형식 다시)`, prompt: retryInstruction(judged.errors, run.schema),
         timeoutMin: Math.max(1, Math.round(job.timeout_sec / 60)), bare: run.kind === "single", resumeJobId: job.id,
         //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
         //  #5081 — 공용 시트 표시도 이 실행 것을 그대로(지금 설정으로 다시 고르지 않는다 — 그 사이 지정을 거뒀으면 재시도는 띄우기 직전에 멈춘다).
-        homeless: job.homeless === true, sharedSeat: await d.store.aiRunSharedSeat(run.id),
+        //  #1639 — 앱 서버의 본인 구독 표시도 이 실행 것을 그대로(실행 행의 사실 · 공용 시트로 돈 실행은 공용 시트의 자리다).
+        homeless: job.homeless === true, sharedSeat, appServerOwn: !sharedSeat && isAppServerOwn(run),
         //  #5082 — 앱 판 지시도 원래 작업의 것 그대로 싣는다(지금 판으로 다시 고르지 않는다 · 같은 글이라 잠금도 같이 걸린다).
         appInstructions: d.jobInstructions ? await d.jobInstructions(job.id) : null,
+        //  «라이블리 MCP 만» 도 원래 작업 행의 값 그대로(빠뜨리면 재시도 턴이 내장 도구를 연 채 돈다 · 못 읽으면 재시도를 보내지 않는다).
+        mcpOnly: await d.jobMcpOnly(job.id),
+        //  도구 허용 목록도 원래 작업 행의 것 그대로(빠뜨리면 재시도 턴이 앱 동의 전체로 돈다 · 못 읽으면 재시도를 보내지 않는다).
+        toolAllowlist: await d.jobToolAllowlist(job.id),
+        //  생각 깊이도 원래 작업 행의 값 그대로(빠뜨리면 재시도 턴이 기본 깊이로 돈다 · 못 읽으면 재시도를 보내지 않는다).
+        effort: await d.jobEffort(job.id),
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {
@@ -697,12 +827,28 @@ async function sharedSeatRunFor(r: Pick<AiRunRow, "id" | "requester" | "account_
   return d.store.aiRunSharedSeat(r.id);
 }
 
+/**
+ * 실행의 도구 호출 단계(작업 행 — 곁기록이라 못 읽은 쪽은 빼고 준다 · 실행 보기를 막지 않는다).
+ *  형식 재시도(syncRun · 한 번)는 실행을 재시도 작업으로 갈아 끼운다(job_id) — 앞 작업의 단계를 앞에 잇는다. 도구를 쓴 턴은 대개 앞 작업이라, 안 이으면 재시도가 나가는 순간 목록이 빈다.
+ *  이어받은 실행의 앞 작업(retries 0 의 resume_job_id)은 다른 실행의 것이라 잇지 않는다.
+ */
+async function runSteps(jobId: number, retries: number, d: AiRunDeps): Promise<unknown[]> {
+  const read = async (id: number): Promise<unknown[]> => (await d.jobSteps(id).catch(() => null)) ?? [];
+  const last = await read(jobId);
+  if (retries < 1) return last;
+  const first = (await d.getJob(jobId).catch(() => null))?.resume_job_id;
+  return first != null ? [...await read(first), ...last].slice(-STEPS_MAX) : last;
+}
+
 export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   let row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
   const shared = row ? await sharedSeatRunFor(row, user, d) : false;
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true, resume: await d.store.aiRunResumeLink(row.id) });
+  const own = isOwnRun(row, user, shared);
+  //  작업 컨테이너 실행이면 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다.
+  const steps = own && row.executor === "job" && row.job_id != null ? await runSteps(row.job_id, row.retries, d) : null;
+  return publicRun(row, { own, withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id), steps });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -721,17 +867,18 @@ export async function cancelRunFor(id: number, user: LivelyUser, d: AiRunDeps): 
   const shared = row ? await sharedSeatRunFor(row, user, d) : false;
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   const own = isOwnRun(row, user, shared);
-  if (isEndedRun(row.status)) return publicRun(row, { own });
+  const effort = await d.store.aiRunEffort(row.id);
+  if (isEndedRun(row.status)) return publicRun(row, { own, effort });
   if (row.executor === "job" && row.job_id != null) {
     await d.cancelJob(row.job_id, user);
     const synced = await syncRun((await d.store.getAiRun(row.id)) ?? row, d);
-    if (synced && isEndedRun(synced.status)) return publicRun(synced, { own });
+    if (synced && isEndedRun(synced.status)) return publicRun(synced, { own, effort });
     //  도는 중이면 판의 다음 박동이 받는다 — 실행 행은 작업이 끝날 때 따라 끝난다(reapJob → onJobEnded).
-    return publicRun(synced ?? row, { own });
+    return publicRun(synced ?? row, { own, effort });
   }
   //  프록시 실행은 몇 초짜리라 끊지 않는다 — 끝나는 대로 결과가 남고, 앱이 보지 않으면 그만이다.
   const ended = await d.store.finishAiRun(row.id, { status: "canceled", result: null, error: "취소했습니다" });
-  return publicRun(ended ?? row, { own });
+  return publicRun(ended ?? row, { own, effort });
 }
 
 /**
@@ -756,7 +903,10 @@ export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, 
     const seat = await seatTermsOf(settings, a, who, d).catch(() => undefined);
     if (seat === undefined) return { kind: "subscription", member: a.member, shared_seat: false, available: false, logged_in: null, reason: "실행 계정을 확인하지 못했습니다 — 잠시 뒤 다시 보세요", from };
     const shared = !!seat && seatShared(seat.facts);
-    const refusal = subscriptionRefusal(a, who, await tieOnce(a), seat);
+    //  #1639 앱 서버의 본인 구독 — 접수와 같은 판정(이 신원이 사람이 보지 않는 자리에서 왔으면 쓸 수 없다 · 못 읽으면 «쓸 수 없음» 쪽으로).
+    const own = !shared && isAppServerOwn({ requester: who.member, requester_kind: who.kind, account_kind: a.kind, account_member: a.member });
+    const unattended = own && (await d.appServerUnattended(user).catch(() => true));
+    const refusal = subscriptionRefusal(a, { ...who, unattended }, await tieOnce(a), seat);
     const loggedIn = refusal ? null : await d.subscriptionLoggedIn(a.member).catch(() => null);
     return { kind: "subscription", member: a.member, shared_seat: shared, available: !refusal && loggedIn !== false, logged_in: loggedIn, reason: refusal ?? (loggedIn === false ? (shared ? "AI 연결 필요 — 공용 시트 계정이 Claude 에 로그인해야 합니다" : "AI 연결 필요 — 그 구성원이 Claude 에 로그인해야 합니다") : null), from };
   };

@@ -92,6 +92,13 @@ test("E15 색인 — 겹침을 막는 색인만 싣고 찾기 색인은 싣지 �
   assert.deepEqual(lines, ["items 표: 겹치는 값 막기(code)"]);
 });
 
+test("E15b 조건부 unique — 어떤 행끼리 겹치면 안 되는지 말한다(조건 없는 문구와 구분된다)", () => {
+  const lines = describeTableChanges(rep({
+    added_indexes: [{ table: "vals", columns: ["address"], unique: true, where: "valid_to IS NULL" }],
+  }), []).changes;
+  assert.deepEqual(lines, ["vals 표: 겹치는 값 막기(address) — 조건 valid_to IS NULL 에 맞는 행끼리"]);
+});
+
 test("E7 새 판에 없는 표 — 비었으면 지움 · 행이 있으면 보관(행 수) · 보고서 뒤에 붙는다", () => {
   const gone: GoneTablePlan[] = [{ table: "logs", rows: 3, action: "archive" }, { table: "tmp", rows: 0, action: "drop" }];
   assert.deepEqual(describeTableChanges(rep({ created: ["x"] }), gone).changes, [

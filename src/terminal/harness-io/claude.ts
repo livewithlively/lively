@@ -78,6 +78,9 @@ export const claudeIo: HarnessSessionAdapter = {
   //     Permissions mode' 를 본다(둘을 섞으면 멀쩡한 입력창을 대화상자로 보고 영영 기다린다 — terminal.ts 머리말).
   term: {
     appMouse: true, choiceNeedsEnter: false, pastePlaceholder: true,
+    //  #5332 — 종전 동작 그대로를 이름 붙였다: ⌘C→^C 다리(#972·#1117 — 관측한 앱 드래그 선택이 있을 때만) · 맨 글 붙여넣기 ·
+    //   Shift+Tab 권한 모드(폰 «모드» 단추).
+    copyBridge: true, pasteBurst: false, permModes: true,
     startDialogRe: /trust (this|the) (folder|files)|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i,
   },
 };

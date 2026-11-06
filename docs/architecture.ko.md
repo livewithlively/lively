@@ -26,7 +26,7 @@
 | 인증 | `src/auth/bearer.ts` | 정적 토큰(`AUTH_TOKENS_JSON`) + **DB 토큰**(`auth_token`, sha256·revoke 즉시·재시작 불요). OAuth 2.1 인가서버(`src/org/auth/oauth-*.ts`, #1473)가 발급한 토큰도 같은 `auth_token` 에 들어가 이 검증기를 탄다 |
 | **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — knowledge·categories·projects-v6·task-v6·activity·context·domainmap-curation·**delivery(웹 관리/전달)** |
 | **전달/관리** | `src/capabilities/delivery.ts`(+ `delivery/`) | 웹 `/ui` '관리' 탭 — org-content(강제규칙·맥락·WIKI 인덱스·구성원)·토큰·**커스텀 훅(`org_hook`)·AI 도구(`org_tool`)·MCP 서버·런타임 설정**. admin/runtime scope·REST(웹) + MCP(에이전트) 양쪽 노출(#549 — 회수 가능한 DB 토큰만, 모든 쓰기는 `org_content_audit` 감사). 항목별 '구성원에게 미치는 효과' 의미 패널 + auto-approve |
-| **조직 지식(WIKI)** | `src/capabilities/knowledge.ts`(+ `knowledge/`) | `knowledge_save`/`knowledge_grep`/`knowledge_search`/`knowledge_get`/`knowledge_list`/`knowledge_set_lifecycle`/`knowledge_set_wiki`/`knowledge_link_category`/`knowledge_delete`(휴지통·사람전용) — 단일 `knowledge` 테이블이 진실원천(SoT). 신규 저장은 category 1개 + type(page-type) 필수(#290). 아래 §SoT 참조 |
+| **조직 지식(WIKI)** | `src/capabilities/knowledge.ts`(+ `knowledge/`) | `knowledge_save`/`knowledge_grep`/`knowledge_search`/`knowledge_get`/`knowledge_list`/`knowledge_set_lifecycle`/`knowledge_set_wiki`/`knowledge_set_searchable`(검색 제외 — 에이전트 검색·자동 소환·임베딩에서 뺌, 사람 화면은 표시를 달고 남음)/`knowledge_link_category`/`knowledge_delete`(휴지통·사람전용) — 단일 `knowledge` 테이블이 진실원천(SoT). 신규 저장은 category 1개 + type(page-type) 필수(#290). 아래 §SoT 참조 |
 | **분류축(category)** | `src/capabilities/categories.ts` | `category_*`(create/update/get/list/delete·edge_*) — 사업·제품·시스템 분류축. **제품 카테고리=도메인**(탈-repo, 단일 `category` 테이블) |
 | 프로젝트/과업 | `src/capabilities/projects-v6.ts` · `src/capabilities/task-*.ts` · `src/capabilities/activity.ts` | `project_*_v6`/`task_*_v6`/`activity_*` |
 | 도메인 맥락 | `src/capabilities/context.ts` | `context_overview`/`debt_list`/`repo_*`/`domainmap_proxy` — domainmap 읽기(리더 함수 직결) + repo 관리. (`all_domains`·`domain_list`/`domain_get` 은 **제거** — v6 `category_*` 가 대체) |
@@ -137,9 +137,17 @@ Docker: `docker compose up -d` 는 스토어(items-db, pgvector)만 띄운다 �
 
 ## 벡터/하이브리드 검색 (선택 — #172)
 
-지식 검색은 두 도구다: **`knowledge_grep`**(정확 텍스트·정규식 매칭, ripgrep 식 — 항상 동작) + **`knowledge_search`**(의미·자연어 **하이브리드** — 벡터 임베딩 ∪ 렉시컬 grep 을 **RRF**(`Σ 1/(rank+60)`)로 융합). 단어가 본문에 그대로 없어도 의미로 회수한다.
+지식 검색은 두 도구다: **`knowledge_search`**(찾기의 기본 — 낱말 **BM25** ∪ 벡터 임베딩을 **RRF**(`Σ 1/(rank+60)`)로 융합. 자연어든 키워드든 식별자든) + **`knowledge_grep`**(글자 그대로의 일치 · 정규식 · 건수, ripgrep 식 — 항상 동작). 단어가 본문에 그대로 없어도 의미로 회수한다.
 
-**기본 off** — 임베딩을 켜기 전엔 `knowledge_search` 도 grep 으로 자동 폴백한다(무중단·하위호환). 켜는 건 opt-in:
+낱말 색인은 확장 없이 일반 표에 있다(`knowledge_lex_doc` · `knowledge_lex_posting` — 낱말 규칙 `src/v6/knowledge-lex.ts`). 정비 스윕이 1분마다 `knowledge` 에 맞추고, 색인이 98% 차기 전이나 SQL 이 실패하면 검색은 grep 채널로 돌아간다. 파생 표라 비워도 된다 — `knowledge_chunk` 까지 세 표를 같이 비우면 스윕이 다시 만든다. 낱말 규칙을 바꾸면 `LEX_RULES_VERSION` 을 올린다. 이슈 번호 · 파일 경로 같은 식별자가 든 질의는 낱말 채널만 쓴다.
+
+지식 조각(`knowledge_chunk` — 절마다 벡터 하나, 규칙 `src/v6/knowledge-chunk.ts`)도 같은 스윕이 맞춘다. 글이 같은 조각은 벡터를 그대로 쓴다. 빈 벡터는 정비가 10분마다 100건, 최근 24시간 7,000건(`LIVELY_CHUNK_EMBED_DAILY_MAX`)까지 채운다. ⚠ 문서 벡터는 문서 앞 8,000자만 임베딩 서버로 보내지만 조각은 **검색 대상 문서의 본문 전체**(문서당 1,000조각까지)를 보낸다 — 외부 엔드포인트를 쓰는 배포는 전송 범위가 넓어진다. 끄는 길은 임베딩을 끄거나 일시중지하는 것이다. 차원을 바꾸면 다른 임베딩 칸처럼 `knowledge_chunk.embedding_vector` 도 손으로 다시 만든다.
+
+찾기(`knowledge_search`)와 자동 소환(`POST /api/ui/knowledge/recall`, 시드 훅 `knowledge-recall`)은 조각의 98% 에 지금 모델의 벡터가 있으면 조각으로 찾고, 그 전에는 문서 벡터로 찾는다(`src/v6/knowledge-chunk-search.ts`). 98% 는 그 찾기가 볼 범위에서 잰다 — 카테고리 제한이 있는 찾기 · 소환(category 인자 · 앱 범위 · 둘의 교집합)은 그 카테고리 지식의 조각만 센다. 그래서 다른 카테고리에 큰 묶음이 새로 들어와도 다 찬 범위는 조각으로 계속 찾고, 거꾸로 범위 안에 큰 묶음이 들어오면 워크스페이스 전체가 98% 를 넘어도 그 범위는 문서 벡터로 찾는다(`org_embeddings_status` 의 `chunk_search.active` 는 워크스페이스 전체 기준이다). 소환의 기준선 · 건수 · 질의는 서버가 정하고, 기준선을 잰 모델(bge-m3)이 아니면 소환은 문서 벡터로 남는다. 저장이 바꾼 조각은 곧바로 임베딩한다(문서당 40개까지 · 나머지는 정비가). 소환 훅은 짧은 프롬프트를 앞 턴과 묶어 찾으려고 사람이 친 글 앞 300자를 임시 폴더(`lively-hooks`, 나만 읽는 파일)에 하루 남긴다. 되돌리기는 `org_embeddings_chunk_search {enabled:false}` 다 — 30초 안에 문서 벡터로 돌아가고 조각 색인과 임베딩은 계속 돈다. 지금 상태는 `org_embeddings_status` 의 `chunk_backlog` · `chunk_search` 에 나온다.
+
+세션의 찾기 · 열람은 `knowledge_search_log` 에 남는다(90일, 세션 보존기간이 더 짧으면 그 기간 · 세션 완전 삭제 때 함께 지움 · 자동 소환 길은 글을 남기지 않음). `db_query` 내장 소스로는 읽을 수 없다.
+
+**임베딩은 기본 off** — 켜기 전엔 `knowledge_search` 가 낱말 채널만 쓴다(무중단·하위호환). 켜는 건 opt-in:
 
 ```bash
 # 1) .env: EMBEDDINGS_PROVIDER=http  (기본 사이드카 = Ollama bge-m3, OpenAI-compatible /v1/embeddings)
@@ -152,8 +160,7 @@ npm run build && node --env-file-if-exists=.env scripts/backfill-embeddings.mjs
 - **pgvector 필요** — items DB(`ITEMS_DATABASE_URL`)에 `vector` 확장. 부팅 시 `CREATE EXTENSION IF NOT EXISTS vector` + `knowledge.embedding_vector vector(N)` + HNSW(cosine) 인덱스를 멱등 생성한다(권한 없거나 확장 부재면 경고 후 **렉시컬 폴백** — 깨지지 않음).
 - **추론 seam = config-over-code(모델 스왑 자유).** provider/base_url/model/dimensions/auth_env 는 `org_runtime_config.embedding_config`(웹·DB, 무재시작) 또는 `.env` `EMBEDDINGS_*`(부트스트랩 시드)로 정한다 — DB 우선. **계약은 OpenAI-compatible `/v1/embeddings`** 라 OpenAI·로컬 TEI/vLLM·고객 자체 엔드포인트로 base_url 만 바꿔 교체 가능. 시크릿은 `EMBEDDINGS_AUTH_ENV`=환경변수 **이름**만(값 미저장).
 - **모델 교체:** `EMBEDDINGS_MODEL` 변경 → `docker compose exec embeddings ollama pull <model>` → 차원이 다르면 `EMBEDDINGS_DIMENSIONS` 도 바꾸고 `scripts/backfill-embeddings.mjs --all`. 기본 bge-m3(1024d, 다국어)는 한국어 강화 시 KURE-v1(동일 1024d → 재임베딩만)로 무손실 스왑.
-- 끄기: `EMBEDDINGS_PROVIDER=off`(또는 org_runtime_config provider=off) → 즉시 grep 으로 복귀.
-- 렉시컬 채널의 한국어 형태소 FTS(mecab-ko)·리랭커는 후속(현재 렉시컬은 ILIKE 토큰-AND·정규식, RRF 의 정확매칭 절반을 담당).
+- 끄기: `EMBEDDINGS_PROVIDER=off`(또는 org_runtime_config provider=off) → 즉시 낱말 채널만으로 복귀.
 
 ## "권한으로 조절"의 실제 구현 (자유 SQL 안전장치)
 

@@ -20,7 +20,7 @@ import {
   linkProjectKnowledge, unlinkProjectKnowledge, linkProjectEdge, unlinkProjectEdge,
 } from "../v6/project-store.js";
 import {
-  upsertKnowledge, restoreKnowledge, deleteKnowledge, setKnowledgeLifecycle, setKnowledgeWiki,
+  upsertKnowledge, restoreKnowledge, deleteKnowledge, setKnowledgeLifecycle, setKnowledgeWiki, setKnowledgeSearchable,
   setKnowledgePropsUi, moveKnowledge, linkKnowledgeCategory, unlinkKnowledgeCategory,
   linkKnowledge, unlinkKnowledge, linkKnowledgeSource, unlinkKnowledgeSource,
 } from "../v6/knowledge-store.js";
@@ -120,6 +120,8 @@ export const knowledgeUpsertInput = (s: Record<string, any>) => ({
   supersedes: s.supersedes ?? undefined, summary: s.summary ?? null, sort: s.sort ?? undefined,
   is_wiki: s.is_wiki ?? undefined, type: s.type ?? undefined, is_folder: s.is_folder ?? undefined,
   parent_name: s.parent_name ?? null, confidence: s.confidence ?? undefined, source: s.source ?? undefined,
+  // #5169 — 이 칸이 생기기 전 스냅샷엔 없다(undefined = 지금 값 보존 — resolveUpsertFacets).
+  searchable: typeof s.searchable === "boolean" ? s.searchable : undefined,
 });
 
 const KNOWLEDGE_OPS: Record<string, Apply> = {
@@ -131,6 +133,10 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
   set_wiki: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
     await setKnowledgeWiki(String(r.entity_key), !!s.is_wiki, ctx);
+  },
+  set_searchable: async (r, d, ctx) => {
+    const s = rec(d === "before" ? r.before : r.after);
+    await setKnowledgeSearchable(String(r.entity_key), s.searchable !== false, ctx);   // #5169 — 칸 없는 옛 스냅샷은 기본값(검색 대상)
   },
   set_props_ui: async (r, d, ctx) => {
     // 전체 교체 — 스냅샷에 없는 키는 null(제거)로 명시해 병합 시맨틱에서도 정확 복원.
@@ -241,7 +247,7 @@ const OP_LABEL: Record<string, string> = {
   set_status: "상태 변경", update: "수정", set_folder: "폴더 경로 변경", delete: "삭제", insert: "생성",
   restore: "복원", set_members: "팀원 변경", set_repos: "레포 연결 변경",
   link_knowledge: "지식 연결", unlink_knowledge: "지식 연결 해제", link_project: "프로젝트 연결",
-  unlink_project: "프로젝트 연결 해제", set_lifecycle: "수명 상태 변경", set_wiki: "WIKI 핀 토글",
+  unlink_project: "프로젝트 연결 해제", set_lifecycle: "수명 상태 변경", set_wiki: "WIKI 핀 토글", set_searchable: "검색 제외 토글",
   set_props_ui: "속성 표시 설정", move: "이동", unlink_category: "카테고리 해제",
   link_source: "자료 연결", unlink_source: "자료 연결 해제", set_view: "보기 설정",
 };

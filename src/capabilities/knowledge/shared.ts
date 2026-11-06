@@ -179,3 +179,8 @@ export function wikiLinkInfo(w: WikiLinkResult | undefined): Record<string, unkn
   }
   return info;
 }
+
+/** 세션이 부른 호출인가 — MCP, 또는 세션 헤더를 실은 REST. 웹 화면 · 앱 토큰(앱 서버 호출 포함)은 아니다. 검색 실패 안내와 찾기 기록이 같은 판정을 쓴다. */
+export function isSessionCall(user: LivelyUser, ctx?: CapabilityCtx): boolean {
+  return !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
+}

@@ -516,6 +516,44 @@ try {
   const viaCap = await capStart.handler({ app_id: "notes", route: "/api/jobs/run", body: { a: 1 } }, person(), { source: "mcp" });
   const noApp = await errOf(capStart.handler({ route: "/x" }, person(), { source: "mcp" }));
   chk("W1 능력 app_job_start — 사람(MCP) · app_id 로 · 출처 mcp · app_id 없으면 400", viaCap.id > 0 && (await jobRow(viaCap.id)).source === "mcp" && noApp?.status === 400, JSON.stringify(viaCap).slice(0, 200));
+  // ── U 사람이 보지 않는 자리(#1639) — 시작한 자리가 작업 행에 남고 · 앱이 시작한 다음 작업이 물려받고 · 칸이 아직 없을 때(롤 창) ──
+  await resetJobs();
+  await q(`INSERT INTO org_session_state(id, owner, kind) VALUES('box-pgt-alice-aaaaaaaa','pgt-alice','human'),('box-pgt-alice-bbbbbbbb','pgt-alice','task')`);
+  const viaOf = async (session) => (await capStart.handler({ app_id: "notes", route: "/api/jobs/run" }, person(), { source: "mcp", session })).id;
+  const [noSession, humanS, taskS, unknownS, externalS] = [await viaOf(undefined), await viaOf("box-pgt-alice-aaaaaaaa"), await viaOf("box-pgt-alice-bbbbbbbb"), await viaOf("box-pgt-alice-cccccccc"), await viaOf("claude-1234")];
+  //  작업 AI 의 토큰 — 세션을 안 실어도 그 토큰으로 정해진다(그 작업 행의 토큰 지문 앞자리를 실은 주체).
+  const JOB_TOK = "ab12cd34ef56";
+  await q(`INSERT INTO org_agent_job(status, requester, account_kind, account_member, cwd, prompt, timeout_sec, mcp_token_hash) VALUES('running','pgt-alice','subscription','pgt-alice','/work/shared/project/1','일',600,$1)`, [JOB_TOK + "0".repeat(52)]);
+  const viaJobToken = (await capStart.handler({ app_id: "notes", route: "/api/jobs/run" }, { ...person(), tokenHashPrefix: JOB_TOK }, { source: "mcp" })).id;
+  await q(`DELETE FROM org_agent_job WHERE mcp_token_hash=$1`, [JOB_TOK + "0".repeat(52)]);
+  const flags = [await js.appJobUnattended(noSession), await js.appJobUnattended(humanS), await js.appJobUnattended(taskS), await js.appJobUnattended(unknownS), await js.appJobUnattended(externalS), await js.appJobUnattended(viaJobToken)];
+  chk("U1 능력 app_job_start — 세션 없음 · 사람 세션 · 외부 실행 id 는 false · 위탁 세션 · 모르는 세션 · 작업 AI 의 토큰은 true", JSON.stringify(flags) === JSON.stringify([false, false, true, true, false, true]), JSON.stringify(flags));
+  chk("U1b 표시는 칸 묶음 밖이다(행 읽기에 안 실린다 — 롤 창)", !("unattended" in (await js.getAppJob(taskS))) && !("unattended" in (await js.getAppJob(taskS, { view: true }))), Object.keys(await js.getAppJob(taskS)).join());
+  await resetJobs();
+  const marked = await svc.startAppJob({ app_id: "notes", route: "/api/jobs/run" }, person(), { unattended: true }, deps);
+  const inMarked = await resolveAppServerPrincipal(tokUser("notes"), (await claimOf(marked.id)).run);
+  const childOfMarked = await start({}, inMarked);
+  const plainTop = await start({});
+  const childOfPlain = await start({}, await resolveAppServerPrincipal(tokUser("notes"), (await claimOf(plainTop.id)).run));
+  chk("U2 앱이 시작한 다음 작업은 표시를 물려받는다 · 표시 없는 작업의 다음 작업은 false", inMarked.appJobId === marked.id && (await js.appJobUnattended(marked.id)) === true
+    && (await js.appJobUnattended(childOfMarked.id)) === true && (await js.appJobUnattended(childOfPlain.id)) === false, JSON.stringify({ c: childOfMarked.id, p: childOfPlain.id }));
+  //  U3 칸이 아직 없을 때 — 표시 읽기 false · 보통 작업 · 작업 안의 다음 작업은 그대로 · 표시를 달 작업만 실패하고 행을 남기지 않는다. 끝나면 같은 DDL 로 되돌린다.
+  await resetJobs();
+  const rollTop = await start({});
+  const rollIn = await resolveAppServerPrincipal(tokUser("notes"), (await claimOf(rollTop.id)).run);
+  await q(`ALTER TABLE org_app_job DROP COLUMN IF EXISTS unattended`);
+  let rollRead = null, rollChild = null, rollMarked = null, rollN = null;
+  try {
+    rollRead = await js.appJobUnattended(rollTop.id);
+    rollChild = await start({}, rollIn).catch((e) => ({ err: String(e?.message ?? e) }));
+    const before = (await q(`SELECT count(*)::int AS n FROM org_app_job`))[0].n;
+    rollMarked = await errOf(svc.startAppJob({ app_id: "notes", route: "/api/jobs/run" }, person(), { unattended: true }, deps));
+    rollN = (await q(`SELECT count(*)::int AS n FROM org_app_job`))[0].n - before;
+  } finally {
+    await q(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false`);
+  }
+  chk("U3 칸이 없을 때 — 표시 읽기 false · 작업 안의 다음 작업은 된다 · 표시를 달 작업만 42703 · 행 없음", rollRead === false && rollChild?.id > 0 && rollMarked?.code === "42703" && rollN === 0,
+    JSON.stringify({ rollRead, rollChild, code: rollMarked?.code, rollN }));
 } catch (e) {
   fail++;
   console.error("시험 도중 예외:", e);

@@ -80,7 +80,7 @@ export interface ServerCallInput {
   level: "L0" | "L1";
   /** 인자 JSON 글. */
   body: string;
-  caller: { userId: string; name: string; scopes: string[] };
+  caller: { userId: string; name: string; scopes: string[]; unattended?: boolean };
   /** 답 본문을 이만큼(바이트)까지 모은다 — 넘는 것은 읽어 버리고 크기만 센다(흐름은 끝까지 읽는다 · 셈 · 자리를 지키려고). */
   maxBytes: number;
 }
@@ -140,7 +140,7 @@ export async function callAppServerRoute(i: ServerCallInput, deps: ServerCallDep
   try {
     const made = await cs.insertAppCall({
       appId: i.app.id, purpose: i.purpose, tool: i.tool, requester: i.caller.userId, requesterName: i.caller.name, variant: i.app.variant, alias,
-      functionName: row.function_name, level: i.level, scopes: i.caller.scopes, timeoutS: policy.timeout_s,
+      functionName: row.function_name, level: i.level, scopes: i.caller.scopes, timeoutS: policy.timeout_s, ...(i.caller.unattended ? { unattended: true } : {}),
     });
     callId = made.row.id;
     const slug = deps.slug() ?? "local";
@@ -222,7 +222,7 @@ export interface ServerJobInput {
   route: string;
   args: Record<string, unknown>;
   /** 부른 사람 — 작업을 시작하는 사람이고, 작업의 돌기 신원은 scopes(부른 연결의 권한 ∩ 동의)를 넘지 않는다. */
-  caller: { userId: string; scopes: string[]; tokenScopes: string[]; tokenHashPrefix?: string };
+  caller: { userId: string; scopes: string[]; tokenScopes: string[]; tokenHashPrefix?: string; unattended?: boolean };
   signal?: AbortSignal;
   progress?: (p: { progress: number; total?: number; message?: string }) => Promise<void>;
 }
@@ -239,7 +239,7 @@ export async function runServerToolJob(i: ServerJobInput, deps: ServerCallDeps =
   let view: Record<string, unknown>;
   try {
     view = await startAppJob({ app_id: i.app.id, route: i.route, body: i.args, label: `AI 도구 ${i.tool}` }, user,
-      { source: MCP_TOOL_JOB_SOURCE, scopeCeiling: [...i.caller.scopes] }, deps.jobDeps());
+      { source: MCP_TOOL_JOB_SOURCE, scopeCeiling: [...i.caller.scopes], ...(i.caller.unattended ? { unattended: true } : {}) }, deps.jobDeps());
   } catch (e) {
     //  작업 상한(대기 줄 · 하루 수) · 그 밖의 거절 — 사람이 읽을 글은 그대로, 코드만 단다(위 판정을 지난 뒤라 서버 상태의 거절은 드물다).
     if (e instanceof HttpError && !e.body?.code) throw fail(e.status, e.status === 429 ? "app_jobs_limit" : "app_job_refused", e.message);

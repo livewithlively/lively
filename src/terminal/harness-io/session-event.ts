@@ -154,6 +154,9 @@ export type SessionEvent =
   //  승인·선택지 — 답을 반드시 보내야 하는 요청이다(호출부가 미응답 추적).
   | { t: "permission.asked"; ask: PermissionAsk }
   | { t: "permission.resolved"; id: string }
+  //  #5398 — 붙는 순간의 **지금 걸린 물음 id 전부**. 화면은 끊겨 있던 동안(숨은 탭 · 재접속) `permission.resolved` 를
+  //   못 받았으니, 이 목록에 없는 카드를 접는다. 서버가 연결 첫머리에서만 보낸다(routes.ts `/events`).
+  | { t: "permission.pending"; ids: string[] }
   //  이 세션이 무엇을 할 수 있나(슬래시·스킬·모델·MCP).
   | { t: "facts"; facts: SessionFacts }
   | { t: "usage"; usage: UsageInfo }

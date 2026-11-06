@@ -9,6 +9,7 @@
 //   ⑥ 30초 넘김(E6) ⑦ 응답 상한(E7) ⑧ 서버 꺼짐 · 미배포(E8) + 돌기 신원 주체(E10) · #5081 이 읽는 모양(E11) · 정비(E12).
 //  BG1~BG7 30초 넘는 도구(run.background — 결정 상민 2026-10-29): 백그라운드 작업(#4486)으로 돌리고 대신 기다림 — 가짜 Lambda 의 비동기 부르기가 이벤트를
 //   **진짜 검사 층의 작업 길**(claim · 결과 보고)로 넘긴다 · 진행 알림 · 못 끝나면 작업 번호 → app_job_get · 작업의 권한 상한(부른 연결의 권한).
+//  OW1~OW9 앱 서버가 보낸 본인 구독 실행(#1639): 도구를 부른 자리(사람 · 위탁 세션 · 작업 AI)가 부르기 · 작업 행에 남고, 앱이 그 돌기 신원으로 실제 app_ai_run 능력을 부를 때 판정이 그것을 읽는다.
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로
 import pg from "pg";
 import crypto from "node:crypto";
@@ -117,6 +118,12 @@ try {
   gw.post("/api/test/app-jobs", sessionOrBearer(verifier, { appServer: true }), async (req, res) => {
     try { res.json(await startAppJob(req.body, req.auth?.extra, {}, spawnDeps)); } catch (e) { res.status(e?.status ?? 500).json({ message: String(e?.message ?? e) }); }
   });
+  //  #1639 앱 코드가 AI 실행을 보내는 문 — 실제 app_ai_run 능력(POST /api/ui/ai-runs 와 같은 처리기 · 살아 있는 의존).
+  const { aiRunCapabilities } = await import(`${D}/capabilities/ai-runs.js`);
+  const aiRunCap = aiRunCapabilities.find((c) => c.name === "app_ai_run");
+  gw.post("/api/test/ai-runs", sessionOrBearer(verifier, { appServer: true }), async (req, res) => {
+    try { res.json(await aiRunCap.handler(req.body, req.auth?.extra, { source: "web" })); } catch (e) { res.status(e?.status ?? 500).json({ message: String(e?.message ?? e) }); }
+  });
   registerMcpTransport(gw, bearerWithResourceMetadata(verifier));
   gwServer = http.createServer(gw);
   await new Promise((r) => gwServer.listen(0, "127.0.0.1", r));
@@ -142,9 +149,9 @@ try {
   };
   const tok = { alice: await oauthToken("alice"), bob: await oauthToken("bob"), dana: await oauthToken("dana") };
   tok.carol = (await mintToken({ userId: "carol", memberId: "carol", scopes: ["memory"] }, "pgt")).token;   // 좁은 토큰 — memory 하나
-  const mcp = async (t) => {
+  const mcp = async (t, headers = {}) => {
     const c = new Client({ name: "pgt", version: "0" });
-    await c.connect(new StreamableHTTPClientTransport(new URL(`${GW}/mcp`), { requestInit: { headers: { authorization: `Bearer ${t}` } } }));
+    await c.connect(new StreamableHTTPClientTransport(new URL(`${GW}/mcp`), { requestInit: { headers: { authorization: `Bearer ${t}`, ...headers } } }));
     return {
       list: async () => (await c.listTools()).tools,
       call: async (name, args = {}) => { try { return await c.callTool({ name, arguments: args }); } catch (e) { return { thrown: String(e?.message ?? e) }; } },
@@ -169,6 +176,8 @@ try {
     S("ask_policy", "POST /api/tools/ask?src=mcp", { input: { type: "object", properties: { q: { type: "string", description: "물을 말" }, n: { type: "integer" } }, required: ["q"] } }),
     S("big_answer", "/api/tools/big"), S("slow_tool", "/api/tools/slow"), S("fail_tool", "/api/tools/fail"), S("png_tool", "/api/tools/png"),
     S("after_tool", "/api/tools/after"), S("propose_tool", "/api/tools/ask", { level: "L1" }),
+    S("own_tool", "/api/tools/own"), S("own_bg", "/api/tools/own", { level: "L1", run: { kind: "server", route: "/api/tools/own", background: true } }),
+    S("own_nested_bg", "/api/tools/own-nested", { level: "L1", run: { kind: "server", route: "/api/tools/own-nested", background: true } }),
     S("ask_bg", "POST /api/tools/ask", { level: "L1", input: { type: "object", properties: { q: { type: "string" } }, required: ["q"] }, run: { kind: "server", route: "POST /api/tools/ask", background: true } }),
     S("slow_bg", "/api/tools/slow", { level: "L1", run: { kind: "server", route: "/api/tools/slow", background: true } }),
     S("fail_bg", "/api/tools/fail", { level: "L1", run: { kind: "server", route: "/api/tools/fail", background: true } }),
@@ -221,6 +230,22 @@ try {
           body: J({ route: "/api/tools/ask", body: { q: "자식" }, wait: 10 }) });
         res.writeHead(200, { "content-type": "application/json" });
         res.end(J({ child: { status: r.status, body: await r.json().catch(() => null) } }));
+        return;
+      }
+      if (u.pathname === "/api/tools/own") {
+        //  #1639 받은 돌기 신원으로 AI 실행을 보낸다 — 판정이 낸 상태 · 글을 그대로 돌려준다.
+        const r = await fetch(`${GW}/api/test/ai-runs`, { method: "POST", headers: { authorization: `Bearer ${fn.token}`, "x-lively-identity": id, "content-type": "application/json" },
+          body: J({ prompt: "내 질문", agent: true }) });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(J({ run: { status: r.status, body: await r.json().catch(() => null) } }));
+        return;
+      }
+      if (u.pathname === "/api/tools/own-nested") {
+        //  #1639 작업 안에서 다음 작업을 시작해 그 안에서 AI 실행을 보낸다 — 앱 코드가 작업 하나로 «사람이 보지 않는 자리» 표시를 벗지 못한다.
+        const r = await fetch(`${GW}/api/test/app-jobs`, { method: "POST", headers: { authorization: `Bearer ${fn.token}`, "x-lively-identity": id, "content-type": "application/json" },
+          body: J({ route: "/api/tools/own", wait: 10 }) });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(J({ child: await r.json().catch(() => null) }));
         return;
       }
       if (u.pathname === "/api/tools/big") { res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); res.end("가".repeat(100_000)); return; }   // 300,000바이트
@@ -658,6 +683,84 @@ try {
     rollPlain?.status === "done" && rollPlain?.result?.json?.me?.status === 200 && rollPlain?.result?.json?.me?.body?.userId === "alice"
       && rollTool?.isError === true && codeOf(rollTool) === "executor_failed" && rollRows.length === nJobsR + 1 && rollRows.at(-1)?.source === "person",
     J({ rollPlain: rollPlain?.err ?? { s: rollPlain?.status, me: rollPlain?.result?.json?.me?.status }, rollTool: codeOf(rollTool), n: [nJobsR, rollRows.length], last: rollRows.at(-1) }));
+
+  // ── OW 앱 서버가 보낸 본인 구독 실행(#1639) — 한 줄 끝까지: 도구 → 부르기 · 작업 행의 표시 → 돌기 신원 → 실제 app_ai_run 판정 ──
+  //  앨리스가 wiki 를 자기 구독으로 돌리게 건다(구독은 본인만 건다 — app_ai_account_set 과 같은 칸). 판정을 지난 실행은 이 시험 자리에 실행면이 없어 501 이다(세션 컨테이너 없음).
+  const aiStore = await import(`${D}/ai-runs/store.js`);
+  await aiStore.updateAiAccountRow(async (cur) => ({ next: { ...(cur ?? {}), apps: { wiki: { default: { kind: "subscription", member: "alice" } } } }, out: null }));
+  const runRows = async () => (await itemsPool.query(`SELECT id, requester, requester_kind, account_kind, account_member, status, error FROM org_app_ai_run ORDER BY id`)).rows.map((x) => ({ ...x, id: Number(x.id) }));
+  const runOf = (r) => { try { return JSON.parse(textOf(r))?.run ?? null; } catch { return null; } };
+  const passed = (x) => x?.status === 200 || x?.status === 501;   // 판정을 지났다 — 실행면이 있으면 200 · 없으면 501
+  const lastCallFlag = async () => (await itemsPool.query(`SELECT unattended FROM org_app_call ORDER BY id DESC LIMIT 1`)).rows[0]?.unattended;
+  const lastJobFlag = async () => (await itemsPool.query(`SELECT unattended FROM org_app_job ORDER BY id DESC LIMIT 1`)).rows[0]?.unattended;
+
+  const nRuns0 = (await runRows()).length;
+  const ow1 = runOf(await A.call("own_tool"));
+  const row1 = (await runRows()).at(-1);
+  chk("OW1 ★ 세션 머리글 없는 연결로 주인 본인이 부른 도구 → 앱 서버의 AI 실행이 구독 판정을 지난다 · 실행 행 = 앱 서버 경유 · 본인 구독 · 부르기 표시 false",
+    passed(ow1) && (await runRows()).length === nRuns0 + 1 && row1?.requester === "alice" && row1?.requester_kind === "app_server" && row1?.account_kind === "subscription"
+      && row1?.account_member === "alice" && (await lastCallFlag()) === false, J({ ow1, row1 }));
+  console.log(`# OW1 판정을 지난 뒤 — ${J({ status: ow1?.status, message: String(ow1?.body?.message ?? "").slice(0, 80), app_server_own: ow1?.body?.app_server_own ?? null, run: row1?.status, error: String(row1?.error ?? "").slice(0, 80) })}`);
+  const ow2 = runOf(await Bb.call("own_tool"));
+  await cap("me_app_grant").handler({ app_id: "wiki" }, P("bob"), ctx);
+  const ow2b = runOf(await Bb.call("own_tool"));
+  chk("OW2 ★ 남(밥)이 부른 도구 — 구독 주인이 아니라 403 · 실행 행을 남기지 않는다", ow2b?.status === 403 && /주인 본인일 때만/.test(ow2b?.body?.message ?? "") && (await runRows()).length === nRuns0 + 1,
+    J({ ow2, ow2b }));
+
+  //  세션 — 사람 세션 · 위탁 세션(같은 주인). 이 시험 자리는 tmux 가 없어 상태 행이 곧 세션이다.
+  const seed = (id, kind) => itemsPool.query(`INSERT INTO org_session_state(id, owner, kind) VALUES($1,'alice',$2)`, [id, kind]);
+  await seed("box-alice-aaaaaaaa", "human"); await seed("box-alice-bbbbbbbb", "task");
+  const Ah = await mcp(tok.alice, { "x-lively-session": "box-alice-aaaaaaaa" });
+  const At = await mcp(tok.alice, { "x-lively-session": "box-alice-bbbbbbbb" });
+  const Au = await mcp(tok.alice, { "x-lively-session": "box-alice-cccccccc" });
+  const Ax = await mcp(tok.alice, { "x-lively-session": "claude-11111111" });
+  const ow3 = runOf(await Ah.call("own_tool"));
+  chk("OW3 ★ 사람 세션에서 부른 도구 — 판정을 지난다 · 부르기 표시 false", passed(ow3) && (await lastCallFlag()) === false, J(ow3));
+  const nRuns4 = (await runRows()).length;
+  const ow4 = runOf(await At.call("own_tool"));
+  chk("OW4 ★ 위탁 세션에서 부른 도구(주인 본인 토큰이어도) — 부르기 표시 true · 403 · 실행 행 없음", ow4?.status === 403 && /사람이 보는 세션/.test(ow4?.body?.message ?? "")
+    && (await lastCallFlag()) === true && (await runRows()).length === nRuns4, J(ow4));
+  const ow5 = runOf(await Au.call("own_tool"));
+  chk("OW5 모르는 세션에서 부른 도구 — 막는 쪽(403 · 표시 true)", ow5?.status === 403 && (await lastCallFlag()) === true, J(ow5));
+  const ow5b = runOf(await Ax.call("own_tool"));
+  chk("OW5b 외부 실행 id — 게이트웨이가 띄우지 않은 하네스라 사람으로 본다(판정을 지난다 · 표시 false)", passed(ow5b) && (await lastCallFlag()) === false, J(ow5b));
+  const ow6 = runOf(await Ah.call("own_bg"));
+  const ow6Flag = await lastJobFlag();
+  chk("OW6 ★ background 도구(사람 세션) — 작업의 돌기 신원으로도 판정을 지난다 · 작업 표시 false", passed(ow6) && ow6Flag === false, J({ ow6, ow6Flag }));
+  const ow7 = runOf(await At.call("own_bg"));
+  const ow7Flag = await lastJobFlag();
+  chk("OW7 ★ background 도구(위탁 세션) — 작업 표시 true · 403", ow7?.status === 403 && /사람이 보는 세션/.test(ow7?.body?.message ?? "") && ow7Flag === true, J({ ow7, ow7Flag }));
+  const ow8Raw = await At.call("own_nested_bg");
+  const ow8 = (() => { try { return JSON.parse(textOf(ow8Raw))?.child?.result?.json?.run ?? null; } catch { return null; } })();
+  const nested = (await itemsPool.query(`SELECT depth, unattended FROM org_app_job ORDER BY id DESC LIMIT 2`)).rows;
+  chk("OW8 ★ 위탁 세션 → 작업 → 앱이 시작한 다음 작업 — 표시를 물려받아 403(작업 하나로 표시를 벗지 못한다)",
+    ow8?.status === 403 && nested[0]?.depth === 1 && nested.every((x) => x.unattended === true), J({ ow8, nested }));
+  await At.call("spawn_tool", {});
+  const ow8b = await lastJobFlag();
+  await Ah.call("spawn_tool", {});
+  const ow8c = await lastJobFlag();
+  chk("OW8b ★ 위탁 세션 → 동기 도구 → 앱이 시작한 작업 — 부르기의 표시를 물려받는다 · 사람 세션의 동기 도구면 false", ow8b === true && ow8c === false, J({ ow8b, ow8c }));
+  //  작업 AI 의 토큰 — 사람이 시킨 작업(앱 작업이 아니라 일반 토큰)의 AI 가 앱 도구를 거쳐 다시 구독을 돌리려는 길.
+  const jt = await mintToken({ userId: "alice", memberId: "alice", scopes: MEMBER_SCOPES }, "agent-job");
+  await itemsPool.query(`INSERT INTO org_agent_job(status, requester, account_kind, account_member, cwd, prompt, timeout_sec, mcp_token_hash) VALUES('running','alice','subscription','alice','/work/shared/project/1','일',600,$1)`, [jt.tokenHash]);
+  const Aj = await mcp(jt.token);
+  const ow9 = runOf(await Aj.call("own_tool"));
+  chk("OW9 ★ 작업 AI 의 토큰으로 부른 도구 — 부르기 표시 true · 403(작업이 앱 도구를 거쳐 구독을 낳지 못한다)", ow9?.status === 403 && /사람이 보는 세션/.test(ow9?.body?.message ?? "") && (await lastCallFlag()) === true, J(ow9));
+  await itemsPool.query(`DELETE FROM org_agent_job WHERE mcp_token_hash=$1`, [jt.tokenHash]);
+  //  롤 창 — 표시 칸이 아직 없을 때: 표시 읽기는 false · 보통 부르기는 돈다 · 표시를 달 부르기만 실패한다(닫힘). 끝나면 같은 DDL 로 되돌린다.
+  let rollOwn = null, rollMachine = null, rollRead = null;
+  await dbc.query(`ALTER TABLE org_app_call DROP COLUMN IF EXISTS unattended`);
+  try {
+    rollOwn = await A.call("ask_policy", { q: "롤 창" });
+    rollMachine = await At.call("ask_policy", { q: "롤 창 위탁" });
+    rollRead = await cs.appCallUnattended(row13.id);
+  } finally {
+    await dbc.query(`ALTER TABLE org_app_call ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false`);
+  }
+  chk("OW10 롤 창(표시 칸이 아직 없음) — 보통 부르기는 그대로 · 표시 읽기 false · 표시를 달 부르기만 실패(닫힘)",
+    !rollOwn?.isError && rollRead === false && rollMachine?.isError === true && codeOf(rollMachine) === "executor_failed", J({ rollOwn: rollOwn?.isError, rollRead, machine: codeOf(rollMachine) }));
+  await aiStore.updateAiAccountRow(async () => ({ next: {}, out: null }));
+  for (const c of [Ah, At, Au, Ax, Aj]) await c.close();
 
   // ── E12 정비 ──
   const st1 = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "t", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 3 });

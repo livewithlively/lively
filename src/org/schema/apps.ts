@@ -321,6 +321,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   권한 상한(부른 연결의 권한 ∩ 그 사람의 앱 동의 — 앱이 시작한 작업은 시작한 주체의 권한을 물려받는다). 다른 작업은 NULL.
   //   돌기 신원을 풀 때 source 'mcp-tool' 인 작업만 이 칸을 따로 읽는다(apps/app-jobs.ts resolveJobRunPrincipal — 칸 묶음 밖이라 롤 창에도 다른 작업이 안 깨진다).
   await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS scope_ceiling TEXT[];`);
+  //  #1639 unattended — 이 작업의 사람 신원이 사람이 보지 않는 자리(위탁 · 상시 세션 · 작업 AI)에서 왔다. 그 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended).
+  //   시작할 때 정해지고 바뀌지 않는다 · 작업이 시작한 작업은 물려받는다. ⚠ 칸 묶음(LIGHT)에 넣지 않고 그 작업일 때만 적고 따로 읽는다(apps/app-jobs-store.ts 머리말 — 롤 창).
+  await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false;`);
   //  org_app_call(#5053 앱 v2-42) — 게이트웨이가 앱 서버의 라우트 하나를 **동기로** 부른 한 건(지금은 앱이 선언한 MCP 도구 · run.kind "server").
   //   흐름: dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원) → done · failed
   //   (게이트웨이가 답을 다 받았을 때 · 하우스키핑이 끝맺지 못한 줄을 닫는다). 판정은 apps/app-server-call-plan.ts · 흐름은 apps/app-server-call.ts.
@@ -352,6 +355,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       ended_at TIMESTAMPTZ
     );
   `);
+  //  #1639 unattended — org_app_job 의 같은 칸과 같은 뜻(사람이 보지 않는 자리에서 부른 도구). ⚠ COLS 에 넣지 않는다(apps/app-server-call-store.ts — 롤 창).
+  await pool.query(`ALTER TABLE org_app_call ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_call_open_idx ON org_app_call(id) WHERE status IN ('dispatched','running');`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_call_ended_idx ON org_app_call(ended_at) WHERE ended_at IS NOT NULL;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
@@ -703,6 +708,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   사람 홈 없는 작업 컨테이너의 작업 AI 토큰이 쓴다 — 그 AI 를 부린 것은 앱 서버 코드라 사람의 다른 길(세션 · 파일 · 계정)을 열지 않는다.
   //   app_id 없이는 뜻이 없다(검증이 거부한다 — tokens.verifyDbToken).
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_server_principal BOOLEAN NOT NULL DEFAULT false;`);
+  //  tool_ceiling — 이 토큰으로 부를 수 있는 도구 상한(JSON 글 배열, 정확한 이름). 앱 AI 작업 토큰이 앱의 작업별 허용 목록(ai.tools)을 싣는다.
+  //   앱 동의와 둘 다 통과해야 한다(apps/principal.appToolAllowed). NULL = 상한 없음. 배열이 아니면 아무것도 허락하지 않는다(tokens.verifyDbToken).
+  await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS tool_ceiling JSONB;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS auth_token_app_idx ON auth_token(app_id) WHERE app_id IS NOT NULL;`);
   //  org_session_state.app_id — 세션이 어느 앱으로 떴나(desired-state 미러).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS app_id TEXT;`);

@@ -92,7 +92,8 @@ import { trashMapFor } from "../sessions/session-trash.js";                     
 import { sessionHandoffInput } from "./session-handoff.js";
 import { forkCheckFromNodeStat, forkInheritsTask, forkRefusal, sessionForkInput, shouldAskNodeForTranscript } from "./session-fork.js";   // #4135 — 세션 복제(이 대화를 아는 새 세션)
 import { sessionTaskOf, sessionTaskIdsFor } from "../v6/session-task.js";   // #4135 — 복제본이 물려받을 태스크
-import { resumePlan, resumedKind, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
+import { resumePlan, resumedKind, freshInsteadOfPicker, type ResumeCheck } from "./resume-plan.js";   // #3870 — 이어받기 인자 결정(순수·엣지 표 시험)
+import { codexStampForRestorable } from "./codex-chat-mode.js";   // #5332 — 판이 없는 codex 행은 되살릴 때의 모드로 읽는다
 import { claudeProjectsDirExact } from "./terminal-transcript.js";   // #3870 — 규약으로 폴더를 정확히 짚을 수 있나
 
 import { sessionHarnessKey } from "./deliver-prompt.js";   // #1683 후속2 — 정의는 deliver-prompt.ts(#1631 이동)
@@ -350,8 +351,12 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
         //  이걸로 선택지를 만든다. 종전엔 그 버튼이 claude 고정이라 codex 사용자가 눌러도 claude 세션이 떴다.
         login: harnessHasCredential(h.key),
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
+        // (#5321) 「실행 승인」 세 칸 — 오토모드·확인 후 실행을 argv 로 말할 수 있는 하네스인가. 없으면 화면이 그 칸을 잠근다
+        //  (서버는 오토모드를 autoApproveFlag 로 올려 버리므로, 모르는 하네스에 «오토» 를 보내면 자동 승인이 된다).
+        hasAutoMode: !!h.autoModeArgv, hasAskMode: !!h.askModeArgv,
         effortsByModel: h.effortsByModel,
-        runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
+        //  both(#5332) — 두 축을 한 줄로 바꾸는 하네스. codex 는 모델만 바꾸면 강도가 그 모델 기본으로 돌아가므로, 화면이 모델을 바꿀 때 지금 강도를 함께 싣는다.
+        runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort, both: !!h.runtimeCmd?.both },
       })),
       members,
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
@@ -640,7 +645,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     const { headlessStatusFor, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
     res.setHeader("Cache-Control", "no-store");
     //  «정할 수 있나» 도 저장과 같은 판정이다 — 데스크톱의 관리자에게도 버튼·안내가 맞게 나온다.
-    res.json(await headlessStatusFor({ memberId: me, isAdmin: await headlessAdminFor(userOf(req), me) }));
+    //  needed(#5167) — 이 서버의 자동 정리가 **따로 받은 자격으로만** 도나(매니지드 중앙 샌드박스). 처음 설정 AI 연결 화면이
+    //   이 값이 참일 때만 그 자격을 함께 받는다 — 자체호스팅은 노드의 로그인 프로필로 돌아 따로 받을 것이 없다.
+    const { sandboxAvailable } = await import("../node/sandbox-task.js");
+    res.json({ ...(await headlessStatusFor({ memberId: me, isAdmin: await headlessAdminFor(userOf(req), me) })), needed: sandboxAvailable() });
   }));
   //  [이 워크스페이스의 실행 멤버로 정하기] — 연결은 됐는데 실행 멤버가 비어 있을 때 사람이 스스로 마무리한다.
   //   대상은 언제나 요청한 본인이다(몸통의 멤버 id 를 읽지 않는다 — claimRunnerFromScreen 머리말).
@@ -833,7 +841,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         //  #4135 — 표식의 **원시값**을 넘긴다(codex 모드는 "app-server"|"terminal" 이라 세 값으로 접히지 않는다).
         //   옛 스냅샷(그 필드가 없는 노드)은 runtimeChoice 로 떨어진다 — 무회귀.
         const stamp = typeof r.runtimeRaw === "string" && r.runtimeRaw ? r.runtimeRaw
-          : r.runtimeChoice === "chat" ? "chat" : r.runtimeChoice === "terminal" ? "terminal" : undefined;
+          : r.runtimeChoice === "chat" ? "chat" : r.runtimeChoice === "terminal" ? "terminal"
+          //  #5332 — 판이 없는(복원 가능) 행은 표식도 없다(tmux 에만 있다). 그걸 «표식 이전 세션(app-server)» 으로 읽으면 화면이
+          //   멈춘 codex 세션을 대화창 세션으로 그린다 — 되살리면 새 세션 규칙으로 뜨므로 그 값을 싣는다(codexStampForRestorable).
+          : (s as { restorable?: boolean }).restorable ? codexStampForRestorable(s.harness) : undefined;
         //  이 박스에 그 tmux 가 있으면 런타임도 여기서 돈다 — 노드 좌표가 붙어 있어도 그렇다.
         const onNode = !localSet.has(s.id);
         Object.assign(s, chatFieldsOf(s.harness, onNode, stamp));
@@ -1111,7 +1122,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   app.get("/api/ui/terminal/sessions/:id/codex-chat/events", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
-    const { onChatEvent, pendingApprovals, codexChatStatus } = await import("./harness-io/codex-chat-runtime.js");
+    const { onChatEvent, codexConnectHead } = await import("./harness-io/codex-chat-runtime.js");
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
@@ -1120,9 +1131,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     });
     const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
     // 붙자마자 지금 상태를 준다 — 새로고침에 승인이 사라지면 그 턴은 영영 선다(TTL 까지 기다렸다 거부된다).
-    // running 은 **지금 턴이 도나**다 — 런타임이 있나(alive)가 아니다. 섞으면 조용한 세션이 영영 '작업 중'이 된다.
-    send({ kind: "hello", running: !!codexChatStatus(req.params.id)?.running });
-    for (const a of pendingApprovals(req.params.id)) send({ kind: "approval", ...a });
+    //  #5398 — 화면은 숨으면 이 연결을 끊는다(web/session-codex-live.ts ★). 머리(codexConnectHead)가 hello(도는 중 · 걸린 승인
+    //   id 전부) · 걸린 승인 · 마지막 사용량을 준다 — 끊긴 동안 흐른 것을 화면이 여기서 따라잡는다.
+    for (const e of codexConnectHead(req.params.id)) send(e);
     const off = onChatEvent(req.params.id, send);
     const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);
     req.on("close", () => { off(); clearInterval(beat); });
@@ -1136,7 +1147,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   app.get("/api/ui/terminal/sessions/:id/events", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
-    const { onSessionEvent, pendingAsks } = await import("./harness-io/runtime-bus.js");
+    const { onSessionEvent, connectHead } = await import("./harness-io/runtime-bus.js");
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
@@ -1144,8 +1155,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       "x-accel-buffering": "no",              // 프록시 버퍼링 금지 — 조각이 뭉쳐 오면 스트리밍이 아니다
     });
     const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
-    //  붙자마자 **걸려 있는 물음**을 다시 준다 — 새로고침에 승인 카드가 사라지면 그 턴은 TTL 까지 선다.
-    for (const a of pendingAsks(req.params.id)) send({ t: "permission.asked", ask: a.ask });
+    //  ★ #5398 — 붙는 순간 **지금 상태를 전부** 준다(runtime-bus connectHead — 작업 목록 · 사실 · 사용량 · 걸린 물음과 그 전체 목록).
+    //   화면은 숨으면 이 연결을 끊는다(web/session-events.ts ★ — 평문 http 의 6연결 한도). 그 사이 흐른 것은 못 받았으니
+    //   다시 붙는 이 자리가 곧 재동기의 자리다. 새로 연 화면도 같은 길로 그린다.
+    //  **걸려 있는 물음**은 종전처럼 다시 준다 — 새로고침에 승인 카드가 사라지면 그 턴은 TTL 까지 선다.
+    for (const e of connectHead(req.params.id)) send(e);
     const off = onSessionEvent(req.params.id, send);
     //  ★ #3699 — 이 구독이 대화 파일 감시의 **참조 하나**를 쥔다(세션당 1개를 탭들이 공유한다).
     //   여기서 잡는 이유: 감시는 «보는 사람이 있을 때만» 돌아야 하고, 그 사실을 아는 곳이 이 통로다.
@@ -1334,7 +1348,62 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (!choices.includes(w.v)) throw new HttpError(400, `${h.label} 가 아는 ${w.ko}가 아닙니다: ${w.v}`);
       cmds.push(make(w.v));
     }
+    //  #5332 — 두 축을 한 줄로 바꾸는 명령이 있으면(codex `/model <모델> --reasoning=<강도>`) 그 한 줄만 친다. 명령이 하나면
+    //   «연속 주입은 증발한다»(#1758)·확인창 사이에 끼는 일(#4772)이 애초에 없다. 그 모델이 그 강도를 받는지는 카탈로그로 본다.
+    const both = h.runtimeCmd?.both;
+    const wm = want.find((w) => w.axis === "model")?.v, we = want.find((w) => w.axis === "effort")?.v;
+    if (both && wm && we) {
+      const ok = h.effortsByModel?.[wm];
+      if (ok && !ok.includes(we)) throw new HttpError(400, `${wm} 모델은 ${we} 추론강도를 지원하지 않습니다`);
+      cmds.splice(0, cmds.length, both(wm, we));
+    }
     res.setHeader("Cache-Control", "no-store");
+
+    //  #5332 — codex 는 **판에 따라** 그 자리에서 칠지(≥0.166 — `/model … --reasoning=…` 를 안다), 같은 대화를 새 플래그로 이어 열지
+    //   정한다. 0.157.1(테넌트 이미지·중앙 박스의 판)은 `/model` 뒤 인자를 몰라 그 줄을 **AI 에게 말로 보낸다**(실측) —
+    //   판정·근거는 codex-runtime-switch.ts 머리말. 이어 열기는 여기서 **새 플래그를 장부에 적고** 화면에 «이어 열어라» 를 돌려준다:
+    //   화면이 보관(DELETE ?reclaim=1) → 복원(POST /restore {fresh}) 을 부르고, 복원이 장부의 플래그로 `codex resume <대화>` 를 띄운다.
+    //   보관·복원은 노드·중앙·세션 호스트를 이미 다 아는 길이라(대화 승계·미전달 지시·소속까지) 여기서 따로 만들지 않는다.
+    const codexFlags = h.key === "codex" ? (() => {
+      const f: Record<string, string> = { ...(st?.flags ?? {}) };
+      if (wm) f["--model"] = wm;
+      if (we) f["--effort"] = we;
+      //  모델만 바꿨는데 지금 강도를 새 모델이 안 받으면 강도를 접는다(그 모델의 기본으로 뜬다 — Sol Ultra → Luna).
+      const okE = f["--model"] ? h.effortsByModel?.[f["--model"]] : undefined;
+      if (f["--effort"] && okE && !okE.includes(f["--effort"])) delete f["--effort"];
+      return f;
+    })() : null;
+    if (codexFlags) {
+      const { codexSessionCliVersion, codexSwitchPlan } = await import("./codex-runtime-switch.js");
+      const ver = await codexSessionCliVersion(req.params.id, nodeId);
+      const plan = codexSwitchPlan(ver);
+      logger.info({ id: req.params.id, node: nodeId || null, codexVersion: ver, plan }, "codex 모델·추론강도 바꾸기 갈래");
+      if (plan === "relaunch") {
+        //  다시 열기는 지금 판을 끝낸다 — 도는 턴·치던 글·떠 있는 대화상자를 잃지 않게 먼저 본다. 화면을 못 읽으면(판이 이미 없다 등) 그대로
+        //   간다 — 잃을 것이 화면에 없으니 복원이 정답이다.
+        const { codexIo, codexComposerState, CODEX_DRAFT_REFUSAL, CODEX_NOT_READY_REFUSAL } = await import("./harness-io/codex.js");
+        const { nodeRpc } = await import("../node/registry.js");
+        let pane: string | null = null;
+        if (nodeId) {
+          const r = await nodeRpc<{ ok?: boolean; pane?: string }>(nodeId, "outboxStep", { step: "peek", id: req.params.id }).catch(() => null);
+          pane = r && r.ok ? String(r.pane ?? "") : null;
+        } else {
+          const { outboxExecFor } = await import("../sessions/outbox-exec.js");
+          const seen = await (await outboxExecFor(req.params.id)).peek().catch(() => null);
+          pane = seen && seen.ok ? seen.pane : null;
+        }
+        if (pane !== null && pane.trim()) {
+          const tail = pane.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "").slice(-14);
+          const scr = codexIo.screen?.(tail) ?? null;
+          if (scr === "busy") throw new HttpError(409, "Codex 가 일하는 중이에요 — 이 판의 Codex 는 설정을 바꾸려면 다시 열어야 해서, 턴이 끝난 뒤 다시 골라 주세요");
+          if (scr === "dialog") throw new HttpError(409, CODEX_NOT_READY_REFUSAL);
+          if (codexComposerState(pane) === "draft") throw new HttpError(409, CODEX_DRAFT_REFUSAL);
+        }
+        await updateSessionStateMeta(req.params.id, { flags: codexFlags });
+        res.json({ ok: true, harness: h.key, relaunch: true, version: ver, flags: codexFlags });
+        return;
+      }
+    }
 
     //  ★ #2439 — **대화 런타임 세션은 pane 이 셸이다.** 그 tmux 에 `/model …` 을 타이핑하면
     //   하네스가 아니라 **bash 가 받는다**(`/model: command not found`). 사람 눈엔 «바꿨다는데 안 바뀜» 이다.
@@ -1365,6 +1434,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         },
         enter: async (): Promise<void> => { await nodeRpc(nodeId, "outboxStep", { step: "keys", id: req.params.id, down: 0, enter: true }).catch(() => undefined); },
       };
+      //  #5332 — codex 는 입력칸이 비었다고 확인될 때만 친다(아웃박스와 같은 판정 — codex.ts codexComposerState). 그 컴퓨터의 화면을
+      //   못 읽으면(옛 번들) 종전대로 친다 — 읽을 수 있는데 비어 있지 않으면 치지 않는다(치면 사람의 글과 한 메시지로 나간다).
+      if (h.key === "codex") {
+        const { codexComposerState, CODEX_DRAFT_REFUSAL, CODEX_NOT_READY_REFUSAL } = await import("./harness-io/codex.js");
+        const seen = await nodeSwitchExec.peek();
+        const comp = seen.ok ? codexComposerState(String(seen.pane ?? "")) : "empty";
+        if (comp !== "empty") throw new HttpError(409, comp === "draft" ? CODEX_DRAFT_REFUSAL : CODEX_NOT_READY_REFUSAL);
+      }
       for (const c of typed) {
         try { await injectPrompt(req.params.id, c); }
         catch (e) {
@@ -1377,6 +1454,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         // 다음 명령을 넣기 전에 이 명령의 확인창을 닫는다(두 번째 명령이 첫 창에 타이핑되는 것 방지).
         if (h.key === "claude") await confirmRuntimeSwitch(nodeSwitchExec, { sleep }).catch(() => undefined);
       }
+      //  #5332 — 바꾼 값을 장부에도 적는다: 이 세션을 다시 열면(복원·이어 열기) 띄울 때 플래그가 아니라 지금 고른 값으로 뜬다.
+      //   안 적으면 복원이 옛 `--model` 로 띄워 바꾼 것이 조용히 되돌아가고, 화면은 옛 기록의 바꾼 값을 계속 보인다.
+      if (codexFlags) await updateSessionStateMeta(req.params.id, { flags: codexFlags }).catch(() => undefined);
       res.json({ ok: true, harness: h.key, sent: cmds });
       return;
     }
@@ -1387,7 +1467,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  '바꿨다/못 바꿨다'를 그 자리에서 말할 수 있다. 아직 대기 중이면 그 사실 그대로(pending) 돌려준다 —
     //  로그인 화면에 멈춘 세션은 뜨는 즉시 배달자가 넣는다(아웃박스가 들고 있다).
     const done = await waitOutboxSettled(ids, 8_000);
-    if (done.failed) throw new HttpError(409, `바꾸지 못했어요 — ${done.failed}`);
+    //  #5332 — 아웃박스가 «넣지 않은 까닭» 을 사람 말로 적어 둔 경우(codex 입력칸에 치던 글 등)는 그 문장 그대로 보인다.
+    if (done.failed) throw new HttpError(409, /[가-힣]/.test(done.failed) ? done.failed : `바꾸지 못했어요 — ${done.failed}`);
+    //  #5332 — 들어갔으면 장부에도 적는다(위 노드 갈래와 같은 까닭). 아직 대기 중이면 적지 않는다 — 안 들어갈 수도 있다.
+    if (codexFlags && done.settled) await updateSessionStateMeta(req.params.id, { flags: codexFlags }).catch(() => undefined);
     res.json({ ok: true, harness: h.key, sent: cmds, pending: !done.settled });
   }));
   // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
@@ -1924,7 +2007,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       // #3870 — 종전엔 여기서 **확인 없이** 그 id 로 `--resume` 을 걸었다(위 머리말의 «노드에 있어 존재 확인을 못 한다»).
       //  세션호스트 노드는 같은 멤버 홈을 보므로 확답이 나온다 — 없으면 피커가 아니라 **새 대화**다(resumeTranscriptCheck 머리말).
       const nodeCheck: ResumeCheck = mappedNodeId ? await resumeTranscriptCheck(id, st, mappedNodeId, nodeId) : "unknown";
-      const nodePlan = resumePlan({ mappedId: mappedNodeId, harness: st.harness || "claude", check: nodeCheck, branch: "node" });
+      const nodePlan = freshInsteadOfPicker(resumePlan({ mappedId: mappedNodeId, harness: st.harness || "claude", check: nodeCheck, branch: "node" }), req.body);
       //  ⚠ 아래 승계(carryConvMapping·내구 맵)도 이 값을 쓴다 — 그게 맞다. «새 대화» 로 열었으면 그 세션은
       //   옛 대화를 **안 돌고 있으므로**, 새 세션 id → 옛 대화 uuid 를 적으면 거짓 매핑이다(#3891 의 adopt 판정이
       //   그걸 보고 «이 대화를 도는 세션» 이라고 답하게 된다). 옛 매핑 자체는 잃지 않는다 —
@@ -2055,7 +2138,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   «없다» 는 이제 피커가 아니라 새 대화다 — 그 폴더의 대화가 이 기계에 한 건도 없으면 피커는 빈 화면이라
     //   사람이 거기서 빠져나올 수 없다. «모른다» 만 종전대로 피커로 간다(사람이 눈으로 고를 기회를 뺏지 않는다).
     const boxCheck: ResumeCheck = mappedId ? await resumeTranscriptCheck(id, st, mappedId, null) : "unknown";
-    const boxPlan = resumePlan({ mappedId, harness: st.harness || "claude", check: boxCheck, branch: "box" });
+    const boxPlan = freshInsteadOfPicker(resumePlan({ mappedId, harness: st.harness || "claude", check: boxCheck, branch: "box" }), req.body);
     if (boxCheck === "absent") logger.warn({ id, convId: mappedId }, "restore: 이어받을 대화가 이 기계에 없다 — 빈 피커 대신 새 대화로 연다(#3870)");
     //  #4694 — **같은 id 로 되살리나**(판정·근거는 restore-same-id.ts 머리말). 옛 판이 없다는 확답(goneVerdict === true)이
     //   있을 때만 — 강제(모름)는 종전대로 새 id 로 가서 옛 id 를 은퇴시킨다(살아 있었을 수 있는 옛 판을 브로커가 걷게).

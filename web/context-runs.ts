@@ -314,7 +314,7 @@ function jobText(job: any): string {
   return every + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행');
 }
 
-export interface RunsPanel { root: HTMLElement; setFilter(f: RunFilter): void }
+export interface RunsPanel { root: HTMLElement; setFilter(f: RunFilter): void; /** 지금 보는 기간을 다시 읽는다(#5147 «지금 수집·증류» 뒤). */ reload(): void }
 
 /** 지도 아래 패널. pipeline = 지도가 이미 받은 /org/pipeline(주기 표기). onFilter = 패널 안에서 거르기를 바꾸면 지도 칩에 알린다. */
 export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => void } = {}): RunsPanel {
@@ -348,8 +348,9 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
       el('span', { class: 'is-c' }, '수집 ' + jobText(stc.collect?.job)), el('span', { class: 'is-d' }, '증류 ' + jobText(stc.distill?.job))),
     hint);
   const feed: HTMLElement = el('div', { class: 'cxr-feed' });
-  const foot: HTMLElement = el('div', { class: 'cxr-more' });
-  root.append(body, legend, feed, foot);
+  //  #5159(원준 2026-10-31) — 목록 아래 «이날 바뀐 실행 n개 모두 보기 →» 단추는 머리의 「자세히 보기 →」와 같은 곳으로 갔다.
+  //   같은 문을 둘 두느라 화면이 길어져 스크롤이 생겼다 — 걷는다.
+  root.append(body, legend, feed);
 
   const spanDays = (): number => (st.period === 'day' ? 1 : st.period === 'week' ? 7 : KEEP_DAYS);
   const startOf = (): number => addDays(st.end, -(spanDays() - 1));
@@ -371,28 +372,73 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
     next.disabled = st.end >= t0;
     prev.disabled = addDays(s, -1) < addDays(t0, -(KEEP_DAYS - 1));
     more.href = runsHref({ from: s, to: st.end, kind: st.f });
-    hint.textContent = st.period === 'day' ? '점이 클수록 많이 바뀌었어요 · 점을 누르면 자세히' : '날마다 점 하나 — 누르면 그날 하루로';
+    hint.textContent = st.period === 'day' ? '점이 클수록 많이 바뀌었어요 · 점을 누르면 아래에 그 내용' : '날마다 점 하나 — 누르면 그날 하루로';
   }
   function paintSeg(): void {
     const b = seg.querySelector('button.is-on') as HTMLElement | null, ind = seg.querySelector('.cxr-seg-ind') as HTMLElement | null;
     if (!b || !ind || !b.offsetWidth) return;
     ind.style.width = b.offsetWidth + 'px'; ind.style.transform = `translateX(${b.offsetLeft}px)`;
   }
-  const goRun = (r: AutoRun): void => { location.hash = runsHref({ from: dayOf(r.t), to: dayOf(r.t), run: r }).slice(1); };
-  const row = (r: AutoRun): HTMLElement => el('a', { class: 'cxr-row', href: runsHref({ from: dayOf(r.t), to: dayOf(r.t), run: r }), 'data-key': r.key },
-    el('span', { class: 'cxr-t num', text: st.period === 'day' ? hhmm(r.t) : sd(r.t) + ' ' + hhmm(r.t) }), runTile(r),
-    el('span', { class: 'cxr-n' }, el('b', { text: r.name, title: r.name }), kindTag(r.kind)), runSummary(r),
-    el('span', { class: 'cxr-chev', 'aria-hidden': 'true', text: '›' }));
-  let dayRuns: AutoRun[] = [], daily: { days: DayAgg[]; recent: AutoRun[] } | null = null;
+  //  줄 = 실행 하나. #5159(원준 2026-10-31) — 한 번 누르면 다른 화면으로 넘어가지 않고 그 줄 아래로 바뀐 지식 · 자료 목록이 펼쳐진다
+  //   (점을 눌렀을 때와 같은 내용). 수식키(⌘ · Ctrl · 가운데 단추)로 누르면 종전처럼 기록 화면을 새로 연다 — 링크는 그대로 둔다.
+  const row = (r: AutoRun, key: string): HTMLElement => {
+    const a: HTMLElement = el('a', { class: 'cxr-row', href: runsHref({ from: dayOf(r.t), to: dayOf(r.t), run: r }), 'aria-expanded': 'false' },
+      el('span', { class: 'cxr-t num', text: st.period === 'day' ? hhmm(r.t) : sd(r.t) + ' ' + hhmm(r.t) }), runTile(r),
+      el('span', { class: 'cxr-n' }, el('b', { text: r.name, title: r.name }), kindTag(r.kind)), runSummary(r),
+      el('span', { class: 'cxr-chev', 'aria-hidden': 'true', text: '›' }));
+    const it: HTMLElement = el('div', { class: 'cxr-it', 'data-key': key }, a, el('div', { class: 'cxr-x' }));
+    //  누르는 순간의 포커스가 브라우저 스스로 줄을 창 안으로 굴린다 — 그 뒤 reveal 의 계산이 어긋나므로 마우스로 누를 땐 포커스를 주지 않는다(키보드 Tab 은 그대로).
+    a.addEventListener('mousedown', (e) => { if (e.button === 0 && !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) e.preventDefault(); });
+    a.addEventListener('click', (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault(); toggleRow(r, it);
+    });
+    return it;
+  };
+  //  수집기 한 줄 요약 — 바뀐 실행만 줄로 세우면 수집기는 거의 안 보인다(5분마다 돌지만 대개 «새 것 없음»).
+  //   원준 2026-10-31: "수집기는 밑에 행에 안 나오나? 증류기만 나오는 것 같다". 그 기계가 돌았다는 사실을 한 줄로 남긴다.
+  const sumRow = (k: RunKind, o: { runs: number; machines: number; last: number | null; text: string; from: number; to: number }): HTMLElement =>
+    el('a', { class: 'cxr-row is-sum', href: runsHref({ from: o.from, to: o.to, kind: k }), 'data-key': 'sum:' + k },
+      el('span', { class: 'cxr-t num', text: o.last == null ? '—' : st.period === 'day' ? hhmm(o.last) : sd(o.last) }),
+      runTile({ svc: null, glyph: k === 'c' ? 'src' : 'wiki' }),
+      el('span', { class: 'cxr-n' }, el('i', { class: 'cxr-dot' + (k === 'd' ? ' is-d' : ''), 'aria-hidden': 'true' }),
+        el('b', { text: (k === 'c' ? '수집기' : '증류기') + (o.machines ? ' ' + o.machines + '개' : '') + ' — 자동 실행 요약' })),
+      el('span', { class: 'cxr-s' }, el('span', { text: '실행 ' + o.runs.toLocaleString() + '회 · ' + o.text })),
+      el('span', { class: 'cxr-chev', 'aria-hidden': 'true', text: '›' }));
+  type Item = { key: string; t: number; kind: RunKind; make: () => HTMLElement };
+  /** 다섯 줄 안에 두 기계가 다 서게 — 없는 쪽은 그 쪽의 최근 바뀐 실행(있으면) 또는 요약 한 줄이 가장 오래된 줄 자리를 받는다. 줄 수는 늘리지 않는다. */
+  const fitBoth = (items: Item[], extra: (k: RunKind) => Item | null, limit = 5): Item[] => {
+    let out = items.slice(0, limit);
+    for (const k of (st.f === 'all' ? ['c', 'd'] : [st.f]) as RunKind[]) {
+      if (out.some((i) => i.kind === k)) continue;
+      const x = extra(k); if (!x) continue;
+      if (out.length >= limit) {
+        const drop = out.map((i, n) => ({ i, n })).filter(({ i }) => i.kind !== k).sort((a, b) => a.i.t - b.i.t)[0];
+        if (!drop) continue;
+        out.splice(drop.n, 1);
+      }
+      out = [...out, x].sort((a, b) => b.t - a.t);
+    }
+    return out;
+  };
+  let dayRuns: AutoRun[] = [], daily: { days: DayAgg[]; recent: AutoRun[]; machines: Machine[] } | null = null;
   function paintBody(): void {
+    if (peekKey || openIt) return;   // 펼쳐 보는 중이면 그 자리를 지킨다(닫으면 다시 그린다)
     const inF = (r: AutoRun): boolean => st.f === 'all' || r.kind === st.f;
     const s = startOf();
+    const item = (r: AutoRun, suf = ''): Item => ({ key: r.key + suf, t: r.t, kind: r.kind, make: () => row(r, r.key + suf) });
     if (st.period === 'day') {
       const rs = dayRuns.filter(inF), ch = rs.filter(changed);
       sub.replaceChildren('실행 ', el('b', { class: 'num', text: rs.length.toLocaleString() }), '회 · 변화 있던 실행 ', el('b', { class: 'num', text: ch.length.toLocaleString() }), '회');
-      keyed(feed, ch.slice(0, 5).map((r) => ({ key: r.key, make: () => row(r) })), ch.length ? null : (dayRuns.length ? '이날은 자동 실행이 돌았지만 바뀐 것이 없어요.' : '이날은 자동 실행 기록이 없어요.'));
-      foot.replaceChildren();
-      if (ch.length > 5) foot.append(el('a', { class: 'cxr-btn is-pri', href: runsHref({ from: s, to: st.end, kind: st.f }), text: `이날 바뀐 실행 ${ch.length}개 모두 보기 →` }));
+      const items = fitBoth(ch.map((r) => item(r)), (k) => {
+        const mine = rs.filter((r) => r.kind === k);
+        if (!mine.length) return null;
+        const c = ch.find((r) => r.kind === k);
+        if (c) return item(c);
+        const last = Math.max(...mine.map((r) => r.t));
+        return { key: 'sum:' + k, t: last, kind: k, make: () => sumRow(k, { runs: mine.length, machines: new Set(mine.map((r) => r.machineId)).size, last, text: '바뀐 것 없음', from: s, to: st.end }) };
+      });
+      keyed(feed, items, items.length ? null : (dayRuns.length ? '이날은 자동 실행이 돌았지만 바뀐 것이 없어요.' : '이날은 자동 실행 기록이 없어요.'));
     } else {
       const ds = daily?.days || [];
       const sum = (k: RunKind, f: 'runs' | 'inserted'): number => ds.reduce((a, d) => a + d[k][f], 0);
@@ -402,18 +448,174 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
       if (st.f !== 'c') sub.append(' · 새 지식 ', el('b', { class: 'num', text: sum('d', 'inserted').toLocaleString() }));
       const rec = (daily?.recent || []).filter(inF);
       // 여러 날 줄은 시간 칸에 날짜가 붙는다 — 하루 보기에서 만든 같은 줄을 다시 쓰지 않게 키를 가른다
-      keyed(feed, rec.map((r) => ({ key: r.key + '@d', make: () => row(r) })), rec.length ? null : '이 기간엔 바뀐 실행이 없어요.');
-      foot.replaceChildren(el('a', { class: 'cxr-btn is-pri', href: runsHref({ from: s, to: st.end, kind: st.f }), text: '이 기간 기록 모두 보기 →' }));
+      const items = fitBoth(rec.map((r) => item(r, '@d')), (k) => {
+        const runsK = sum(k, 'runs'); if (!runsK) return null;
+        const ins = sum(k, 'inserted'), upd = ds.reduce((a, d) => a + d[k].updated, 0);
+        const lastDay = [...ds].reverse().find((d) => d[k].runs)?.day ?? null;
+        const text = ins + upd ? (k === 'c' ? `새 자료 ${ins} · 바뀐 자료 ${upd}` : `새 지식 ${ins} · 고친 지식 ${upd}`) : '바뀐 것 없음';
+        return { key: 'sum:' + k + '@d', t: lastDay ?? 0, kind: k, make: () => sumRow(k, { runs: runsK, machines: (daily?.machines || []).filter((m) => m.kind === k).length, last: lastDay, text, from: s, to: st.end }) };
+      });
+      keyed(feed, items, items.length ? null : '이 기간엔 바뀐 실행이 없어요.');
     }
   }
-  async function load(): Promise<void> {
+  // ── 실행 하나 펼쳐 보기 — 다른 화면으로 가지 않는다(원준 2026-10-31) ──
+  //  목록이 차지하던 높이를 그대로 쓴다(세로로 늘지 않고 스크롤도 생기지 않는다). 넘치는 줄은 «외 n건» 으로 접는다.
+  //  지식 · 자료 제목은 그 문서로 가는 링크다. 다시 누르거나 Esc 면 닫힌다.
+  //  · 줄을 누르면 — 그 줄 아래로 살포시 펼친다(아코디언). 펼친 만큼 아래 줄이 밀려 내려가 바닥의 한두 줄만 가려진다.
+  //    원준 2026-10-31: "하나 누르면 위아래 있던 게 전부 날아가니 액션이 너무 크다 — 접혀 있던 게 살포시 펴지면서 멀리 있는 게 한두 개 사라지는 방식".
+  //    그래서 펼친 칸은 내용만큼(최대 GENTLE_MAX)이고, 목록은 펼친 칸이 보일 만큼만 굴린다(바닥 줄을 펼칠 때만 위가 조금 올라간다).
+  //  · 점을 누르면 — 그 실행이 목록에 있으면 그 줄을 펼치고, 없으면 목록 자리에 그 실행 하나를 띄운다(peek).
+  const detailCache = new Map<string, RunDetail | Error>();
+  /** 바뀐 것 목록을 채운다 — list 는 높이가 정해진 상자 안이어야 한다(넘치는 줄을 재서 접는다). live() 가 거짓이면 그사이 닫힌 것이다. */
+  function fillDetail(r: AutoRun, list: HTMLElement, fhint: HTMLElement, detailHref: string, live: () => boolean, done?: () => void): void {
+    const k = r.kind, cat = r.lane === 'category';
+    const fill = (d: RunDetail | Error): void => {
+      if (!live()) return;
+      fill0(d); done?.();
+    };
+    const fill0 = (d: RunDetail | Error): void => {
+      if (d instanceof Error) { list.replaceChildren(el('li', { class: 'is-empty', text: '내용을 불러오지 못했습니다 — ' + d.message })); return; }
+      if (!r.ok) { list.replaceChildren(el('li', { class: 'cxr-pk-err', text: String(r.err || '실패') })); fhint.textContent = ''; return; }
+      const its = cat ? d.items.filter((i) => i.tag === 'mod') : d.items;
+      if (!its.length) { list.replaceChildren(el('li', { class: 'is-empty', text: '이 실행에서 바뀐 것이 없어요.' })); return; }
+      const li = (i: RunDetail['items'][number]): HTMLElement => el('li', {},
+        el('span', { class: 'cxrp-tg' + (i.tag === 'mod' ? ' is-mod' : ''), text: i.tag === 'new' ? '새' : k === 'c' ? '바뀜' : cat ? '칸' : '고침' }),
+        i.where ? el('span', { class: 'cxrp-wh', text: i.where }) : null,
+        i.href ? el('a', { href: i.href, text: i.title, title: i.title }) : el('span', { text: i.title }));
+      const nodes = its.map(li);
+      list.replaceChildren(...nodes);
+      //  넘치면 끝에서부터 걷고 «외 n건» 한 줄 — 그 자리도 높이에 들어가야 하니 넣고 다시 잰다.
+      let shown = nodes.length;
+      const moreLi: HTMLElement = el('li', { class: 'is-more' });
+      while (shown > 1 && list.scrollHeight > list.clientHeight + 1) {
+        nodes[--shown].remove();
+        moreLi.replaceChildren(el('a', { href: detailHref, text: `외 ${its.length - shown}건 — 자세히 보기에서` }));
+        if (!moreLi.isConnected) list.append(moreLi);
+      }
+      fhint.textContent = k === 'c' ? '제목을 누르면 그 자료로 갑니다' : '제목을 누르면 그 지식으로 갑니다';
+    };
+    const hit = detailCache.get(r.key);
+    if (hit) fill(hit);
+    else fetchDetail(r).then((d) => { if (r.ok) detailCache.set(r.key, d); fill(d); }, (e) => fill(e instanceof Error ? e : new Error(String(e))));
+  }
+  const markDot = (key: string | null): void => body.querySelectorAll('.t-r').forEach((x) => x.classList.toggle('is-sel', !!key && x.getAttribute('data-k') === key));
+  const lockFeed = (): void => { if (!feed.style.height) { feed.style.height = Math.max(feed.offsetHeight, 200) + 'px'; feed.classList.add('is-lock'); } };
+  const unlockFeed = (): void => { feed.style.height = ''; feed.classList.remove('is-lock'); feed.scrollTop = 0; };
+
+  //  ① 줄 펼치기(아코디언)
+  const GENTLE_MAX = 200, LOADING_H = 40;
+  let openIt: HTMLElement | null = null, openRun: AutoRun | null = null;
+  /** 펼친 칸이 목록 창 안에 들게 — 이미 보이면 굴리지 않는다. 펼치는 중엔 아직 굴릴 거리가 없어 scrollTo 가 묶이므로 그동안만 바닥에 그 높이를 빌려 둔다. */
+  function reveal(it: HTMLElement, h: number, shift = 0): void {
+    const a = it.querySelector<HTMLElement>('.cxr-row')!;
+    //  모두 «다 펼치고 다 접힌 뒤» 의 자리로 잰다 — 위의 줄이 접히는 중이면 지금 보이는 자리도 그만큼 올라간다.
+    const top = it.offsetTop - shift, bottom = top + a.offsetHeight + h + 6;
+    let want = Math.max(0, feed.scrollTop - shift);
+    if (bottom > want + feed.clientHeight) want = bottom - feed.clientHeight;
+    if (top < want) want = Math.max(0, top - 2);
+    if (want === feed.scrollTop && !shift) return;
+    //  접힘(앞 줄)과 펼침(이 줄)이 겹치는 동안 목록 길이가 잠깐 줄어 스크롤이 끝에 눌린다 — 그 사이만 바닥을 빌려 둔다.
+    feed.style.paddingBottom = h + shift + 'px';
+    feed.scrollTo({ top: want, behavior: REDUCE() ? 'auto' : 'smooth' });
+    setTimeout(() => { feed.style.paddingBottom = ''; }, 360);
+  }
+  /** now = 애니메이션 없이 곧바로. keepLock = 다른 줄로 옮겨 펼치는 중 — 목록 잠금을 풀지도, 맨 위로 되감지도 않는다. */
+  function foldRow(now: boolean, keepLock = false): void {
+    const it = openIt; if (!it) return;
+    openIt = null; openRun = null;
+    const x = it.querySelector<HTMLElement>('.cxr-x'), a = it.querySelector('.cxr-row');
+    it.classList.remove('is-open'); a?.setAttribute('aria-expanded', 'false'); if (!keepLock) markDot(null);
+    if (now || REDUCE()) {
+      if (x) { x.style.transition = 'none'; x.style.height = ''; x.replaceChildren(); void x.offsetHeight; x.style.transition = ''; }
+      if (!keepLock) unlockFeed();
+      return;
+    }
+    if (x) x.style.height = '0px';
+    if (!keepLock) feed.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => {
+      if (x && !it.classList.contains('is-open')) { x.style.height = ''; x.replaceChildren(); }
+      if (!openIt && !peekKey) unlockFeed();
+    }, 320);
+  }
+  function toggleRow(r: AutoRun, it: HTMLElement): void {
+    if (openIt === it) { foldRow(false); return; }
+    unpeek(false);
+    //  옮겨 펼칠 때 — 앞 줄도 함께 스르르 접힌다. 그 줄이 위에 있었으면 이 줄은 접히는 만큼 올라가니 그만큼 빼고 잰다.
+    let shift = 0;
+    if (openIt) {
+      if (openIt.compareDocumentPosition(it) & Node.DOCUMENT_POSITION_FOLLOWING) shift = openIt.querySelector<HTMLElement>('.cxr-x')?.offsetHeight || 0;
+      foldRow(false, true);
+    }
+    lockFeed();
+    const x = it.querySelector<HTMLElement>('.cxr-x')!, a = it.querySelector<HTMLElement>('.cxr-row')!;
+    //  넘치는 줄은 이 높이에 맞춰 «외 n건» 으로 접는다 — 실제로 펼치는 높이는 채운 뒤 내용만큼.
+    const cap = Math.max(LOADING_H, Math.min(GENTLE_MAX, feed.clientHeight - a.offsetHeight - 8));
+    const detailHref = runsHref({ from: dayOf(r.t), to: dayOf(r.t), run: r });
+    const list: HTMLElement = el('ul', { class: 'cxrp-il cxr-pk-il' }, el('li', { class: 'is-empty', text: '불러오는 중…' }));
+    const fhint: HTMLElement = el('span', { class: 'cxr-pk-hint' });
+    const inner: HTMLElement = el('div', { class: 'cxr-x-in', style: `height:${cap}px` }, list,
+      el('div', { class: 'cxr-pk-f' }, fhint, el('a', { class: 'cxr-more-link', href: detailHref, text: '자세히 보기 →' })));
+    x.replaceChildren(inner);
+    openIt = it; openRun = r;
+    it.classList.add('is-open'); a.setAttribute('aria-expanded', 'true'); markDot(r.key);
+    x.style.height = '0px'; void x.offsetHeight;
+    let filled = false;
+    fillDetail(r, list, fhint, detailHref, () => openIt === it, () => {
+      filled = true;
+      inner.style.height = 'auto'; list.style.flex = 'none';
+      const h = Math.min(inner.offsetHeight, cap);
+      list.style.flex = ''; inner.style.height = h + 'px';
+      x.style.height = h + 'px';
+      reveal(it, h, shift); shift = 0;
+    });
+    if (!filled) { x.style.height = LOADING_H + 'px'; reveal(it, LOADING_H, shift); shift = 0; }
+  }
+
+  //  ② 점 — 목록에 있으면 그 줄을, 없으면 목록 자리에 하나(peek)
+  let peekKey: string | null = null;
+  function unpeek(repaint: boolean): void {
+    if (!peekKey) return;
+    peekKey = null; feed.classList.remove('is-peek'); unlockFeed(); markDot(null);
+    if (repaint) { feed.replaceChildren(); paintBody(); }
+  }
+  function onDot(r: AutoRun): void {
+    const it = feed.querySelector<HTMLElement>(`.cxr-it[data-key="${r.key}"]`);
+    if (it && !peekKey) { toggleRow(r, it); return; }
+    openPeek(r);
+  }
+  function openPeek(r: AutoRun): void {
+    if (peekKey === r.key) { unpeek(true); return; }
+    if (openIt) foldRow(true, true);
+    lockFeed();
+    peekKey = r.key; feed.classList.add('is-peek'); markDot(r.key);
+    const close: HTMLElement = el('button', { type: 'button', class: 'cxr-pk-x', title: '목록으로 (Esc)', 'aria-label': '목록으로', text: '✕' });
+    close.addEventListener('click', () => unpeek(true));
+    const list: HTMLElement = el('ul', { class: 'cxrp-il cxr-pk-il' }, el('li', { class: 'is-empty', text: '불러오는 중…' }));
+    const detailHref = runsHref({ from: dayOf(r.t), to: dayOf(r.t), run: r });
+    const fhint: HTMLElement = el('span', { class: 'cxr-pk-hint' });
+    feed.replaceChildren(el('div', { class: 'cxr-pk', role: 'region', 'aria-label': r.name + ' ' + hhmm(r.t) + ' 실행' },
+      el('div', { class: 'cxr-pk-h' }, el('span', { class: 'cxr-t num', text: hhmm(r.t) }), runTile(r),
+        el('span', { class: 'cxr-n' }, el('b', { text: r.name, title: r.name }), kindTag(r.kind)), runSummary(r), close),
+      list,
+      el('div', { class: 'cxr-pk-f' }, fhint, el('a', { class: 'cxr-more-link', href: detailHref, text: '자세히 보기 →' }))));
+    fillDetail(r, list, fhint, detailHref, () => peekKey === r.key);
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !root.isConnected) return;
+    if (peekKey) unpeek(true); else if (openIt) foldRow(false);
+  });
+
+  /** keep = 자세히 보던 실행을 그대로 둔다(«지금 수집·증류» 뒤 다시 읽기 — 보던 것을 닫지 않는다). */
+  async function load(keep = false): Promise<void> {
+    if (!keep) { unpeek(false); foldRow(true); }
     clampEnd(); paintHead();
     const my = ++st.seq, s = startOf();
     root.classList.add('is-loading');
     try {
       if (st.period === 'day') {
         const rs = await fetchDay(st.end); if (my !== st.seq) return;
-        dayRuns = rs; body.replaceChildren(dayTimeline(rs, st.end, goRun));
+        dayRuns = rs; body.replaceChildren(dayTimeline(rs, st.end, onDot));
+        markDot(peekKey || openRun?.key || null);
       } else {
         const d = await fetchDaily(s, st.end); if (my !== st.seq) return;
         daily = d; body.replaceChildren(daysTimeline(d.days, s, st.end, (d0) => { st.period = 'day'; st.end = d0; void load(); }));
@@ -427,6 +629,7 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
     } finally { if (my === st.seq) root.classList.remove('is-loading'); }
   }
   function setFilter(f: RunFilter): void {
+    unpeek(false); foldRow(true);
     st.f = f; root.setAttribute('data-f', f);
     legend.querySelectorAll('[data-lf]').forEach((b) => b.classList.toggle('is-on', b.getAttribute('data-lf') === f));
     more.href = runsHref({ from: startOf(), to: st.end, kind: st.f });
@@ -436,7 +639,7 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
   requestAnimationFrame(paintSeg);
   new ResizeObserver(() => paintSeg()).observe(seg);
   void load();
-  return { root, setFilter };
+  return { root, setFilter, reload: () => { void load(true); } };
 }
 
 /**

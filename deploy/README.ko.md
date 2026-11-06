@@ -126,9 +126,9 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 
 기본 off(검색 = grep 폴백). provider 를 켜면 게이트웨이가 미임베딩분(**기존 지식 포함**)을 자동 백필 스윕으로 채운다(부팅 30초 뒤·10분 주기·커넥터 동기화 뒤 — #669, 관리 화면에서 일시중지 가능). 아래 경로는 그 주기를 기다리지 않고 **기존 지식 백필**까지 바로 돌린다.
 
-- **기존 박스 한 방:** `bash deploy/enable-embeddings.sh` — 로컬 Ollama 사이드카(bge-m3) 기동 → `.env` `EMBEDDINGS_PROVIDER=http` → 게이트웨이 재시작 → 기존 지식 백필. 4GB 박스는 RAM 가드로 중단(→ 업사이즈 / 외부 엔드포인트 / `FORCE=1`).
+- **기존 박스 한 방:** `bash deploy/enable-embeddings.sh` — 로컬 Ollama 사이드카(bge-m3) 기동 + 모델 pull 완료 대기 → `.env` `EMBEDDINGS_PROVIDER=http` → 게이트웨이 재시작 → 기존 지식 백필(약 5분, 남은 것은 게이트웨이가 이어서 채운다). 백필이 실패하면 exit 1 로 끝나고 `.env` 설정은 그대로 남는다. 4GB 박스는 RAM 가드로 중단(→ 업사이즈 / 외부 엔드포인트 / `FORCE=1`).
   - 외부 엔드포인트(사이드카 없이): `EMBEDDINGS_BASE_URL=<host> EMBEDDINGS_MODEL=<m> [EMBEDDINGS_AUTH_ENV=<키담은env이름>] bash deploy/enable-embeddings.sh --external`
-- **웹 UI(관리자):** [수집 · 증류 ▸ AI 주입 설정] 의 ‘의미 검색 (임베딩)’ 섹션 — provider/base_url/model/dim 저장(무재시작) + [기존 지식 임베딩(백필)] 버튼(진행 표시) + 자동 백필 일시중지/재개.
+- **웹 UI(관리자):** [수집 · 증류 ▸ AI 주입기 설정] 의 ‘의미 검색 (임베딩)’ 섹션 — provider/base_url/model/dim 저장(무재시작) + [기존 지식 임베딩(백필)] 버튼(진행 표시) + 자동 백필 일시중지/재개.
 - **처음부터:** `WITH_EMBEDDINGS=1 bash deploy/install.sh`.
 
 끄기: `bash deploy/disable-embeddings.sh`(provider off + 사이드카 down — 벡터 데이터는 보존). 모델 스왑: `EMBEDDINGS_MODEL` 변경 후 `node --env-file-if-exists=.env scripts/backfill-embeddings.mjs --model-changed`(차원이 다르면 `--all`).

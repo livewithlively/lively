@@ -12,6 +12,7 @@
 import { api, busy, cardHead, el, errorNote, relTime, renderMarkdown, sv, toast } from './core.js';
 import { confirmDialog } from './ui-primitives.js';
 import { overlayBox, skeleton } from './learn.js';
+import { knHref } from './lib/kn-links.js';
 
 // 관리탭 스위치가 관리하는 규칙의 표식 — 사람이 손으로 만든 세부 규칙과 구분(서버 org_ingest_policy.preset).
 const GATE_PRESET = 'agent-knowledge';
@@ -680,7 +681,7 @@ function renderRow(it: QItem, idx: number, paint: () => void, drop: (k: string) 
   }, chk, badge, el('span', { class: 'rq-title', text: it.title }), meta,
     el('span', { class: 'rq-acts' },
       el('a', {
-        class: 'btn btn-ghost btn-sm', href: '#/knowledge/' + encodeURIComponent(it.name), text: '열기',
+        class: 'btn btn-ghost btn-sm', href: knHref(it.name), text: '열기',
         onclick: (e: any) => e.stopPropagation(),
       }),
       el('button', { class: 'btn btn-ghost btn-sm', text: '✓ 승인', onclick: (e: any) => { e.stopPropagation(); approve(it, drop); } }),
@@ -710,7 +711,7 @@ async function fillExpand(exp: any, it: QItem): Promise<void> {
           const strip = el('div', { class: 'rq-dup' }, el('span', { text: '⚠ 비슷한 기존 지식이 있습니다 — 중복이면 반려하고 기존 지식을 갱신하게 하세요: ' }));
           hits.forEach((h: any, i: number) => {
             if (i) strip.append(el('span', { text: ' · ' }));
-            strip.append(el('a', { href: '#/knowledge/' + encodeURIComponent(h.name), text: (h.title || h.name) + ' (' + Math.round(Number(h.score) * 100) + '%)' }));
+            strip.append(el('a', { href: knHref(h.name), text: (h.title || h.name) + ' (' + Math.round(Number(h.score) * 100) + '%)' }));
           });
           parts.push(strip);
         }

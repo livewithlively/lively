@@ -262,7 +262,7 @@ function emitHooks(targetDir, orgLabel) {
 const teamReadme = (publishLabel, orgLabel, orgName) => `# ${orgName} 팀 컨텍스트 (설치 묶음)
 
 ${orgName} 팀 컨텍스트 **설치 묶음**입니다. 설치 한 줄(\`/cli\`)을 한 번 돌리면(user-level 설치),
-이후 **어느 폴더에서든** 하네스(Claude Code · Codex · OpenCode 등)가 조직 컨텍스트+리플렉스를 받습니다.
+이후 **작업 폴더에서** 켠 하네스(Claude Code · Codex · OpenCode 등)가 조직 컨텍스트+리플렉스를 받습니다.
 (조직 맥락은 설치 시 1회 + 매 세션 게이트웨이에서 **라이브로** 받습니다 — 번들에 정적 콘텐츠를 굽지 않습니다.)
 
 > **이 묶음은 생성물입니다 — 게이트웨이가 조직 DB(위키)에서 발행할 때마다 새로 만듭니다(git clone 아님).**
@@ -276,7 +276,7 @@ ${orgName} 팀 컨텍스트 **설치 묶음**입니다. 설치 한 줄(\`/cli\`)
 - **Windows(PowerShell):** \`irm <게이트웨이 주소>/cli.ps1 | iex\`
 
 토큰은 명령줄에 넣지 않습니다 — 실행하면 화면에 안 보이는 가림 입력으로 받습니다.
-설치 후 **자기 코드 레포 등 아무 폴더**에서 \`claude\` 를 실행하면 회사 맥락을 아는 상태로 시작됩니다.
+설치 후 자기 코드 레포 등 **쓰는 폴더**에서 \`lively work-root add\` 를 한 번 실행하면, 그 폴더에서 켠 \`claude\` 가 회사 맥락을 아는 상태로 시작됩니다.
 
 업데이트는 **자동**입니다(다음 세션에 스스로 최신화). 지금 당장 맞추려면 \`lively update\`,
 상태 확인은 \`lively status\` / \`lively doctor\`. 라이브 현황은 세션마다 자동 갱신됩니다.

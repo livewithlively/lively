@@ -41,7 +41,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
+import { appLogo, selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
 import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.js';
 import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음
@@ -53,7 +53,7 @@ import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870
 import { createFavSaver, listFavMsg } from '../lib/list-fav.js';   // #3870 — 리스트 즐겨찾기: 셸 ↔ 액자 알림 한 줄 · 연달아 누를 때의 저장 순서
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
-import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
+import { isPastDay, orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
 import { HOSTING_GROUP, INVITED_GROUP, splitInvited } from '../lib/invited-up.js';   // #3870 — 「초대받은 세션」·「초대한 세션」 층
 import { NOW_CARD, pinnedFirst, planNowCards, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수) · #4551 — 「지금 볼 것」 조각 카드
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
@@ -72,7 +72,7 @@ import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
-import { onScreenLang, toggleScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — 맨 윗줄 «EN» 알약
+import { screenLangOn, setScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — «EN» 알약은 #5319 에서 걷었다(켜 둔 채 남은 것만 끈다)
 import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
@@ -136,6 +136,7 @@ const cardHolds = new Map<string, CardHold>();
 
 let openSet = new Set<string>();
 const pastSet = new Set<string>();          // '지난 세션'을 펴 둔 프로젝트 — **페이지 수명만**(위 주석)
+let olderOpen = false;                      // #5319 「이전 날짜」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
 let allOpen = false;                        // 「전체 프로젝트」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
 let binsPinned = false;                     // 아카이브·휴지통 행을 발치에 고정(#1851) — 브라우저에 기억
 let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
@@ -934,15 +935,38 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
     for (const g of pinnedGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
   if (inv.invited.length || inv.hosting.length) { kids.push(...invitedLayer(inv, o)); lastBucket = inv.hosting.length ? HOSTING_GROUP : INVITED_GROUP; }
+  //  #5319 어제와 그 앞 날짜의 카드는 「이전 날짜 n」 한 줄 뒤로 접는다(olderFold). n = 접힌 프로젝트 카드 수.
+  const older: HTMLElement[] = [];
+  let olderN = 0;
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
+    const past = isPastDay(g.bucket);
+    const into = past ? older : kids;
+    if (past) olderN += 1;
     if (g.bucket && g.bucket !== lastBucket) {
-      kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
+      into.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    kids.push(projGrpCard(g, o, false, standingSess));
+    into.push(projGrpCard(g, o, false, standingSess));
   }
+  olderFold(kids, older, olderN, `프로젝트 ${olderN}개`);
   return kids;
+}
+
+/** #5319 「이전 날짜 n」 — 어제와 그 앞 날짜 묶음을 한 줄로 접어 목록 끝에 단다(원준 2026-11-04 v2 확정안).
+ *  펼침은 이 페이지 동안만(「지난 세션」 접힘과 같은 규율 — 저장하지 않는다). 위에 선 것이 하나도 없으면 펴 둔다 —
+ *  접어 두면 목록이 이 한 줄뿐이라, 펴야 비로소 무엇이든 보인다(카드의 «앞면이 없으면 접힘을 편다» 와 같은 규율). */
+function olderFold(kids: HTMLElement[], older: HTMLElement[], n: number, what: string): void {
+  if (!older.length) return;
+  const open = olderOpen || !kids.length;
+  kids.push(el('button', {
+    class: 'v2-pg-past v2-older' + (open ? ' open' : ''), type: 'button', 'aria-expanded': String(open),
+    title: open ? '이전 날짜 접기' : `어제와 그 전에 쓴 ${what} — 눌러서 펴요`,
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); olderOpen = !open; repaintList(); },
+  },
+  el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
+  el('span', { class: 'n', text: '이전 날짜' }), el('span', { class: 'v2-cnt', text: String(n) })) as HTMLElement);
+  if (open) kids.push(...older);
 }
 
 /** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
@@ -1074,10 +1098,17 @@ function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
     for (const g of pinGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
   if (inv.invited.length || inv.hosting.length) kids.push(...invitedLayer(inv, o));
+  //  #5319 어제와 그 앞 날짜는 「이전 날짜 n」 한 줄 뒤로(olderFold). n = 접힌 세션 줄 수.
+  const older: HTMLElement[] = [];
+  let olderN = 0;
   plan.dated.forEach((d, i) => {
-    if (d.group) kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
-    kids.push(dayCard(d.group, d.rows, o, i));
+    const past = isPastDay(d.group);
+    const into = past ? older : kids;
+    if (past) olderN += d.rows.length;
+    if (d.group) into.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
+    into.push(dayCard(d.group, d.rows, o, i));
   });
+  olderFold(kids, older, olderN, `세션 ${olderN}개`);
   return kids;
 }
 
@@ -1322,10 +1353,9 @@ function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string,
 //  줄 수는 위키와 같은 줄 나누기(fitWikiList): 사람 줄이 한 묶음, 앱마다 자리 줄이 한 묶음. 앱 줄과 만든 자료 두 줄은 늘 선다.
 //  카드 머리를 누르면 그 갈래 전체가 가운데 목록에 선다(AI 세션 사이드바의 카드 머리와 같은 쓰임). 켜진 줄 옮기기는 sources.ts paintSideActive.
 const srcMore = new Set<string>();
-const SRC_APP_IC: Record<string, string> = {
-  slack: 'chat', discord: 'chat', github: 'code', gitlab: 'code', linear: 'check', clickup: 'check', figma: 'pen',
-  notion: 'doc', gdrive: 'doc', 'domain-wiki': 'doc', gmail: 'mailopen', outlook: 'mailopen', zotero: 'doc',
-};
+//  앱 줄의 그림 = 그 앱의 공식 로고(sources.ts appLogo). 로고 표에 없는 출처(도메인 위키 등)만 선 아이콘으로 떨어진다.
+const SRC_APP_IC: Record<string, string> = { 'domain-wiki': 'doc' };
+const srcAppMark = (system: string): Element => appLogo(system, 'v2-ptl-logo') || icon(SRC_APP_IC[system] || 'link', 'v2-ptl-ic');
 function renderSourcesSection(): void {
   if (!last) return;
   const { host } = last;
@@ -1402,7 +1432,7 @@ function renderSourcesSection(): void {
     //  ② 수집한 자료: 앱 줄, 그 아래 자리 줄(채널 · 저장소).
     const colKids: HTMLElement[] = [];
     for (const a of apps) {
-      colKids.push(line({ system: a.system }, icon(SRC_APP_IC[a.system] || 'link', 'v2-ptl-ic'), srcSysLabel(a.system), a.n, ' v2-ss-app', `${srcSysLabel(a.system)}에서 가져온 자료`));
+      colKids.push(line({ system: a.system }, srcAppMark(a.system), srcSysLabel(a.system), a.n, ' v2-ss-app', `${srcSysLabel(a.system)}에서 가져온 자료`));
       const key = 'app:' + a.system;
       const full = srcMore.has(key);
       const shown = full ? a.containers : a.containers.slice(0, alloc[key] ?? a.containers.length);
@@ -3045,25 +3075,11 @@ function navArrow(dir: 'back' | 'fwd', on: boolean, run?: () => void): HTMLEleme
     onclick: () => run?.() },
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-navb-ic', 'aria-hidden': 'true' }, sv('path', { d })));
 }
-/** #5141 화면 영어 보기 — 맨 윗줄 오른쪽 «EN» 알약. 켜면 지금 화면(액자 포함)의 한국어 글을 영어로 바꿔 보여 준다(저장된 내용은 그대로).
- *  상태는 lib/screen-lang 이 쥔다 — 이 단추는 누르면 바꾸고, 바뀌면(다른 문서 · 번역 중) 제 얼굴만 고친다. 사이드바가 다시 그려져도 듣는 이는 하나만 남는다. */
-let screenLangOff: (() => void) | null = null;
-function screenLangBtn(): HTMLElement {
-  const b = el('button', {
-    class: 'v2-navb v2-langtg', type: 'button', translate: 'no',
-    onclick: () => toggleScreenLang() }, el('span', { class: 'v2-langtg-t', text: 'EN' })) as HTMLButtonElement;
-  screenLangOff?.();
-  screenLangOff = onScreenLang((s) => {
-    b.classList.toggle('on', s.on);
-    b.classList.toggle('busy', s.busy);
-    b.setAttribute('aria-pressed', String(s.on));
-    //  title 은 영어로 둔다 — 켜면 이 글도 번역 대상이 되므로, 처음부터 두 말로 적어 두면 바꿀 것이 없다.
-    b.title = s.on ? 'Showing this screen in English — click for Korean (원래 한국어로)' + (s.error ? ` · ${s.error}` : '') : 'Show this screen in English (화면을 영어로 보기 · 저장된 내용은 그대로)';
-    b.setAttribute('aria-label', s.on ? 'Show in Korean' : 'Show in English');
-  });
-  return b;
-}
+/** #5141 화면 영어 보기 — 맨 윗줄 «EN» 알약은 #5319 에서 걷었다(원준 2026-11-05 «yc 제출 끝났으니 저 EN 저거 버튼도 필요없다»).
+ *  기능(lib/screen-lang)은 그대로 두고 문만 닫는다. 켜 둔 채 남은 브라우저는 끌 길이 없어지므로 사이드바를 그릴 때 한 번 끈다. */
+function retireScreenLang(): void { if (screenLangOn()) setScreenLang(false); }
 function navRow(): HTMLElement {
+  retireScreenLang();
   const st = hooks.navState ? hooks.navState() : { back: true, forward: true };
   // 표기는 플랫폼을 따른다 — 맥이 아닌데 ⌘K 라고 적어 두면 눌러도 안 열린다(같은 키를 두 이름으로 배우게 된다).
   //  맥이 아니면 **Alt+K** 를 적는다: Ctrl+K 도 먹지만 터미널이 포커스면 안 먹는다(그건 셸의 kill-line 이다).
@@ -3096,8 +3112,7 @@ function navRow(): HTMLElement {
         sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
       el('span', { class: 'v2-omnib-t', text: '검색' }),
       el('kbd', { class: 'v2-omnib-k', text: omniKeyHint(mac) }))),
-    el('span', { class: 'v2-nav-sp v2-nav-sp--r', 'aria-hidden': 'true' }),
-    screenLangBtn());
+    el('span', { class: 'v2-nav-sp v2-nav-sp--r', 'aria-hidden': 'true' }));
 }
 /** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게. */
 export function markNav(st: { back: boolean; forward: boolean }): void {
