@@ -274,7 +274,10 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
 //  #5319 독 아래 탭 줄(2026-11-05 — 뷰어 여럿 중 하나를 고를 수 없었다 · «탭 사이즈가 충분히 크게»).
 {
   const TABS_LIB = read("web/lib/pane-tabs.ts");
-  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions';/.test(PANES_TS)
+  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions' && !!actApp && appOf\(k\) === actApp;/.test(PANES_TS)
+    && /function appOf\(k: TabKey\): string \{ return isFileTab\(k\) \? 'files' : tabBase\(k\); \}/.test(PANES_TS)
+    && /actApp: \(\) => \{ const a = panes\.get\('side'\)\?\.act \?\? null; return a \? appOf\(a\) : null; \}/.test(PANES_TS)
+    && /const aa = host\.actApp\?\.\(\) \?\? null; if \(aa\) items = items\.map/.test(DOCK)
     && /const MUST_APP: TabKey = 'console';/.test(PANES_TS) && /if \(isDefaultApp\(key\)\) return;/.test(PANES_TS)
     && /function isPinned\(k: TabKey\): boolean \{ return lay\.pin\.includes\(k\) \|\| isDefaultApp\(k\); \}/.test(PANES_TS)
     && /label: isDefaultApp\(key\) \? '기본 앱에서 빼기' : '기본 앱으로 두기', icon: 'pin', off: key === MUST_APP,/.test(PANES_TS)
@@ -283,7 +286,7 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
     && /const sub = top && list\.some\(inSub\);/.test(PANES_TS)
     && /w\.classList\.toggle\('pn-sub-off', top && !inSub\(k\)\)/.test(PANES_TS)
     && /classList\.contains\('pn-tabwrap'\) && !n\.classList\.contains\('pn-sub-off'\)/.test(PANES_TS),
-    "W16k 독 아래 탭 줄 = 열린 탭 전부(파일 · 앱, 켜진 앱과 무관) — 독엔 [뷰어] 칸이 없다 · 기본 앱(콘솔은 늘 · 사람마다 더하기)은 늘 열려 있고 × 없음 · 숨은 탭은 폭을 나눠 갖지 않는다");
+    "W16k 독 아래 탭 줄 = 켜진 앱의 탭만(뷰어 탭은 자료 앱 몫 · 자료 칸이 켜진다) — 독엔 [뷰어] 칸이 없다 · 기본 앱(콘솔은 늘 · 사람마다 더하기)은 늘 열려 있고 × 없음 · 숨은 탭은 폭을 나눠 갖지 않는다");
   check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: flex; flex-wrap: wrap;/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar::after \{ content: ""; order: 1; flex: 0 0 100%; height: 0; \}/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ order: 0; flex: 1 1 0; min-width: 0; height: calc\(var\(--pn-bighead-h, 113px\) - 1px\); \}/.test(DOCK_CSS)
@@ -324,7 +327,7 @@ check(/\.pn-dock\[data-home="top"\] \.pn-dock-shelf \{[^}]*background: none;[^}]
   && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on \.pn-dock-lb \{ font-weight: 700;/.test(DOCK_CSS)
   && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on::after \{ content: "";/.test(DOCK_CSS)
   && /el\('span', \{ class: 'pn-dock-lb', 'aria-hidden': 'true', text: name \}\)/.test(DOCK)
-  && /top: \{ min: 34, max: 44 \}/.test(DOCK) && /if \(dragging \|\| ctxIsOpen\(\)\) return;/.test(DOCK),
+  && /top: \{ min: 36, max: 52 \}/.test(DOCK) && /if \(dragging \|\| ctxIsOpen\(\)\) return;/.test(DOCK),
   "W16g 머리 줄 독 — 선반(유리 상자) 없음 · 아이콘 아래 이름표 15px · 켜진 앱은 굵게 + 밑줄(색만으로 말하지 않는다) · 아이콘 40~56 · 꼬리 이름표는 안 띄운다");
 check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\s+const mb = moreBtn\(\);/.test(DOCK) && /sessionOnly \? null : addBtn\(zone\),\n\s*\]\.filter/.test(PANES_TS),
   "W16e 머리 줄엔 «앱 더하기» 가 하나 — 독의 [모든 앱] 칸 대신 줄 끝 [＋](앱 서랍)");
