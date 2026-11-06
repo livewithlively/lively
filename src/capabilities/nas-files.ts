@@ -8,7 +8,7 @@ import { logger } from "../log.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { parseListing, displayPath, encodeRawPath, decodeRawPath, isSafeRawPath } from "../net/ftp/ftp-list.js";
 import { crawl, searchEntries, type NasEntry, type CrawlResult } from "../net/nas/nas-index.js";
-import { nasErrorReply, openNasSession, resolveNasLogin, resolveNasServer, nasIndexCache, nasIndexKey, nasDownloadPath } from "../net/nas/nas-access.js";
+import { connectNas, nasErrorReply, openNasSession, resolveNasAccess, nasIndexCache, nasIndexKey, nasDownloadPath } from "../net/nas/nas-access.js";
 
 /** 첫 색인을 기다리는 최대 시간. 넘으면 «만드는 중»으로 답하고 색인은 뒤에서 계속 만든다(MCP 호출을 오래 붙잡지 않게). */
 export const FIRST_INDEX_WAIT_MS = 20_000;
@@ -77,16 +77,13 @@ const nasFind: Capability = {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const i = z.object(findInput).parse(input ?? {});
     const memberId = user.userId;
-    let username: string;
-    try {
-      await resolveNasServer();
-      username = (await resolveNasLogin(memberId)).username;
-    } catch (e) { rethrow(e, memberId); }
-    const key = nasIndexKey(memberId, username);
+    const { server, login } = await resolveNasAccess(memberId).catch((e: unknown) => rethrow(e, memberId));
+    const key = nasIndexKey(memberId, login.username, server);
     if (i.refresh || !nasIndexCache.isFresh(key)) {
+      // 키를 만든 그 서버·계정으로 색인한다 — 사이에 설정이 바뀌어도 다른 서버의 색인이 이 키에 담기지 않게
       const building = nasIndexCache.build(key, async () => {
         try {
-          const { session } = await openNasSession(memberId);
+          const session = await connectNas(server, login);
           try {
             const r = await crawl((dir) => session.list(dir));
             logger.info({ member: memberId, dirs: r.dirs, entries: r.entries.length, failedDirs: r.failedDirs, truncated: r.truncated }, "[nas] 파일명 색인 완료");
