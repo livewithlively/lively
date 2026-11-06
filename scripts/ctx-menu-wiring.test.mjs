@@ -99,7 +99,7 @@ ok(/if \(e\.shiftKey \|\| IS_MOBILE\) return;/.test(T), "E10b ⇧우클릭·모�
 ok(/if \(plan\.copy === 'sel'\) copyText\(sel, false, true\);\s*else if \(plan\.copy === 'app'\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}/.test(T) && /const plan = ctxCopyPlan\(sel, appSel, link\);/.test(T), "E10c 복사 = Cmd+C 와 같은 길(앱 선택 없으면 ^C 안 보냄) — 판정은 메뉴를 띄운 순간의 것(#4083 커서 밑 링크는 ctxCopyPlan)");
 // 우클릭의 누름·뗌을 xterm 에 안 넘긴다 — 넘기면 앱 선택(appDragSelect)이 «제자리 클릭» 으로 풀리고 셸 화면은 rightClickSelectsWord 로 선택이 갈린다(원준님 실측).
 ok(/const eat = \(e: MouseEvent\): void => \{ if \(e\.button === 2 && !e\.shiftKey && !IS_MOBILE\) \{ e\.stopPropagation\(\); e\.preventDefault\(\); \} \};\s*host\.addEventListener\('mousedown', eat, true\);\s*host\.addEventListener\('mouseup', eat, true\);/.test(T), "E10f 우클릭 누름·뗌은 capture 에서 삼킨다(xterm·앱에 안 간다)");
-ok(/const appSelSeen = mouseOn && appDragSelect;/.test(T) && !/if \(appDragSelect\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}\s*\} \},/.test(T), "E10g [복사] 는 띄운 순간의 appSel 을 쓴다(누를 때 다시 읽지 않는다)");
+ok(/const appSelSeen = mouseOn && appDragSelect && TERM_UI\.copyBridge;/.test(T) && !/if \(appDragSelect\) \{ clearAppSelect\(\); armClipboardPromise\(\); sendInput\('\\x03'\); armBridgeMissHint\(\); \}\s*\} \},/.test(T), "E10g [복사] 는 띄운 순간의 appSel 을 쓴다(누를 때 다시 읽지 않는다) · #5332 ^C 가 복사가 아닌 앱(codex)엔 다리를 안 놓는다");
 // 여러 줄 드래그 뒤 단어 위에서 우클릭 → [복사 3자](원준님 실측, #3778): xterm 이 element 의 contextmenu 에서 rightClickSelectsWord 로
 //  커서 밑 단어를 선택했고, 우리 bubble 리스너는 그 뒤에 돌아 그 단어를 읽었다. 옵션을 끄고, contextmenu 를 capture 에서 받고,
 //  웹 선택·앱 선택이 둘 다 있으면 더 최근 것을 고른다.
@@ -110,7 +110,9 @@ ok(/off: !canCopy/.test(T), "E10d 선택이 없으면 복사 행이 꺼진다");
 ok(read("public/terminal.html").includes(".tctx {") && read("scripts/build-standalone.mjs").includes('"ctx-lite.ts"'), "E10e 터미널 메뉴 CSS + 번들 스탬프 입력");
 // E11. 입력줄 선택·되돌리기(#3778) — 판정은 line-edit.ts 가, «실제로 배선됐는가» 는 여기서 본다.
 //  (판정 규칙 40행은 src/terminal/line-edit.test.ts 가 변이로 red 를 입증해 검증한다.)
-ok(/import \{ decideKey, UndoStack, countTyped, SEQ, nativeUndoOk \} from '\.\/line-edit\.js'/.test(T), "E11a line-edit 판정을 실제로 들여온다(#3864 앱 되돌리기 판 판정 포함)");
+ok(/import \{ decideKey, UndoStack, countTyped, isCaretMove, SEQ, nativeUndoOk \} from '\.\/line-edit\.js'/.test(T), "E11a line-edit 판정을 실제로 들여온다(#3864 앱 되돌리기 판 판정 · #5332 캐럿 이동 판정 포함)");
+// #5332 — 웹이 보내는 이동도 손으로 친 이동도 합성 되돌리기 기록을 버린다(캐럿이 옮겨진 뒤 ⌘Z 가 엉뚱한 글자를 지우던 것).
+ok(/if \(!undoBusy && isCaretMove\(d\)\) undoStack\.reset\(\);/.test(T) && /if \(d === '\\r' \|\| isCaretMove\(d\)\) undoStack\.reset\(\);/.test(T), "E11a2 캐럿 이동은 sendInput·handleTermData 두 문에서 기록을 버린다");
 // 순서가 규칙이다 — Alt+화살표 블록이 먼저 먹으면 ⌥Shift+←/→(단어 선택)가 «그냥 단어이동» 이 되어 선택이 안 선다.
 ok(T.indexOf("if (handleLineEditKey(e)) return false;") > 0
   && T.indexOf("if (handleLineEditKey(e)) return false;") < T.indexOf("const wordSeq = e.key === 'ArrowLeft'"), "E11b 선택 판정이 Alt+화살표 블록보다 먼저 온다");
@@ -123,7 +125,7 @@ ok(/if \(e\.isComposing\) return \{ k: 'clear' \};/.test(read("web/standalone/li
 ok(/term\.onRender\(drawSel\)/.test(T) && /term\.onScroll\(drawSel\)/.test(T), "E11e 선택 표시는 렌더·스크롤마다 새로 계산한다");
 // 안전장치 — 선택을 시작한 줄의 내용이 바뀌었으면 좌표를 믿지 않는다(잘못 세면 사람 글자를 더 지운다).
 ok(/bufRowText\(y\) !== was\) return true/.test(T) && /if \(selStale\(r\)\) \{ clearSel\('stale-row'\)/.test(T), "E11f 선택한 행들이 바뀌었으면 지우지 않고 취소한다");
-ok(/if \(d === '\\r'\) undoStack\.reset\(\)/.test(T), "E11g 보내고 나면 되돌릴 것을 버린다");
+ok(/if \(d === '\\r'(?: \|\| isCaretMove\(d\))?\) undoStack\.reset\(\)/.test(T), "E11g 보내고 나면 되돌릴 것을 버린다");
 ok(/lineSelect: !!selI\.checked/.test(T) && /p\.lineSelect !== false/.test(T), "E11h 선택 흉내를 끄는 설정이 있다");
 ok(read("public/terminal.html").includes(".term-sel {"), "E11i 선택 표시 CSS");
 ok(read("scripts/build-standalone.mjs").includes('"line-edit.ts"'), "E11j 새 파일이 빌드 스탬프 입력에 들어간다");
