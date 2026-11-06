@@ -684,6 +684,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const pw = plan.widths;
       plan = { ...plan, widths: tabsIn.map((t, i) => (t.active && !t.pinned ? pw[i] : Math.min(Math.max(met.icon, Math.ceil(t.natural)), met.minLabel))) };
     }
+    //  아주 좁은 곁칸(240 안팎)에선 탭 하나도 줄보다 넓다 — 줄 폭에서 멈추고 이름은 가운데를 줄인다(아이콘 · × 가 잘려 나가지 않게).
+    if (sub) { const cap = Math.max(met.icon, Math.floor(room(p.tabs.clientWidth))); plan = { ...plan, widths: plan.widths.map((w) => Math.min(w, cap)) }; }
     wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
     p.bar.classList.toggle('compact', plan.mode === 'icons' && !sub);
     fitTitles(p);
