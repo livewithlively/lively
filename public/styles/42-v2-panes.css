@@ -25,7 +25,7 @@
 /* 손잡이 — 머리 아랫선 위 6px 에 눕는다(머리는 overflow hidden 이라 밖으로 못 나간다). 넓은 화면의 큰 머리 · 곁칸 머리 줄 독에만. 끄는 동안 둘 다 파란 선. */
 .pn-head-grip { display: none; }
 @media (min-width: 901px) {
-  .pn-body:not(.cm) .sc-head.sc-head--big > .pn-head-grip, .pn-pane.dock-top > .pn-tabbar > .pn-head-grip { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 6px; z-index: 3; cursor: row-resize; touch-action: none; }
+  .pn-body:not(.cm) .sc-head.sc-head--big > .pn-head-grip, .pn-pane.dock-top > .pn-tabbar > .pn-head-grip { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 6px; z-index: 8; cursor: row-resize; touch-action: none; }   /* 8 — 머리 줄 독(.pn-dock z 6) 위에(실측: 독 줄 안에 누운 손잡이를 독이 가로챘다) */
   .pn-head-grip::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--blue); opacity: 0; transition: opacity .12s; }
   .pn-head-grip:hover::after, .pn-head-grip:focus-visible::after, body.pn-head-dragging .pn-head-grip::after { opacity: .7; }
   .pn-head-grip:focus-visible { outline: none; }
