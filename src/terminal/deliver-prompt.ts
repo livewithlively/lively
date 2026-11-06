@@ -36,11 +36,13 @@ import { getSessionState } from "../sessions/session-state.js";
  *  ⚠ 모르면 undefined 다 — codex 판정이 «표식 없음 = 이 변경 전 세션(app-server)» 으로 읽는다(codex-chat-mode.ts).
  */
 async function sessionRuntimeStamp(id: string): Promise<string | undefined> {
+  //  #5332 — «안 적힘»(undefined → 표식 이전 세션)과 «못 읽음»(CODEX_STAMP_UNREAD)을 가른다(codex-chat-mode 머리말).
+  const { getOptStrict } = await import("./tmux-exec.js");
+  const { CODEX_STAMP_UNREAD } = await import("./codex-chat-mode.js");
   try {
-    const { getOpt } = await import("./tmux-exec.js");
-    const v = String((await getOpt(id, "@box_runtime")) || "").trim();
+    const v = String((await getOptStrict(id, "@box_runtime")) || "").trim();
     return v || undefined;
-  } catch { return undefined; }
+  } catch { return CODEX_STAMP_UNREAD; }
 }
 
 /**
@@ -48,12 +50,25 @@ async function sessionRuntimeStamp(id: string): Promise<string | undefined> {
  *  ⚠ 옛 번들 노드의 행엔 이 값이 없다 → undefined → codex 축이 «이 변경 전 세션(app-server)» 으로 읽는다.
  *   그 노드가 실제로 만드는 세션도 app-server 이므로 그 답이 맞다(번들이 갱신되면 그때부터 표식이 붙는다).
  */
-async function nodeSessionStamp(nodeId: string, sessionId: string): Promise<string | undefined> {
+async function nodeSessionStamp(nodeId: string, sessionId: string, deps?: { row?: (n: string, s: string) => { row: boolean; stamp?: string }; sleep?: (ms: number) => Promise<void> }): Promise<string | undefined> {
+  //  #5332 — 스냅샷에 그 **행이 아예 없으면**(갓 만든·갓 복원한 세션 — 노드가 다음 스냅샷을 올리기 전 몇 초) 표식 없음(=옛 번들 →
+  //   app-server)으로 읽지 않는다. 잠깐 기다려 보고, 그래도 없으면 «못 읽음» 이다. 행은 있는데 표식만 없을 때가 옛 번들이다.
+  //   실측 사고: 멈춘 노드 codex 세션에 말로 말을 걸면 복원 → 새 id 에 곧바로 말이 오는데, 그 순간 스냅샷에 행이 없어
+  //   app-server(chatSend)로 갔다 — TUI 가 이어 연 대화에 두 번째 writer 가 붙는다.
   try {
-    const { nodeSessionRuntime } = await import("../node/registry.js");
-    return nodeSessionRuntime(nodeId, sessionId);
+    const { nodeSessionRuntimeRow } = await import("../node/registry.js");
+    const { CODEX_STAMP_UNREAD } = await import("./codex-chat-mode.js");
+    const look = deps?.row ?? nodeSessionRuntimeRow;
+    const sleep = deps?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    for (let i = 0; i < 8; i++) {
+      const r = look(nodeId, sessionId);
+      if (r.row) return r.stamp;
+      await sleep(500);
+    }
+    return CODEX_STAMP_UNREAD;
   } catch { return undefined; }
 }
+export const __nodeSessionStampForTest = nodeSessionStamp;
 
 /** #1683 후속2 — 그 세션이 어느 하네스로 떴나(tmux 세션 옵션 @box_harness). 모르면 빈 문자열. */
 export async function sessionHarnessKey(id: string): Promise<string> {

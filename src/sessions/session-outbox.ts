@@ -40,7 +40,7 @@
 import path from "node:path";
 import { itemsPool } from "../db/client.js";
 import { firstPromptStep, acceptTrustDialog, dismissUpdatePrompt, UPDATE_ESC_MAX } from "../terminal/session-first-prompt.js";   // #3949 — 신뢰 대화상자는 읽고 누른다(첫 지시와 같은 함수) · #4135 후속 — codex 업데이트 창은 Escape
-import { codexChatMode } from "../terminal/codex-chat-mode.js";
+import { codexChatMode, CODEX_STAMP_UNREAD } from "../terminal/codex-chat-mode.js";
 import { confirmRuntimeSwitch } from "../terminal/runtime-switch-confirm.js";   // #4772 — 전환 확인창을 눌러 준다
 import { harnessIo } from "../terminal/harness-io/adapter.js";
 import { codexComposerState, CODEX_DRAFT_REFUSAL, CODEX_NOT_READY_REFUSAL } from "../terminal/harness-io/codex.js";   // #5332 — codex 설정 명령은 빈 입력칸에만
@@ -147,11 +147,13 @@ export function deliveryTransport(harness: string, stamp?: string, env: NodeJS.P
 
 /** 그 세션의 모드 표식을 읽는다(#4135). 못 읽으면 undefined — codex 축이 «표식 없음» 규칙으로 읽는다. */
 async function sessionRuntimeStampSafe(sessionId: string): Promise<string | undefined> {
+  //  #5332 — 못 읽었으면(세션 없음·중계 끊김) app-server 로 짐작하지 않는다(codex-chat-mode CODEX_STAMP_UNREAD 머리말) —
+  //   아래 send-keys 갈래는 화면이 준비됐을 때만 친다. 안 적혔을 때(표식 이전 세션)만 undefined 다.
+  const { getOptStrict } = await import("../terminal/tmux-exec.js");
   try {
-    const { getOpt } = await import("../terminal/tmux-exec.js");
-    const v = String((await getOpt(sessionId, "@box_runtime")) || "").trim();
+    const v = String((await getOptStrict(sessionId, "@box_runtime")) || "").trim();
     return v || undefined;
-  } catch { return undefined; }
+  } catch { return CODEX_STAMP_UNREAD; }
 }
 
 /** 못 닿는 동안의 재시도 간격 — 입력창 대기(초 단위)와 달리 **분 단위** 사건이다(노드 재기동·사람의 복원). */
