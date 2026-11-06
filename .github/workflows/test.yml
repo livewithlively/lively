@@ -203,6 +203,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/node/task-mark-running.pg-test.mjs
+      # 노드 토큰 회전 — 겹친 회전에서 «살아 있는 노드 토큰 = org_node 에 붙은 하나» (기대값 비교 갱신).
+      - name: 노드 토큰 회전 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/node/node-token-rotate.pg-test.mjs
       # ④-d1d 작업 컨테이너 작업 행(#4490) — 목으로는 못 보는 것: **동시 상한·대기열 상한이 테넌트 잠금 안의 셈이고, 일회용 부트 · 한 번만
       #    끝남 · 무응답 재확인 · 일시 실패 되돌리기 · 고른 뒤 끝난 행 넘기지 않기가 UPDATE 한 문장의 조건이다**. 병렬로 부르고(청/녹 두 슬롯)
       #    다른 트랜잭션으로 잠금·행을 쥐어 순서를 고정한 뒤 행을 되읽어 판정한다. 조건을 지우면 빨개지는 것을 확인했다.
