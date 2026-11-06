@@ -10,12 +10,14 @@
 import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
 import { isTerminalOmniChord, OMNI_MSG, OMNI_CLOSED_MSG } from './omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(정본 web/lib/omni-chord.ts 의 사본)
-import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
+import { decideKey, UndoStack, countTyped, isCaretMove, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
 import {                                  // #4406 Claude Code 입력칸 선택 — 범위는 웹, 지우기는 앱(순수 판정)
   findBox, move, rangeCells, cellsToRange, selText as appSelText, dragSeq, clickSeq, pressPlan, highlightMatches, scanHighlight,
   boxFingerprint, cmpPos as asCmp, lineEnd, decideAppSelKey, isTypingKey, versionAtLeast, APP_SELECT_MIN, // asCmp — #1155 의 cmpPos({x,y})와 다른 자리 모양({row,col})
 } from './app-select.js';
 import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
+import { UploadBook, fmtBytes, upPercent, upStatusText } from './upload-queue.js';   // #5361 올리기 진행 표시 — 같은 파일·이름 예약(순수 판정)
+import type { UpJob } from './upload-queue.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -516,12 +518,17 @@ const nodeQ = (joiner) => (NODE_ID ? joiner + 'node=' + encodeURIComponent(NODE_
 //  그래서 사실을 **서버에 묻는다** — 출처는 하네스 어댑터 한 곳이다(src/terminal/harness-io/term-ui.ts).
 //  ⚠ 기본값은 **종전 동작(클로드 기준)** 이다: 메타가 아직 안 왔거나 서버가 모르는 하네스면 지금까지 하던 대로 움직인다(무회귀).
 //  ⚠ 기본값에 기대 **키를 먼저 보내지 않는다** — 하네스에 따라 답이 반대인 자리(선택지 Enter)는 whenTermUi 로 기다린다.
-interface TermUiProfile { label: string; appMouse: boolean; choiceNeedsEnter: boolean; pastePlaceholder: boolean; startDialog: RegExp }
+interface TermUiProfile {
+  label: string; appMouse: boolean; choiceNeedsEnter: boolean; pastePlaceholder: boolean; startDialog: RegExp;
+  //  #5332 — 뜻은 src/terminal/harness-io/term-ui.ts 머리말. 구 서버가 안 주면 종전 동작(아래 기본값)이다.
+  copyBridge: boolean; pasteBurst: boolean; permModes: boolean;
+}
 const TERM_UI_FALLBACK: TermUiProfile = {
   //  ⚠ 이름표의 기본값은 **'AI'** 다 — 서버가 이름을 안 주면(구서버·셸 세션) «클로드» 라고 단언하지 않는다.
   //   나머지 기본값은 종전 동작(클로드 화면)이다(무회귀).
   label: 'AI', appMouse: true, choiceNeedsEnter: false, pastePlaceholder: true,
   startDialog: /trust (this|the) folder|Do you trust|Enter to confirm|❯\s*1\.\s|\bNo, exit\b|Bypass Permissions mode|accept the risk/i,
+  copyBridge: true, pasteBurst: false, permModes: true,
 };
 let TERM_UI: TermUiProfile = TERM_UI_FALLBACK;
 let termUiDone = false;
@@ -534,6 +541,10 @@ function applyTermUi(meta) {
       TERM_UI = {
         label: String(meta.harnessLabel || TERM_UI_FALLBACK.label),
         appMouse: !!t.appMouse, choiceNeedsEnter: !!t.choiceNeedsEnter, pastePlaceholder: !!t.pastePlaceholder,
+        //  필드가 없으면(구 서버) 종전 동작 — 다리·모드 단추는 있던 대로, 맨 글 붙여넣기도 그대로.
+        copyBridge: t.copyBridge === undefined ? true : !!t.copyBridge,
+        pasteBurst: !!t.pasteBurst,
+        permModes: t.permModes === undefined ? true : !!t.permModes,
         //  정규식은 source 만 온다(플래그는 여기서 'i' 로 고정) — 서버가 만든 글자를 그대로 컴파일한다.
         //  못 읽는 글자가 오면(구·신 버전 엇갈림) 기본값을 쓴다 — 화면이 죽는 것보다 종전 동작이 낫다.
         startDialog: t.startDialog ? new RegExp(t.startDialog, 'i') : TERM_UI_FALLBACK.startDialog,
@@ -541,7 +552,13 @@ function applyTermUi(meta) {
     }
   } catch (_) { /* 종전 기본값 유지 */ }
   termUiDone = true;
+  paintTermUiDeps();
   while (termUiWaiters.length) { const f = termUiWaiters.shift(); try { f && f(); } catch (_) { /* noop */ } }
+}
+/** 화면 사실에 매인 화면 조각을 다시 칠한다 — 메타보다 먼저 그려진 조각(폰 글쇠 줄)이 있다.
+ *  #5332 — codex 엔 클로드의 Shift+Tab 권한 모드가 없다: «모드» 단추를 누르면 ⇧Tab 이 codex 로 가서 엉뚱한 일을 했다. */
+function paintTermUiDeps(): void {
+  try { if (mmodeKey) mmodeKey.hidden = !TERM_UI.permModes; } catch (_) { /* noop */ }
 }
 /** 화면 사실이 정해진 뒤에 한다 — 하네스마다 답이 **반대**인 자리(선택지 Enter 유무)가 그 전에 움직이면 안 된다. */
 function whenTermUi(fn: () => void) { if (termUiDone) fn(); else termUiWaiters.push(fn); }
@@ -838,6 +855,7 @@ export function __injectRefsForTest(refs: Record<string, any>): void {
   if ('panesEl' in refs) panesEl = refs.panesEl;
   if ('explorerEl' in refs) explorerEl = refs.explorerEl;
   if ('echoWaitMs' in refs) ECHO_WAIT_MS = refs.echoWaitMs;
+  if ('uploadDoneMs' in refs) UPLOAD_DONE_MS = refs.uploadDoneMs;
 }
 let curDir = '';
 let sessionProjectId = 0; // 프로젝트 세션이면 그 id(loadSessionMeta 가 채움) — 업로드 위치를 뭐라 부를지 가른다(#1235)
@@ -1708,7 +1726,8 @@ export function handleTermData(d) {
   // 되돌리기용 타이핑 세기(#3778) — 실제로 PTY 로 나가는 바이트가 정본이라 IME·붙여넣기까지 저절로 맞는다.
   //  Enter(\r)는 «보냈다» = 입력칸이 비었다는 뜻이라 스택을 통째로 비운다(안 비우면 새 프롬프트에 옛 글이 들어간다).
   if (!undoBusy) {
-    if (d === '\r') undoStack.reset();
+    //  #5332 — 캐럿 이동(손으로 친 방향키 포함)도 기록을 버린다: 기록은 전부 «캐럿이 그 자리» 전제다(isCaretMove 머리말).
+    if (d === '\r' || isCaretMove(d)) undoStack.reset();
     else { const n = countTyped(d); if (n === null) undoStack.breakRun(); else undoStack.typeText(d); }
   }
   trackAppMouse(d);       // 앱 드래그 선택 관측(#1117 버그C — Cmd+C 브리지 발동 조건, 일반 타이핑 시 해제)
@@ -1764,7 +1783,12 @@ export function setupOscClipboard() {
   } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
-function sendInput(d) { emitInput(d); } // #4406 — 선택 지우기(op)가 도는 동안은 줄 선다(emitInput)
+function sendInput(d) {
+  //  #5332 — 웹이 보내는 이동(⌘←/→·⌥←/→·⇧ 넓히기·걷기·⌘↑/↓)은 handleTermData 를 안 지나 되돌리기 기록이 몰랐다 — 그 뒤 ⌘Z 가
+  //   옮겨진 캐럿 앞을 백스페이스로 지웠다. 여기서 같은 규칙(isCaretMove → 기록 버리기)을 건다.
+  if (!undoBusy && isCaretMove(d)) undoStack.reset();
+  emitInput(d);
+} // #4406 — 선택 지우기(op)가 도는 동안은 줄 선다(emitInput)
 // 붙여넣기 위생(#1117 버그B) — 클립보드가 어디서 왔든(타 터미널 화면·웹페이지·앱) '보이는 텍스트'만 넣는다.
 //  · CR/CRLF/유니코드 줄구분자(U+2028/29) → \n 정규화 — 터미널에서 \r 은 Enter 로 해석돼 의도치 않은 '제출'이 된다.
 //  · ESC 시퀀스(CSI/OSC/DCS/…)·C0 제어문자(탭·개행 제외)·C1 제거 — ① 화면캡처 유래 제어 바이트(커서이동·삭제·색)가
@@ -1783,6 +1807,12 @@ export function sanitizePasteText(t) {
 // 텍스트 붙여넣기 — 여러 줄(줄바꿈 포함)은 bracketed paste(\e[200~ … \e[201~)로 감싸 한 덩어리로 전달한다.
 //  그래야 안에서 도는 프로그램(클로드 코드·zsh/bash)이 중간 줄바꿈을 'Enter(전송)'로 오인하지 않는다.
 //  tmux control mode 에선 inner 의 DECSET 2004 가 xterm 까지 안 와 term.paste 가 감싸지 못하므로 직접 감싼다.
+/** 붙여넣기로 보낼 바이트(위생 · 괄호 표지까지) — 빈 글이면 ''. pasteText 와 선택 갈아치우기가 같은 규칙을 쓴다. */
+function pasteBytes(t: string): string {
+  const s = sanitizePasteText(t || '');
+  if (!s) return '';
+  return (/\n/.test(s) || TERM_UI.pasteBurst) ? '\x1b[200~' + s + '\x1b[201~' : s;
+}
 export function pasteText(t) {
   if (!t) return;
   t = sanitizePasteText(t);
@@ -1792,7 +1822,9 @@ export function pasteText(t) {
     pastedTextNo++;
     toast('[붙여넣은 텍스트 #' + pastedTextNo + ' +' + (t.split('\n').length - 1) + '줄]');
   }
-  if (/\n/.test(t)) sendInput('\x1b[200~' + t + '\x1b[201~');
+  //  #5332 — 붙여넣기 뭉치를 보는 앱(codex)은 한 줄도 괄호 표지로 감싼다: 맨 글로 보내면 한 번에 읽힌 덩어리를 붙여넣기로 치고
+  //   1024B 마다 쪼개 접거나(0.157.1 실측 «[Pasted Content 1024 chars]» + 나머지), 바로 뒤의 Enter 를 줄바꿈으로 삼켰다.
+  if (/\n/.test(t) || TERM_UI.pasteBurst) sendInput('\x1b[200~' + t + '\x1b[201~');
   else sendInput(t);
 }
 let pastedTextNo = 0;
@@ -1837,7 +1869,8 @@ function autosendReadScreen() {
 function autosendLanded(screen) {
   //  접는 하네스에서만 표식을 믿는다 — codex 는 접지 않고 그대로 펼치므로(실측 2026-09-24) 이 정규식이 영영 안 맞고,
   //   본문 대조만이 안착의 증거다. 반대로 접는 하네스(클로드)에서 본문 대조만 하면 접힌 화면을 «안 들어갔다» 로 본다.
-  if (TERM_UI.pastePlaceholder && /\[Pasted text|paste again to expand|\+\s*\d+\s*lines?/i.test(screen)) return true;
+  //  #5332 — codex 도 1000자 넘는 붙여넣기는 «[Pasted Content N chars]» 로 접는다(0.157.1·0.166.0 실측). 짧은 붙여넣기는 펼쳐지므로 본문 대조도 그대로 둔다.
+  if (TERM_UI.pastePlaceholder && /\[Pasted (text|Content)|paste again to expand|\+\s*\d+\s*lines?/i.test(screen)) return true;
   const probe = AUTOSEND.replace(/\s+/g, ' ').trim().slice(0, 24);
   return probe.length >= 6 && screen.replace(/\s+/g, ' ').indexOf(probe) !== -1;
 }
@@ -1929,28 +1962,190 @@ function showDropHint() {
   ok.focus();
 }
 
+// ── 올리기 진행 표시(#5361) ────────────────────────────────────────────────────────────────
+//  신고(원준 2026-11-05): 257MB 녹화 파일을 끌어다 놓았더니 «업로드 중…» 알림(toast — 2.8초 뒤 무조건 지운다)만 잠깐 뜨고
+//   다 올라갈 때까지 아무 표시가 없었다. 올라가는지 몰라 같은 파일을 다시 놓았고, 두 업로드가 같은 이름으로 가서 경로가
+//   입력창에 두 번 들어갔다. 그래서:
+//   · 올리는 동안 사라지지 않는 칸(.upq) — 파일 이름·크기·퍼센트·[취소]. fetch 는 업로드 진행률을 주지 않아 XHR 로 보낸다
+//     (putWithProgress). 다 올리면 «다 올렸어요» 로 바꾸고 UPLOAD_DONE_MS 뒤 걷는다. 못 올리면 이유를 남기고 사람이 [닫기]로 걷는다.
+//   · 같은 파일(이름·크기·수정 시각)이 올라가는 중이면 다시 올리지 않고 알린다 · 함께 올라가는 같은 이름은 번호를 달리 준다
+//     (판정은 upload-queue.ts — 순수, 시험이 직접 부른다).
+//   · 올리는 동안 창을 닫거나 새로고침하려 하면 브라우저가 묻는다(guardUploadUnload).
+//  칸은 터미널 판(#panes) 오른쪽 아래에 둔다 — 폰에선 입력 바(#mdock)가 #panes 아래의 형제라 판의 오른쪽 아래가 곧 «입력 바
+//   바로 위»다(화면 고정 자리면 바를 덮는다). 세션 그리드의 칸(iframe)에서도 그 칸 안에 선다.
+//  끊겨도 반쯤 쓴 파일은 남지 않는다 — 서버는 임시 파일에 받다가 다 받은 뒤에야 이름을 바꾼다(src/terminal/upload-file.ts).
+const upBook = new UploadBook();
+const upUi = new Map<number, { row: any; nameEl: any; pctEl: any; bar: any; fill: any; sub: any; btn: any; ctl: AbortController | null; hideT: any }>();
+let upqEl: any = null;
+let UPLOAD_DONE_MS = 4000;   // 다 올린 줄을 걷는 시간 — 시험이 줄인다(__injectRefsForTest)
+
+function upqPanel() {
+  const host = panesEl || document.body;
+  if (!upqEl) upqEl = el('div', { class: 'upq', role: 'region', 'aria-label': '파일 올리기' });
+  if (!host.contains(upqEl)) host.append(upqEl);
+  return upqEl;
+}
+function paintUpload(job: UpJob) {
+  let u = upUi.get(job.id);
+  if (!u) {
+    const nameEl = el('span', { class: 'upq-name' });
+    const pctEl = el('span', { class: 'upq-pct' });
+    const fill = el('i');
+    const bar = el('div', { class: 'upq-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, fill);
+    const sub = el('span', { class: 'upq-sub' });
+    const btn = el('button', { class: 'upq-btn', type: 'button' });
+    //  눌러도 터미널 입력 초점을 뺏지 않는다(누른 뒤 바로 이어 칠 수 있게) — click 은 그대로 온다.
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => upButton(job));
+    const row = el('div', { class: 'upq-row' }, el('div', { class: 'upq-head' }, nameEl, pctEl), bar, el('div', { class: 'upq-foot' }, sub, btn));
+    u = { row, nameEl, pctEl, bar, fill, sub, btn, ctl: null, hideT: null };
+    upUi.set(job.id, u);
+    upqPanel().append(row);
+  }
+  const pct = job.state === 'done' ? 100 : upPercent(job.loaded, job.size);
+  const finishing = job.state === 'send' && job.size > 0 && job.loaded >= job.size;
+  u.row.setAttribute('data-state', job.state);
+  u.nameEl.textContent = job.name;
+  u.nameEl.setAttribute('title', job.name);
+  u.pctEl.textContent = job.state === 'send' ? pct + '%' : fmtBytes(job.size);
+  u.fill.style.width = (job.state === 'fail' ? 100 : pct) + '%';
+  u.bar.setAttribute('aria-valuenow', String(pct));
+  u.sub.textContent = upStatusText(job);
+  //  [취소]는 기다리는 중·보내는 중에만. 다 보내고 서버가 저장을 마치는 동안은 멈춰도 파일이 남을 수 있어 감춘다(거짓 약속을 하지 않는다).
+  const act = job.state === 'wait' || (job.state === 'send' && !finishing) ? '취소' : job.state === 'done' || job.state === 'fail' ? '닫기' : '';
+  u.btn.textContent = act;
+  u.btn.setAttribute('title', act === '취소' ? '올리기 취소' : '알림 닫기');
+  u.btn.hidden = !act;
+}
+function dropUpRow(job: UpJob) {
+  const u = upUi.get(job.id);
+  if (!u) return;
+  if (u.hideT) clearTimeout(u.hideT);
+  u.row.remove();
+  upUi.delete(job.id);
+  if (!upUi.size && upqEl) upqEl.remove();
+}
+function upButton(job: UpJob) {
+  if (job.state === 'wait') { job.state = 'cancel'; upBook.release(job); dropUpRow(job); guardUploadUnload(); toast('올리기를 취소했어요 — ' + job.name); return; }
+  if (job.state === 'send') { const u = upUi.get(job.id); if (u && u.ctl) u.ctl.abort(); return; }   // 마무리는 sendUpload 의 catch 가 한다
+  dropUpRow(job);   // 다 올렸다·못 올렸다 — 사람이 닫는다
+}
+function upDone(job: UpJob, note: string) {
+  job.state = 'done'; job.note = note || ''; job.loaded = job.size;
+  paintUpload(job);
+  const u = upUi.get(job.id);
+  if (u) u.hideT = setTimeout(() => dropUpRow(job), UPLOAD_DONE_MS);
+}
+
+// 올리는 동안 창을 닫거나 새로고침하려 하면 브라우저가 한 번 묻는다(올리던 파일은 거기서 멈춘다). 도는 동안만 건다.
+//  데스크톱 앱에선 걸지 않는다 — Electron 은 beforeunload 를 묻지 않고 **조용히** 닫기를 취소해, 트레이 [종료]·업데이트
+//  재시작이 아무 말 없이 안 먹는 앱이 된다(web/v2/bg-upload.ts 와 같은 규칙 · #5060).
+const onUploadUnload = (e) => { e.preventDefault(); e.returnValue = ''; return ''; };
+let unloadGuarded = false;
+function guardUploadUnload() {
+  const on = upBook.busy() && !inDesktopApp();
+  if (on === unloadGuarded) return;
+  unloadGuarded = on;
+  if (on) window.addEventListener('beforeunload', onUploadUnload);
+  else window.removeEventListener('beforeunload', onUploadUnload);
+}
+
+// 못 올린 이유(사람이 읽는 문장). 게이트웨이가 낸 오류엔 늘 {error} 본문이 붙는다 — 그대로 쓴다. 본문 없는 403·407·451 은
+//  게이트웨이가 쓰지 않는 응답이라 그 사이(내 PC 보안 프로그램·사내 프록시)에서 막힌 것이다(#1272 — files-upload.ts upFailMsg).
+const UP_NOT_OURS = [403, 407, 451];
+function upFailText(status, bodyErr) {
+  if (bodyErr) return String(bodyErr);
+  if (!status) return '네트워크 연결이 끊겼어요.';
+  return '서버가 오류를 돌려줬어요(' + status + ').' + (UP_NOT_OURS.indexOf(status) >= 0 ? ' 게이트웨이가 보낸 응답이 아니에요. 내 PC 보안 프로그램이나 사내 프록시가 막은 것으로 보여요.' : '');
+}
+// 진행률이 보이는 PUT — fetch 는 업로드 진행률을 주지 않는다(그래서 종전엔 끝날 때까지 아무 표시가 없었다). XHR 의
+//  upload.onprogress 로 보낸 바이트를 받는다. 주소·인증은 fetchAuth 와 같은 규칙(apiUrl 접두사 + authHeaders).
+//  ⚠ Content-Type 은 octet-stream 으로 박는다 — 비우면 브라우저가 File.type 으로 채우는데, .json 파일이면 게이트웨이 전역
+//   express.json 이 본문을 먼저 삼킨다(web/projects/files-upload.ts authUpload 머리말 · #1870).
+//  signal 이 끊기면 xhr.abort() 로 **보내는 중인 바이트까지** 멈추고 이름이 'AbortError' 인 오류로 거절한다.
+function putWithProgress(path, file, onProgress, signal?): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const abortErr = () => { const e = new Error('올리기를 취소했어요'); e.name = 'AbortError'; return e; };
+    if (signal && signal.aborted) { reject(abortErr()); return; }
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', apiUrl(path));
+    const h = authHeaders({ 'Content-Type': 'application/octet-stream' });
+    for (const k of Object.keys(h)) xhr.setRequestHeader(k, h[k]);
+    const onAbort = () => xhr.abort();
+    if (signal) signal.addEventListener('abort', onAbort);
+    if (xhr.upload) xhr.upload.onprogress = (ev) => { if (ev && ev.lengthComputable) onProgress(ev.loaded, ev.total); };
+    xhr.onload = () => {
+      let j = null;
+      try { j = JSON.parse(xhr.responseText); } catch (_) { /* 본문 없음 */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(j);
+      else reject(new Error(upFailText(xhr.status, j && j.error)));
+    };
+    xhr.onerror = () => reject(new Error(upFailText(0, '')));
+    xhr.onabort = () => reject(abortErr());
+    xhr.onloadend = () => { if (signal) signal.removeEventListener('abort', onAbort); };
+    xhr.send(file);
+  });
+}
+
+// 올릴 파일을 대기열에 세우고 칸에 줄을 그린다(동기 — 같은 파일 판정이 await 사이로 새지 않게). 같은 폴더로 같은 파일이
+//  이미 올라가는 중이면 세우지 않고 알린 뒤 null — 그 줄을 잠깐 반짝여 어디서 올라가는지 보여 준다.
+//  keyFile — 같은 파일 판정에 쓸 원본(폰 첨부는 HEIC 를 JPEG 로 바꿔 올리므로 사람이 고른 원본으로 판정한다).
+function queueUpload(file, dir: string, name: string, keyFile?): UpJob | null {
+  const { job, dup } = upBook.claim(keyFile || file, dir, name);
+  if (dup) {
+    toast('이미 올리고 있는 파일이에요 — ' + job.name);
+    const u = upUi.get(job.id);
+    if (u) { u.row.classList.add('upq-flash'); setTimeout(() => u.row.classList.remove('upq-flash'), 1200); }
+    return null;
+  }
+  job.size = Number(file && file.size) || 0;   // 칸이 말하는 크기는 실제로 보내는 파일의 것
+  paintUpload(job);
+  guardUploadUnload();
+  return job;
+}
+// 세운 파일 하나를 보낸다 — 진행률을 칸에 그리고, 끝나면 서버 응답(JSON, 못 읽으면 {})을, 취소·실패면 null 을 준다.
+//  어느 쪽이든 장부에서 빼고 창 닫기 경고를 다시 잰다. 실패 줄은 사람이 닫을 때까지 남는다(이유를 읽어야 한다).
+async function sendUpload(job: UpJob, file, rel: string): Promise<any> {
+  if (job.state !== 'wait') return null;   // 차례를 기다리는 동안 취소됐다
+  const u = upUi.get(job.id);
+  const ctl = new AbortController();
+  if (u) u.ctl = ctl;
+  job.state = 'send'; job.loaded = 0;
+  paintUpload(job);
+  try {
+    const j = await putWithProgress(sUrl('/file?path=' + encodeURIComponent(rel)), file, (loaded) => {
+      if (job.state !== 'send') return;
+      job.loaded = job.size > 0 ? Math.min(loaded, job.size) : loaded;
+      paintUpload(job);
+    }, ctl.signal);
+    return j || {};
+  } catch (e) {
+    if (e && e.name === 'AbortError') { job.state = 'cancel'; dropUpRow(job); toast('올리기를 취소했어요 — ' + job.name); }
+    else { job.state = 'fail'; job.error = (e && e.message) || ''; paintUpload(job); }
+    return null;
+  } finally {
+    if (u) u.ctl = null;
+    upBook.release(job);
+    guardUploadUnload();
+  }
+}
+
 // uploads/ 안에서 겹치지 않는 이름 — 원래 이름을 그대로 쓰되, 이미 있으면 '이름-2.png' 로 번호를 올린다(#1235).
 //  왜 타임스탬프(20260729-143022-) 를 안 쓰나: 그 접두어가 통째로 입력창에 꽂혀 경로를 길게 만들고, 사람이 자기 파일을
 //  못 알아본다. 덮어쓰기(서버 PUT 은 그냥 쓴다)는 막아야 하므로 조회로 회피한다 — 목록을 못 읽으면(폴더 없음 등)
-//  겹칠 것도 없다고 보고 그대로 쓴다.
-async function uniqueUploadName(name) {
-  const taken = new Set();
+//  이미 있는 이름은 없다고 본다.
+//  ★ #5361 — 목록엔 **다 올라간** 파일만 있다. 올리는 중인 파일의 이름도 예약으로 쳐야 함께 놓은 같은 이름이 서로를
+//   덮지 않는다(UploadBook.reserve). 목록을 받은 뒤 고르기·예약은 한 틱 안에 끝난다 — 두 파일이 같은 이름을 집을 틈이 없다.
+async function uniqueUploadName(job: UpJob) {
+  const taken = new Set<string>();
   try {
     const d = await api(sUrl('/ls?path=' + encodeURIComponent('uploads')));
     for (const it of (d.items || [])) taken.add(it.name);
-  } catch (_) { return name; }
-  if (!taken.has(name)) return name;
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  for (let i = 2; i < 1000; i++) { const c = stem + '-' + i + ext; if (!taken.has(c)) return c; }
-  return stem + '-' + Math.floor(Math.random() * 1e6) + ext;
+  } catch (_) { /* 목록을 못 읽었다 — 올리는 중인 이름만 피한다 */ }
+  return upBook.reserve(job, taken);
 }
-// 이미지/파일을 작업폴더(cwd)의 uploads/ 로 업로드하고 그 경로를 입력창에 꽂는다. 웹 터미널은 이미지 바이트를
-//  텍스트 스트림으로 못 흘리므로(터미널=텍스트), 파일로 올리고 경로를 입력해 안에서 도는 에이전트가 읽게 한다.
-//  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
-async function dropFileToAgent(file) {
-  if (!file) return;
+// 끌어놓은 파일의 이름 — 경로 조각을 떼고 쓸 수 없는 글자를 밑줄로 바꾼다. 확장자가 없으면 형식에서 붙인다(붙여넣은 이미지).
+function dropName(file) {
   // ★ #3870 — **맥에서 온 한글 파일명이 통째로 `_` 가 되던 것.** 맥 파일시스템(APFS/HFS+)은 파일명을 NFD 로
   //  들고 있어 `file.name` 이 «경진대회» = ㄱ+ㅕ+ㅇ… (자모 U+1100~U+11FF) 로 온다. 아래 허용집합의 `가-힣` 은
   //  **완성형 음절**(U+AC00~U+D7A3)이라 그 자모가 한 글자도 안 맞고, 이름 전체가 밑줄로 치환됐다
@@ -1958,16 +2153,22 @@ async function dropFileToAgent(file) {
   //  서버는 이미 NFC 정본으로 쓰므로(#1278b nfcPath) 여기서 미리 합치는 것이 그 규약과 같은 자다.
   let name = (file.name || 'pasted').normalize('NFC').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
   if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + (((file.type || '').split('/')[1]) || 'png');
-  name = await uniqueUploadName(name);
+  return name;
+}
+// 이미지/파일을 작업폴더(cwd)의 uploads/ 로 업로드하고 그 경로를 입력창에 꽂는다. 웹 터미널은 이미지 바이트를
+//  텍스트 스트림으로 못 흘리므로(터미널=텍스트), 파일로 올리고 경로를 입력해 안에서 도는 에이전트가 읽게 한다.
+//  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
+//  세우기(queueUpload, 동기)와 올리기(runDrop)를 나눈 이유(#5361): 여러 파일을 한 번에 놓으면 모두 먼저 칸에 세워
+//   «차례를 기다리고 있어요» 로 보이게 하고, 그 사이 같은 파일을 다시 놓아도 알아본다.
+async function runDrop(job: UpJob, file) {
+  if (job.state !== 'wait') return;
+  const name = await uniqueUploadName(job);
+  if (job.state !== 'wait') return;   // 이름을 고르는 사이 취소됐다
+  paintUpload(job);
   const rel = 'uploads/' + name;
-  toast('업로드 중… ' + name);
-  let abs = rel; // 폴백: 서버가 절대경로를 안 주면 기존처럼 상대경로
-  try {
-    const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(rel)), { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-    const j = await res.json().catch(() => null);
-    if (!res.ok) { throw new Error((j && j.error) || ('' + res.status)); }
-    if (j && j.path) abs = j.path; // 서버가 준 절대경로 — 클코 cwd 가 세션 루트와 달라도 바로 찾음
-  } catch (e) { toast('업로드 실패 — ' + e.message, true); return; }
+  const j = await sendUpload(job, file, rel);
+  if (!j) return;
+  const abs = j.path || rel; // 서버가 준 절대경로 — 클코 cwd 가 세션 루트와 달라도 바로 찾음(안 주면 종전처럼 상대경로)
   // 절대경로엔 공백·한글이 흔해(프로젝트 폴더명) 작은따옴표로 감싼다(내부 ' 는 '\'' 로 이스케이프). 전송은 사용자가.
   const quoted = "'" + abs.replace(/'/g, "'\\''") + "'";
   // ★ #4229 — 폰(모바일 입력 바가 켜진 상태)에선 경로를 PTY 가 아니라 **입력 바의 글 상자**에 넣는다. 폰의 글은 그 상자에서
@@ -1978,8 +2179,20 @@ async function dropFileToAgent(file) {
   // 알림은 파일명 기준으로 말한다(#1235) — 절대경로는 입력창에 이미 보이고, 사람이 자기가 넣은 걸 알아보는 단서는 이름이다.
   //  ⚠ 입력창 표시 자체를 파일명으로 바꿀 수는 없다: sendInput 은 PTY 로 바이트를 흘릴 뿐이고 그 줄을 그리는 건
   //   클로드 코드 TUI 라, 화면에 보이는 문자열이 곧 클로드가 받는 문자열이다(표시만 갈아끼울 층이 없다).
-  toast('첨부: ' + name + (toDock ? ' — 경로가 입력칸에 들어갔어요(설명 적고 보내기)' : ' — 경로가 입력창에 들어갔어요(설명 적고 Enter)'));
+  upDone(job, toDock ? '경로를 입력칸에 넣었어요. 설명을 적고 보내세요.' : '경로를 입력창에 넣었어요. 설명을 적고 Enter 를 누르세요.');
   if (explorerLoaded) loadDir(curDir);
+}
+// keyFile — 같은 파일 판정에 쓸 원본(queueUpload 머리말).
+async function dropFileToAgent(file, keyFile?) {
+  if (!file) return;
+  const job = queueUpload(file, 'uploads', dropName(file), keyFile);
+  if (job) await runDrop(job, file);
+}
+// 한 번에 놓은 여러 파일 — 모두 먼저 세우고 하나씩 올린다. 순서대로 — 경로가 놓은 순서로 입력창에 들어간다.
+async function dropFilesToAgent(files) {
+  const jobs: Array<[UpJob, any]> = [];
+  for (const f of files) { if (!f) continue; const job = queueUpload(f, 'uploads', dropName(f)); if (job) jobs.push([job, f]); }
+  for (const [job, f] of jobs) await runDrop(job, f);
 }
 // ── 입력줄 선택·되돌리기 (#3778 · 여러 줄 #3870) ────────────────────────────────────────
 //  앱에 없는 두 기능을 «앱이 이미 아는 조작»만으로 합성한다. 판정 규칙은 line-edit.ts(순수), 여기서는
@@ -1996,7 +2209,31 @@ async function dropFileToAgent(file) {
 //   한글은 대부분 이쪽 — 엔 0글자, 줄바꿈 경계엔 1글자). 그래서 여러 행 선택을 지울 때는 **앱 커서를 방향키로 반대 끝까지
 //   실제로 걸어 가며 글자 수를 잰 뒤**에 지운다(walkCursor). 방향키 수는 화면으로 센 «하한» 이라 넘치지 않고,
 //   닿지 못하면 아무것도 지우지 않는다. 한 행 안의 선택은 종전 그대로 바로 지운다(화면 셈이 정확하다).
-let selAnchor: { x: number; y: number; snap: Map<number, string> } | null = null;
+let selAnchor: { x: number; y: number; snap: Map<number, string>; base?: number } | null = null;
+/** 지금 버퍼의 baseY(스크롤백 줄 수) — 못 읽으면 0. */
+function curBase(): number { try { return term.buffer.active.baseY; } catch (_) { return 0; } }
+/**
+ * #5332 — 선택 앵커를 화면 밀림에 맞춘다. 앵커는 버퍼 절대 행으로 적는데, codex 인라인은 지난 대화를 **입력칸 위 영역만** 굴려
+ *  끼워 넣는다(위쪽 고정 스크롤 영역). 그러면 입력칸은 화면 같은 자리에 머물고 절대 행만 baseY 만큼 늘어 — 앵커가 입력칸 윗줄을
+ *  가리켰다(실측: 답이 흐르는 동안 ⇧← 로 고른 범위가 한 줄씩 위로 미끄러졌다). 전체 화면 스크롤(셸·클로드)은 내용이 절대 행과 같이
+ *  간다 — 그래서 어느 쪽인지 **앵커 행의 글자(snap)** 로 가린다: 제자리 그대로면 두고, baseY 차만큼 아래에 있으면 옮긴다. 둘 다 아니면 둔다
+ *  (selStale 이 지우기·복사를 막는다).
+ */
+function rebaseSel(): void {
+  const a = selAnchor;
+  if (!a) return;
+  const base = curBase();
+  if (a.base === undefined) { a.base = base; return; }
+  const d = base - a.base;
+  if (!d) return;
+  a.base = base;
+  const was = a.snap.get(a.y);
+  if (was === undefined || bufRowText(a.y) === was || bufRowText(a.y + d) !== was) return;
+  const snap = new Map<number, string>();
+  for (const [y, t] of a.snap) snap.set(y + d, t);
+  selAnchor = { x: a.x, y: a.y + d, snap, base };
+  dlog('sel-rebase', 'd=' + d);
+}
 let selEls: any[] = [];
 let selBusy: { y: number; x0: number; y1: number; x1: number; curAtEnd: boolean } | null = null; // 걷는 중 — 그동안 선택 모양은 이것으로 고정
 const undoStack = new UndoStack();
@@ -2037,6 +2274,7 @@ const cmpPos = (a: Pos, b: Pos): number => (a.y - b.y) || (a.x - b.x);
 /** 지금 선택 범위(시작 ≤ 끝, 읽는 순서). 앵커가 없거나·비었거나·너무 멀면 null(= 선택 없음). */
 function selRange(): SelRange | null {
   if (selBusy) return selBusy;
+  rebaseSel();
   if (!selAnchor) return null;
   const c = cursorPos();
   if (!c) return null;
@@ -2217,6 +2455,8 @@ async function walkDeleteSel(r: SelRange, text: string, then?: string): Promise<
 function copySel(): boolean {
   const r = selRange();
   if (!r) return false;
+  //  #5332 — 지우기와 같은 잣대: 고른 뒤 그 행들이 바뀌었으면(밀림을 못 맞췄다) 엉뚱한 글을 복사하지 않는다.
+  if (selStale(r)) { clearSel('stale-row'); toast('화면이 바뀌어 선택을 취소했어요', true); return false; }
   const { text } = selText(r);
   if (!text) return false;
   copyText(text, false, true);
@@ -2236,7 +2476,7 @@ function extendSel(seq: string, cross?: number): void {
     let top = 0;
     try { top = term.buffer.active.baseY; } catch (_) { /* noop */ }
     for (let y = Math.max(top, c.y - SEL_MAX_ROWS); y <= c.y + SEL_MAX_ROWS && y < top + term.rows; y++) snap.set(y, bufRowText(y));
-    selAnchor = { x: c.x, y: c.y, snap };
+    selAnchor = { x: c.x, y: c.y, snap, base: curBase() };
     dlog('sel-on', 'x=' + c.x + ' y=' + c.y);
   }
   if (cross && cross < 0 && c.x <= rowTextStart(c.y) && !isPromptRow(c.y)) seq = SEQ.left + seq;
@@ -2250,13 +2490,124 @@ function isTerminalInputFocused(): boolean {
 function selectCurrentInput(): void {
   clearSel('select-input');
   inputSelectArmed = true;
+  const from = cursorPos();
   sendInput(SEQ.home);
   // Home의 결과는 PTY 왕복 뒤 xterm 버퍼에 반영된다. 그 실제 커서 자리를 앵커로 삼아 End까지 넓힌다.
-  setTimeout(() => { if (inputSelectArmed && isTerminalInputFocused()) extendSel(SEQ.end); }, 45);
+  //  #5332 — 종전 고정 45ms 는 왕복이 그보다 길면(원격 노드·바쁜 앱) Home 이 닿기 전 자리를 앵커로 잡아 «캐럿 뒤만» 골랐다.
+  //   커서가 실제로 움직였다가 멈출 때까지 기다린다(cursorSettle — 추측 타이머로 다시 보내지 않는다). 이미 줄 머리였으면
+  //   움직일 일이 없으니 상한(SELECT_HOME_WAIT_MS)만큼 기다린 뒤 그대로 넓힌다 — 앵커가 줄 머리인 건 같다.
+  const go = (): void => { if (inputSelectArmed && isTerminalInputFocused()) extendSel(SEQ.end); };
+  if (!from) { setTimeout(go, 45); return; }
+  //  이미 줄 머리면(Home 이 할 일이 없다) 기다리지 않는다 — ⌘A 바로 뒤의 ⌘C 가 빈 선택을 만나지 않게.
+  if (from.x <= rowTextStart(from.y)) { setTimeout(go, 45); return; }
+  void cursorSettle(from, SELECT_HOME_WAIT_MS).then(go);
 }
+const SELECT_HOME_WAIT_MS = 600;
 function selectWholeTerminal(): void {
   clearSel('select-all');
   try { term.selectAll(); } catch (_) { /* noop */ }
+}
+
+// ── 입력 **전체**의 처음·끝 (#5332) ─────────────────────────────────────────────────
+//  원준님 2026-11-04: «클로드에서는 되는 ⌘A 등으로 입력중인 글자 선택하거나 오려붙이거나 … 코덱스엔 클로드만큼 반영 안 돼 있다».
+//  Claude Code 전체화면은 #4406 판(app-select)이 입력 전체를 다룬다. 그 밖(Codex·Claude 인라인)은 이 판 — 종전엔 ⌘A·⌘⇧↑/↓·⌘↑/↓ 가
+//  전부 Ctrl+A/E(= **지금 줄**)라 여러 줄 입력에서 그 줄 머리·끝에서 멈췄다. 앱엔 입력 처음·끝으로 가는 키가 없다(#3870 실측 — 두 앱 다
+//  Ctrl+Home·M-< 무반응) → 입력칸의 두 끝을 화면에서 찾고, 앱 커서를 방향키로 **걸어** 간다(walkCursor — 하한씩 보내고 다시 재므로 넘치지 않는다).
+//  입력칸 = 커서 행에서 위로 «› / ❯» 첫 행까지(사이 행은 전부 두 칸 들여쓰기) + 아래로 두 칸 들여쓴 이어지는 행들(빈 행에서 끝 — 그 아래가 발치).
+//  못 찾거나(셸·목록·대화상자) 빈 입력칸(흐린 안내문)이면 null — 부른 쪽이 종전 «지금 줄» 동작으로 물러난다.
+function isContRow(y: number): boolean {
+  const c0 = cellAt(y, 0), c1 = cellAt(y, 1);
+  return blankCh(c0) && blankCh(c1) && rowEnd(y) > 2;
+}
+//  #5332 — 입력 가운데의 **빈 줄**(⇧Enter 두 번). codex 는 그 줄을 완전히 빈 행으로 그린다(0.157.1·0.166.0 실측 — 들여쓰기도 배경색도 없다).
+//   종전 판정은 빈 행에서 입력칸이 끝난다고 봐서 «a / 빈 줄 / b» 의 ⌘A 가 b 만(또는 아무것도) 못 골랐다. 그런데 입력칸 아래 발치
+//   («  GPT-6-Sol medium · …») 도 두 칸 들여쓴 행이라 빈 행만 건너뛰면 발치까지 입력으로 먹는다. 그래서 **화면 맨 아래 덩어리**
+//   (빈 행 뒤에 이어 붙은 글 행들 — 발치·슬래시 목록)를 먼저 찾아 그 위까지만 입력칸으로 본다. 덩어리를 못 가르면(커서가 그 안이다)
+//   종전대로 첫 빈 행에서 끝낸다.
+function isBlankRow(y: number): boolean { return rowEnd(y) === 0; }
+/** 화면 맨 아래 «빈 행 뒤의 글 덩어리» 의 첫 행 — 없으면(빈 화면·빈 행이 없다) -1. */
+function bottomBlockTop(): number {
+  let base = 0;
+  try { base = term.buffer.active.baseY; } catch (_) { /* noop */ }
+  let y = base + term.rows - 1;
+  while (y >= base && isBlankRow(y)) y--;
+  if (y < base) return -1;
+  while (y - 1 >= base && !isBlankRow(y - 1)) y--;
+  return y - 1 >= base ? y : -1;
+}
+function inputBounds(): { start: Pos; end: Pos } | null {
+  const c = cursorPos();
+  if (!c) return null;
+  const foot = bottomBlockTop();
+  const inBody = (y: number): boolean => foot < 0 || foot <= c.y || y < foot - 1;   // 발치 덩어리와 그 위 빈 행은 입력칸이 아니다
+  const blankOk = foot > c.y;                                                       // 발치를 갈랐을 때만 빈 행을 입력으로 본다
+  let top = -1;
+  for (let y = c.y; y >= Math.max(0, c.y - SEL_MAX_ROWS); y--) {
+    if (isPromptRow(y)) { top = y; break; }
+    if (isContRow(y) || (blankOk && isBlankRow(y) && y !== c.y)) continue;
+    if (!(y === c.y && blankCh(cellAt(y, 0)) && blankCh(cellAt(y, 1)))) return null;
+  }
+  if (top < 0) return null;
+  if (/^\d+[.)]\s/.test(bufRowText(top).slice(2))) return null;          // 번호 메뉴(대화상자) — 입력칸이 아니다
+  let bot = Math.max(top, c.y);
+  for (let y = bot + 1; y - top < SEL_MAX_ROWS && inBody(y); y++) {
+    if (isContRow(y)) { bot = y; continue; }
+    if (blankOk && isBlankRow(y)) continue;                                  // 빈 줄 — 아래에 입력 행이 더 있으면 그때 넓힌다
+    break;
+  }
+  const head = cellAt(top, 2);
+  if (top === c.y && c.x <= 2 && (!head || blankCh(head) || isDimAt(top, 2))) {
+    if (bot === top) return null;                                        // 빈 입력칸(안내문은 흐리게 그려진다)
+  }
+  return { start: { x: 2, y: top }, end: { x: Math.max(2, rowEnd(bot)), y: bot } };
+}
+function isDimAt(y: number, x: number): boolean {
+  try { const ln = term.buffer.active.getLine(y); const cell = ln && ln.getCell(x); return !!(cell && cell.isDim()); } catch (_) { return false; }
+}
+function snapRows(c: Pos): Map<number, string> {
+  const snap = new Map<number, string>();
+  let top = 0;
+  try { top = term.buffer.active.baseY; } catch (_) { /* noop */ }
+  for (let y = Math.max(top, c.y - SEL_MAX_ROWS); y <= c.y + SEL_MAX_ROWS && y < top + term.rows; y++) snap.set(y, bufRowText(y));
+  return snap;
+}
+/** 선택을 입력 처음(dir<0)·끝(dir>0)까지 넓힌다 — 앵커는 그대로(없으면 지금 자리), 커서를 그 끝까지 걷는다. 걷는 동안 선택 모양은 목표까지로 고정. */
+async function extendSelToInput(dir: -1 | 1): Promise<void> {
+  const b = inputBounds(), c = cursorPos();
+  if (!b || !c) { extendSel(dir < 0 ? SEQ.home : SEQ.end); return; }   // 입력칸을 못 찾았다 — 종전 «지금 줄»
+  if (!selAnchor) { selAnchor = { x: c.x, y: c.y, snap: snapRows(c), base: curBase() }; dlog('sel-on', 'x=' + c.x + ' y=' + c.y); }
+  const goal = dir < 0 ? b.start : b.end;
+  const a = { x: selAnchor.x, y: selAnchor.y };
+  const d = cmpPos(a, goal);
+  if (!d) return;
+  const [s, e] = d < 0 ? [a, goal] : [goal, a];
+  selBusy = { y: s.y, x0: s.x, y1: e.y, x1: e.x, curAtEnd: d < 0 };
+  drawSel();
+  let net: number | null = null;
+  try { net = await walkCursor(goal); } finally { selBusy = null; }
+  if (net === null) { toast('입력의 끝을 찾지 못했어요', true); dlog('sel-walk', 'input-fail dir=' + dir); }
+  drawSel();
+}
+/** ⌘A — 입력이 여러 행이면 입력 전체(앵커=끝, 커서를 처음까지 걷는다). 한 행이면 종전 그대로(Home/End). */
+function selectWholeInput(): void {
+  const b = inputBounds();
+  if (!b || b.start.y === b.end.y) { selectCurrentInput(); return; }
+  clearSel('select-input');
+  selAnchor = { x: b.end.x, y: b.end.y, snap: snapRows(b.end), base: curBase() };
+  inputSelectArmed = true;
+  dlog('sel-on', 'input rows=' + (b.end.y - b.start.y + 1));
+  void extendSelToInput(-1);
+}
+/** ⌘↑/↓ — 캐럿만 입력 처음·끝으로(선택은 거둔다). */
+async function caretToInput(dir: -1 | 1): Promise<void> {
+  clearSel('caret-input');
+  const b = inputBounds();
+  if (!b) { sendInput(dir < 0 ? SEQ.home : SEQ.end); return; }
+  const goal = dir < 0 ? b.start : b.end;
+  const c = cursorPos();
+  if (!c || !cmpPos(c, goal)) return;
+  selBusy = { y: c.y, x0: c.x, y1: c.y, x1: c.x, curAtEnd: true };   // 걷는 동안 키를 받지 않는다(빈 선택 — 칠하지 않는다)
+  try { await walkCursor(goal); } finally { selBusy = null; removeSelEls(); }
 }
 
 // ── 마우스는 pane 의 것이다 (#4406) ────────────────────────────────────────────────
@@ -2274,6 +2625,128 @@ function selectWholeTerminal(): void {
 //   가로챈 누름은 앱에 닿지 않아 입력칸 클릭·끌기·선택 지우기까지 함께 죽었다. 되살리려면 먼저 이 머리말의 실측을 이겨야 한다.
 export function wireInputLineMouse(host: HTMLElement): void {
   host.addEventListener('mousedown', () => { clearSel('mouse'); clearAppSel('mouse'); }, true);
+  wireComposerClick(host);
+}
+
+// ── 입력칸의 마우스 선택·클릭 (#5332 — 마우스를 안 쥐는 앱: codex) ─────────────────────────────────
+//  원준님 2026-11-04: «코덱스 위에서 드래그하고 cmd+c 나 이런 모든 기능들 클로드만큼». codex 는 마우스 보고를 안 켠다(appMouse=false) —
+//  끌기는 xterm 이 스스로 칠하는 **웹 선택**이고 앱은 그 범위를 모른다. ⌘C 는 됐지만 ⌘X·⌫·덮어치기·⌘V 갈아 붙이기는 앱 쪽에선
+//  아무 범위도 없어서 ⌫ 는 캐럿 앞 한 글자만 지웠다. 그래서 그 선택이 **입력칸 안에만** 걸쳐 있으면 키보드 선택(selAnchor)으로
+//  넘겨받는다 — 앱 캐럿을 가까운 끝으로 걸어 가고(walkCursor — 하한씩 보내고 다시 재므로 넘치지 않는다) 반대 끝을 앵커로 세운 뒤,
+//  키보드 선택과 같은 지우기(deleteSel)를 쓴다. 입력칸 밖에 걸친 선택(지난 대화)은 종전 그대로 복사만 된다.
+//  클릭(끌지 않음)은 그 글자 앞으로 캐럿을 걸어 옮긴다 — 클로드 전체화면은 앱이 스스로 하는 일이다(#4406 머리말).
+//  ⚠ 마우스를 쥐는 앱(appMouse)에선 아무것도 안 한다 — 그 앱이 누름·끌기를 받는다.
+/** 넓은 글자(한글)의 뒤 칸을 가리키면 앞(dir<0)·뒤(dir>0) 칸으로 옮긴다. */
+function cellFix(p: Pos, dir: -1 | 1): Pos { const c = cellAt(p.y, p.x); return c && c.w === 0 ? { x: p.x + dir, y: p.y } : p; }
+/** xterm 선택이 입력칸 글자 안에만 걸쳐 있으면 그 범위(읽는 순서). 아니면 null. */
+function xtermSelInInput(): { s: Pos; e: Pos } | null {
+  if (TERM_UI.appMouse) return null;
+  try {
+    if (!term.hasSelection()) return null;
+    const p = term.getSelectionPosition();
+    if (!p) return null;
+    const b = inputBounds();
+    if (!b || p.start.y < b.start.y || p.end.y > b.end.y) return null;
+    const s0 = cellFix({ x: Math.max(p.start.x, rowTextStart(p.start.y)), y: p.start.y }, -1);
+    const e0 = cellFix({ x: Math.min(p.end.x, Math.max(rowTextStart(p.end.y), rowEnd(p.end.y))), y: p.end.y }, 1);
+    return cmpPos(s0, e0) < 0 ? { s: s0, e: e0 } : null;
+  } catch (_) { return null; }
+}
+/** 웹 선택을 키보드 선택으로 넘겨받는다 — 됐으면 true(그때 selRange() 가 그 범위다). */
+async function adoptXtermSel(r: { s: Pos; e: Pos }): Promise<boolean> {
+  const c = cursorPos();
+  if (!c) return false;
+  const dist = (q: Pos): number => (cmpPos(c, q) < 0 ? charsLowerBound(c, q) : charsLowerBound(q, c));
+  const [goal, anchor] = dist(r.s) <= dist(r.e) ? [r.s, r.e] : [r.e, r.s];
+  try { term.clearSelection(); } catch (_) { /* noop */ }
+  clearSel('adopt');
+  selBusy = { y: r.s.y, x0: r.s.x, y1: r.e.y, x1: r.e.x, curAtEnd: goal === r.e };   // 걷는 동안 그 범위를 칠해 두고 키를 받지 않는다
+  drawSel();
+  let net: number | null = null;
+  try { net = await walkCursor(goal); } finally { selBusy = null; }
+  if (net === null) { removeSelEls(); toast('고른 자리를 찾지 못해 그대로 두었어요', true); return false; }
+  selAnchor = { x: anchor.x, y: anchor.y, snap: snapRows(anchor), base: curBase() };
+  dlog('sel-adopt', 'rows=' + (r.e.y - r.s.y + 1) + ' walk=' + net);
+  drawSel();
+  return true;
+}
+/**
+ * 입력칸 웹 선택 위의 키 — 맡았으면 true. ⌫·⌦ = 지우기 · ⌘X(윈도 Ctrl+X) = 복사하고 지우기 · 글자 = 지우고 그 글자.
+ *  조합(IME) 시작 키는 삼킬 수 없어(#1300) 웹 선택만 거두고 흘린다 — 키보드 여러 행 선택과 같은 물러섬이다.
+ */
+function handleMouseSelKey(e: any): boolean {
+  if (TERM_UI.appMouse || !term.hasSelection() || selRange() || inputSelectArmed) return false;
+  const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+  const cut = mod && !e.altKey && (e.key || '').toLowerCase() === 'x';
+  const del = !e.ctrlKey && !e.metaKey && (e.key === 'Backspace' || e.key === 'Delete');
+  const typing = !e.ctrlKey && !e.metaKey && !e.altKey && Array.from(e.key || '').length === 1;
+  if (!cut && !del && !typing && e.keyCode !== 229) return false;
+  const r = xtermSelInInput();
+  if (!r) return false;
+  if (e.keyCode === 229 || e.isComposing) { try { term.clearSelection(); } catch (_) { /* noop */ } return false; }
+  e.preventDefault();
+  if (cut) { try { copyText(term.getSelection(), false, true); } catch (_) { /* noop */ } }   // 복사는 제스처 안(동기)에서
+  const ch = typing ? e.key : '';
+  void adoptXtermSel(r).then((ok) => {
+    if (ok) deleteSel(ch || undefined);
+    else if (ch) sendInput(ch);                       // 넘겨받기에 실패해도 친 글자는 잃지 않는다
+  });
+  return true;
+}
+/** 붙여넣기가 입력칸 웹 선택을 갈아치운다(편집기 관례) — 맡았으면 true. */
+function pasteOverMouseSel(t: string): boolean {
+  const r = xtermSelInInput();
+  if (!r) return false;
+  const bytes = pasteBytes(t);
+  if (!bytes) return false;
+  void adoptXtermSel(r).then((ok) => { if (ok) deleteSel(bytes); else sendInput(bytes); });
+  return true;
+}
+/** 입력칸 글자를 누르면(끌지 않고) 그 글자 앞으로 캐럿을 옮긴다. 두 번 누르기(단어 고르기)와 섞이지 않게 잠깐 기다렸다 간다. */
+function wireComposerClick(host: HTMLElement): void {
+  let down: { x: number; y: number; at: number } | null = null;
+  let timer: any = null;
+  host.addEventListener('mousedown', (e: MouseEvent) => {
+    if (timer) { clearTimeout(timer); timer = null; }   // 두 번째 누름 — 단어 고르기다(캐럿을 옮기지 않는다)
+    down = e.button === 0 && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && e.detail === 1 ? { x: e.clientX, y: e.clientY, at: Date.now() } : null;
+  }, true);
+  host.addEventListener('mouseup', (e: MouseEvent) => {
+    const d = down; down = null;
+    if (!d || TERM_UI.appMouse || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 3 || Date.now() - d.at > 600) return;
+    const target = composerCellAt(e.clientX, e.clientY);
+    if (!target) return;
+    timer = setTimeout(() => {
+      timer = null;
+      try { if (term.hasSelection()) return; } catch (_) { /* noop */ }
+      void caretToCell(target);
+    }, 260);
+  }, true);
+}
+/** 화면 좌표 → 입력칸 글자 자리(글자 끝 너머는 그 행 끝으로). 입력칸 밖이면 null. */
+function composerCellAt(cx: number, cy: number): Pos | null {
+  try {
+    const m = term.modes && term.modes.mouseTrackingMode;
+    if (m && m !== 'none') return null;                 // 앱이 마우스를 받는 화면
+    const scr = term.element && term.element.querySelector('.xterm-screen');
+    if (!scr) return null;
+    const rect = scr.getBoundingClientRect();
+    const col = Math.floor((cx - rect.left) / (rect.width / term.cols));
+    const row = Math.floor((cy - rect.top) / (rect.height / term.rows));
+    if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
+    const y = term.buffer.active.viewportY + row;
+    const b = inputBounds();
+    if (!b || y < b.start.y || y > b.end.y) return null;
+    const x = Math.min(Math.max(col, rowTextStart(y)), Math.max(rowTextStart(y), rowEnd(y)));
+    return cellFix({ x, y }, -1);
+  } catch (_) { return null; }
+}
+async function caretToCell(p: Pos): Promise<void> {
+  const c = cursorPos();
+  if (!c || !cmpPos(c, p) || selBusy) return;
+  clearSel('click');
+  selBusy = { y: c.y, x0: c.x, y1: c.y, x1: c.x, curAtEnd: true };   // 걷는 동안 키를 받지 않는다(빈 선택 — 칠하지 않는다)
+  try { await walkCursor(p); } finally { selBusy = null; removeSelEls(); }
+  dlog('caret-click', 'x=' + p.x + ' y=' + p.y);
 }
 
 // ── Claude Code 입력칸 선택 (#4406 후속) ────────────────────────────────────────────
@@ -2568,8 +3041,36 @@ export function wireInputSelection(host: HTMLElement): void {
   try { term.onScroll(drawAppSel); } catch (_) { /* noop */ }
   wireInputLineMouse(host);
 }
+//  #5332 — 걷는 동안(selBusy) 친 글자는 버리지 않고 줄 세웠다가 걷기·지우기가 끝난 뒤 순서대로 보낸다. 종전엔 삼켜서 버렸다 —
+//   고른 위에 «XY» 를 빨리 치면 Y 가 사라졌다(실측: «alpha beta gamma» 의 beta 위에 XY → «alpha X gamma»). 걷는 중간에 보내면
+//   중간 자리에 박히므로 끝날 때까지 기다린다(지우기의 뒤따를 바이트는 같은 순간에 동기로 나가므로 그 뒤에 선다).
+//  보통 글자와 ⌫ 만 줄 세운다 — 조합(IME)은 삼킬 수 없고(#1300), 단축키는 걷기가 끝난 화면에서 다시 누르는 게 맞다.
+const busyKeys: string[] = [];
+let busyFlushArmed = false;
+function queueBusyKey(e: any): void {
+  if (e.ctrlKey || e.metaKey || e.isComposing || e.keyCode === 229) return;
+  const k = e.key === 'Backspace' ? SEQ.back : (!e.altKey && Array.from(e.key || '').length === 1 ? e.key : '');
+  if (!k) return;
+  busyKeys.push(k);
+  if (busyFlushArmed) return;
+  busyFlushArmed = true;
+  const tick = (): void => {
+    if (selBusy) { setTimeout(tick, 16); return; }
+    busyFlushArmed = false;
+    const d = busyKeys.splice(0).join('');
+    if (d) { dlog('sel-queue', 'flush n=' + d.length); sendInput(d); }
+  };
+  setTimeout(tick, 16);
+}
 /** 사람이 붙여넣을 때 선택이 서 있으면 먼저 지운다(편집기 관례 — 붙여넣기는 선택을 갈아치운다). */
 function pasteReplacingSel(t: string): void {
+  //  #5332 — 키보드 선택(⇧방향키·⌘A)과 입력칸의 마우스 선택(codex)도 갈아치운다. 종전엔 선택을 둔 채 캐럿 자리에 덧붙었다.
+  //   지우기는 deleteSel 의 «뒤따를 바이트» 로 붙여넣기를 싣는다 — 여러 행 지우기는 비동기라 순서가 그래야 지켜진다.
+  if (t && !opBusy && !asel && !appDragSelect) {
+    const r = selRange();
+    if (r && !selBusy) { const bytes = pasteBytes(t); if (bytes && deleteSel(bytes)) return; }
+    if (pasteOverMouseSel(t)) return;
+  }
   if (t && !opBusy && (asel || appDragSelect)) {
     const g = aselGeom();
     const cur = g && asel ? aselNow(g) : null;
@@ -2623,7 +3124,8 @@ function handleLineEditKey(e: any): boolean {
   if (handleAppSelKey(e)) return true;
   const p = prefs();
   // 여러 행 선택을 지우려고 앱 커서를 걷는 동안(walkDeleteSel)엔 키를 받지 않는다 — 걷는 중 친 글자는 중간 자리에 박힌다.
-  if (selBusy) { e.preventDefault(); return true; }
+  if (selBusy) { e.preventDefault(); queueBusyKey(e); return true; }
+  if (handleMouseSelKey(e)) return true;   // #5332 — 입력칸의 마우스 선택(codex)
   const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange() || inputSelectArmed, select: p.lineSelect !== false, inputActive: isTerminalInputFocused() });
   if (act.k === 'pass') return false;
   if (act.k === 'clear') { clearSel('key:' + (e.key || '?')); return false; }
@@ -2648,7 +3150,9 @@ function handleLineEditKey(e: any): boolean {
   if (act.k === 'redo') { doRedo(); return true; }
   if (act.k === 'copy') { copySel(); return true; }
   if (act.k === 'cut') { copySel(); deleteSel(); return true; }
-  if (act.k === 'selectInput') { selectCurrentInput(); return true; }
+  if (act.k === 'selectInput') { selectWholeInput(); return true; }
+  if (act.k === 'extendInput') { void extendSelToInput(act.dir); return true; }
+  if (act.k === 'caretInput') { void caretToInput(act.dir); return true; }
   if (act.k === 'selectAll') { selectWholeTerminal(); return true; }
   if (act.k === 'del') { deleteSel(); return true; }
   if (act.k === 'send') {
@@ -2751,9 +3255,13 @@ export function setupClipboard() {
       // Windows의 Ctrl+C는 선택이 없으면 본래의 중단 키다. 단, 앱이 관리하는 마우스 선택을 방금 관측했을
       // 때만 macOS의 Cmd+C와 같은 복사 브리지로 소비한다. 이 조건이 없으면 Ctrl+C를 복사로 오인해 앱을
       // 취소·종료시키거나, 반대로 선택 없는 중단을 막게 된다.
-      const windowsObservedCopy = !IS_MAC && e.ctrlKey && !e.metaKey && mouseOn && appDragSelect;
+      //  #5332 — 다리는 «그 앱의 ^C 가 복사다» 라고 하네스가 답했을 때만(TERM_UI.copyBridge). codex 의 ^C 는 입력칸을 지우거나
+      //   (비었으면) codex 를 끈다 — 마우스 보고가 켜진 codex 화면(전체화면으로 뜬 옛 세션)에서도 ⌘C 가 \x03 이 되면 안 된다.
+      const bridge = mouseOn && TERM_UI.copyBridge;
+      const windowsObservedCopy = !IS_MAC && e.ctrlKey && !e.metaKey && bridge && appDragSelect;
+      if (macCopy && mouseOn && !bridge) { dlog('cmdc-skip', 'no-bridge'); copyHintToast(); return false; }
       if (macCopy || windowsObservedCopy) {
-        if (mouseOn) {
+        if (bridge) {
           // ⚠ 관측은 '1회용'이다(#1117 후속, 사파리 실기기 사고): 앱(CC)은 복사 후·출력 후 선택을 스스로 잃는데
           //  우리는 그걸 볼 수 없다. 관측을 소비하지 않으면 Cmd+C 연타의 2번째부터가 선택 없는 ^C(= 취소,
           //  두 번이면 CC 종료)로 들어간다. 그래서 브리지 1회마다 소비하고, 다시 복사하려면 다시 드래그해야 한다.
@@ -2765,7 +3273,7 @@ export function setupClipboard() {
       }
       // Ctrl+C 를 마우스모드 앱에 그대로 흘리는 경로(아래 return true) — 드래그 선택이 관측돼 있으면 '복사 의도'로
       //  보고 사파리용 클립보드 promise 를 미리 커밋해 둔다(앱의 OSC52 가 곧 도착). 흐름은 바꾸지 않는다.
-      if (e.ctrlKey && !e.metaKey && mouseOn && appDragSelect) armClipboardPromise();
+      if (e.ctrlKey && !e.metaKey && bridge && appDragSelect) armClipboardPromise();
       return true;
     }
     if (k === 'v') {
@@ -3098,7 +3606,7 @@ function arrowSeq(letter) {
 //   번호도 안 먹고 Esc 도 없어 빠져나올 길이 없었다(상민 2026-10-25, #4990).
 //  ④ ⇧Tab 은 «모드» 단추다 — 지금 모드 이름을 화면 아래 상태 줄에서 읽어 단추에 적는다.
 let mdockComposing = false;
-let msendEl = null, mkeysEl = null, mpicksEl = null, mmodeT = null;
+let msendEl = null, mkeysEl = null, mpicksEl = null, mmodeT = null, mmodeKey: HTMLElement | null = null;
 const MDRAFT_KEY = 'lively:mdraft:' + SESSION_ID;
 function saveDraft() {
   try { const v = mcompEl ? String(mcompEl.value || '') : ''; if (v) sessionStorage.setItem(MDRAFT_KEY, v); else sessionStorage.removeItem(MDRAFT_KEY); } catch (_) { /* 저장소가 막혀 있으면 보관만 못 한다 */ }
@@ -3118,6 +3626,8 @@ let ECHO_WAIT_MS = 3000;
 const ECHO_POLL_MS = 40;
 const ECHO_PROBE = 16;             // 화면에서 찾을 글 꼬리(공백 뺀 글자 수)
 const PASTED_MARK = '[Pastedtext#';   // 800자 넘게 한 번에 읽히면 Claude Code 가 입력칸을 이 표시로 접는다(공백 뺀 꼴)
+const PASTED_MARK_CODEX = '[PastedContent';   // #5332 — codex 는 1000자 넘으면 «[Pasted Content N chars]» (공백 뺀 꼴)
+const pastedMarks = (s: string): number => countOf(s, PASTED_MARK) + countOf(s, PASTED_MARK_CODEX);
 const squashWs = (s) => String(s || '').replace(/\s+/g, '');
 const countOf = (hay, needle) => { let n = 0; if (!needle) return 0; for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) n++; return n; };
 function screenSquashed() { return squashWs(screenTail((term && term.rows) || 24).join('')); }
@@ -3130,14 +3640,14 @@ function fireEnter(why) {
 function enterAfterEcho(text) {
   const probe = squashWs(text).slice(-ECHO_PROBE);
   const s0 = screenSquashed();
-  const tail0 = countOf(s0, probe), mark0 = countOf(s0, PASTED_MARK);
+  const tail0 = countOf(s0, probe), mark0 = pastedMarks(s0);
   const started = Date.now();
   const p = { timer: null };
   pendingEnter = p;
   const check = () => {
     if (pendingEnter !== p) return;
     const s = screenSquashed();
-    if (countOf(s, probe) > tail0 || (TERM_UI.pastePlaceholder && countOf(s, PASTED_MARK) > mark0)) fireEnter('after echo ' + (Date.now() - started) + 'ms');
+    if (countOf(s, probe) > tail0 || (TERM_UI.pastePlaceholder && pastedMarks(s) > mark0)) fireEnter('after echo ' + (Date.now() - started) + 'ms');
     else if (Date.now() - started >= ECHO_WAIT_MS) fireEnter('by timeout');
     else p.timer = setTimeout(check, ECHO_POLL_MS);
   };
@@ -3152,8 +3662,13 @@ function mobileSend() {
   if (/\n/.test(t)) { pasteText(t); sendInput('\r'); }
   else {
     const line = sanitizePasteText(t);
-    sendInput(line);
-    if (line.length >= ECHO_WAIT_MIN) enterAfterEcho(line); else sendInput('\r');
+    //  #5332 — codex(붙여넣기 뭉치): 글과 CR 이 한 번에 읽히면 CR 이 제출이 아니라 **줄바꿈**이 된다(실측). 괄호 표지로 감싼 글 뒤의
+    //   CR 은 곧바로 제출된다(0.157.1·0.166.0 실측) — 화면 확인을 기다릴 필요도 없다.
+    if (TERM_UI.pasteBurst) { sendInput('\x1b[200~' + line + '\x1b[201~'); sendInput('\r'); }
+    else {
+      sendInput(line);
+      if (line.length >= ECHO_WAIT_MIN) enterAfterEcho(line); else sendInput('\r');
+    }
   }
   mcompEl.value = ''; mobileGrow(); saveDraft(); paintSend();
   //  조합 중이던 글자가 비운 뒤에 되살아나지 않게 IME 를 끊는다(같은 손짓 안이라 자판은 그대로 남는다).
@@ -3229,7 +3744,7 @@ function scanScreen() {
     //  줄을 옆으로 밀어 둔 채였으면 번호가 화면 밖 맨 앞에 붙는다 — 번호가 새로 서면 줄을 처음으로 되돌린다.
     if (n > 0) mkeysEl.scrollLeft = 0;
   }
-  if (mmodeT) { const nm = modeName(detectMode(screenTail(8))) || '고르기'; if (mmodeT.textContent !== nm) mmodeT.textContent = nm; }
+  if (mmodeT && TERM_UI.permModes) { const nm = modeName(detectMode(screenTail(8))) || '고르기'; if (mmodeT.textContent !== nm) mmodeT.textContent = nm; }
 }
 function scheduleScan() { if (!scanTimer) scanTimer = setTimeout(scanScreen, 150); }
 //  모드 고르기 — 목록에서 고르면 그 방식이 될 때까지 Shift+Tab 을 보내며 **매번 화면으로 확인**한다.
@@ -3261,6 +3776,7 @@ export async function switchModeTo(target, deps?) {
   } finally { modeSwitching = false; }
 }
 function openModeSheet() {
+  if (!TERM_UI.permModes) { toast(TERM_UI.label + ' 에는 고를 일하는 방식이 없어요', true); return; }   // #5332 — 단추가 감춰지기 전 눌린 경우
   if (modeSwitching) { toast(MODE_BUSY_MSG); return; }
   const cur = detectMode(screenTail(8));
   const pick = async (k) => {
@@ -3330,6 +3846,7 @@ export function setupMobileDock(mainEl) {
   const modeKey = tbtn('', '일하는 방식 고르기', openModeSheet);
   mmodeT = el('b', { class: 'mkey-t', text: '고르기' });
   modeKey.replaceChildren(el('span', { class: 'mkey-l', text: '모드' }), mmodeT, mIcon('mkey-caret', IC_CARET)); modeKey.classList.add('mkey-mode');
+  mmodeKey = modeKey; paintTermUiDeps();   // #5332 — 권한 모드가 없는 하네스(codex)면 감춘다
   //  Tab 은 뺐다 — 글은 아래 글 상자에서 쓰므로 터미널 자동 완성(Tab)이 닿을 자리가 없다(원준 «왜 필요해?»).
   //  ^C(Ctrl+C)도 뺐다(원준 2026-09-26 «그냥 필요 없을 듯, 빼 버리자») — AI 를 멈추는 건 Esc 이고, 클로드 코드는 Ctrl+C 를 두 번 받으면 꺼진다.
   mpicksEl = el('div', { class: 'mpicks', hidden: '', role: 'group', 'aria-label': '번호로 고르기' });
@@ -3407,15 +3924,16 @@ function insertIntoComposer(text) {
   return true;
 }
 // 폰에서 고른 사진·파일을 하나씩 올린다(#4229). 끌어놓기와 같은 함수(dropFileToAgent)를 타므로 올라가는 자리(uploads/)·
-//  이름 규칙·경로 삽입이 데스크톱과 같다. 순서대로 — 동시에 올리면 겹치는 이름 판정(uniqueUploadName)이 서로를 못 본다.
+//  이름 규칙·경로 삽입·진행 칸(#5361)이 데스크톱과 같다. 순서대로 — 경로가 고른 순서로 글 상자에 들어간다.
 //  아주 큰 파일(폰이면 대개 동영상)은 한 번 묻는다 — 셀룰러로 몇 분이 걸리고 AI 가 읽지도 못한다.
+//  같은 파일 판정은 사람이 고른 원본(f)으로 한다 — HEIC 를 JPEG 로 바꾼 파일은 고를 때마다 새 파일이다.
 const ATTACH_ASK_BYTES = 50 * 1024 * 1024;
 export async function attachFilesToAgent(files) {
   for (const f of [...(files || [])]) {
     if (!f) continue;
     if (f.size > ATTACH_ASK_BYTES && typeof confirm === 'function'
       && !confirm((f.name || '파일') + ' 은 ' + Math.round(f.size / 1048576) + 'MB 예요. 올릴까요? (AI 는 사진·문서만 읽어요)')) continue;
-    await dropFileToAgent(await prepareAttachment(f));
+    await dropFileToAgent(await prepareAttachment(f), f);
   }
 }
 // iOS 사진 보관함은 보통 JPEG 로 바꿔 주지만, 파일 앱에서 고르면 HEIC 가 그대로 온다 — AI 는 HEIC 를 못 읽는다.
@@ -3560,13 +4078,17 @@ async function downloadFile(p, name) {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   } catch (e) { toast('다운로드 실패: ' + e.message, true); }
 }
-async function uploadFile(file, dir) {
-  const rel = (dir ? dir + '/' : '') + file.name;
-  const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(rel)), { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-  if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('' + res.status)); }
-}
+// 파일 탐색기의 [업로드]·끌어놓기 — 지금 보는 폴더로 원래 이름 그대로 올린다(같은 이름의 파일은 덮어쓴다 — 종전 그대로).
+//  진행은 터미널 끌어놓기와 같은 칸이 보여 준다(#5361 — 종전엔 다 올라간 뒤에야 «업로드: 이름» 알림 하나뿐이었다).
+//  예약(reserve)에 서버 목록을 넘기지 않는 이유: 덮어쓰기가 이 입구의 약속이다. 함께 올라가는 같은 이름만 피한다.
 async function uploadMany(files, dir) {
-  for (const f of files) { try { await uploadFile(f, dir); toast('업로드: ' + f.name); } catch (e) { toast('업로드 실패: ' + f.name + ' — ' + e.message, true); } }
+  const jobs: Array<[UpJob, any]> = [];
+  for (const f of files) { if (!f) continue; const job = queueUpload(f, dir, f.name); if (job) jobs.push([job, f]); }
+  for (const [job, f] of jobs) {
+    if (job.state !== 'wait') continue;
+    upBook.reserve(job, []);
+    if (await sendUpload(job, f, (dir ? dir + '/' : '') + job.name)) upDone(job, '');
+  }
   loadDir(curDir);
 }
 function startUpload() {
@@ -3632,7 +4154,7 @@ export function setupTermDrop() {
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if (!files.length) return;
     e.preventDefault(); off();
-    for (const f of files) await dropFileToAgent(f);
+    await dropFilesToAgent(files);
   });
 }
 
@@ -3880,9 +4402,16 @@ function openHelp() {
       sec('복사',
         kb(['드래그 → ⌘/Ctrl C'], '드래그로 선택한 뒤 복사 — 자동 복사는 없어요(클립보드 안 덮임)'),
         kb(['더블클릭'], '단어 하나만 빠르게 — 세 번 누르면 그 줄 전체가 선택됩니다'),
-        kb(['Shift 드래그'], 'Claude 안에서 선택이 잘 안 될 때는 Shift 누른 채 드래그'),
-        kb(['Claude 복사'], 'Claude 가 복사한 내용은 내 컴퓨터 클립보드에도 자동으로 올라가요'),
-        kb(['⌘C (선택 없이)'], 'Claude 화면에서 선택 없이 ⌘C 를 눌러도 이제 Claude 가 종료되지 않아요')),
+        //  #5332 — 아래 셋은 마우스를 쥐는 앱(클로드 전체화면)의 사정이다. codex 는 마우스를 안 쥐어 끌기가 곧 웹 선택이고,
+        //   앱의 Ctrl+C 는 복사가 아니라 입력 지우기·종료다 — 그 화면에 «Claude» 문구를 띄우지 않는다.
+        ...(TERM_UI.appMouse ? [
+          kb(['Shift 드래그'], TERM_UI.label + ' 안에서 선택이 잘 안 될 때는 Shift 누른 채 드래그'),
+          kb([TERM_UI.label + ' 복사'], TERM_UI.label + ' 가 복사한 내용은 내 컴퓨터 클립보드에도 자동으로 올라가요'),
+          kb(['⌘C (선택 없이)'], TERM_UI.label + ' 화면에서 선택 없이 ⌘C 를 눌러도 ' + TERM_UI.label + ' 가 종료되지 않아요'),
+        ] : [
+          kb(['입력칸 끌기'], '입력 중인 글을 끌어 고르면 ⌘X 오려 두기 · ⌫ 지우기 · 그 위에 치기 · ⌘V 갈아 붙이기가 돼요'),
+          kb(['⌘A'], '입력 중인 글 전체 고르기 — 한 번 더 누르면 화면 전체'),
+        ])),
       // 파일 전달은 이 화면에서 가장 안 알려진 기능이라 별도 섹션으로 앞에 둔다(#1235 — 종전엔 '파일 탐색기' 한 줄이 전부였다).
       sec('파일·이미지 주기',
         tool('끌어다 놓기', '화면 아무 데나 놓으면 ' + uploadDestLabel() + '(uploads/)에 올라가고 그 경로가 입력창에 들어갑니다'),
@@ -3898,7 +4427,7 @@ function openHelp() {
         tool('파일 탐색기', '올린 파일 확인·다운로드 (여기에 놓으면 지금 열린 폴더로 업로드)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
-      sec('클로드 코드',
+      sec(TERM_UI.label,
         kb(['Esc'], '에이전트가 하던 작업 멈추기'),
         kb(['/'], '쓸 수 있는 명령 목록'))));
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } }, pop);
@@ -4088,6 +4617,40 @@ function openMyPrompts() {
 
 // ── 부팅 ──
 function gate(msg) { document.getElementById('root').replaceChildren(el('div', { class: 'gate-msg', text: msg })); }
+
+// ── 첫 확인(/api/ui/me)이 늦거나 닿지 않을 때 (#5398) ──
+//  «연결 준비 중…» 은 이 확인의 답을 기다리는 동안만 뜬다. 종전엔 시간 상한이 없어서, 답이 안 오면 사람은 이유도 모른 채
+//   그 글자만 봤다(2026-11-02 상민님 신고). 가장 흔한 이유는 평문 http(HTTP/1.1) 주소의 **브라우저 연결 한도**다 — 크롬은
+//   같은 주소에 연결을 6개까지만 열고 그 주소의 모든 탭이 이 한도를 함께 쓴다(원인 지식 http1-6conn-limit-terminal-gate-stuck-5267).
+//  ⚠ 늦다고 요청을 끊지 않는다: 끊고 다시 보내면 대기열 맨 뒤로 간다. 붙든 채로 이유만 보여 주고, 답이 오면(다른 탭을 닫아
+//   자리가 나면) 그대로 이어서 화면을 세운다.
+export const ME_SLOW_MS = 8000;
+
+/** (판정) 첫 확인이 늦을 때 보여 줄 제목 · 설명. http 면 연결 한도를, 아니면 서버 응답을 말한다. */
+export function slowGateCopy(protocol: string): { title: string; body: string } {
+  if (String(protocol) === 'http:') {
+    return {
+      title: '연결을 기다리고 있어요',
+      body: '이 주소는 http 라서 브라우저가 같은 주소에 연결을 6개까지만 열어요. 라이블리 탭이 여러 개 열려 있으면 그 탭들이 연결을 모두 쓰고 있을 수 있어요. 쓰지 않는 라이블리 탭을 닫으면 저절로 이어져요.',
+    };
+  }
+  return { title: '서버 응답을 기다리고 있어요', body: '응답이 오면 저절로 이어져요. 계속 이 화면이면 다시 시도해 주세요.' };
+}
+
+function gateCard(icon: string, title: string, body: string) {
+  document.getElementById('root').replaceChildren(
+    el('div', { class: 'gate-card' },
+      el('div', { class: 'gate-icon', text: icon }),
+      el('h2', { class: 'gate-title', text: title }),
+      el('p', { class: 'gate-sub', text: body }),
+      el('button', { class: 'gate-retry', text: '다시 시도', onclick: () => location.reload() })));
+}
+function gateSlow() { const c = slowGateCopy(location.protocol); gateCard('⏳', c.title, c.body); }
+// 로그인 문제가 아니다 — 네트워크가 끊겼거나 서버가 오류로 답했다. 종전엔 이것도 «로그인이 필요해요» 로 보였다.
+function gateUnreachable(status?: number) {
+  gateCard('⚠️', '서버에 닿지 못했어요',
+    '네트워크나 서버 상태를 확인한 뒤 다시 시도해 주세요.' + (status ? ` (응답 ${status})` : ''));
+}
 
 // 미인증 진입 안내 — 메인 UI 로그인은 이메일+비밀번호(세션 쿠키)다. 이 탭은 그대로 두고, 새 탭에서 로그인한 뒤
 //  '다시 시도'를 누르면 같은 origin 세션 쿠키가 공유되어 곧바로 연결된다(세션 주소를 잃지 않게 새 탭으로 연다).
@@ -4307,8 +4870,18 @@ export async function boot() {
   // 인증은 '토큰 유무'가 아니라 서버에 물어 확인한다 — 세션 쿠키(웹 로그인)·bearer(에이전트) 모두 /api/ui/me 가 수용.
   //  메인 UI 가 이메일+비번 로그인(세션 쿠키)로 바뀌며 localStorage 토큰이 없는 게 정상이 됐다(옛 토큰 게이트가 오인 차단했다).
   gate('연결 준비 중…');
-  try { await api('/api/ui/me'); }
-  catch (_) { gateLogin(); return; }
+  //  #5398 — 답이 늦으면 이유를 보여 준다(위 ME_SLOW_MS 머리말). 요청은 끊지 않는다 — 답이 오면 아래가 그대로 이어서 세운다.
+  //   로그인 카드는 **인증이 거절됐을 때만**(401 · 403) 띄운다. 끊김 · 서버 오류까지 «로그인이 필요해요» 로 말하면 엉뚱한 일을 시킨다.
+  const slow = setTimeout(gateSlow, ME_SLOW_MS);
+  let me: Response | null = null;
+  try { me = await fetchAuth('/api/ui/me'); }
+  catch (_) { me = null; }
+  finally { clearTimeout(slow); }
+  //  본문은 끝까지 읽어 둔다 — 덜 읽은 응답은 그 연결을 다음 요청에 못 넘긴다(바로 그 연결 한도가 이 자리의 문제다).
+  if (me) void me.text().catch(() => '');
+  if (!me) { gateUnreachable(); return; }
+  if (me.status === 401 || me.status === 403) { gateLogin(); return; }
+  if (!me.ok) { gateUnreachable(me.status); return; }
 
   // 셸 구성
   explorerEl = el('aside', { id: 'explorer' },
@@ -4745,7 +5318,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
     // 메뉴를 띄우는 **이 순간**의 판정을 붙잡아 둔다 — [복사]를 누르는 시점에 다시 읽으면 그 사이 무엇이 풀렸을 수 있다.
     //  웹(xterm) 선택과 앱(Claude) 드래그 선택이 둘 다 있으면 **더 최근 것**이 사용자의 뜻이다 — 마우스모드 앱 화면에서
     //  방금 드래그했는데 옛 웹 선택이 남아 있으면 그 옛것이 복사되던 것.
-    const appSelSeen = mouseOn && appDragSelect;
+    const appSelSeen = mouseOn && appDragSelect && TERM_UI.copyBridge;   // #5332 — ^C 가 복사가 아닌 앱(codex)엔 다리를 안 놓는다
     const appSel = appSelSeen && (!xsel || appSelectAt >= xtermSelAt);
     const sel = appSel ? '' : xsel;
     // 커서 밑 링크도 잡는다(#4083 — 드래그 안 한 링크 위 우클릭). 무엇을 복사할지는 ctxCopyPlan 한 곳이 정한다.
@@ -4768,7 +5341,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
     e.preventDefault(); e.stopPropagation();
     dlog('ctx-copy', plan.copy === 'sel' ? 'xterm len=' + sel.length : plan.copy === 'link' ? 'link len=' + link.length : (plan.copy || 'none'));
     liteMenu(e.clientX, e.clientY, [
-      { label: '복사', hint: plan.copy === 'sel' ? String(sel.length) + '자' : plan.copy === 'app' ? 'Claude 선택' : plan.copy === 'link' ? shortLink(link) : '선택한 글이 없어요', off: !canCopy, run: () => {
+      { label: '복사', hint: plan.copy === 'sel' ? String(sel.length) + '자' : plan.copy === 'app' ? TERM_UI.label + ' 선택' : plan.copy === 'link' ? shortLink(link) : '선택한 글이 없어요', off: !canCopy, run: () => {
         if (plan.copy === 'sel') copyText(sel, false, true);
         else if (plan.copy === 'app') { clearAppSelect(); armClipboardPromise(); sendInput('\x03'); armBridgeMissHint(); }
         else if (plan.copy === 'link') copyText(link, false, true);

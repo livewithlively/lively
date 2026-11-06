@@ -200,7 +200,11 @@ test("E6 — 감시가 살아 있을 때만 안전망 주기로 늦춘다(기본
 
 test("E7 — 감시가 꺼지면 즉시 촘촘한 주기로 돌아간다(30초를 기다리지 않는다)", () => {
   const src = read("web/session-chat.ts");
-  assert.match(src, /if \(next\) pokePoll\(\); else schedule\(\);/, "E7 — 거짓 전이에 주기를 다시 걸지 않는다");
+  //  #5398 — 켜졌다는 말은 붙을 때마다 온다(숨은 화면이 다시 붙을 때 포함). 값이 같아도 한 번 따라잡는다.
+  assert.match(src, /if \(next\) \{ pokePoll\(\); return; \}/, "E7 — 켜졌다는 말(붙을 때마다)에 따라잡아 읽지 않는다");
+  //  꺼진 전이 — 걸린 타이머를 걷고 촘촘한 주기로 다시 건다. 같은 값(꺼짐→꺼짐)은 건드리지 않는다.
+  assert.match(src, /if \(!changed\) return;[\s\S]{0,400}?if \(pollTimer\) clearTimeout\(pollTimer\);\s*\n\s*poking = false;\s*\n\s*schedule\(\);/,
+    "E7 — 거짓 전이에 주기를 다시 걸지 않는다");
   assert.match(src, /watchLive = next;/, "전이를 상태에 반영하지 않는다");
 });
 
@@ -298,7 +302,7 @@ test("E21 — 접을 때 살아 있는 수가 새지 않는다(계수가 거짓�
 test("E13 — /events 연결은 세션당 한 벌이다(표면마다 각자 열지 않는다)", () => {
   const tasks = read("web/session-tasks.ts");
   const chat = read("web/session-chat.ts");
-  assert.match(tasks, /onSessionEvents\(o\.sessionId, handle\)/, "작업 도크가 공용 연결을 안 쓴다");
+  assert.match(tasks, /onSessionEvents\(o\.sessionId, handle[,)]/, "작업 도크가 공용 연결을 안 쓴다");
   assert.doesNotMatch(tasks, /sessions\/\$\{encodeURIComponent\(o\.sessionId\)\}\/events`\), \{\s*\n?\s*headers: authHeaders\(\{\}\)/,
     "E13 — 작업 도크가 자기 SSE 를 따로 연다(같은 세션에 소켓 둘)");
   assert.match(chat, /onSessionEvents\(target\.id,/, "대화창이 상태 통로를 안 연다");
@@ -318,7 +322,8 @@ test("E20 — 붙을 수 없는 세션(404)에는 촘촘히 되묻지 않는다(
   assert.ok(m, "E20 — 404 전용 간격이 없다: 죽은 세션 화면이 15초마다 되묻는다");
   assert.ok(Number(m![1].replace(/_/g, "")) >= 60_000, `E20 — 404 재시도 간격이 ${m![1]} 로 너무 촘촘하다`);
   assert.match(bus, /if \(res\.status === 404\) \{ gone = true;/, "404 를 따로 안 가른다");
-  assert.match(bus, /setTimeout\(r, gone \? GONE_RETRY_MS : wait\)/, "가르기만 하고 간격에 안 쓴다");
+  //  #5398 — 기다림은 «다시 보이면 깨는» nap 이다(백오프도 사람이 다시 보면 깬다). 간격 고르기는 그대로다.
+  assert.match(bus, /nap\(c, gone \? GONE_RETRY_MS : wait\)/, "가르기만 하고 간격에 안 쓴다");
   //  ⚠ 영구 정지는 아니다 — «죽었다» 판정은 틀릴 수 있다(#2108). 루프를 빠져나가면 안 된다.
   assert.doesNotMatch(bus, /if \(res\.status === 404\) \{ [^}]*\bbreak\b/,
     "E20 — 404 에서 루프를 끝낸다: 되살아난 세션의 화면이 영영 통보를 못 받는다");
@@ -329,7 +334,8 @@ test("E12 — 구독을 놓으면 서버의 감시 참조도 함께 풀린다", 
   const events = read("web/session-events.ts");
   const routes = read("src/terminal/routes.ts");
   assert.match(chat, /destroy\(\) \{[^}]*offEvents\(\);/, "대화창이 구독을 안 놓는다");
-  assert.match(events, /if \(cur\.subs\.size\) return;\s*\n\s*cur\.closed = true;/,
+  //  #5398 — 구독이 남아 있으면 닫지 않되 남은 구독이 아무도 안 보면 끊는다(reconcile). 마지막이 떠나면 닫는다.
+  assert.match(events, /if \(cur\.subs\.size\) \{ reconcile\(cur\); return; \}[^\n]*\n\s*cur\.closed = true;/,
     "E12 — 마지막 구독이 떠나도 연결을 안 닫는다(서버의 감시 참조가 영영 안 풀린다)");
   assert.match(routes, /const release = acquireTranscriptWatch\(req\.params\.id\);/, "SSE 가 감시 참조를 안 쥔다");
   assert.match(routes, /req\.on\("close", \(\) => \{ off\(\); release\(\); clearInterval\(beat\); \}\);/,

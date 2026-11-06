@@ -35,6 +35,9 @@ export type Act =
   | { k: 'copy' }                                     // 선택을 클립보드로
   | { k: 'cut' }                                      // 선택을 복사한 뒤 지운다
   | { k: 'selectInput' } | { k: 'selectAll' }        // ⌘A 첫 번=입력, 다음 번=터미널 전체
+  //  #5332 — 입력 **전체**의 처음·끝(여러 줄 입력). 앱에 그 자리로 가는 키가 없어(Codex·Claude 둘 다 실측 #3870) terminal.ts 가
+  //   앱 커서를 방향키로 걸어 간다(walkCursor). extendInput=선택을 그 끝까지 넓힘(⌘⇧↑/↓) · caretInput=캐럿만 옮김(⌘↑/↓).
+  | { k: 'extendInput'; dir: Dir } | { k: 'caretInput'; dir: Dir }
   | { k: 'undo' } | { k: 'redo' };
 
 // 앱이 이미 아는 조작들의 바이트. 셸(readline)·Claude Code 가 같은 뜻으로 받는 것만 골랐다.
@@ -89,26 +92,36 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
     if (c.mac) {
       if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
       if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
-      if (key === 'ArrowUp') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
-      if (key === 'ArrowDown') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      //  ⌘↑/↓ 는 macOS 글 상자 관례대로 **입력 전체**의 처음·끝(#5332 — 종전엔 ⌘←/→ 와 같은 «지금 줄» 이었다).
+      if (key === 'ArrowUp') return shift ? { k: 'extendInput', dir: -1 } : { k: 'caretInput', dir: -1 };
+      if (key === 'ArrowDown') return shift ? { k: 'extendInput', dir: 1 } : { k: 'caretInput', dir: 1 };
       if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killHead, kill: true };
       if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killTail, kill: true };
     } else {
       // Windows 관례: Ctrl+←/→ = 단어, Ctrl+Home/End = 입력줄 경계, Ctrl+⌫/Delete = 단어 삭제.
       if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.wordLeft, unit: 'word', dir: -1 } : { k: 'send', seq: SEQ.wordLeft };
       if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.wordRight, unit: 'word', dir: 1 } : { k: 'send', seq: SEQ.wordRight };
-      if (key === 'Home') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
-      if (key === 'End') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      //  Ctrl+Home/End = 입력 **전체**의 처음·끝(#5332 — Windows 글 상자 관례. 줄 경계는 Shift 없는 Home/End 가 그대로 한다).
+      if (key === 'Home') return shift ? { k: 'extendInput', dir: -1 } : { k: 'caretInput', dir: -1 };
+      if (key === 'End') return shift ? { k: 'extendInput', dir: 1 } : { k: 'caretInput', dir: 1 };
       if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelBack, kill: true };
       if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelForward, kill: true };
     }
     if (lower === 'c' && c.hasSel) return { k: 'copy' }; // 우리 선택이 서 있으면 그것이 «복사»의 대상이다
     if (lower === 'x' && c.hasSel) return { k: 'cut' };
+    //  #5332 — 붙여넣기는 선택을 **갈아치운다**(글 상자 관례). 여기서 선택을 거두면 뒤따르는 paste 이벤트가 갈아칠 대상을 잃어
+    //   선택은 그대로 둔 채 캐럿 자리에 덧붙었다. 거두지 않고 흘린다 — terminal.ts 의 붙여넣기(pasteReplacingSel)가 지우고 붙인다.
+    if (lower === 'v' && c.hasSel) return { k: 'pass' };
   }
 
   // macOS의 ⌥Fn+Delete는 key='Delete', altKey=true로 온다. Meta+d는 readline·zsh·두 하네스가
   // 공통으로 쓰는 forward-kill-word라 별도 하네스 추측 없이 보낼 수 있다.
   if (c.mac && alt && !ctrl && !meta && key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelForward, kill: true };
+  //  #5332 — ⌥⌫(Windows Alt+⌫) = 앞 단어 지우기(^W). 종전엔 이 표를 거치지 않고 terminal.ts 가 ^W 를 곧장 보내서
+  //   되돌리기 스택이 그 삭제를 몰랐다 — ⌘Z 가 «방금 친 덩이» 만큼 백스페이스를 보내 **지워지지 않은 글자**까지 지웠다
+  //   (실측: «abc def» ⌥⌫ ⌘Z → 빈 입력칸). kill 로 표시하면 되돌리기는 앱의 Ctrl+Y(되붙이기) 한 방이다.
+  //  조합 중(IME)엔 손대지 않는다 — 종전 경로(terminal.ts)가 그대로 맡는다.
+  if (alt && !ctrl && !meta && key === 'Backspace' && !e.isComposing) return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelBack, kill: true };
 
   // ── 선택 확장 ─────────────────────────────────────────────────────────────────
   //  Shift+이동키. 보내는 바이트는 **선택 없는 평범한 이동과 똑같다** — 앱은 선택을 모르고, 넓어진 범위를
@@ -253,4 +266,22 @@ export function countTyped(d: string): number | null {
     else n++;
   }
   return n;
+}
+
+/**
+ * #5332 — 이 덩이가 **캐럿만 옮기는** 바이트인가(방향키·Home/End·단어 이동·Ctrl+A/E/B/F, 같은 것의 반복 포함).
+ *  합성 되돌리기의 기록(친 런 = 백스페이스 n 번 · 지운 글 = 그 자리에 다시 넣기 · kill = Ctrl+Y)은 전부 «캐럿이 그 자리에 있다» 가
+ *  전제다. 캐럿이 옮겨진 뒤 ⌘Z 가 백스페이스를 보내면 **지금 자리 앞의 엉뚱한 글자**를 지웠다(실측: «hello» ⌘← ⌘Z → 앞 줄이 먹혔다).
+ *  그래서 이동을 보면 기록을 버린다(되돌릴 것이 없다고 말하는 게 엉뚱한 글자를 지우는 것보다 낫다). 앱이 되돌리기를 가진 판(nativeUndoOk)은 무관하다.
+ */
+const CARET_MOVE_TOKENS = /^(?:\x1b\[(?:1;\d+)?[ABCDHF]|\x1bO[ABCDHF]|\x1b\[[14]~|\x1b[bf]|[\x01\x02\x05\x06])/;
+export function isCaretMove(d: string): boolean {
+  let s = String(d || '');
+  if (!s) return false;
+  while (s) {
+    const m = CARET_MOVE_TOKENS.exec(s);
+    if (!m) return false;
+    s = s.slice(m[0].length);
+  }
+  return true;
 }

@@ -219,6 +219,30 @@ await t("[K10] 문자열 osUser(세션 없음) — 세션 중계가 켜져 있�
   delete process.env.LIVELY_SESSION_EXEC;
 });
 
+// ── #5352 — 중앙 게이트웨이 하나가 여러 워크스페이스를 서비스한다. osUser(box_<slug>)는 워크스페이스마다 같다 ──
+await t("[K11] ★ 같은 사람이 워크스페이스 B 에서 처음 세션을 열면 — A 에서 심은 기록으로 건너뛰지 않고 B 홈에 심는다", async () => {
+  const { withTenant } = await import("../org/tenant-context.js");
+  const home = path.join(process.env.LIVELY_MEMBER_HOME_BASE!, "box_u-k11");
+  resetLog();
+  const a = okDeps();
+  await withTenant({ id: "t-a", slug: "ws-a" }, () => ensureMemberKitSeeded(user("u-k11") as never, "box_u-k11", a.deps));
+  assert.equal(a.minted.length, 1, "A 첫 시딩");
+  // B 의 홈은 물리적으로 다른 자리라 비어 있다 — 이 테스트에선 같은 경로이므로 마커를 지워 흉내 낸다.
+  fs.rmSync(path.join(home, ".lively"), { recursive: true, force: true });
+  resetLog();
+  const b = okDeps();
+  await withTenant({ id: "t-b", slug: "ws-b" }, () => ensureMemberKitSeeded(user("u-k11") as never, "box_u-k11", b.deps));
+  assert.ok(calls().length > 0, "B 에서 마커조차 안 봤다 — A 의 «이미 심었다» 기록을 B 에 그대로 썼다");
+  assert.equal(b.minted.length, 1, "B 홈에도 토큰을 심어야 한다");
+  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded")), "B 마커");
+  // 같은 워크스페이스 안에서는 여전히 프로세스 내 1회다(무회귀).
+  resetLog();
+  const b2 = okDeps();
+  await withTenant({ id: "t-b", slug: "ws-b" }, () => ensureMemberKitSeeded(user("u-k11") as never, "box_u-k11", b2.deps));
+  assert.equal(calls().length, 0, "같은 워크스페이스 두 번째는 exec 0회");
+  assert.equal(b2.minted.length, 0);
+});
+
 installTenantSlugResolver(() => null);
 delete process.env.LIVELY_MEMBER_EXEC;
 fs.rmSync(tmp, { recursive: true, force: true });

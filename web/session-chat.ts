@@ -61,6 +61,7 @@ import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';  
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
+import { watchShown } from './lib/shown.js';   // #5398 — 이 화면이 지금 보이나(숨은 탭 · 셸이 숨긴 세션) — 다시 보이면 따라잡는다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
@@ -849,7 +850,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // 관측값이 선택지 중 하나를 품고 있으면 그 칸을 고른 것으로 본다. 영숫자만 남겨 비교한다 — 관측값은
     //  'claude-opus-4-5-…' 로도 오고 화면용으로 다듬은 'Grok 4.6' 으로도 와서, 하이픈·공백을 그대로 두면 서로 안 닿는다.
     const nz = (x: string): string => x.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const hit = choices.find((c) => known && nz(known).includes(nz(c))) || '';
+    //  #5332 — 같은 값이 먼저, 그다음 «품고 있나». 종전엔 품고 있나만 봐서 'xhigh' 가 목록 앞의 'high' 에 먼저 닿아 «높음» 으로 보였다
+    //   (바꿨는데 안 바뀐 것처럼 보인다). 품는 후보가 여럿이면 가장 긴 것이 그 값이다(xhigh ⊃ high).
+    const nk = known ? nz(known) : '';
+    const hit = (nk && (choices.find((c) => nz(c) === nk)
+      || choices.filter((c) => nk.includes(nz(c))).sort((x, y) => nz(y).length - nz(x).length)[0])) || '';
     const keep = box.value;   // 방금 고른 값이 아직 기록에 안 나타났을 수 있다 — 관측이 따라오면 그게 이긴다
     // 빈 칸의 문구는 **지금 화면이 아는 것**을 그대로 말한다 — 고른 값이 있으면 그 칸이 대신 서므로(box.value=hit)
     //  이 문구는 '안 바꾸기' 뜻이고, 아는 게 없으면 '지난번'이 아니라 **AI 기본값**이라고 적는다(이미 도는 세션에
@@ -962,16 +967,39 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         await handoff(hcat, flags);
         return;
       }
-      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/runtime`, { method: 'POST', body: JSON.stringify({ [a]: v }) }) as { pending?: boolean };
+      //  #5332 — 두 축을 한 줄로 바꾸는 하네스(codex)는 모델만 바꾸면 추론강도가 그 모델의 기본으로 돌아간다(실측). 그래서 모델을 바꿀 때
+      //   지금 강도가 새 모델에서도 유효하면 함께 싣는다(서버가 `/model <모델> --reasoning=<강도>` 한 줄로 친다). 유효하지 않으면 모델만 —
+      //   그 모델의 기본 강도로 뜬다(예: Sol Ultra → Luna).
+      const body: Record<string, string> = { [a]: v };
+      if (a === 'model' && hcat.runtime?.both) {
+        const keep = nowVal('effort');
+        if (keep && effortChoices(hcat, v).includes(keep)) body.effort = keep;
+      }
+      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/runtime`, { method: 'POST', body: JSON.stringify(body) }) as { pending?: boolean; relaunch?: boolean };
       // 값은 「」로 감싼다 — 'sonnet'처럼 한글이 아닌 값에 조사를 직접 붙이면 읽는 소리에 따라 '로/으로'가 갈려
       //  어느 쪽을 써도 어색해진다. 「」 뒤의 '으로'는 그 문제를 안 만든다(session-form 의 「지난번 그대로」와 같은 표기).
       //  pending = 아직 큐에 있다(세션이 로그인·대화상자에 멈춰 있는 경우) — '바꿨다'고 말하지 않는다.
       const said = a === 'model' ? prettyModel(v) : effortKo(v);
+      //  #5332 — 서버가 «이 Codex 는 그 자리에서 못 바꾼다(0.166 미만)» 고 답했다: 새 설정은 이미 장부에 적혔다. 지금 판을 보관하고
+      //   **같은 대화를** 그 설정으로 다시 연다(복원이 `codex resume <대화>` 로 띄운다). 대화를 정확히 모르면 피커 대신 새 대화(fresh).
+      //   보관·복원은 [종료]→[이어서 열기] 와 같은 길이라 노드·중앙을 가리지 않는다.
+      if (r?.relaunch) {
+        view.setNote(`${AXIS[a].obj} 「${said}」으로 바꿔 같은 대화를 다시 여는 중… (이 Codex 는 그 자리에서 바꿀 수 없어요)`);
+        const nd = remoteNode();
+        await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}?reclaim=1${nd ? '&node=' + encodeURIComponent(nd) : ''}`, { method: 'DELETE' });
+        const moved = await resumeSession(null, { canRestore: true, fresh: true });
+        if (!moved) throw new Error(`${AXIS[a].obj} 바꾼 설정으로 다시 열지 못했어요 — [이어서 열기]로 다시 열면 고른 설정으로 뜹니다.`);
+        return;
+      }
       const msg = r?.pending
         ? `${AXIS[a].obj} 「${said}」으로 바꾸라고 걸어 뒀어요 — AI 입력창이 뜨면 들어갑니다.`
         : `${AXIS[a].obj} 「${said}」으로 바꿨어요.`;
       view.setNote(msg);
-      if (!r?.pending) { picked[a] = { v, was: a === 'model' ? obsModel : obsEffort }; paintRun(); }
+      if (!r?.pending) {
+        picked[a] = { v, was: a === 'model' ? obsModel : obsEffort };
+        if (body.effort && a === 'model') picked.effort = { v: body.effort, was: obsEffort };
+        paintRun();
+      }
       // 내가 띄운 안내만 지운다 — 그 사이에 다른 안내가 올라왔으면 그걸 지우면 안 된다(먼저 건 타이머가 나중 걸 지웠다).
       window.setTimeout(() => { if (!destroyed && view.noteEl.textContent === msg) view.setNote(''); }, 3000);
     } catch (e: any) {
@@ -3005,7 +3033,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  돌려주는 값 = **옮겨 갔나**(#3891) — 부른 쪽이 실패를 제자리에서 마감할 수 있게 한다. 종전엔 실패를 토스트로
    *  삼키고 아무것도 안 돌려줘서, 말로 되살리던 화면(reviveWithPrompt)이 «여는 중…» 에 영영 멈췄다.
    */
-  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean; onRetry?: () => void; stayIfSame?: boolean }, beforeRoute?: (newId: string, stay: boolean) => Promise<void>): Promise<boolean> {
+  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean; onRetry?: () => void; stayIfSame?: boolean; fresh?: boolean }, beforeRoute?: (newId: string, stay: boolean) => Promise<void>): Promise<boolean> {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
@@ -3022,7 +3050,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         //  ★ #3891 — **끊긴 실패에만** 짧게 다시 묻는다(restore-retry.ts). 수 초짜리 이 요청은 롤 교대에 잘린다.
         //   다시 물어도 안전한 건 서버 복원이 같은 대화를 둘로 만들지 않아서다(restore-adopt.ts) — 아래 이어보기엔 안 건다.
         const r: any = await withRetry(
-          () => api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' }),
+          //  #5332 — fresh: 이어 열 대화를 정확히 모르면 피커 대신 새 대화(드롭다운의 «새 설정으로 이어 열기» — routes freshInsteadOfPicker).
+          () => api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: hint?.fresh ? '{"fresh":true}' : '{}' }),
           { stop: () => destroyed, onRetry: () => { hint?.onRetry?.(); if (btn) btn.textContent = '다시 여는 중…'; } });
         if (r?.session) rememberCreated(r.session);
         // #2231 — `movedTo` = "그 id 는 이미 이어졌고, 대화는 이 새 세션에서 돌고 있다". 종전엔 이 경우 서버가
@@ -3221,6 +3250,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  ★ 입력칸을 함께 넘긴다 — 슬래시 자동완성이 붙을 자리다(터미널의 `/` 목록에 해당).
     tasksDock = mountSessionTasks(liveDock, {
       sessionId: target.id, input: view.input,
+      anchor: wrap,   // #5398 — 이 세션 화면이 안 보이면(숨은 탭 · 셸이 숨긴 세션) 상태 통로를 끊어 둔다
       //  서버가 «이 하네스는 웹에서 이건 못 한다» 를 실어 준다(coverage 표) — 화면이 그걸 그대로 말한다.
       terminalOnly: (target.raw as any)?.terminalOnly ?? [],
       //  ★ **승인은 한 층만 그린다.** codex 는 자기 실시간 층(mountCodexLive)이 이미 승인 카드를
@@ -3238,6 +3268,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     void loginGate();
     live = mountCodexLive({
       sessionId: target.id, view, dock: liveDock,
+      anchor: wrap,   // #5398 — 이 세션 화면이 안 보이면 실시간 층의 스트림도 끊어 둔다(다시 보이면 hello 로 따라잡는다)
       liveTurn: () => cur?.t ?? null,
       poke: () => pokePoll(),
       onSettled: () => {
@@ -3269,21 +3300,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ⚠ **하네스·모드를 안 가리고 연다.** 폴링이 노드를 갉는 주범이 바로 터미널 모드로 열어 둔 박스
   //   세션이고(#3656 이 그 절반만 덜어냈다), 그 세션엔 작업 도크(runtimeMode==='chat')가 안 붙는다.
   //   연결은 세션당 한 벌이라(session-events.ts) 도크와 함께 열려도 소켓은 하나다.
+  //  #5398 — 이 화면이 안 보이면(숨은 탭 · 셸이 숨긴 세션) 연결을 끊어 둔다(session-events.ts ★). 다시 붙는 순간 서버가
+  //   감시 상태(transcript.watch)를 첫머리에 다시 준다 — 아래가 그것을 «끊긴 동안 자란 것을 지금 따라잡는다» 로 읽는다.
   const offEvents = onSessionEvents(target.id, (ev) => {
     const e = ev as { t?: string; size?: number; live?: boolean };
     if (e?.t === 'transcript.grew') { pokePoll(); return; }
     if (e?.t === 'outbox.typed') { onOutboxTyped(String((ev as { head?: unknown }).head ?? '')); return; }   // #4794 — 서버가 말을 다 쳤다
     if (e?.t === 'transcript.watch') {
       const next = e.live === true;
-      if (next === watchLive) return;
+      const changed = next !== watchLive;
       watchLive = next;
-      //  주기가 바뀌었으니 지금 걸린 타이머를 다시 건다. 켜질 땐 한 번 따라잡고(놓친 델타가 있을 수 있다),
-      //   꺼질 땐 촘촘한 주기로 곧바로 되돌아간다 — 통보가 끊긴 채 30초를 기다리면 안 된다.
+      //  ★ #5398 — 켜져 있다는 말은 **붙을 때마다** 온다(연결 첫머리). 값이 같아도 한 번 따라잡는다: 끊겨 있던 동안
+      //   (숨은 화면 · 재접속)의 `transcript.grew` 는 받지 못했고, 그대로 두면 안전망 주기(30초)까지 화면이 묵는다.
+      //   pokePoll 은 몰아치면 한 번으로 합치고, 읽은 뒤의 주기는 schedule() 이 바뀐 watchLive 로 정한다.
+      if (next) { pokePoll(); return; }
+      if (!changed) return;
+      //  꺼졌다 — 촘촘한 주기로 곧바로 되돌아간다(통보가 끊긴 채 30초를 기다리면 안 된다). 걸린 타이머를 다시 건다.
       if (pollTimer) clearTimeout(pollTimer);
       poking = false;
-      if (next) pokePoll(); else schedule();
+      schedule();
     }
-  });
+  }, { anchor: wrap });
+  //  #5398 — 화면이 다시 보이는 순간 한 번 읽는다. 숨은 탭은 폴을 건너뛰므로(poll 의 document.hidden) 그대로 두면 다음 주기까지
+  //   묵는다. 감시가 켜진 세션은 위 transcript.watch 도 같은 일을 하지만, 못 미는 세션(노드 · 못 읽는 하네스)은 이것뿐이다.
+  const shownWatch = watchShown(wrap, (shown) => { if (shown) pokePoll(); });
 
   // 기본 화면 — 코덱스를 포함해 터미널이 기본이다. Codex app-server는 대화·승인 층을 계속 제공하되,
   //  사용자가 보는 첫 화면을 대화로 강제하지 않는다. 나머지 대화 런타임·화면이 대화를 요청한 자리의 예외는 chatHome()에 둔다.
@@ -3382,7 +3422,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     viewMode() { return viewNow(); },
     reshown() { reshown(); },
     revivedHere() { return !destroyed && revivedAt > 0 && Date.now() - revivedAt < REVIVE_TRUST_MS && !goneByFrame; },
-    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); wideMq?.removeEventListener('change', placeHead); duoClose?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); shownWatch.stop(); offViewers(); offAppDoor?.(); wideMq?.removeEventListener('change', placeHead); duoClose?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 
