@@ -138,10 +138,10 @@ export interface Metrics {
   activeMin: number;
 }
 export const TAB_METRICS: Metrics = { icon: 34, minLabel: 64, max: 184, activeMax: 220, activeMin: 120 };
-/** #5319 독 아래 큰 탭 줄(15px · 40px) — 접지도 옆으로 미끄러지지도 않고 줄을 바꿔 다 보인다(셸 fit). 탭 폭 = 제 이름만큼,
- *  바닥 icon(아이콘 26 + 여백 · 간격 30) · 상한 max(켜진 탭 activeMax). 그보다 긴 파일 이름은 가운데를 줄인다(날짜 · 확장자가 남는다).
- *  minLabel · activeMin 은 이 줄에서 쓰지 않는다(Metrics 모양을 맞춘 값). */
-export const SUB_TAB_METRICS: Metrics = { icon: 56, minLabel: 168, max: 300, activeMax: 360, activeMin: 200 };
+/** #5319 독 아래 파일 탭 줄(3안 · 15px · 40px) — 한 줄. 긴 이름부터 줄이되 아이콘으로 접지 않는다(셸 fit 이 icons 판을 minLabel 바닥으로
+ *  바꾼다): 같은 아이콘만 남으면 어느 파일인지 모른다. 바닥 190 = 아이콘(26) + 여백 · × 자리(84) + 글자 일곱 자쯤(105). 그보다 좁아야 하면
+ *  이름을 남긴 채 줄이 옆으로 미끄러진다(잘린 쪽 끝은 흐린다 · [n ▾] 목록이 전부를 말한다). */
+export const SUB_TAB_METRICS: Metrics = { icon: 76, minLabel: 190, max: 320, activeMax: 380, activeMin: 210 };
 /**
  * 탭을 «보이게» 할 때 어느 칸에서 켜나 — **닫힌 아래 칸(터미널 밑)은 펼치지 않는다**, 곁칸으로 옮겨 켠다.
  *  원준(2026-10-01): «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와. 밑에서 나오는거 없게해줘» — 옛 기본 배치가 타임라인을
