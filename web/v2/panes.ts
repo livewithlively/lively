@@ -634,14 +634,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (!on) return;
     const r = on.getBoundingClientRect();
     const b = p.tabs.getBoundingClientRect();
-    if (r.right > b.right - 2) p.tabs.scrollLeft += r.right - b.right + 2;
-    else if (r.left < b.left + 2) p.tabs.scrollLeft -= b.left - r.left + 2;
+    if (r.right > b.right - 8) p.tabs.scrollLeft += r.right - b.right + 8;     // 줄 안 여백(4)까지 — 끝 탭이면 끝까지 민다
+    else if (r.left < b.left + 8) p.tabs.scrollLeft -= b.left - r.left + 8;
+    edgeFade(p.tabs);
   }
   /** #5319 옆으로 미는 줄(머리 줄 독 · 독 아래 탭 줄)의 잘린 쪽 끝을 흐린다 — 반쯤 잘린 이름표가 «깨진 것» 이 아니라 «더 있다» 로 읽히게. */
   function edgeFade(sc: HTMLElement): void {
+    //  끝에서 몇 px(줄 안 여백) 모자란 것은 «다 밀었다» 로 친다 — 아니면 맨 끝 탭의 × 위에 흐림이 덮인다(실측: 2px 모자라 흐림이 남았다).
     const max = sc.scrollWidth - sc.clientWidth;
-    sc.classList.toggle('fade-l', max > 1 && sc.scrollLeft > 1);
-    sc.classList.toggle('fade-r', max > 1 && max - sc.scrollLeft > 1);
+    sc.classList.toggle('fade-l', max > 6 && sc.scrollLeft > 6);
+    sc.classList.toggle('fade-r', max > 6 && max - sc.scrollLeft > 6);
   }
   //  #5319 머리 줄 독 아래 탭 줄은 켜진 앱의 탭만 세운다 — 나머지(pn-sub-off)는 폭을 나눠 갖지 않는다.
   const wrapsOf = (p: Pane): HTMLElement[] => [...p.tabs.children].filter((n) => n.classList.contains('pn-tabwrap') && !n.classList.contains('pn-sub-off')) as HTMLElement[];
