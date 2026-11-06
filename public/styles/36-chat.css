@@ -676,6 +676,22 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
 .sc-act-fork, .sc-act-move { display: inline-flex; align-items: center; gap: 4px; }
 .sc-act-fork[hidden], .sc-act-move[hidden] { display: none; }
+/* #5319 3-B — 둘째 줄 왼쪽 묶음(넓은 화면에서만 차 있다 — 폰은 종전 자리로 돌린다: session-chat.ts placeHead) · 묶은 [복제·옮기기 ▾] */
+.sc-sub-lead { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.sc-sub-sep { width: 1px; height: 12px; background: var(--line-net); flex: none; }
+.sc-sub-lead:empty, .sc-sub-lead:empty + .sc-sub-sep { display: none; }
+.sc-act-duo { display: inline-flex; align-items: center; gap: 4px; }
+.sc-act-duo[hidden] { display: none; }
+.sc-act-duo::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 4.5px solid transparent; border-right: 4.5px solid transparent; border-top: 5px solid currentColor; opacity: .6; }
+@media (max-width: 900px) { .sc-act-duo-t { display: none; } }
+/* 묶은 단추의 메뉴 — 줄마다 아이콘 + 이름 + 한 줄 설명. anchoredPopover 는 자리만 잡으니 판 모양은 여기서. */
+.sc-duo-pop { min-width: 280px; padding: 6px; background: var(--bg); border: 1px solid var(--line-net); border-radius: 12px; box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16); }
+.sc-duo-it { display: grid; grid-template-columns: 22px 1fr; column-gap: 10px; align-items: start; width: 100%; padding: 10px 12px; border: 0; border-radius: 8px;
+  background: none; font: inherit; text-align: left; color: var(--ink); cursor: pointer; }
+.sc-duo-it:hover, .sc-duo-it:focus-visible { background: var(--bg-punch); outline: none; }
+.sc-duo-ic { width: 20px; height: 20px; margin-top: 1px; fill: none; stroke: var(--ink-sub); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
+.sc-duo-tx b { display: block; font-size: 15px; font-weight: 600; color: var(--ink); }
+.sc-duo-tx span { display: block; margin-top: 2px; font-size: 13px; color: var(--ink-sub); }
 @media (min-width: 901px) {
   /* 칸은 셋이다 — 두 줄이 오른쪽 폭을 나눠 갖지 않게(실측 2026-11-05: 둘째 줄 모델 · 추론강도 폭만큼 첫 줄 이름이 굶었다).
      첫 줄: 이름 [1~2] · 단추 [3]   둘째 줄: 연결 상태 [1] · 선택기 [2~3]. 셋째 칸은 단추 폭, 둘째 칸은 선택기가 그보다 넓은 만큼만 선다.
@@ -684,12 +700,12 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
     column-gap: 0; row-gap: 8px; align-items: center; padding: 16px 24px 16px 32px; }   /* 높이는 42-v2-panes.css(--pn-bighead-h) */
   .pn-body:not(.cm) .sc-head--big > .sc-head-l, .pn-body:not(.cm) .sc-head--big .sc-head-main { display: contents; }
   .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1 / 3; gap: 12px; min-width: 0; overflow: hidden; }   /* 넘치면 제 칸 안에서 — 오른쪽 단추 위로 안 번진다 */
-  .pn-body:not(.cm) .sc-head--big .sc-sub { grid-row: 2; grid-column: 1; gap: 12px; font-size: 15px; overflow: hidden; }   /* 넘치면 제 칸 안에서 잘린다 — 오른쪽 선택기 위에 겹치지 않게 */
+  .pn-body:not(.cm) .sc-head--big .sc-sub { grid-row: 2; grid-column: 1; gap: 8px; font-size: 15px; overflow: hidden; }   /* 넘치면 제 칸 안에서 잘린다 — 오른쪽 선택기 위에 겹치지 않게 */
   .pn-body:not(.cm) .sc-head--big > .sc-head-r { grid-row: 1; grid-column: 3; justify-self: end; gap: 4px; margin-left: 24px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top { grid-row: 2; grid-column: 2 / 4; justify-self: end; gap: 4px; margin-left: 24px; }
   /* 둘째 줄 왼쪽이 모자라면 연결 상태 글이 …로 준다([화면 복구]는 그대로) — 칸 밖으로 잘려 나가지 않게. 전체 글은 title 에(session-chat.ts). */
   .pn-body:not(.cm) .sc-head--big .sc-sub > .sc-pair { flex: 0 1 auto; min-width: 0; }
-  .pn-body:not(.cm) .sc-head--big .sc-sub .sc-termstat:not([hidden]) { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 36px; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub .sc-termstat:not([hidden]) { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 34px; }
   .pn-body:not(.cm) .sc-head--big .sc-sub .sc-pair > .sc-act { flex: none; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-h { display: none; }
   /* 이름 — KRDS 제목 24 · 굵기 700 · 줄 높이 150% · 자간 0. */
@@ -708,25 +724,32 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   /* 얼굴 — 28px(KRDS 아이콘 단계 사이, 이니셜 13px). 묶음 높이 32. */
   .pn-body:not(.cm) .sc-head--big .sc-faces { height: 32px; margin-block: 0; padding: 0 4px; }
   .pn-body:not(.cm) .sc-head--big .sc-face { width: 28px; height: 28px; font-size: 13px; }
-  /* 조작 단추 · 연결 상태 · 선택기 — 한 벌: 36px · 15px/500 · 테두리 없음 · 모서리 6(KRDS 높이×1/8 → 짝수). */
+  /* 조작 단추 · 연결 상태 · 선택기 — 한 벌: 36px · 15px/500. #5319(원준 2026-11-06 «버튼 생김새 이전꺼가 더 이쁘거든») — 이전 모양
+     (85bfd261^ .sc-act): 쉴 땐 글자만, 올리면 --line-net 테두리 알약 + 파란 글자. 바탕을 칠하지 않는다. */
   .pn-body:not(.cm) .sc-head--big .sc-act { height: 36px; padding: 0 10px; font-size: 15px; font-weight: 500; color: var(--ink-sub);
-    border: 0; border-radius: 6px; gap: 6px; }
-  .pn-body:not(.cm) .sc-head--big .sc-act:hover { color: var(--ink); background: var(--bg-punch); }
+    border: 1px solid transparent; border-radius: 999px; background: transparent; gap: 6px; }
+  .pn-body:not(.cm) .sc-head--big .sc-act:hover { color: var(--blue); border-color: var(--line-net); background: transparent; }
   .pn-body:not(.cm) .sc-head--big .sc-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-  .pn-body:not(.cm) .sc-head--big .sc-act-on { color: var(--blue); background: var(--bg-tint); }
-  .pn-body:not(.cm) .sc-head--big .sc-act-ic { width: 20px; height: 20px; }
+  .pn-body:not(.cm) .sc-head--big .sc-act-on { color: var(--blue); background: var(--bg-tint); border-color: var(--line-net); }
+  .pn-body:not(.cm) .sc-head--big .sc-act-ic { width: 18px; height: 18px; }
   .pn-body:not(.cm) .sc-head--big .sc-head-r > .sc-act:last-child { width: 36px; padding: 0; justify-content: center; font-size: 20px; }   /* ⋯ */
-  .pn-body:not(.cm) .sc-head--big .sc-pair, .pn-body:not(.cm) .sc-head--big .sc-pair:hover { border: 0; gap: 4px; }
+  .pn-body:not(.cm) .sc-head--big .sc-pair, .pn-body:not(.cm) .sc-head--big .sc-pair:hover { border: 1px solid transparent; border-radius: 999px; gap: 4px; }
+  /* 연결 상태 | 화면 복구 는 한 덩어리 — 올리면 둘을 한 알약이 감싼다(안의 단추는 제 테두리를 따로 그리지 않는다). 테두리 1px 씩이 들어갈 자리로 안은 34. */
+  .pn-body:not(.cm) .sc-head--big .sc-pair:hover { border-color: var(--line-net); }
+  .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act:hover { border-color: transparent; }
   .pn-body:not(.cm) .sc-head--big .sc-pair-sep { height: 16px; margin: 0 4px; }
-  .pn-body:not(.cm) .sc-head--big .sc-termstat { height: 36px; padding: 0; font-size: 15px; }
+  .pn-body:not(.cm) .sc-head--big .sc-termstat { height: 34px; padding: 0 0 0 10px; font-size: 15px; }
   .pn-body:not(.cm) .sc-head--big .sc-termstat.ok { color: var(--ok-ink); }   /* KRDS 글자 대비 4.5:1 — --mint-deep 은 흰 바탕에서 3.2:1 이었다 */
-  .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act { padding: 0 8px; }
+  .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act { padding: 0 10px 0 8px; height: 34px; }
   .pn-body:not(.cm) .sc-head--big .sc-run { font-size: 13px; padding: 2px 10px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel { height: 36px; max-width: 220px; padding: 0 28px 0 10px; font-size: 15px; font-weight: 500;
-    color: var(--ink-sub); border: 0; border-radius: 6px; background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px, 5px 5px; }
-  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--bg-punch); }
+    color: var(--ink-sub); border: 1px solid transparent; border-radius: 999px; background-color: transparent; background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px, 5px 5px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:hover:not(:disabled) { color: var(--blue); border-color: var(--line-net); background-color: transparent; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top span.dt-chip { line-height: 36px; padding: 0 10px; font-size: 15px; }   /* display 는 안 준다 — 숨김 규칙(.sc-ax-h · @container)을 이기면 안 된다 */
+  /* #5319 3-B(원준 2026-11-06) — 둘째 줄 왼쪽: [얼굴 ＋] [자료] │ 연결 상태 | 화면 복구. 오른쪽 위엔 [복제·옮기기 ▾] · [⋯] 만. */
+  .pn-body:not(.cm) .sc-head--big .sc-sub-lead { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub-sep { height: 18px; }
 }
 /* 세션 칸이 좁으면(곁칸을 넓힌 때) 접는 차례 — 이름이 마지막까지 버틴다(실측 2026-11-05: 세션 칸 400px 에서 이름이 «U» 한 글자까지 줄었다).
    ① ≤680 [복제] · [옮기기] — [⋯] 와 세션 우클릭에 그대로 있다
@@ -742,6 +765,11 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
     .pn-body:not(.cm) .sc-head--big .sc-act-files, .pn-body:not(.cm) .sc-head--big .sc-title-pen, .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { display: none; }
     .pn-body:not(.cm) .sc-head.sc-head--big { padding-left: 20px; padding-right: 16px; } }
   @container schead (max-width: 460px) { .pn-body:not(.cm) .sc-head--big .sc-faces { display: none; } }
+  /* #5319 3-B — ≤640 묶은 단추는 이름을 접고 아이콘 + ▾ 만 · ≤600 [자료] 도 아이콘만(480 에서 통째로 접는 것은 위 ③ 그대로) */
+  @container schead (max-width: 640px) { .pn-body:not(.cm) .sc-head--big .sc-act-duo-t { display: none; } }
+  @container schead (max-width: 600px) {
+    .pn-body:not(.cm) .sc-head--big .sc-act-files > span { display: none; }
+    .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; } }
 }
 @media (max-width: 900px) {
   .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
@@ -751,3 +779,4 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .pn-body.cm > .pn-col .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
 .pn-body.cm > .pn-col .sc-head--big .sc-title { font-size: 13.5px; letter-spacing: 0; }
 .pn-body.cm > .pn-col .sc-head .sc-act-fork, .pn-body.cm > .pn-col .sc-head .sc-act-move { display: none; }
+.pn-body.cm > .pn-col .sc-head .sc-act-duo { display: none; }
