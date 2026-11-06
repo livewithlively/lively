@@ -64,7 +64,8 @@ import { isAbs, pathOpenPlans, pickTailHit, slash, type PathOpenPlan } from '../
 import { type Sess, type V2Data } from './views.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
-import { appGlyphName, glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
+import { appGlyphName, glyphAt } from '../lib/icon-paths.js';
+import { applyHeadH, headGrip, savedHeadH } from './head-grip.js';   // #5319 — 머리 줄 높이(세션 큰 머리 · 곁칸 독 줄이 같이 읽는 --pn-bighead-h)   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -552,6 +553,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const colMain = el('div', { class: 'pn-col' });
   const body = el('div', { class: 'pn-body' });
   const wrap = el('div', { class: 'pn-wrap' }, door, body) as HTMLElement;
+  applyHeadH(wrap, savedHeadH());   // #5319 — 지난번에 끌어 둔 머리 줄 높이(기본 113 이면 아무것도 안 적는다)
   host.replaceChildren(wrap);
   // #3784 — 문패 우클릭 = 이 프로젝트의 메뉴(사이드바 행과 같은 것). 프로젝트 없는 세션 화면(loose)엔 안 단다.
   if (!loose) { door.dataset.ctx = 'project'; door.dataset.pid = String(id); }
@@ -785,7 +787,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const subBarSlot = el('div', { class: 'pn-sub-barslot' }) as HTMLElement;
   const subMore = el('button', { class: 'pn-web-btn ic pn-sub-more', type: 'button', title: '이 파일에 할 일 — 고치기 · 다시 불러오기 · 내려받기', 'aria-label': '이 파일에 할 일', hidden: true }, pnIcon('more', 'pn-i sm')) as HTMLButtonElement;
   const subActs = el('div', { class: 'pn-sub-acts' }, subList, subBarSlot, subMore) as HTMLElement;
-  sidePane.bar.append(subActs);
+  sidePane.bar.append(subActs, headGrip());   // #5319 — 곁칸 머리 줄 아랫선 손잡이(CSS 가 머리 줄 독일 때만 보인다)
   const SUB_ICON: Record<string, string> = { '고치기': 'pencil', '다시 불러오기': 'undo', '파일 올리기': 'up', '내려받기': 'drop' };
   subMore.onclick = (e: MouseEvent) => {
     const btns = [...subBarSlot.querySelectorAll('button.pn-sub-fold')] as HTMLButtonElement[];

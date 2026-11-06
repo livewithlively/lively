@@ -367,9 +367,22 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-wrap .pn-pane.dock-top:not(.dock-sub) > .pn-tabbar > .pn-dock-slot { align-items: center; }
 .pn-wrap .pn-pane.dock-top:not(.dock-sub) .pn-dock[data-home="top"] .pn-dock-shelf { align-items: center; }
 /* 파일 줄이 있는 때 — 독 줄 60(선 1 포함) + 파일 줄 53 = 113 */
-.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar { background-position: 0 59px, 0 0; row-gap: 0; }   /* 두 줄 사이 선 · 줄 사이 틈 없음(실측: gap 4 가 줄끊기 ::after 앞뒤로 두 번 들어가 67 이었다) */
-.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { height: 59px; }
-/* [＋] 꼬리 — 단추(40) 가운데를 타일 가운데에: 파일 줄이 있으면 타일 가운데가 바닥에서 30(8 + 22) → 아래 여백 10. 없으면(세로 가운데) 타일이 줄 가운데보다 4 위 → 8. */
-.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { box-sizing: border-box; height: 59px; align-items: flex-end; padding: 0 0 10px; }
+/* 높이 사다리(#5319 손잡이, 42-v2-panes.css 머리말) — 머리 줄 전체 높이 H = --pn-bighead-h(80~150, 기본 113)를 두 줄이 나눈다:
+     독 줄 --pn-dock-row = max(38, H - 54)   파일 줄 --pn-file-row = H - 1 - 독 줄   타일 = min(폭이 정한 --pn-dk-s, 독 줄 - 15)   탭 = clamp(32, 파일 줄 - 3, 40)
+     113: 59 + 53 · 타일 44 · 탭 40   97: 43 + 53 · 타일 28   94: 40 + 53 · 타일 25   80: 38 + 41 · 타일 23 · 탭 38.  파일 줄이 없으면 독 줄 = H, 타일 44 세로 가운데. */
+.pn-wrap .pn-pane.dock-top { --pn-dock-row: var(--pn-bighead-h, 113px); --pn-dk-cap: 44px; --pn-dk-t: min(var(--pn-dk-s, 44px), var(--pn-dk-cap)); }
+.pn-wrap .pn-pane.dock-top.dock-sub { --pn-dock-row: max(38px, calc(var(--pn-bighead-h, 113px) - 54px)); --pn-file-row: calc(var(--pn-bighead-h, 113px) - 1px - var(--pn-dock-row));
+  --pn-dk-cap: calc(var(--pn-dock-row) - 15px); --pn-tab-h: clamp(32px, calc(var(--pn-file-row) - 3px), 40px); }
+.pn-wrap .pn-pane.dock-top > .pn-tabbar { position: relative; }   /* 손잡이(.pn-head-grip) 자리 */
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-it .pn-dock-ic { width: calc(var(--pn-dk-t) * var(--m)); height: calc(var(--pn-dk-t) * var(--m)); }
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-it { width: calc(var(--pn-dk-t) + 8px); }
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar { background-position: 0 var(--pn-dock-row), 0 0; row-gap: 0; }   /* 두 줄 사이 선 · 줄 사이 틈 없음(실측: gap 4 가 줄끊기 ::after 앞뒤로 두 번 들어가 67 이었다) */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { height: var(--pn-dock-row); }
+/* [＋] 꼬리 — 단추(40) 가운데를 타일 가운데에: 파일 줄이 있으면 타일 가운데가 바닥에서 8 + 타일/2 → 아래 여백 타일/2 - 12(44 → 10). 없으면(세로 가운데) 타일이 줄 가운데보다 4 위 → 8. */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { box-sizing: border-box; height: var(--pn-dock-row); align-items: flex-end; padding: 0 0 max(0px, calc(var(--pn-dk-t) / 2 - 12px)); }
 .pn-wrap .pn-pane.dock-top:not(.dock-sub) > .pn-tabbar > .pn-tabtail { box-sizing: border-box; align-items: center; padding: 0 0 8px; }   /* 옛 규칙의 위 16 도 걷는다 */
+/* 파일 줄 — 높이 · 탭 높이가 사다리를 따른다(기본 53 · 40 은 위 3안 규칙 그대로) */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs { height: var(--pn-file-row); }
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-sub-acts { height: var(--pn-file-row); }
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs > .pn-tabwrap { height: var(--pn-tab-h); margin-block: calc((var(--pn-file-row) - 1px - var(--pn-tab-h)) / 2); }
 

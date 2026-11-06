@@ -698,7 +698,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   /* 칸은 셋이다 — 두 줄이 오른쪽 폭을 나눠 갖지 않게(실측 2026-11-05: 둘째 줄 모델 · 추론강도 폭만큼 첫 줄 이름이 굶었다).
      첫 줄: 이름 [1~2] · 단추 [3]   둘째 줄: 연결 상태 [1] · 선택기 [2~3]. 셋째 칸은 단추 폭, 둘째 칸은 선택기가 그보다 넓은 만큼만 선다.
      칸 사이 24 는 오른쪽 두 덩이의 margin-left 다(column-gap 을 쓰면 빈 둘째 칸에도 틈이 한 번 더 붙는다). */
-  .pn-body:not(.cm) .sc-head.sc-head--big { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 36px 36px;
+  .pn-body:not(.cm) .sc-head.sc-head--big { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: var(--hd-r, 36px) var(--hd-r, 36px);   /* #5319 높이 사다리 — 42-v2-panes.css --hd-r */
     column-gap: 0; row-gap: 8px; align-items: center; padding: 16px 24px 16px 32px; }   /* 높이는 42-v2-panes.css(--pn-bighead-h) */
   .pn-body:not(.cm) .sc-head--big > .sc-head-l, .pn-body:not(.cm) .sc-head--big .sc-head-main { display: contents; }
   .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1 / 3; gap: 12px; min-width: 0; overflow: hidden; }   /* 넘치면 제 칸 안에서 — 오른쪽 단추 위로 안 번진다 */
@@ -707,11 +707,11 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big > .sc-run-top { grid-row: 2; grid-column: 2 / 4; justify-self: end; gap: 4px; margin-left: 24px; }
   /* 둘째 줄 왼쪽이 모자라면 연결 상태 글이 …로 준다([화면 복구]는 그대로) — 칸 밖으로 잘려 나가지 않게. 전체 글은 title 에(session-chat.ts). */
   .pn-body:not(.cm) .sc-head--big .sc-sub > .sc-pair { flex: 0 1 auto; min-width: 0; }
-  .pn-body:not(.cm) .sc-head--big .sc-sub .sc-termstat:not([hidden]) { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 34px; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub .sc-termstat:not([hidden]) { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: calc(var(--hd-b, 36px) - 2px); }
   .pn-body:not(.cm) .sc-head--big .sc-sub .sc-pair > .sc-act { flex: none; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-h { display: none; }
   /* 이름 — KRDS 제목 24 · 굵기 700 · 줄 높이 150% · 자간 0. */
-  .pn-body:not(.cm) .sc-head--big .sc-title, .pn-body:not(.cm) .sc-head--big button.sc-title { font-size: 24px; font-weight: 700; letter-spacing: 0; line-height: 1.5; }
+  .pn-body:not(.cm) .sc-head--big .sc-title, .pn-body:not(.cm) .sc-head--big button.sc-title { font-size: 24px; font-weight: 700; letter-spacing: 0; line-height: var(--hd-b, 36px); }
   .pn-body:not(.cm) .sc-head--big button.sc-title { padding-block: 0; }
   .pn-body:not(.cm) .sc-head--big .sc-title-in { font-size: 24px; font-weight: 700; }
   .pn-body:not(.cm) .sc-head--big .sc-titlebox { min-width: 0; }   /* 좁아지면 이름이 …로 준다(줄은 안 바꾼다) — 오른쪽은 @container 사다리가 먼저 접는다 */
@@ -724,31 +724,31 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { width: 32px; height: 32px; }
   .pn-body:not(.cm) .sc-head--big .v2-dot { width: 10px; height: 10px; }
   /* 얼굴 — 28px(KRDS 아이콘 단계 사이, 이니셜 13px). 묶음 높이 32. */
-  .pn-body:not(.cm) .sc-head--big .sc-faces { height: 32px; margin-block: 0; padding: 0 4px; }
+  .pn-body:not(.cm) .sc-head--big .sc-faces { height: calc(var(--hd-b, 36px) - 4px); margin-block: 0; padding: 0 4px; }
   .pn-body:not(.cm) .sc-head--big .sc-face { width: 28px; height: 28px; font-size: 13px; }
   /* 조작 단추 · 연결 상태 · 선택기 — 한 벌: 36px · 15px/500. #5319(원준 2026-11-06 «버튼 생김새 이전꺼가 더 이쁘거든») — 이전 모양
      (85bfd261^ .sc-act): 쉴 땐 글자만, 올리면 --line-net 테두리 알약 + 파란 글자. 바탕을 칠하지 않는다. */
-  .pn-body:not(.cm) .sc-head--big .sc-act { height: 36px; padding: 0 10px; font-size: 15px; font-weight: 500; color: var(--ink-sub);
+  .pn-body:not(.cm) .sc-head--big .sc-act { height: var(--hd-b, 36px); padding: 0 10px; font-size: 15px; font-weight: 500; color: var(--ink-sub);
     border: 1px solid transparent; border-radius: 999px; background: transparent; gap: 6px; }
   .pn-body:not(.cm) .sc-head--big .sc-act:hover { color: var(--blue); border-color: var(--line-net); background: transparent; }
   .pn-body:not(.cm) .sc-head--big .sc-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   .pn-body:not(.cm) .sc-head--big .sc-act-on { color: var(--blue); background: var(--bg-tint); border-color: var(--line-net); }
   .pn-body:not(.cm) .sc-head--big .sc-act-ic { width: 18px; height: 18px; }
-  .pn-body:not(.cm) .sc-head--big .sc-head-r > .sc-act:last-child { width: 36px; padding: 0; justify-content: center; font-size: 20px; }   /* ⋯ */
+  .pn-body:not(.cm) .sc-head--big .sc-head-r > .sc-act:last-child { width: var(--hd-b, 36px); padding: 0; justify-content: center; font-size: 20px; }   /* ⋯ */
   .pn-body:not(.cm) .sc-head--big .sc-pair, .pn-body:not(.cm) .sc-head--big .sc-pair:hover { border: 1px solid transparent; border-radius: 999px; gap: 4px; }
   /* 연결 상태 | 화면 복구 는 한 덩어리 — 올리면 둘을 한 알약이 감싼다(안의 단추는 제 테두리를 따로 그리지 않는다). 테두리 1px 씩이 들어갈 자리로 안은 34. */
   .pn-body:not(.cm) .sc-head--big .sc-pair:hover { border-color: var(--line-net); }
   .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act:hover { border-color: transparent; }
   .pn-body:not(.cm) .sc-head--big .sc-pair-sep { height: 16px; margin: 0 4px; }
-  .pn-body:not(.cm) .sc-head--big .sc-termstat { height: 34px; padding: 0 0 0 10px; font-size: 15px; }
+  .pn-body:not(.cm) .sc-head--big .sc-termstat { height: calc(var(--hd-b, 36px) - 2px); padding: 0 0 0 10px; font-size: 15px; }
   .pn-body:not(.cm) .sc-head--big .sc-termstat.ok { color: var(--ok-ink); }   /* KRDS 글자 대비 4.5:1 — --mint-deep 은 흰 바탕에서 3.2:1 이었다 */
-  .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act { padding: 0 10px 0 8px; height: 34px; }
+  .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act { padding: 0 10px 0 8px; height: calc(var(--hd-b, 36px) - 2px); }
   .pn-body:not(.cm) .sc-head--big .sc-run { font-size: 13px; padding: 2px 10px; }
-  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel { height: 36px; max-width: 220px; padding: 0 28px 0 10px; font-size: 15px; font-weight: 500;
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel { height: var(--hd-b, 36px); max-width: 220px; padding: 0 28px 0 10px; font-size: 15px; font-weight: 500;
     color: var(--ink-sub); border: 1px solid transparent; border-radius: 999px; background-color: transparent; background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px, 5px 5px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:hover:not(:disabled) { color: var(--blue); border-color: var(--line-net); background-color: transparent; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-  .pn-body:not(.cm) .sc-head--big > .sc-run-top span.dt-chip { line-height: 36px; padding: 0 10px; font-size: 15px; }   /* display 는 안 준다 — 숨김 규칙(.sc-ax-h · @container)을 이기면 안 된다 */
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top span.dt-chip { line-height: var(--hd-b, 36px); padding: 0 10px; font-size: 15px; }   /* display 는 안 준다 — 숨김 규칙(.sc-ax-h · @container)을 이기면 안 된다 */
   /* #5319 3-B(원준 2026-11-06) — 첫 줄 오른쪽 [연결 상태 | 화면 복구] [⋯] · 둘째 줄 왼쪽 [얼굴 ＋] [자료] │ [복제·옮기기 ▾].
      자주 누르는 [화면 복구] 가 오른쪽 위(«마우스가 주로 오른쪽에서 놀거같으니까»). 연결 상태 글은 오른쪽 위에선 12em 에서 …로 준다 —
      첫 줄의 남는 폭은 이름 것이라(위 격자: 셋째 칸이 max-content 를 먼저 가져간다) 글을 안 자르면 이름이 굶는다. 온전한 글은 title 에. */
@@ -756,7 +756,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big .sc-sub-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
   .pn-body:not(.cm) .sc-head--big .sc-sub-sep { height: 18px; }
   .pn-body:not(.cm) .sc-head--big > .sc-head-r > .sc-pair { flex: 0 1 auto; min-width: 0; }
-  .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { display: block; min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; line-height: 34px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { display: block; min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; line-height: calc(var(--hd-b, 36px) - 2px); }
 }
 /* 세션 칸이 좁으면(곁칸을 넓힌 때) 접는 차례 — 이름이 마지막까지 버틴다(실측 2026-11-05: 세션 칸 400px 에서 이름이 «U» 한 글자까지 줄었다).
    ① ≤680 [복제] · [옮기기] — [⋯] 와 세션 우클릭에 그대로 있다
@@ -777,7 +777,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   @container schead (max-width: 640px) { .pn-body:not(.cm) .sc-head--big .sc-act-duo-t { display: none; } }
   @container schead (max-width: 760px) {
     .pn-body:not(.cm) .sc-head--big .sc-act-files > span { display: none; }
-    .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; } }
+    .pn-body:not(.cm) .sc-head--big .sc-act-files { width: var(--hd-b, 36px); padding: 0; justify-content: center; } }
   /* ≤600 오른쪽 위 연결 상태 글은 6.5em(«재연결 중…» 까지) — 첫 줄 폭을 이름에 돌려준다. «연결됨» 은 늘 다 보인다 */
   @container schead (max-width: 600px) { .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { max-width: 6.5em; } }
   /* ≤480 #번호를 접고 연결 상태 글은 4.5em(«재연결…») — 실측 468 에서 이름이 «UI 수…» 까지 줄었다(연결 상태가 첫 줄로 온 값). 번호는 세션 목록·[⋯] 에 있다 */

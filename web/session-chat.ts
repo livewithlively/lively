@@ -67,6 +67,7 @@ import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js'; 
 import { onViewers, viewersOf, viewersFresh, noteActivity, SESSION_VIEW_EVENT, type Viewer } from './v2/presence.js';
 import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
+import { headGrip } from './v2/head-grip.js';   // #5319 — 큰 머리 아랫선 손잡이(곁칸 머리 줄과 같은 높이를 민다)
 
 
 // ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
@@ -663,7 +664,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   닫을 때 여기로 되돌리기 때문이다(openMore). 배선이 하나뿐이라 두 자리가 갈릴 일이 없다.
   const runTop = el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort) as HTMLElement;
   //  #5319 큰 머리는 오른쪽 둘째 줄(조작 단추 아래)이라 맨 뒤 — 초점 순서도 위 줄 다음이 된다.
-  if (opts.bigHead) head.append(runTop); else head.insertBefore(runTop, headR);
+  if (opts.bigHead) head.append(runTop, headGrip()); else head.insertBefore(runTop, headR);
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).

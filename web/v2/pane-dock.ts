@@ -315,6 +315,8 @@ export function mountDock(host: DockHost): DockHandle {
     root.classList.toggle('min', minNow);
     root.setAttribute('aria-orientation', vertical() ? 'vertical' : 'horizontal');
     root.style.setProperty('--dk-s', size + 'px');
+    //  #5319 — 머리 줄 독의 타일 한 변을 곁칸에도 적는다: [＋] 꼬리가 타일 가운데에 맞추고, 줄 높이 상한(--pn-dk-cap)과 작은 쪽을 고른다(42-v2-dock.css).
+    if (home === 'top') pane.style.setProperty('--pn-dk-s', size + 'px'); else pane.style.removeProperty('--pn-dk-s');
     const kids: HTMLElement[] = [];
     btns = [];
     if (minNow) {
