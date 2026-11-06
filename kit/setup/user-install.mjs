@@ -565,7 +565,7 @@ export function writeConnectCommands(dir, format, label) {
       wrote++;
     }
     if (wrote) console.log(`  ✓ ${label} «여기 연결» 커맨드(${CONNECT_IDS.join("·")})`);
-  } catch (e) { console.log(`  · ${label} «여기 연결» 커맨드 설치 실패(무해 — 셸의 ${directCli() || "lively"} work-root add 로 대신): ${e.message}`); }
+  } catch (e) { console.log(`  · ${label} «여기 연결» 커맨드 설치 실패(무해 — 셸의 ${directCli() ? `${directCli()} work-root add 로 대신 — PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고` : "lively work-root add 로 대신"}): ${e.message}`); }
 }
 // Windows: `env` 프리픽스 불가 → 하네스는 argv 로. Mac/Linux: 기존 env 형 유지(idempotency 키 안정).
 const codexHookCmd = (script) => WIN

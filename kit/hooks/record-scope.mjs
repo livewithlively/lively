@@ -39,6 +39,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renam
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isAbsWinNodeExe } from "./stdio-launch.mjs";
 
 export const SCOPES = ["work_folders", "anywhere"];
 export const DEFAULT_SCOPE = "work_folders";
@@ -339,15 +340,15 @@ export async function changeScopeSettings({ lively, gw, token, send, machineId =
 // ── 작업 폴더 등록 명령 ──────────────────────────────────────────────────────
 //  배치 실행이 막힌 윈도우 PC 에선 `lively`(=lively.cmd)가 «액세스가 거부되었습니다» 로 못 뜨지만 키트 전용 node.exe 는 뜬다
 //  (2026-11-05, 배치 실행 차단 PC). 그래서 node 절대경로를 알면 심을 거치지 않고 node 로 lively.mjs 를 부르는 명령을 준다 —
-//  MCP 등록(stdio-launch.mjs)·/lively-connect 본문(setup/user-install.mjs connectCommandFiles)과 같은 기준이다.
+//  판정은 MCP 등록과 같은 stdio-launch.mjs isAbsWinNodeExe 다(/lively-connect 본문 setup/user-install.mjs connectCommandFiles 도 같은 기준).
 //  ⚠ kit/cli/lively.mjs workRootAddCommand 와 같은 규칙이다 — CLI 는 이 파일을 정적 import 하지 않는다(부트스트랩이 CLI 만 새로
-//   받으면 옛 훅 폴더와 짝이 안 맞는다). 두 곳이 같은 값을 내는지 kit/cli/install-scope-notice.test.mjs 가 한 표로 잰다.
+//   받으면 옛 훅 폴더와 짝이 안 맞는다). 세 곳이 같은 값을 내는지 kit/cli/install-scope-notice.test.mjs 가 한 표로 잰다.
 const fwdSlash = (p) => String(p).replace(/\\/g, "/");
 /** 등록 명령 한 줄. dir 은 작은따옴표로 감싸 붙이고, 작은따옴표·제어문자가 든 이름이면 빼고 낸다(그 폴더에서 실행하는 꼴). */
 export function workRootAddCommand({ win = WIN, nodeExe = process.execPath, cliPath = join(livelyDirOf(), "lib", "lively.mjs"), dir = "" } = {}) {
   const n = String(nodeExe || ""), d = String(dir || "");
   const arg = d && !/['\u0000-\u001f\u007f]/.test(d) ? ` '${d}'` : "";
-  if (win && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(n) && /[\\/]node\.exe$/i.test(n)) return `& "${fwdSlash(n)}" "${fwdSlash(cliPath)}" work-root add${arg}`;
+  if (win && isAbsWinNodeExe(n)) return `& "${fwdSlash(n)}" "${fwdSlash(cliPath)}" work-root add${arg}`;
   return `lively work-root add${arg}`;
 }
 //  `& ` 는 PowerShell 의 호출 연산자라 Git Bash·cmd 에선 문법 오류다 — 하네스가 어느 셸로 돌릴지 몰라 둘 다 말한다.

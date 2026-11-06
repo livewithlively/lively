@@ -7,12 +7,13 @@
 //  ⚠ 안내가 판정과 어긋나는지는 **실제 판정 함수**로 잰다 — 문구만 맞추면 판정이 바뀔 때 또 거짓이 된다.
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { closedPath, nodeOnlyDir, noBrowserEnv, sandboxEnv } from "../testlib/os-sandbox.mjs";
 import * as rs from "../hooks/record-scope.mjs";
 import { launchNotice, setupDoneHints, workRootAddCommand, workRootAddHint } from "./lively.mjs";
+import { connectCommandFiles, winNodeBin } from "../setup/user-install.mjs";
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const CLI = join(HERE, "lively.mjs");
@@ -42,13 +43,15 @@ const envOf = (home) => ({
 });
 const cli = (home, cwd, args, file = CLI) => spawnSync(process.execPath, [file, ...args], { cwd, env: envOf(home), encoding: "utf8", timeout: 60_000 });
 const json = (r) => { try { return JSON.parse(r.stdout); } catch { return null; } };
+// 이 플랫폼에서 CLI 가 낼 등록 안내 — 윈도 CI 에선 node 직결형이다(W 절). 홈은 CLI 의 LIVELY_HOME(없으면 OS 홈).
+const hintFor = (home) => workRootAddHint({ win: process.platform === "win32", nodeExe: process.execPath, cliPath: join(home, ".lively", "lib", "lively.mjs") });
 
 try {
   // ── N. 설치 끝 안내 ─────────────────────────────────────────────────────────────
   const anyPlace = (n) => n.line.includes("아무 폴더");
   const n1 = launchNotice("Cursor", { scope: null, roots: 0 });
   check("N1 ★ 사본 없음 — 받으면 꺼질 수 있으니 아무 폴더라고 단정하지 않고 등록 명령을 함께 말한다",
-    !anyPlace(n1) && !n1.needsRoot && n1.line.includes("Cursor") && n1.line.includes("lively work-root add"), JSON.stringify(n1));
+    !anyPlace(n1) && !n1.needsRoot && n1.line.includes("Cursor") && n1.line.includes(hintFor(process.env.LIVELY_HOME || homedir())), JSON.stringify(n1));
   const n2 = launchNotice("Cursor", { scope: ANYWHERE, roots: 0 });
   check("N2 어디서나 — 아무 폴더", anyPlace(n2) && !n2.needsRoot, JSON.stringify(n2));
   const n3 = launchNotice("Cursor", { scope: WORK_FOLDERS, roots: 0 });
@@ -80,6 +83,12 @@ try {
     check(`W1 CLI·훅 등록 명령이 같다 — ${JSON.stringify(o)}`, a === b, `cli=${a} hook=${b}`);
   }
   const direct = rs.workRootAddCommand({ win: true, nodeExe: NODE, cliPath: CLI_JS });
+  //  /lively-connect 본문(user-install.mjs connectCommandFiles)도 같은 node 판정으로 같은 명령을 싣는다 — 세 번째 사본의 드리프트를 잡는다.
+  for (const o of same.filter((x) => x.win && !x.dir)) {
+    const body = connectCommandFiles({ format: "codex", win: true, nodeBin: winNodeBin(o.nodeExe), cliPath: o.cliPath.replace(/\\/g, "/") })[0].text;
+    const want = `\`${workRootAddCommand(o)} "<폴더>"\``;
+    check(`W1 /lively-connect 본문도 같은 명령 — ${o.nodeExe}`, body.includes(want), `want=${want}\n${body}`);
+  }
   const winHint = workRootAddHint({ win: true, nodeExe: NODE, cliPath: CLI_JS });
   check("W2 ★ 윈도 node 직결 — /lively-connect 를 먼저, 셸 명령은 node 직접 호출", winHint.startsWith("/lively-connect") && winHint.endsWith(direct) && !winHint.includes("lively work-root"), winHint);
   check("W2 그 밖엔 종전 명령 그대로", workRootAddHint({ win: false, nodeExe: "/usr/bin/node", cliPath: "/x" }) === "lively work-root add");
@@ -106,9 +115,10 @@ try {
   const sayNotice = (home) => spawnSync(process.execPath, ["--input-type=module", "-e",
     `const m = await import(${JSON.stringify(pathToFileURL(CLI).href)}); await m.sayLaunchNotice(["cursor"], (l) => console.log(l));`],
   { cwd: plain, env: envOf(home), encoding: "utf8", timeout: 30_000 });
-  const off = sayNotice(mkHome({ scope: WORK_FOLDERS }).home);
+  const offHome = mkHome({ scope: WORK_FOLDERS }).home;
+  const off = sayNotice(offHome);
   check("N7 ★ 작업 폴더 0개인 컴퓨터의 설치 끝에 등록 명령이 나온다",
-    off.status === 0 && off.stdout.includes("Cursor") && off.stdout.includes("lively work-root add") && !off.stdout.includes("아무 폴더"), off.stdout + off.stderr);
+    off.status === 0 && off.stdout.includes("Cursor") && off.stdout.includes(hintFor(offHome)) && !off.stdout.includes("아무 폴더"), off.stdout + off.stderr);
   const on = sayNotice(mkHome({ scope: ANYWHERE }).home);
   check("N7 어디서나인 컴퓨터엔 등록 명령이 없다", on.status === 0 && on.stdout.includes("아무 폴더") && !on.stdout.includes("work-root"), on.stdout + on.stderr);
 
@@ -131,7 +141,7 @@ try {
   }
   check("S-배선 네 경우 모두 JSON 을 냈고 값이 들어 있다",
     Object.values(cases).every((c) => c.json && "recordScope" in c.json), JSON.stringify(Object.values(cases).map((c) => c.json && Object.keys(c.json).length)));
-  const hasHint = (c) => c.text.includes("lively work-root add");
+  const hasHint = (c) => c.text.includes(hintFor(c.home));
   const off1 = cases.off.json?.recordScope;
   check("S1 ★ 작업 폴더 0개 · 일반 폴더 — 꺼짐으로 나온다", off1?.scope === WORK_FOLDERS && off1?.roots === 0 && off1?.inScope === false, JSON.stringify(off1));
   check("S1 ★ 사람 출력에 꺼짐과 등록 명령이 나온다", cases.off.text.includes("꺼짐") && hasHint(cases.off), cases.off.text);
