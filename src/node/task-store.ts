@@ -61,6 +61,22 @@ export async function listTasks(opts: { requester?: string; status?: DelegateSta
   return r.rows as DelegateTask[];
 }
 
+/** 끝나지 않은 위탁의 상태 — 그 밖(done·failed·canceled)은 종결이다(org_task.status CHECK). */
+export const OPEN_TASK_STATUSES: readonly DelegateStatus[] = ["queued", "running"];
+
+/**
+ * 그 위탁 행 + 끝나지 않은 위탁 행 전부 — 위탁 워크트리 회수가 «같은 작업 폴더를 쓰는 끝나지 않은 다른 위탁» 을
+ *  가르는 재료다(task-worktree-reclaim.openTaskSharingWorkspace). 판정은 호출부가 한다 — 여기서 경로를 비교하지 않는다.
+ *  ⚠ queued 행은 task_dir 이 비어 있다(createTask·requeue 는 안 채운다 — 배정 중인 위탁이 바로 그 상태다).
+ *  id 는 문자열로 준다(BIGSERIAL — pg 는 어차피 문자열로 준다. 숫자·문자열이 섞인 비교를 호출부가 한 모양으로 하게).
+ */
+export async function workspaceTaskRows(selfId: number | string): Promise<Array<{ id: string; status: DelegateStatus; subpath: string; task_dir: string | null }>> {
+  const r = await itemsPool.query(
+    `SELECT id::text AS id, status, subpath, task_dir FROM org_task WHERE id = $1 OR status = ANY($2::text[])`,
+    [String(selfId), [...OPEN_TASK_STATUSES]]);
+  return r.rows as Array<{ id: string; status: DelegateStatus; subpath: string; task_dir: string | null }>;
+}
+
 export async function queuedTasks(): Promise<DelegateTask[]> {
   const r = await itemsPool.query(`SELECT * FROM org_task WHERE status='queued' ORDER BY id LIMIT 20`);
   return r.rows as DelegateTask[];
