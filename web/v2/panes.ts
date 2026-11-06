@@ -41,13 +41,13 @@ import { listSessionApps } from './app-session.js';
 import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
-import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, seedConsoleTab, showZone, stripRoom, SUB_TAB_METRICS, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, seedConsoleTab, showZone, stripRoom, SUB_TAB_METRICS, TAB_METRICS, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -659,22 +659,21 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  탭이 나눠 쓸 폭 = 띠 안 폭 − 좌우 안 여백 − 탭 사이 간격(#4443 탭 새 옷 — lib/pane-tabs stripRoom 머리말).
     const cs = getComputedStyle(p.tabs);
     const room = (cw: number): number => stripRoom(cw, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, parseFloat(cs.columnGap) || 0, wraps.length);
-    //  #5319 독 아래 큰 탭 줄은 접지도 옆으로 미끄러지지도 않고 **줄을 바꿔 다 보인다**(42-v2-dock.css flex-wrap) — 열어 둔 파일이
-    //   몇 개든 하나하나가 늘 눈에 보이고 한 번에 눌린다(«뷰어 여러개 떠있을때 특정한걸 선택할수가 없음»). 폭은 제 이름만큼(상한 max).
-    if (p.root.classList.contains('dock-sub')) {
-      const m = SUB_TAB_METRICS;
-      wraps.forEach((w, i) => { const t = tabsIn[i]; w.style.width = Math.max(m.icon, Math.min(Math.ceil(t.natural), t.active ? m.activeMax : m.max)) + 'px'; });
-      fitTitles(p);
-      syncMore(p);
-      return;
-    }
-    let plan = planTabs(tabsIn, room(full));
+    //  #5319 독 아래 파일 탭 줄(3안 — 뷰어의 이름 줄 자리) — 한 줄. 긴 이름부터 줄이되 아이콘으로 접지 않고 이름(글자 일곱 자쯤)을
+    //   남긴 바닥(minLabel)에서 멈춘다. 그래도 넘치면 줄이 옆으로 미끄러지고(끝은 흐림) [n ▾] 목록이 전부를 말한다.
+    const sub = p.root.classList.contains('dock-sub');
+    const met = sub ? SUB_TAB_METRICS : TAB_METRICS;
+    let plan = planTabs(tabsIn, room(full), met);
     if (plan.mode !== 'full') {
       p.bar.classList.add('shrunk');                            // ⌄ 가 선다 — 그 폭을 뺀 줄에 다시 앉힌다
-      plan = planTabs(tabsIn, room(p.tabs.clientWidth));
+      plan = planTabs(tabsIn, room(p.tabs.clientWidth), met);
+    }
+    if (sub && plan.mode === 'icons') {
+      const pw = plan.widths;
+      plan = { ...plan, widths: tabsIn.map((t, i) => (t.active && !t.pinned ? pw[i] : Math.min(Math.max(met.icon, Math.ceil(t.natural)), met.minLabel))) };
     }
     wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
-    p.bar.classList.toggle('compact', plan.mode === 'icons');
+    p.bar.classList.toggle('compact', plan.mode === 'icons' && !sub);
     fitTitles(p);
     syncMore(p);        // 접고도 남는 넘침만 '더 있다'(그늘)로 말한다
   }
@@ -764,6 +763,40 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   그 오른쪽에 켜진 앱 이름 · [열린 탭 ∨] 가 붙는다(paintPane). 좁은 폭(서랍)은 종전대로 탭 줄 + 바닥 독.
   const dockSlot = el('div', { class: 'pn-dock-slot' }) as HTMLElement;
   sidePane.bar.prepend(dockSlot);
+  //  #5319 3안(원준 2026-11-06) — 독 아래 파일 탭 줄의 오른쪽 끝: [n ▾](열어 둔 파일 목록) · 켜진 뷰어의 단추(고치기 · 다시 불러오기 ·
+  //   올리기 · 내려받기). 뷰어가 제 머리에 따로 세우던 이름 줄을 이 줄이 대신한다 — 이름은 탭이 말하고, 단추는 여기로 옮겨 온다.
+  //   곁칸이 좁으면 단추를 [⋯] 하나로 접고, 넓히면 원래처럼 늘어선다(42-v2-dock.css @container pnsidebar).
+  const subList = el('div', { class: 'pn-sub-listslot' }) as HTMLElement;
+  const subBarSlot = el('div', { class: 'pn-sub-barslot' }) as HTMLElement;
+  const subMore = el('button', { class: 'pn-web-btn ic pn-sub-more', type: 'button', title: '이 파일에 할 일 — 고치기 · 다시 불러오기 · 내려받기', 'aria-label': '이 파일에 할 일', hidden: true }, pnIcon('more', 'pn-i sm')) as HTMLButtonElement;
+  const subActs = el('div', { class: 'pn-sub-acts' }, subList, subBarSlot, subMore) as HTMLElement;
+  sidePane.bar.append(subActs);
+  const SUB_ICON: Record<string, string> = { '고치기': 'pencil', '다시 불러오기': 'undo', '파일 올리기': 'up', '내려받기': 'drop' };
+  subMore.onclick = (e: MouseEvent) => {
+    const btns = [...subBarSlot.querySelectorAll('button.pn-web-btn.ic')] as HTMLButtonElement[];
+    const r = subMore.getBoundingClientRect();
+    ctxMenu(r.left, r.bottom + 4, btns.map((b) => {
+      const label = b.getAttribute('aria-label') || b.title || '';
+      return { label, icon: SUB_ICON[label] || '', run: () => b.click() };
+    }), { title: tabName(sidePane.act || '') });
+    e.stopPropagation();
+  };
+  /** 켜진 뷰어의 머리(.pn-ed-bar)를 이 줄로 옮겨 온다 — 다른 탭이 켜지거나 줄이 걷히면 제 부품 맨 위로 돌려보낸다.
+   *  부품은 제 머리를 잡은 채 다시 그리므로(paintBar) 어디에 서 있든 내용은 늘 그 부품 것이다. */
+  let movedBar: { bar: HTMLElement; home: HTMLElement } | null = null;
+  function dockViewerBar(pane: Pane, key: TabKey | null): void {
+    const part = key ? pane.parts.get(key) : null;
+    const bar = part ? (part.root.querySelector(':scope > .pn-ed-bar') as HTMLElement | null) ?? (movedBar && movedBar.home === part.root ? movedBar.bar : null) : null;
+    if (movedBar && movedBar.bar !== bar) {
+      if (movedBar.home.isConnected) movedBar.home.prepend(movedBar.bar); else movedBar.bar.remove();
+      movedBar = null;
+    }
+    if (bar && part && !movedBar) { subBarSlot.append(bar); movedBar = { bar, home: part.root }; }
+    syncSubMore();
+  }
+  /** [⋯] 는 접힐 단추(아이콘 단추)가 있을 때만 선다 — 보이기는 폭이 정한다(CSS). 부품이 머리를 다시 그리면 다시 잰다. */
+  function syncSubMore(): void { subMore.hidden = !subBarSlot.querySelector('button.pn-web-btn.ic'); }
+  if (typeof MutationObserver === 'function') new MutationObserver(syncSubMore).observe(subBarSlot, { childList: true, subtree: true });
   const dockTop = (): boolean => !narrow();
   //  곁칸 폭에 다 안 들어가면 독은 줄 안에서 옆으로 민다(pane-dock fit) — 세로 휠로도 밀고(탭 띠와 같은 문법), 잘린 쪽 끝은 흐린다.
   dockSlot.addEventListener('wheel', (e: WheelEvent) => {
@@ -1360,11 +1393,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const face = tabFaces.get(key);
     if (face) return appGlyphName(face);               // 붙은 앱 = 그 앱의 그림(앱 찾기와 같은 그림)
     const d = partDef(tabBase(key) as PartType);
-    if (tabBase(key) !== 'editor') return d.icon;
-    const nm = tabTitles.get(key) || rememberedViewerPath(ctx.memKey(), key);
-    if (!nm) return d.icon;
-    const k = kindOf(nm);
-    return k.kind === 'img' ? 'img' : k.kind === 'video' || k.kind === 'audio' ? 'play' : k.kind === 'page' ? 'window' : k.type === '코드' ? 'code' : 'doc';
+    //  #5319 파일(뷰어) 탭은 아이콘 하나 — 종류마다 모양(눈 · 네모 · 재생…)을 바꾸면 같은 줄이 어수선하고, 파일 이름이 서기 전엔
+    //   눈(뷰어)이었다가 이름이 서면 바뀌어 같은 탭이 모양을 갈아입었다. 종류는 이름의 확장자가 이미 말한다.
+    return tabBase(key) === 'editor' ? 'doc' : d.icon;
   }
   /** 탭의 색 토큰 이름(--gi-c-<이름>) — 탭이 단 얼굴이 있으면 그 앱의 색, 없으면 종류의 색(lib/pane-dock appColor). */
   const tabColor = (key: TabKey): string => tabFaces.get(key) || appColor(tabBase(key));
@@ -1461,14 +1492,19 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   /** [모두 보기] — 탭 이름이 줄었거나 접혔거나 넘쳤을 때 서는 목록(CSS: .pn-tabbar.shrunk · .compact · .has-more).
    *  #3870 — × 를 눌러도 목록이 **열린 채** 그 줄만 사라진다(종전엔 × 한 번마다 목록이 닫혀 매번 다시 열어야 했다).
    *  발치에 [파일 탭 n개 모두 닫기] · [닫은 탭 다시 열기]. */
-  function moreBtn(zone: Zone): HTMLElement {
-    const b = el('button', { class: 'pn-tab-more', type: 'button', title: '이 칸에 열린 탭을 모두 봅니다', 'aria-label': '탭 모두 보기' }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
+  function moreBtn(zone: Zone, only?: (k: TabKey) => boolean): HTMLElement {
+    //  only — #5319 독 아래 파일 탭 줄의 [n ▾]: 그 줄에 선 탭만(열어 둔 파일) 나열하고 단추에 그 수를 쓴다.
+    const n = only ? zoneTabs(zone).filter(only).length : 0;
+    const b = (only
+      ? el('button', { class: 'pn-tab-more pn-sub-list', type: 'button', title: '열어 둔 파일을 모두 봅니다 — 고르거나 닫아요', 'aria-label': `열어 둔 파일 ${n}개 모두 보기` },
+        el('span', { class: 'pn-sub-n', text: String(n) }), pnIcon('chev', 'pn-i sm'))
+      : el('button', { class: 'pn-tab-more', type: 'button', title: '이 칸에 열린 탭을 모두 봅니다', 'aria-label': '탭 모두 보기' }, pnIcon('chev', 'pn-i sm'))) as HTMLElement;
     b.onclick = () => {
       const listEl = el('div', { class: 'pn-pop-list' }) as HTMLElement;
       const foot = el('div', { class: 'pn-pop-foot' }) as HTMLElement;
       let close: () => void = () => { /* 아래에서 채운다 */ };
       const fill = (): void => {
-        const list = zoneTabs(zone).filter((t) => tabBase(t) !== 'sessions');
+        const list = zoneTabs(zone).filter((t) => tabBase(t) !== 'sessions' && (!only || only(t)));
         const act = panes.get(zone)?.act ?? lay.act[zone];
         listEl.replaceChildren(...list.map((t) => {
           const d = partDef(tabBase(t) as PartType);
@@ -1480,7 +1516,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
               el('span', { class: 'n' }, el('b', { text: nm }), el('span', { class: 'pn-fine', text: pinned ? '고정한 탭' : nm === d.name ? d.hint : d.name }))),
             pinned ? null : el('button', {
               class: 'pn-pop-x', type: 'button', title: `${nm} 탭 닫기`, 'aria-label': `${nm} 닫기`,
-              onclick: () => { removeTab(zone, t); if (zoneTabs(zone).length) fill(); else close(); },
+              onclick: () => { removeTab(zone, t); if (zoneTabs(zone).some((k) => tabBase(k) !== 'sessions' && (!only || only(k)))) fill(); else close(); },
             }, pnIcon('x', 'pn-i xs')));
         }));
         const files = bulkTargets(zoneTabs(zone), null, 'files', { keep: keepInBulk, isFile: isFileTab }).length;
@@ -1492,7 +1528,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       };
       fill();
       close = anchoredPopover(b, el('div', { class: 'pn-pop' },
-        el('p', { class: 'pn-pop-h', text: '이 칸에 열린 탭이에요. 누르면 그 탭이 켜지고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' }),
+        el('p', { class: 'pn-pop-h', text: only ? '열어 둔 파일이에요. 누르면 그 파일로 가고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' : '이 칸에 열린 탭이에요. 누르면 그 탭이 켜지고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' }),
         listEl, foot));
     };
     return b;
@@ -1646,6 +1682,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const sub = top && list.some(inSub);
     pane.root.classList.toggle('dock-sub', sub);
     for (const [k, w] of tabNodes(pane)) w.classList.toggle('pn-sub-off', top && !inSub(k));
+    if (zone === 'side') subList.replaceChildren(...(sub && list.filter(inSub).length >= 2 ? [moreBtn(zone, inSub)] : []));
     if (top) {
       sideHide = null;
       //  [열린 탭 ∨] 은 세우지 않는다 — 독 아래 탭 줄이 줄을 바꿔 하나하나를 다 보인다(같은 것을 두 번 말하지 않게 · 독 줄 폭도 아낀다).
@@ -1671,6 +1708,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // 켜진 부품만 보이게(나머지는 살려 둔 채 숨긴다 — 탭을 오가도 대화·스크롤이 그대로다).
     if (act) ensurePart(pane, act);
     for (const [t, p] of pane.parts) p.root.hidden = t !== act;
+    if (zone === 'side') dockViewerBar(pane, top && pane.root.classList.contains('dock-sub') && !!act && isFileTab(act) ? act : null);
     pane.bodyEl.classList.toggle('empty', !act);
     if (!act) {
       let ph = pane.bodyEl.querySelector('.pn-pane-empty') as HTMLElement | null;
