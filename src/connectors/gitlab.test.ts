@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { parseProjectList, issueItem, noteItem, releaseItem, makeProgressLogger, pages } from "./gitlab.js";
+import { parseProjectList, issueItem, noteItem, releaseItem, pages } from "./gitlab.js";
+import { makeProgressLogger } from "./progress-log.js";
 import { routeIngestV6 } from "../org/ingest/ingest-classify.js";
 import { sourceKindOf } from "../v6/mirror/mirror-source.js";
 import { SOURCE_KINDS } from "../capabilities/source.js";
