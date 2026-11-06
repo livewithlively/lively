@@ -348,7 +348,7 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
   check(/const duo = !!duoBtn && f && m;/.test(SC) && /if \(forkBtn\) forkBtn\.hidden = !f \|\| duo;/.test(SC)
     && /row\(ICONS\.copy, '복제', '지금까지의 대화를 아는 세션을 하나 더'/.test(SC)
     && /if \(wideMq\.matches\) \{ subLead\.append\(facesEl, \.\.\.leadParts\(\)\);/.test(SC)
-    && /el\('div', \{ class: 'sc-sub' \}, subLead, subSep, subActs, fixPair, metaEl\)/.test(SC)
+    && /el\('div', \{ class: 'sc-sub' \}, subLead, subSep, subActs, \.\.\.\(opts\.bigHead \? \[fixPair\] : \[\]\), metaEl\)/.test(SC)
     && /subActs\.append\(\.\.\.sessActs\(\)\); headR\.insertBefore\(fixPair, moreBtn\);/.test(SC)
     && /\.sc-head--big > \.sc-head-r \.sc-termstat:not\(\[hidden\]\) \{ display: block; min-width: 0; max-width: 12em;/.test(CHAT_CSS)
     && /\.pn-body:not\(\.cm\) \.sc-head--big \.sc-act \{[^}]*border: 1px solid transparent; border-radius: 999px;/.test(CHAT_CSS)

@@ -156,6 +156,10 @@
   --rail-hover:    rgba(255, 255, 255, .08);  /* (theme-invariant) 레일 칸 손 얹음 면 */
   --rail-on:       rgba(255, 255, 255, .15);  /* (theme-invariant) 레일 켜진 칸 면 */
   --rail-line:     rgba(255, 255, 255, .13);  /* (theme-invariant) 레일 안 구분선 */
+  /* #5319 머리 줄 높이 사다리 — 세션 큰 머리의 줄 높이·단추 높이. 기본 36, 42-v2-panes.css .pn-wrap 가 --pn-bighead-h 에서 다시 푼다.
+     크기 토큰이라 테마와 무관(theme-invariant) — 36-chat.css 가 var(--hd-r, 36px) 로 읽는다. */
+  --hd-r:          36px;   /* (theme-invariant) 큰 머리 한 줄 높이 */
+  --hd-b:          36px;   /* (theme-invariant) 큰 머리 단추 높이 */
 }
 
 /* ── §2 베이스 타이포 ── */
