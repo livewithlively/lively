@@ -780,6 +780,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
     .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; } }
   /* ≤600 오른쪽 위 연결 상태 글은 6.5em(«재연결 중…» 까지) — 첫 줄 폭을 이름에 돌려준다. «연결됨» 은 늘 다 보인다 */
   @container schead (max-width: 600px) { .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { max-width: 6.5em; } }
+  /* ≤480 #번호를 접고 연결 상태 글은 4.5em(«재연결…») — 실측 468 에서 이름이 «UI 수…» 까지 줄었다(연결 상태가 첫 줄로 온 값). 번호는 세션 목록·[⋯] 에 있다 */
+  @container schead (max-width: 480px) {
+    .pn-body:not(.cm) .sc-head--big .sc-title-no { display: none; }
+    .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { max-width: 4.5em; } }
 }
 @media (max-width: 900px) {
   .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
