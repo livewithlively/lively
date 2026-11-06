@@ -603,7 +603,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const subLead = el('span', { class: 'sc-sub-lead' });
   const subActs = el('span', { class: 'sc-sub-acts' });
   const metaEl = el('span', { class: 'sc-meta' }, runEl);
-  const subEl = el('div', { class: 'sc-sub' }, subLead, subSep, subActs, fixPair, metaEl);
+  //  ⚠ fixPair(연결 칩 · 화면 복구)는 **큰 머리일 때만** 여기 — 작은 머리는 headR 에 이미 들어 있고, el() 이 자식을 **옮기므로** 여기 넣으면
+  //   붙지 않는 subEl 로 떨어져 칩이 DOM 에서 사라진다(scripts/term-warm-runtime.test.mjs W18 이 잡았다).
+  const subEl = el('div', { class: 'sc-sub' }, subLead, subSep, subActs, ...(opts.bigHead ? [fixPair] : []), metaEl);
   const wideMq = opts.bigHead && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)') : null;
   const leadParts = (): HTMLElement[] => [opts.onOpenFiles ? filesGoBtn : null, appGoBtn].filter((n): n is HTMLButtonElement => !!n);
   const sessActs = (): HTMLElement[] => [duoBtn, forkBtn, moveBtn].filter((n): n is HTMLButtonElement => !!n);

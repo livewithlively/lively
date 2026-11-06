@@ -325,12 +325,14 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     } catch (_) { return [MUST_APP]; }
   })();
   function isDefaultApp(k: TabKey): boolean { return defaultApps.includes(k); }
-  /** 기본 앱이 곁칸에 다 서 있게 — 없으면 뒤에 붙인다(켜지는 않는다). 다른 칸에 이미 있으면 거기 둔다. */
+  /** 기본 앱이 곁칸에 다 서 있게 — 없으면 **앞에** 세운다(켜지는 않는다). 다른 칸에 이미 있으면 거기 둔다.
+   *  앞인 까닭: 처음 배치(A1) · «기본 배치로»(A7) · #4876 걷기(M1)가 전부 콘솔을 앞에 세운다 — 옛 배치에 없던 콘솔도 같은 자리에. */
   function ensureDefaultApps(): boolean {
     if (loose) return false;
-    let changed = false;
-    for (const k of defaultApps) if (!lay.side.includes(k) && !lay.main.includes(k) && !lay.bottom.includes(k)) { lay.side.push(k); changed = true; }
-    return changed;
+    const miss = defaultApps.filter((k) => !lay.side.includes(k) && !lay.main.includes(k) && !lay.bottom.includes(k));
+    if (!miss.length) return false;
+    lay.side.unshift(...miss);
+    return true;
   }
   function setDefaultApp(k: TabKey, on: boolean): void {
     if (k === MUST_APP && !on) return;
