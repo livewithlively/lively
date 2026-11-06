@@ -360,7 +360,9 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
     && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;/.test(DOCK_CSS),
     "W16t #5319 A안 — 머리 줄 독 타일 44 · 이름표는 평소 숨기고 올리면 말풍선 · 독 줄 = 세션 머리줄 높이(타일 세로 가운데) · 탭 줄 53 은 그 선 아래로 · 옛 규칙은 지우지 않고 덮는다");
   const GRIP = read(path.join(root, "web/v2/head-grip.ts"));
-  check(/export const HEAD_H = \{ def: 113, min: 80, max: 150 \} as const;/.test(GRIP)
+  check(/export const HEAD_H = \{ def: 113, min: 52, max: 150 \} as const;/.test(GRIP) && /export const ONE_ROW_BELOW = 80;/.test(GRIP)
+    && /wrap\.classList\.toggle\('hd-one', \(h \?\? HEAD_H\.def\) < ONE_ROW_BELOW\);/.test(GRIP)
+    && /\.pn-wrap\.hd-one \.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ display: flex; flex-wrap: nowrap;/.test(PANES_CSS)
     && /head\.append\(runTop, headGrip\(\)\)/.test(SC) && /sidePane\.bar\.append\(subActs, headGrip\(\)\);/.test(read(path.join(root, "web/v2/panes.ts")))
     && /applyHeadH\(wrap, savedHeadH\(\)\);/.test(read(path.join(root, "web/v2/panes.ts")))
     && /\.pn-wrap \{ --hd-r: clamp\(32px, calc\(\(var\(--pn-bighead-h\) - 15px\) \/ 2\), 36px\); --hd-b: var\(--hd-r\); \}/.test(PANES_CSS)
@@ -368,7 +370,7 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
     && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub \{ --pn-dock-row: calc\(var\(--pn-bighead-h, 113px\) - 1px\); --pn-file-row: 53px;/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-head-grip \{ bottom: auto; top: calc\(var\(--pn-dock-row\) - 5px\); \}/.test(DOCK_CSS)
     && /if \(home === 'top'\) pane\.style\.setProperty\('--pn-dk-s', size \+ 'px'\);/.test(DOCK),
-    "W16u 머리 줄 높이 손잡이(#5319) — 80~150(기본 113) 한 값(--pn-bighead-h)을 세션 큰 머리 · 곁칸 독 줄이 같이 읽는다 · 줄 36→32.5 · 독 줄 = H-1 · 탭 줄 53 은 선 아래 · 손잡이는 그 선 위");
+    "W16u 머리 줄 높이 손잡이(#5319) — 52~150(기본 113) 한 값(--pn-bighead-h)을 세션 큰 머리 · 곁칸 독 줄이 같이 읽는다 · 80 아래는 한 줄 머리(hd-one) · 독 줄 = H-1 · 탭 줄 53 은 선 아래 · 손잡이는 그 선 위");
   const TERM_HTML = read(path.join(root, "public/terminal.html"));
   check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
     "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");

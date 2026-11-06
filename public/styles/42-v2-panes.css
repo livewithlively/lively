@@ -32,6 +32,26 @@
   body.pn-head-dragging { cursor: row-resize; user-select: none; -webkit-user-select: none; }
   body.pn-head-dragging iframe, body.pn-head-dragging webview { pointer-events: none; }
 }
+/* 한 줄 머리(#5319, 원준 2026-11-06 «2열 이하로 댕겨서 줄이려면 줄일 수 있도록 · 우측 곁칸 라인도 같이») — 80 아래로 끌면(52까지, head-grip.ts ONE_ROW_BELOW)
+   두 줄 격자가 한 줄 flex 가 된다: [● 이름 #번호] [얼굴] [자료] │ [복제·옮기기 ▾] …… [모델 · 추론강도] [연결 상태 | 화면 복구] [⋯]. 단추는 36 그대로,
+   공기 = (H - 37) / 2. 폭은 두 줄 몫을 한 줄이 쓰니 접는 차례를 당긴다(아래 @container) — 이름은 14em 에서 …. 곁칸 독 줄은 H 를 따라 타일이 준다(42-v2-dock.css). */
+@media (min-width: 901px) {
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head.sc-head--big { display: flex; flex-wrap: nowrap; align-items: center; gap: 0 8px; --hd-r: 36px; --hd-b: 36px;
+    padding-top: clamp(2px, calc((var(--pn-bighead-h) - 37px) / 2), 20px); padding-bottom: clamp(2px, calc((var(--pn-bighead-h) - 37px) / 2), 20px); }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-head-top, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub { display: contents; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-titlebox { flex: 0 1 auto; min-width: 3em; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-titlebox .sc-title-t { max-width: 14em; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-lead, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-acts, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-sep { flex: none; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-run-top { order: 8; margin-left: auto; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-head-r { order: 9; margin-left: 0; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-act-duo-t, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-act-files > span { display: none; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { max-width: 6.5em; }
+  @container schead (max-width: 1040px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-run-top > .sc-ax-me:nth-child(n+5) { display: none; } }   /* 추론강도 */
+  @container schead (max-width: 860px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-me:not([hidden]) { display: none; } }   /* 모델도 — [⋯ ▸ 이 세션 설정] 에 있다 */
+  @container schead (max-width: 720px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-faces { display: none; } }
+  @container schead (max-width: 620px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-acts, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-sep { display: none; } }
+}
 /* 사이드바 열의 폭 = 적어 둔 폭(--pn-side-w)과 상한 가운데 작은 쪽(#3870). 상한 = 격자 폭 - 세션 최소 폭 360px - 손잡이 6px,
    하한 220px(web/lib/side-card-geom.ts sideCap 과 같은 식). 상한을 **그릴 때** 맞추므로 격자가 잠깐 좁아져도 적어 둔 폭은
    깎이지 않고, 격자가 다시 넓어지면 제 폭으로 돌아온다. */
