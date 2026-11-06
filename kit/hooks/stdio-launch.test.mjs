@@ -5,10 +5,12 @@
 //  self-update 가 이미 등록된 항목을 고치는 규칙(correctStdioEntry)도 여기서 win 을 주입해 잰다(통합은 self-update.test ⑮i·⑮j).
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { closedPath, nodeOnlyDir, noBrowserEnv, sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const SANDBOX = mkdtempSync(join(tmpdir(), "lvly-stdio-launch-"));
@@ -17,7 +19,7 @@ process.env.CLAUDE_CONFIG_DIR = join(SANDBOX, ".claude");
 mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
 
 const { livelyStdioEntry, isOurShimEntry, correctStdioEntry } = await import(pathToFileURL(join(HERE, "stdio-launch.mjs")));
-const { livelyStdioLaunch } = await import(pathToFileURL(join(HERE, "..", "cli", "lively.mjs")));
+const { livelyStdioLaunch, missingLaunchTargets } = await import(pathToFileURL(join(HERE, "..", "cli", "lively.mjs")));
 const { winNodeBin, winNodeToken, connectCommandFiles } = await import(pathToFileURL(join(HERE, "..", "setup", "user-install.mjs")));
 
 const SHIM = "C:\\Profiles\\홍길동\\.lively\\bin\\lively.cmd";
@@ -140,6 +142,57 @@ test("교정 B12 — 저장 표기가 대소문자·구분자만 달라도 우�
 
 test("교정 B13 — 지금 꼴이 stdio 가 아니면(롤백 스위치 http) 손대지 않는다", () => {
   assert.equal(fix(deadEntry("mcp"), "mcp", { want: { type: "http", url: "https://gw.example/mcp", headers: {} } }), null);
+});
+
+// ── doctor — 훅·MCP 가 가리키는 실행 파일이 사라졌나 ─────────────────────────────
+//  설치 때 구운 node 경로가 지워지면 훅이 전부 죽고, 훅이 띄우는 자가 업데이트도 못 떠 스스로 못 돌아온다.
+//  «배선»·«등록» 칸은 그래도 ✓ 라 doctor 가 따로 짚어야 한다. 절대경로만 판정한다(PATH 이름은 모른다).
+test("실행 파일 D1~D4 — 훅 첫 토큰(따옴표 유무)·MCP command 의 절대경로 중 없는 것만, 한 번씩", () => {
+  const WIN_DEAD = "C:/Profiles/홍길동/.lively/runtime/node-v22.14.0-win-x64/node.exe";
+  const POSIX_DEAD = "/Users/me/.lively/runtime/current/bin/node";
+  const hookCommands = [
+    `${WIN_DEAD} "C:/Profiles/홍길동/.lively/hooks/session-preload.mjs"`,                 // D1 윈도우 — 따옴표 없는 첫 토큰
+    `${WIN_DEAD} "C:/Profiles/홍길동/.lively/hooks/run-custom.mjs" Stop`,                 //    같은 경로는 한 번만
+    `"${POSIX_DEAD}" "$HOME/.lively/hooks/work-flag.mjs"`,                                // D2 POSIX — 큰따옴표로 감싼 첫 토큰
+    `node "C:/Profiles/홍길동/.lively/hooks/stop-writeback-gate.mjs"`,                    // D3 맨몸 node — 판정하지 않는다
+    `"node" "$HOME/.lively/hooks/sync-harness-assets.mjs"`,
+    `C:/alive/node.exe "C:/Profiles/홍길동/.lively/hooks/x.mjs"`,                         // D4 살아 있는 경로
+  ];
+  const mcpCommands = ["\\\\fileserver\\tools\\node.exe", "C:\\Profiles\\홍길동\\.lively\\bin\\lively.cmd", "C:/alive/node.exe"];
+  const alive = new Set(["C:/alive/node.exe", "C:\\Profiles\\홍길동\\.lively\\bin\\lively.cmd"]);
+  assert.deepEqual(missingLaunchTargets({ hookCommands, mcpCommands, exists: (p) => alive.has(p) }).sort(),
+    [WIN_DEAD, POSIX_DEAD, "\\\\fileserver\\tools\\node.exe"].sort());
+});
+
+test("실행 파일 D5 — 넣을 게 없으면 빈 목록(부재)", () => {
+  assert.deepEqual(missingLaunchTargets({ exists: () => false }), []);
+  assert.deepEqual(missingLaunchTargets({ hookCommands: ["", "   "], mcpCommands: [null, undefined, ""], exists: () => false }), []);
+});
+
+test("실행 파일 D6 — doctor 가 실제 설정 파일에서 읽어 사라진 실행 파일을 ✗ 로 짚는다(배선 단언 포함)", () => {
+  const box = mkdtempSync(join(SANDBOX, "doctor-"));
+  const run = (home) => {
+    const r = spawnSync(process.execPath, [join(HERE, "..", "cli", "lively.mjs"), "doctor", "--json"], {
+      cwd: home, encoding: "utf8", timeout: 60_000,
+      env: { ...process.env, ...sandboxEnv({ home }), ...noBrowserEnv(), LIVELY_HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"),
+        LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", PATH: closedPath(nodeOnlyDir(box)), NO_COLOR: "1" },
+    });
+    try { return JSON.parse(r.stdout).checks.find((c) => c.name === "훅·MCP 실행 파일") ?? null; }
+    catch { return { error: `exit=${r.status} ${String(r.stderr).slice(-300)}` }; }
+  };
+  const mkHome = (name, hookCmd, mcpCmd) => {
+    const home = join(box, name);
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: hookCmd }] }] } }));
+    writeFileSync(join(home, ".claude", ".claude.json"), JSON.stringify({ mcpServers: { "lively-local": { type: "stdio", command: mcpCmd, args: ["mcp-local"], env: {} } } }));
+    return home;
+  };
+  const DEAD = "C:/lvly-gone/runtime/node-v0.0.0-win-x64/node.exe";
+  const dead = run(mkHome("dead", `${DEAD} "C:/u/.lively/hooks/session-preload.mjs"`, "/lvly-gone/bin/lively"));
+  assert.equal(dead?.pass, false, JSON.stringify(dead));
+  assert.ok(dead.detail.includes(DEAD) && dead.detail.includes("/lvly-gone/bin/lively"), JSON.stringify(dead));
+  const healthy = run(mkHome("healthy", `"node" "$HOME/.lively/hooks/session-preload.mjs"`, process.execPath));
+  assert.equal(healthy?.pass, true, JSON.stringify(healthy));
 });
 
 test("훅용 node — 절대경로 node.exe 는 forward-slash 로, 그 밖은 맨몸 node", () => {

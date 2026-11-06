@@ -944,6 +944,23 @@ export function workRootAddHint(opts) {
 }
 const addHint = () => workRootAddHint({ win: WIN, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs") });
 
+/**
+ * (순수) 우리 훅·MCP 가 실행 파일로 가리키는 **절대경로** 중 지금 없는 것(중복 없이) — doctor 가 쓴다.
+ *  설치 때 node 경로를 굽는다(Windows 는 설치를 돌린 node.exe — 버전이 경로에 든 런타임·volta·fnm 일 수 있다). 그 파일이 지워지면
+ *  그걸로 뜨는 훅·MCP 가 전부 죽는데 «배선»·«등록» 칸은 설정에 우리 항목이 있으니 ✓ 다. 훅이 죽으면 자가 업데이트(session-preload 훅이
+ *  띄운다)도 못 떠 스스로 못 돌아온다 — 다시 굽는 길은 `lively update`(지금 node 로 설치기를 돌리고 MCP 를 다시 등록한다)뿐이다.
+ *  hookCommands = 훅 명령줄(첫 토큰이 실행 파일 — 큰따옴표로 감쌌으면 그 안) · mcpCommands = MCP 항목의 command.
+ *  맨몸 `node` 처럼 PATH 로 찾는 이름은 판정하지 않는다(모르는 것을 고장으로 단정하지 않는다).
+ */
+export function missingLaunchTargets({ hookCommands = [], mcpCommands = [], exists }) {
+  const head = (cmd) => { const s = String(cmd || "").trim(); return (s.startsWith('"') ? /^"([^"]*)"/.exec(s) : /^(\S+)/.exec(s))?.[1] || ""; };
+  const out = [];
+  for (const p of [...hookCommands.map(head), ...mcpCommands.map((c) => String(c || ""))]) {
+    if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(p) && !out.includes(p) && !exists(p)) out.push(p);
+  }
+  return out;
+}
+
 // 한 config dir 에 전부 등록한다. 대상 열거는 claudeMcpTargets, 여기선 '그 한 곳에 무엇을 넣나' 만.
 function registerClaudeMcpIn(target, gw) {
   const cd = target.configDir;
@@ -2544,6 +2561,36 @@ async function cmdDoctor(opts) {
     chk("Claude MCP 연결", st.harness.claude.mcpConnected,
       st.harness.claude.mcpConnected ? "lively 연결됨" : "등록은 됐지만 연결 실패 — 게이트웨이 도달·VPN·프록시 확인",
       "lively doctor 후 게이트웨이 도달 여부(위 줄) 확인");
+  }
+  // 훅·MCP 가 가리키는 실행 파일이 살아 있나 — 위 «배선»·«등록» 은 설정에 우리 항목이 있는지만 본다(missingLaunchTargets 머리말).
+  {
+    const hookCommands = [];
+    try {
+      const hooks = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8"))?.hooks || {};
+      for (const entries of Object.values(hooks)) {
+        for (const e of Array.isArray(entries) ? entries : []) {
+          for (const h of Array.isArray(e?.hooks) ? e.hooks : []) {
+            if (typeof h?.command === "string" && /\.lively[\\/]hooks[\\/]/.test(h.command)) hookCommands.push(h.command);
+          }
+        }
+      }
+    } catch { /* 없음·파손 — 위 «배선» 칸이 말한다 */ }
+    const mcpCommands = claudeUserConfigPaths().flatMap((p) => {
+      try {
+        const s = JSON.parse(readFileSync(p, "utf8"))?.mcpServers || {};
+        return ["lively", "lively-local"].map((n) => (s[n]?.type === "stdio" ? s[n].command : null)).filter(Boolean);
+      } catch { return []; }
+    });
+    if (hookCommands.length || mcpCommands.length) {
+      const gone = missingLaunchTargets({ hookCommands, mcpCommands, exists: existsSync });
+      //  윈도우는 `lively`(심) 자체가 배치 실행 차단으로 막힐 수 있다 — 지금 이 진단을 돌린 node 로 바로 부르는 꼴도 함께 준다.
+      const direct = WIN && isAbsWinNodeExe(process.execPath)
+        ? `  (lively 가 막히면 PowerShell: & "${process.execPath.replace(/\\/g, "/")}" "${join(LIVELY, "lib", "lively.mjs").replace(/\\/g, "/")}" update)`
+        : "";
+      chk("훅·MCP 실행 파일", !gone.length,
+        gone.length ? `없음: ${gone.join(" · ")} — 이걸로 뜨는 훅·MCP 가 전부 못 뜨고 스스로 못 돌아옵니다` : "OK",
+        `lively update${direct}`);
+    }
   }
   if (st.harness.codex.installed) {
     chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml 에 관리 블록 있음" : "미배선", "lively install");
