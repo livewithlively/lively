@@ -260,7 +260,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   let closedStack: ClosedTab[][] = [];
   //  #4443 곁칸 독 — paintPane('side') 가 부른다. 세우는 것은 첫 그림 직전(아래 applyView 옆) — 여기엔 자리만(같은 TDZ 이유).
   let dock: DockHandle | null = null;
-  function isPinned(k: TabKey): boolean { return lay.pin.includes(k); }
+  function isPinned(k: TabKey): boolean { return lay.pin.includes(k) || isDefaultApp(k); }   // #5319 기본 앱은 고정 탭처럼(× 없음 · 묶어 닫기에서 빠진다)
   function pinSet(): Set<TabKey> { return new Set(lay.pin); }
   /** 한꺼번에 닫기에서 빠지는 탭 — 고정 탭 · 붙은 앱(닫기 = 이 세션에서 떼기라 다른 일이 생긴다). */
   function keepInBulk(k: TabKey): boolean { return isPinned(k) || DERIVED_TABS.has(tabBase(k)); }
@@ -309,6 +309,35 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...st, last: saved, p: map }));   // ...st — 표식(seeded)을 지우지 않는다
     } catch (_) { /* noop */ }
   }
+  // ── #5319 기본 앱(원준 2026-11-06 «앱 탭도 항상 보이게 · 디폴트로 콘솔은 항상 켜져 있게 · 보이는 기본앱도 사람마다 커스텀 · 콘솔은 못 빼고») ──
+  //  곁칸에 **늘 열려 있는 앱**. 브라우저(사람)마다 한 벌이라 프로젝트를 옮겨도 따라온다(배치 lay 는 프로젝트마다라 거기 안 적는다).
+  //  콘솔은 늘 들고 뺄 수 없다. 기본 앱의 탭은 고정 탭처럼 × 가 없고 «닫기» 가 꺼지며, 화면을 열 때 없으면 곁칸에 다시 선다.
+  //  더하기 · 빼기는 그 탭의 우클릭 [기본 앱으로 두기 / 기본 앱에서 빼기]. 자투리 화면(loose)은 곁칸에 앱이 없으니 건너뛴다.
+  const DEFAULT_APPS_KEY = 'v2.side.defaultApps';
+  const MUST_APP: TabKey = 'console';
+  let defaultApps: TabKey[] = (() => {
+    try {
+      const a = JSON.parse(localStorage.getItem(DEFAULT_APPS_KEY) || '[]');
+      const xs = Array.isArray(a) ? a.filter((k): k is TabKey => typeof k === 'string' && k !== MUST_APP) : [];
+      return [MUST_APP, ...xs];
+    } catch (_) { return [MUST_APP]; }
+  })();
+  function isDefaultApp(k: TabKey): boolean { return defaultApps.includes(k); }
+  /** 기본 앱이 곁칸에 다 서 있게 — 없으면 뒤에 붙인다(켜지는 않는다). 다른 칸에 이미 있으면 거기 둔다. */
+  function ensureDefaultApps(): boolean {
+    if (loose) return false;
+    let changed = false;
+    for (const k of defaultApps) if (!lay.side.includes(k) && !lay.main.includes(k) && !lay.bottom.includes(k)) { lay.side.push(k); changed = true; }
+    return changed;
+  }
+  function setDefaultApp(k: TabKey, on: boolean): void {
+    if (k === MUST_APP && !on) return;
+    defaultApps = on ? [...defaultApps.filter((x) => x !== k), k] : defaultApps.filter((x) => x !== k);
+    try { localStorage.setItem(DEFAULT_APPS_KEY, JSON.stringify(defaultApps.filter((x) => x !== MUST_APP))); } catch (_) { /* 저장 못 해도 이번 화면은 바뀐다 */ }
+    ensureDefaultApps();
+    saveLayout(); paintAll();
+  }
+  ensureDefaultApps();
   saveLayout();   // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게
 
   // ── 어느 탭을 보고 있었나는 **세션마다** 기억한다(원준 2026-08-20) ─────────────────
@@ -1269,6 +1298,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  붙은 앱 탭인데 아직 한 번도 안 켰다 — 부품이 없으니 어느 앱을 뗄지 모른다. 걷기만 하면 syncSessApps 가 곧 되살린다
     //   (아무 일도 안 한 것). 그러니 먼저 켜서 무엇이 붙어 있는지 보이고, 떼기는 거기서(× 는 켜진 앱 탭에만 선다 — tabEl).
     if (DERIVED_TABS.has(tabBase(key))) { const z = zoneOf(key) || zone; revealZone(z); activate(z, key); return; }
+    if (isDefaultApp(key)) return;   // #5319 기본 앱(콘솔 …)은 늘 열려 있다 — 빼려면 우클릭 [기본 앱에서 빼기]
     recordClosed([key]);
     dropTab(zone, key);
   }
@@ -1502,13 +1532,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const canGo = (z: Zone): boolean => !narrow() && z !== zone && !(type === 'sessions' && z !== 'main') && z !== 'main';   // 좁은 폭엔 칸이 하나뿐
     ctxMenu(e.clientX, e.clientY, withSeps([
       [
-        { label: derived ? '이 세션에서 떼기' : '닫기', icon: 'x', hint: derived ? '' : '휠 클릭', run: () => closeTab(zone, key) },
+        { label: derived ? '이 세션에서 떼기' : '닫기', icon: 'x', off: !derived && isDefaultApp(key), hint: derived ? '' : isDefaultApp(key) ? '기본 앱은 늘 열려 있어요' : '휠 클릭', run: () => closeTab(zone, key) },
         { label: '다른 탭 닫기', off: !others, hint: others ? `${others}개` : '', run: () => closeMany(zone, key, 'others') },
         { label: '오른쪽 탭 닫기', off: !right, hint: right ? `${right}개` : '', run: () => closeMany(zone, key, 'right') },
         ...(files ? [{ label: '파일 탭 모두 닫기', hint: `${files}개`, run: () => closeMany(zone, null, 'files') }] : []),
       ],
       [
-        ...(derived ? [] : [{ label: pinned ? '고정 해제' : '탭 고정', icon: 'pin', hint: pinned ? '' : '아이콘만 남기고 맨 앞에', run: () => togglePin(zone, key) }]),
+        //  #5319 곁칸의 앱 탭(첫 탭)은 «기본 앱» 으로 — 사람마다 늘 열려 있는 앱 한 벌(콘솔은 못 뺀다). 파일 탭 · 다른 칸은 종전 «탭 고정».
+        ...(derived ? [] : zone === 'side' && !isFileTab(key) && tabBase(key) === key
+          ? [{ label: isDefaultApp(key) ? '기본 앱에서 빼기' : '기본 앱으로 두기', icon: 'pin', off: key === MUST_APP,
+            hint: key === MUST_APP ? '콘솔은 늘 열려 있어요' : isDefaultApp(key) ? '' : '늘 열려 있고 닫히지 않아요', run: () => setDefaultApp(key, !isDefaultApp(key)) }]
+          : [{ label: pinned ? '고정 해제' : '탭 고정', icon: 'pin', hint: pinned ? '' : '아이콘만 남기고 맨 앞에', run: () => togglePin(zone, key) }]),
         //  하나 더 — 아래 칸의 옛 탭에서 불러도 새 탭은 곁칸에 선다(landZone).
         ...(d.multi && d.pickable !== false ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(landZone(zone), type); } }] : []),
         //  #4443(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») — 아래 칸으로는 보내지 않는다. 아래 칸에 남은 옛 탭은 곁칸으로 보낼 수 있다.
@@ -1527,7 +1561,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  only — #5319 독 아래 파일 탭 줄의 [n ▾]: 그 줄에 선 탭만(열어 둔 파일) 나열하고 단추에 그 수를 쓴다.
     const n = only ? zoneTabs(zone).filter(only).length : 0;
     const b = (only
-      ? el('button', { class: 'pn-tab-more pn-sub-list', type: 'button', title: '열어 둔 파일을 모두 봅니다 — 고르거나 닫아요', 'aria-label': `열어 둔 파일 ${n}개 모두 보기` },
+      ? el('button', { class: 'pn-tab-more pn-sub-list', type: 'button', title: '열어 둔 탭을 모두 봅니다 — 고르거나 닫아요', 'aria-label': `열어 둔 탭 ${n}개 모두 보기` },
         el('span', { class: 'pn-sub-n', text: String(n) }), pnIcon('chev', 'pn-i sm'))
       : el('button', { class: 'pn-tab-more', type: 'button', title: '이 칸에 열린 탭을 모두 봅니다', 'aria-label': '탭 모두 보기' }, pnIcon('chev', 'pn-i sm'))) as HTMLElement;
     b.onclick = () => {
@@ -1544,7 +1578,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           return el('div', { class: 'pn-pop-line' + (act === t ? ' on' : '') },
             el('button', { class: 'pn-pop-row', type: 'button', title: nm, onclick: () => { close(); activate(zone, t); } },
               pnIcon(glyphAt(tabIcon(t), 13), 'pn-i sm'),
-              el('span', { class: 'n' }, el('b', { text: nm }), el('span', { class: 'pn-fine', text: pinned ? '고정한 탭' : nm === d.name ? d.hint : d.name }))),
+              el('span', { class: 'n' }, el('b', { text: nm }), el('span', { class: 'pn-fine', text: isDefaultApp(t) ? '기본 앱 — 늘 열려 있어요' : pinned ? '고정한 탭' : nm === d.name ? d.hint : d.name }))),
             pinned ? null : el('button', {
               class: 'pn-pop-x', type: 'button', title: `${nm} 탭 닫기`, 'aria-label': `${nm} 닫기`,
               onclick: () => { removeTab(zone, t); if (zoneTabs(zone).some((k) => tabBase(k) !== 'sessions' && (!only || only(k)))) fill(); else close(); },
@@ -1559,7 +1593,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       };
       fill();
       close = anchoredPopover(b, el('div', { class: 'pn-pop' },
-        el('p', { class: 'pn-pop-h', text: only ? '열어 둔 파일이에요. 누르면 그 파일로 가고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' : '이 칸에 열린 탭이에요. 누르면 그 탭이 켜지고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' }),
+        el('p', { class: 'pn-pop-h', text: only ? '이 줄에 열린 탭이에요. 누르면 그 탭이 켜지고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' : '이 칸에 열린 탭이에요. 누르면 그 탭이 켜지고, × 를 누르면 목록은 그대로 둔 채 닫혀요.' }),
         listEl, foot));
     };
     return b;
@@ -1705,11 +1739,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     pane.root.classList.toggle('dock-top', top);
     //  #5319 독 아래 탭 줄(2026-11-05 — 뷰어를 여럿 띄우면 독의 [뷰어] 한 칸이 돌아가며 보여 줄 뿐 «그 파일» 을 골라 갈 수 없었다).
     //   독 = 앱(한 앱에 한 칸), 이 줄 = **파일**과 여럿 뜬 앱의 하나하나. 뷰어(파일) 탭은 하나라도 늘 이 줄에 서고 독에는 [뷰어] 칸을
-    //   세우지 않는다(dockKeys — 같은 것이 두 번 서지 않게, 그리고 곁칸이 좁을 때 독이 넘치지 않게). 다른 앱은 둘 이상 떴을 때만 이 줄에
-    //   선다(하나면 독 아이콘이 곧 그 탭이다). 켜진 앱과 무관하게 선다: 자료를 보다가 PDF 셋 중 둘째로 한 번에 간다(자료 ↔ 파일 오가기).
-    const counts = new Map<string, number>();
-    for (const k of list) counts.set(tabBase(k), (counts.get(tabBase(k)) ?? 0) + 1);
-    const inSub = (k: TabKey): boolean => tabBase(k) !== 'sessions' && (isFileTab(k) || (counts.get(tabBase(k)) ?? 0) >= 2);
+    //   세우지 않는다(dockKeys — 같은 것이 두 번 서지 않게, 그리고 곁칸이 좁을 때 독이 넘치지 않게). 켜진 앱과 무관하게 선다: 자료를
+    //   보다가 PDF 셋 중 둘째로 한 번에 간다(자료 ↔ 파일 오가기).
+    //  ★ 앱 탭도 **늘** 선다(원준 2026-11-06 «앱 탭도 항상 보이게») — 처음엔 둘 이상 뜬 앱만 세웠는데(하나면 독 아이콘이 곧 탭), 독을 눌렀는데
+    //   아래 줄이 비는 게 «안 뜬다» 로 읽혔다. 기본 앱(콘솔)이 늘 열려 있으니 이 줄은 빌 일이 없다.
+    const inSub = (k: TabKey): boolean => tabBase(k) !== 'sessions';
     const sub = top && list.some(inSub);
     pane.root.classList.toggle('dock-sub', sub);
     for (const [k, w] of tabNodes(pane)) w.classList.toggle('pn-sub-off', top && !inSub(k));
