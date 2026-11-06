@@ -72,6 +72,7 @@ import { livelyLogCapabilities } from "./lively-log.js";
 import { recallCapabilities } from "./recall.js";
 import { memberSecretCapabilities } from "./member-secret.js";
 import { awsCredentialCapabilities } from "./aws-credentials.js";
+import { nasFileCapabilities } from "./nas-files.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
 import { slackConnectCapabilities } from "./slack-connect.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
@@ -156,6 +157,7 @@ const all: Capability[] = [
   //  코어는 src/ee 를 정적으로 모르므로 여기 목록에 없고, EE 적재 시 addEnterpriseCapabilities 로 합류한다.
   ...memberSecretCapabilities, // P1(#746): per-user 백엔드 자격 vault — me_credential(s)(본인, 인증만)+org_credential(s)(통합, admin). 커넥터 툴이 resolveMemberSecret 로 해소. MCP+REST(/api/ui/{me,org}/credential*).
   ...awsCredentialCapabilities, // #746 파도2: AWS STS 브로커 — me_aws_credentials(role 가정→credential_process JSON, RoleSessionName=요청자). scope=null, MCP+REST(/api/ui/me/aws-credentials).
+  ...nasFileCapabilities, // NAS(FTP) 파일 도구 — 구성원 본인 FTP 자격으로만 연다(net/nas/nas-access.ts).
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
   ...notionConnectCapabilities,
