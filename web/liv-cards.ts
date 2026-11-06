@@ -31,6 +31,11 @@ export interface LivFinding {
 export interface LivSecretAsk {
   kind?: 'secret' | 'choice' | 'upload';
   collector_id?: number; field?: string; label?: string; why?: string; hint?: string;
+  /**
+   * 저장 위치 — **서버가 만든 문장**(본인 금고 대상 · liv-secret.ts vaultAskDest). label·why·hint 는 리브가 쓴 말이라
+   *  값이 갈 곳을 말해 줄 수 없다 — 그래서 카드는 이것을 리브의 말과 다른 칸에 보여 준다. 없으면(수집기 대상·옛 요청) 그 칸이 없다.
+   */
+  dest?: string;
   /** 객관식 — 사람은 고르기만 하고, 그 답이 통계 축(key)으로 쌓인다. */
   key?: string; question?: string; multi?: boolean; allow_other?: boolean;
   options?: Array<{ id: string; label: string; hint?: string }>;
@@ -547,6 +552,8 @@ function livSecretCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
 
   return el('div', { class: 'liv-ask' },
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })),
+    //  저장 위치는 리브의 말(label·why) 사이가 아니라 이름 바로 아래 제 칸에 — 긴 why 에 밀려 안 보이거나 리브의 문장과 섞이지 않게.
+    ask.dest ? el('div', { class: 'liv-ask-dest', text: ask.dest }) : null,
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
     el('div', { class: 'liv-ask-row' }, input),
     el('div', { class: 'liv-ask-row liv-ask-acts' }, livDismissBtn(hooks), save),

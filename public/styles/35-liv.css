@@ -115,6 +115,9 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-ask { border: 1px solid var(--mint-deep); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
 .liv-ask-head { font-size: 13px; line-height: 1.45; }
 .liv-ask-why { color: var(--ink-sub); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+/* 저장 위치(서버가 만든 문장) — 리브가 쓴 label·why 와 **다른 모양**이어야 한다. 사람이 값이 갈 곳을 리브의 말이 아니라 이 칸으로 안다. */
+.liv-ask-dest { color: var(--ink); font-size: 12px; line-height: 1.5; margin-top: 6px; padding: 6px 8px;
+  border-radius: 6px; background: var(--bg-tint); }
 /* 좁은 레일이라 칸과 버튼이 줄바꿈된다 — 칸이 먼저 한 줄을 다 쓰고 버튼이 아래로 흐른다. */
 .liv-ask-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 /* #5058 버튼 줄 — 물러서기([나중에])는 왼쪽, 확정([선택 완료]·[저장])은 오른쪽 끝. 흔한 대화상자 배치라 사람이 손을 오른쪽으로 뻗는다. */
