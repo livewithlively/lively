@@ -257,6 +257,19 @@ export async function getOpt(name: string, opt: string): Promise<string> {
   try { return (await tmux(["show-options", "-t", name, "-v", opt])).trim(); } catch { return ""; }
 }
 
+/**
+ * #5332 — «안 적혔다» 와 «못 읽었다» 를 가른다. getOpt 는 둘 다 "" 로 접는데, codex 모드 표식(@box_runtime)에선 그 둘의 뜻이 반대다:
+ *  안 적힘 = 표식 이전에 태어난 세션(그때 기본 app-server) · 못 읽음 = 세션이 없거나 중계가 잠깐 끊김(모른다).
+ *  tmux 는 안 적힌 사용자 옵션에 `invalid option: @x`(종료 1)를 낸다(실측 3.3a) — 그때만 "" 이고, 그 밖의 실패는 던진다.
+ */
+export async function getOptStrict(name: string, opt: string): Promise<string> {
+  try { return (await tmux(["show-options", "-t", name, "-v", opt])).trim(); }
+  catch (e) {
+    if (/invalid option|unknown option/i.test(String((e as { stderr?: unknown })?.stderr ?? ""))) return "";
+    throw e;
+  }
+}
+
 // ── 구조값(JSON)을 user option 에 싣는 단일 통로 (#1541) ──────────────────────
 // **왜 평문 JSON 을 그대로 안 쓰나** — Windows 네이티브 노드가 쓰는 멀티플렉서(psmux)는 옵션 값에서
 //  따옴표를 벗긴다. 실측(psmux 3.3.7, Windows Server 2022):

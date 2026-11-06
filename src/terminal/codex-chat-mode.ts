@@ -34,6 +34,13 @@ export type CodexModeStamp = string | null | undefined;
 /** 표식에 적는 값 — codex 세션만 쓴다(그 밖의 하네스는 "chat"|없음, #2439). */
 export const CODEX_STAMP_APP_SERVER = "app-server";
 export const CODEX_STAMP_TMUX = "terminal";
+/**
+ * #5332 — 표식을 **못 읽었다**(세션이 없음·중계가 잠깐 끊김 · 노드 스냅샷에 그 행이 아직 없음)는 뜻의 자리표시. tmux 에 적히는 값이 아니다.
+ *  «안 적힘»(= 표식 이전 세션 → app-server)과 갈라야 한다: 못 읽은 것을 app-server 로 짐작하면 **TUI 가 쥔 대화에 app-server 가
+ *  두 번째로 붙는다**(갓 복원된 노드 세션 — 스냅샷이 따라오기 전 몇 초 — 의 첫 말이 그렇게 샜다). tmux 갈래는 화면을 보고서야 치므로
+ *  (대기 판정이 셸 화면엔 ready 를 안 준다) 모를 때 그쪽이 안전하다.
+ */
+export const CODEX_STAMP_UNREAD = "unread";
 
 const envMode = (env: NodeJS.ProcessEnv): string => String(env.LIVELY_CODEX_CHAT || "").trim().toLowerCase();
 
@@ -69,6 +76,7 @@ export function codexChatMode(
   const stamp = String(o.stamp ?? "").trim().toLowerCase();
   if (stamp === CODEX_STAMP_APP_SERVER) return "app-server";
   if (stamp === CODEX_STAMP_TMUX) return "tmux";
+  if (stamp === CODEX_STAMP_UNREAD) return "tmux";
   //  "chat"(하네스 무관 대화 런타임, #2439)도 여기로 온다 — codex 축의 값이 아니므로 표식 없음과 같이 다룬다.
   return codexChatModeLegacy(env);
 }
@@ -77,4 +85,13 @@ export function codexChatMode(
 export function codexModeStampFor(harness: string, mode: CodexChatMode): string | undefined {
   if (String(harness || "") !== "codex") return undefined;
   return mode === "app-server" ? CODEX_STAMP_APP_SERVER : CODEX_STAMP_TMUX;
+}
+
+/**
+ * #5332 — **판이 없는**(복원 가능) codex 세션의 표식. 표식은 tmux 에만 있어 판이 내려가면 같이 사라지는데, 그 행을 표식 없음(=app-server)
+ *  으로 읽으면 화면이 그 세션을 «대화창 세션» 으로 그린다. 되살리면 createSession 이 **새 세션 규칙**(codexChatModeForNew)으로 띄우므로
+ *  그 값이 이 행의 진실이다.
+ */
+export function codexStampForRestorable(harness: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return codexModeStampFor(harness, codexChatModeForNew(env));
 }
