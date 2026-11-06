@@ -5,7 +5,9 @@
 //  기본(113)이면 아무것도 안 적는다 — 저장값은 «기본이 아닌 때» 만. 두 번 누르면 기본으로.
 import { el } from '../core.js';
 
-export const HEAD_H = { def: 113, min: 80, max: 150 } as const;
+export const HEAD_H = { def: 113, min: 52, max: 150 } as const;
+/** 이 아래로 끌면 큰 머리가 두 줄에서 **한 줄**이 된다(원준 2026-11-06 «2열 이하로 댕겨서 줄이려면 줄일 수 있도록») — .pn-wrap.hd-one(42-v2-panes.css). */
+export const ONE_ROW_BELOW = 80;
 const KEY = 'v2.head.h';
 const STEP = 4;   // 키보드 한 칸
 
@@ -18,6 +20,7 @@ export function savedHeadH(): number | null {
 export function applyHeadH(wrap: HTMLElement, h: number | null): void {
   if (h == null || h === HEAD_H.def) wrap.style.removeProperty('--pn-bighead-h');
   else wrap.style.setProperty('--pn-bighead-h', Math.round(h) + 'px');
+  wrap.classList.toggle('hd-one', (h ?? HEAD_H.def) < ONE_ROW_BELOW);
 }
 const clampH = (h: number): number => Math.round(Math.max(HEAD_H.min, Math.min(HEAD_H.max, h)));
 const currentH = (wrap: HTMLElement): number => parseFloat(getComputedStyle(wrap).getPropertyValue('--pn-bighead-h')) || HEAD_H.def;
