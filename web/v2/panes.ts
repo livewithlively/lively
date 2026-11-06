@@ -627,6 +627,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     p.bar.classList.toggle('has-more', p.tabs.scrollWidth > p.tabs.clientWidth + 1);
     edgeFade(p.tabs);
   }
+  /** #5319 파일 탭 줄 — 켜진 탭을 통째로 보이는 자리로(그 × 까지). 폭을 다시 잰 뒤에 맞춰야 한다(먼저 맞추면 폭이 바뀌며 어긋난다).
+   *  scrollIntoView 는 쓰지 않는다 — 넘침을 감춘 조상 칸까지 밀어 화면이 통째로 비뚤어진다. */
+  function revealSubOn(p: Pane): void {
+    const on = p.tabs.querySelector('.pn-tabwrap.on:not(.pn-sub-off)') as HTMLElement | null;
+    if (!on) return;
+    const r = on.getBoundingClientRect();
+    const b = p.tabs.getBoundingClientRect();
+    if (r.right > b.right - 2) p.tabs.scrollLeft += r.right - b.right + 2;
+    else if (r.left < b.left + 2) p.tabs.scrollLeft -= b.left - r.left + 2;
+  }
   /** #5319 옆으로 미는 줄(머리 줄 독 · 독 아래 탭 줄)의 잘린 쪽 끝을 흐린다 — 반쯤 잘린 이름표가 «깨진 것» 이 아니라 «더 있다» 로 읽히게. */
   function edgeFade(sc: HTMLElement): void {
     const max = sc.scrollWidth - sc.clientWidth;
@@ -675,6 +685,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
     p.bar.classList.toggle('compact', plan.mode === 'icons' && !sub);
     fitTitles(p);
+    if (sub) revealSubOn(p);
     syncMore(p);        // 접고도 남는 넘침만 '더 있다'(그늘)로 말한다
   }
   //  파일 이름은 **가운데**를 줄인다(파인더 문법) — 끝을 줄이면 「붙여넣은 그림 20260930-….png」 여럿이 모두 「붙여넣은 그…」
