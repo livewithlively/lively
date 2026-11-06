@@ -367,7 +367,9 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-wrap .pn-pane.dock-top:not(.dock-sub) > .pn-tabbar > .pn-dock-slot { align-items: center; }
 .pn-wrap .pn-pane.dock-top:not(.dock-sub) .pn-dock[data-home="top"] .pn-dock-shelf { align-items: center; }
 /* 파일 줄이 있는 때 — 독 줄 60(선 1 포함) + 파일 줄 53 = 113 */
-.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar { background-position: 0 59px, 0 0; }   /* 두 줄 사이 선 */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar { background-position: 0 59px, 0 0; row-gap: 0; }   /* 두 줄 사이 선 · 줄 사이 틈 없음(실측: gap 4 가 줄끊기 ::after 앞뒤로 두 번 들어가 67 이었다) */
 .pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { height: 59px; }
-.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { height: 59px; }
+/* [＋] 꼬리 — 단추(40) 가운데를 타일 가운데에: 파일 줄이 있으면 타일 가운데가 바닥에서 30(8 + 22) → 아래 여백 10. 없으면(세로 가운데) 타일이 줄 가운데보다 4 위 → 8. */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { box-sizing: border-box; height: 59px; align-items: flex-end; padding-bottom: 10px; }
+.pn-wrap .pn-pane.dock-top:not(.dock-sub) > .pn-tabbar > .pn-tabtail { box-sizing: border-box; align-items: center; padding-bottom: 8px; }
 

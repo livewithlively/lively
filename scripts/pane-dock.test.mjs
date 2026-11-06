@@ -351,7 +351,7 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
   check(/\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: none; \}/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-it \{ width: calc\(var\(--dk-s, 44px\) \+ 8px\); gap: 0; padding: 0 0 8px; \}/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ height: 59px; \}/.test(DOCK_CSS)
-    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-position: 0 59px, 0 0; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-position: 0 59px, 0 0; row-gap: 0; \}/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top:not\(\.dock-sub\) > \.pn-tabbar > \.pn-dock-slot \{ align-items: center; \}/.test(DOCK_CSS)
     && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;/.test(DOCK_CSS),
     "W16t #5319 A안 — 머리 줄 독 타일 44 · 이름표는 평소 숨기고 올리면 말풍선 · 독 줄 60 + 파일 줄 53 = 113(세션 머리줄) · 파일 줄 없으면 113 안 세로 가운데 · 옛 규칙은 지우지 않고 덮는다");
