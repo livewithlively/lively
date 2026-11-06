@@ -203,6 +203,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/node/task-mark-running.pg-test.mjs
+      # ④-d1c2 위탁 워크트리 회수의 «같은 작업 폴더를 쓰는 끝나지 않은 위탁» 판정 — 목으로는 못 보는 것: **판정 재료가 org_task 조회 한 문장이다**
+      #    (그 위탁 행 + queued·running 행, id 는 문자열). 배정 중인 위탁은 queued 이고 task_dir 이 비어 있어 subpath 로 잰다 — 행을 위탁 생애주기
+      #    (생성 → running → 실패·취소·재큐)로 만들어 «배정 중·running 이면 막고 · 끝나면 걷는다» 를 본다. 상태에서 queued 를 빼거나 자기 행을
+      #    빠뜨리면 빨개지는 것을 확인했다.
+      - name: 위탁 워크트리 회수 판정 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/node/task-worktree-reclaim.pg-test.mjs
       # ④-d1d 작업 컨테이너 작업 행(#4490) — 목으로는 못 보는 것: **동시 상한·대기열 상한이 테넌트 잠금 안의 셈이고, 일회용 부트 · 한 번만
       #    끝남 · 무응답 재확인 · 일시 실패 되돌리기 · 고른 뒤 끝난 행 넘기지 않기가 UPDATE 한 문장의 조건이다**. 병렬로 부르고(청/녹 두 슬롯)
       #    다른 트랜잭션으로 잠금·행을 쥐어 순서를 고정한 뒤 행을 되읽어 판정한다. 조건을 지우면 빨개지는 것을 확인했다.

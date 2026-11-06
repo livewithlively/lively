@@ -162,12 +162,13 @@ async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reac
 
 // 위탁 워크트리 회수 — 세션이 걷힌 **뒤에** 부른다(작업 중인 폴더를 지우지 않게). 중앙(게이트웨이 박스)만 한다:
 //  원격 노드의 워크트리는 그 PC 의 파일이라 중앙이 지울 통로가 없고, 그쪽은 `lively reclaim` 몫이다.
-//  지울지·말지는 reclaimTaskWorktree 가 정한다(미커밋·미푸시·남의 워크트리·작업 중 세션이면 남긴다).
+//  지울지·말지는 reclaimTaskWorktree 가 정한다(미커밋·미푸시·남의 워크트리·작업 중 세션·같은 폴더의 끝나지 않은 위탁이면 남긴다).
 //  호출부는 기다리지 않는다 — 큰 레포는 지우는 데 수십 초가 걸리고, 그동안 tick 의 다른 위탁 감시가 멈추면 안 된다.
 async function reclaimCentralWorktree(t: TaskWorktreeRef & { node_id: string | null }): Promise<void> {
   if (t.node_id !== CENTRAL_NODE_ID || !t.repo) return;
   const r = await reclaimTaskWorktree(t);
   if (r.removed) logger.info({ task: t.id, wt: r.worktree }, "위탁 워크트리 회수");
+  else if (r.undetermined) logger.warn({ task: t.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지 — 상태를 읽지 못했다");
   else if (r.reason) logger.info({ task: t.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지");
 }
 
