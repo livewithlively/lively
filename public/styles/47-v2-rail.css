@@ -38,9 +38,10 @@
    접힘 = **스택 타일**. 슬랙 좌상단의 그것: 타일 한 장이 앞에, 뒤에 한 장이 아래로 살짝 겹쳐 '여럿'을 말한다.
    뒤 타일은 잉크 채널 틴트라 라이트에선 어둡게, 다크에선 밝게 — 어느 테마에서든 캔버스보다 한 톤 뜬다. */
 .v2-rail-ws { display: flex; justify-content: center; padding: 0 0 6px; }
-.v2-rail-stack { position: relative; display: inline-grid; place-items: start center; width: 44px; height: 46px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 12px; }
-.v2-rail-stack .v2-wscard-big { position: relative; z-index: 1; width: 36px; height: 36px; border-radius: 10px; font-size: 16px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .18); transition: transform 120ms ease; }
-.v2-rail-stack::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 3px; height: 13px; border-radius: 0 0 9px 9px; background: var(--rail-on); }
+/* #5319(원준 2026-11-06 «사이즈 좀 작다») — 타일 36 → 40 · 바깥 44×46 → 48×50. 레일 칸(63×58 · 아이콘 24) 사이에서 점처럼 떠 보였다. */
+.v2-rail-stack { position: relative; display: inline-grid; place-items: start center; width: 48px; height: 50px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 12px; }
+.v2-rail-stack .v2-wscard-big { position: relative; z-index: 1; width: 40px; height: 40px; border-radius: 11px; font-size: 18px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .18); transition: transform 120ms ease; }
+.v2-rail-stack::after { content: ''; position: absolute; left: 9px; right: 9px; bottom: 3px; height: 14px; border-radius: 0 0 10px 10px; background: var(--rail-on); }
 .v2-rail-stack:hover .v2-wscard-big { transform: translateY(-1px); }
 .v2-rail-stack:focus-visible { outline: 2px solid var(--rail-fg-on); outline-offset: 2px; }
 /* 펼침 = switcher.ts 의 문패 카드 그대로(부품을 두 벌로 두지 않는다). */
@@ -275,7 +276,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-rail-avaw { position: relative; display: inline-flex; flex: none; line-height: 0; }
 .v2-rail-avaw::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); border: 2px solid var(--rail-bg); }
 .v2-rail-me .v2-rail-t { font-size: 13px; font-weight: 600; color: var(--rail-fg); }
-.v2-rail.closed .v2-rail-me .v2-ava { width: 32px; height: 32px; font-size: 13px; }
+.v2-rail.closed .v2-rail-me .v2-ava { width: 36px; height: 36px; font-size: 14px; }   /* #5319 32 → 36(원준 2026-11-06 «사이즈 좀 작다») */
 .v2-rail.closed .v2-rail-me .v2-rail-t { display: none; }
 .v2-rail.closed .v2-rail-me { padding: 6px 2px; }
 
