@@ -4430,6 +4430,40 @@ function openMyPrompts() {
 // ── 부팅 ──
 function gate(msg) { document.getElementById('root').replaceChildren(el('div', { class: 'gate-msg', text: msg })); }
 
+// ── 첫 확인(/api/ui/me)이 늦거나 닿지 않을 때 (#5398) ──
+//  «연결 준비 중…» 은 이 확인의 답을 기다리는 동안만 뜬다. 종전엔 시간 상한이 없어서, 답이 안 오면 사람은 이유도 모른 채
+//   그 글자만 봤다(2026-11-02 상민님 신고). 가장 흔한 이유는 평문 http(HTTP/1.1) 주소의 **브라우저 연결 한도**다 — 크롬은
+//   같은 주소에 연결을 6개까지만 열고 그 주소의 모든 탭이 이 한도를 함께 쓴다(원인 지식 http1-6conn-limit-terminal-gate-stuck-5267).
+//  ⚠ 늦다고 요청을 끊지 않는다: 끊고 다시 보내면 대기열 맨 뒤로 간다. 붙든 채로 이유만 보여 주고, 답이 오면(다른 탭을 닫아
+//   자리가 나면) 그대로 이어서 화면을 세운다.
+export const ME_SLOW_MS = 8000;
+
+/** (판정) 첫 확인이 늦을 때 보여 줄 제목 · 설명. http 면 연결 한도를, 아니면 서버 응답을 말한다. */
+export function slowGateCopy(protocol: string): { title: string; body: string } {
+  if (String(protocol) === 'http:') {
+    return {
+      title: '연결을 기다리고 있어요',
+      body: '이 주소는 http 라서 브라우저가 같은 주소에 연결을 6개까지만 열어요. 라이블리 탭이 여러 개 열려 있으면 그 탭들이 연결을 모두 쓰고 있을 수 있어요. 쓰지 않는 라이블리 탭을 닫으면 저절로 이어져요.',
+    };
+  }
+  return { title: '서버 응답을 기다리고 있어요', body: '응답이 오면 저절로 이어져요. 계속 이 화면이면 다시 시도해 주세요.' };
+}
+
+function gateCard(icon: string, title: string, body: string) {
+  document.getElementById('root').replaceChildren(
+    el('div', { class: 'gate-card' },
+      el('div', { class: 'gate-icon', text: icon }),
+      el('h2', { class: 'gate-title', text: title }),
+      el('p', { class: 'gate-sub', text: body }),
+      el('button', { class: 'gate-retry', text: '다시 시도', onclick: () => location.reload() })));
+}
+function gateSlow() { const c = slowGateCopy(location.protocol); gateCard('⏳', c.title, c.body); }
+// 로그인 문제가 아니다 — 네트워크가 끊겼거나 서버가 오류로 답했다. 종전엔 이것도 «로그인이 필요해요» 로 보였다.
+function gateUnreachable(status?: number) {
+  gateCard('⚠️', '서버에 닿지 못했어요',
+    '네트워크나 서버 상태를 확인한 뒤 다시 시도해 주세요.' + (status ? ` (응답 ${status})` : ''));
+}
+
 // 미인증 진입 안내 — 메인 UI 로그인은 이메일+비밀번호(세션 쿠키)다. 이 탭은 그대로 두고, 새 탭에서 로그인한 뒤
 //  '다시 시도'를 누르면 같은 origin 세션 쿠키가 공유되어 곧바로 연결된다(세션 주소를 잃지 않게 새 탭으로 연다).
 function gateLogin() {
@@ -4648,8 +4682,18 @@ export async function boot() {
   // 인증은 '토큰 유무'가 아니라 서버에 물어 확인한다 — 세션 쿠키(웹 로그인)·bearer(에이전트) 모두 /api/ui/me 가 수용.
   //  메인 UI 가 이메일+비번 로그인(세션 쿠키)로 바뀌며 localStorage 토큰이 없는 게 정상이 됐다(옛 토큰 게이트가 오인 차단했다).
   gate('연결 준비 중…');
-  try { await api('/api/ui/me'); }
-  catch (_) { gateLogin(); return; }
+  //  #5398 — 답이 늦으면 이유를 보여 준다(위 ME_SLOW_MS 머리말). 요청은 끊지 않는다 — 답이 오면 아래가 그대로 이어서 세운다.
+  //   로그인 카드는 **인증이 거절됐을 때만**(401 · 403) 띄운다. 끊김 · 서버 오류까지 «로그인이 필요해요» 로 말하면 엉뚱한 일을 시킨다.
+  const slow = setTimeout(gateSlow, ME_SLOW_MS);
+  let me: Response | null = null;
+  try { me = await fetchAuth('/api/ui/me'); }
+  catch (_) { me = null; }
+  finally { clearTimeout(slow); }
+  //  본문은 끝까지 읽어 둔다 — 덜 읽은 응답은 그 연결을 다음 요청에 못 넘긴다(바로 그 연결 한도가 이 자리의 문제다).
+  if (me) void me.text().catch(() => '');
+  if (!me) { gateUnreachable(); return; }
+  if (me.status === 401 || me.status === 403) { gateLogin(); return; }
+  if (!me.ok) { gateUnreachable(me.status); return; }
 
   // 셸 구성
   explorerEl = el('aside', { id: 'explorer' },

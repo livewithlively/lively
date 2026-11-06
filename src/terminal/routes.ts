@@ -1122,7 +1122,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   app.get("/api/ui/terminal/sessions/:id/codex-chat/events", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
-    const { onChatEvent, pendingApprovals, codexChatStatus } = await import("./harness-io/codex-chat-runtime.js");
+    const { onChatEvent, codexConnectHead } = await import("./harness-io/codex-chat-runtime.js");
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
@@ -1131,9 +1131,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     });
     const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
     // 붙자마자 지금 상태를 준다 — 새로고침에 승인이 사라지면 그 턴은 영영 선다(TTL 까지 기다렸다 거부된다).
-    // running 은 **지금 턴이 도나**다 — 런타임이 있나(alive)가 아니다. 섞으면 조용한 세션이 영영 '작업 중'이 된다.
-    send({ kind: "hello", running: !!codexChatStatus(req.params.id)?.running });
-    for (const a of pendingApprovals(req.params.id)) send({ kind: "approval", ...a });
+    //  #5398 — 화면은 숨으면 이 연결을 끊는다(web/session-codex-live.ts ★). 머리(codexConnectHead)가 hello(도는 중 · 걸린 승인
+    //   id 전부) · 걸린 승인 · 마지막 사용량을 준다 — 끊긴 동안 흐른 것을 화면이 여기서 따라잡는다.
+    for (const e of codexConnectHead(req.params.id)) send(e);
     const off = onChatEvent(req.params.id, send);
     const beat = setInterval(() => { try { res.write(": beat\n\n"); } catch { /* */ } }, 25_000);
     req.on("close", () => { off(); clearInterval(beat); });
@@ -1147,7 +1147,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   app.get("/api/ui/terminal/sessions/:id/events", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(404, SESSION_NOT_FOUND);
-    const { onSessionEvent, pendingAsks } = await import("./harness-io/runtime-bus.js");
+    const { onSessionEvent, connectHead } = await import("./harness-io/runtime-bus.js");
     res.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store",
@@ -1155,8 +1155,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       "x-accel-buffering": "no",              // 프록시 버퍼링 금지 — 조각이 뭉쳐 오면 스트리밍이 아니다
     });
     const send = (e: unknown): void => { try { res.write(`data: ${JSON.stringify(e)}\n\n`); } catch { /* 이미 닫힘 */ } };
-    //  붙자마자 **걸려 있는 물음**을 다시 준다 — 새로고침에 승인 카드가 사라지면 그 턴은 TTL 까지 선다.
-    for (const a of pendingAsks(req.params.id)) send({ t: "permission.asked", ask: a.ask });
+    //  ★ #5398 — 붙는 순간 **지금 상태를 전부** 준다(runtime-bus connectHead — 작업 목록 · 사실 · 사용량 · 걸린 물음과 그 전체 목록).
+    //   화면은 숨으면 이 연결을 끊는다(web/session-events.ts ★ — 평문 http 의 6연결 한도). 그 사이 흐른 것은 못 받았으니
+    //   다시 붙는 이 자리가 곧 재동기의 자리다. 새로 연 화면도 같은 길로 그린다.
+    //  **걸려 있는 물음**은 종전처럼 다시 준다 — 새로고침에 승인 카드가 사라지면 그 턴은 TTL 까지 선다.
+    for (const e of connectHead(req.params.id)) send(e);
     const off = onSessionEvent(req.params.id, send);
     //  ★ #3699 — 이 구독이 대화 파일 감시의 **참조 하나**를 쥔다(세션당 1개를 탭들이 공유한다).
     //   여기서 잡는 이유: 감시는 «보는 사람이 있을 때만» 돌아야 하고, 그 사실을 아는 곳이 이 통로다.

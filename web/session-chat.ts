@@ -61,6 +61,7 @@ import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';  
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
+import { watchShown } from './lib/shown.js';   // #5398 — 이 화면이 지금 보이나(숨은 탭 · 셸이 숨긴 세션) — 다시 보이면 따라잡는다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
@@ -3191,6 +3192,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  ★ 입력칸을 함께 넘긴다 — 슬래시 자동완성이 붙을 자리다(터미널의 `/` 목록에 해당).
     tasksDock = mountSessionTasks(liveDock, {
       sessionId: target.id, input: view.input,
+      anchor: wrap,   // #5398 — 이 세션 화면이 안 보이면(숨은 탭 · 셸이 숨긴 세션) 상태 통로를 끊어 둔다
       //  서버가 «이 하네스는 웹에서 이건 못 한다» 를 실어 준다(coverage 표) — 화면이 그걸 그대로 말한다.
       terminalOnly: (target.raw as any)?.terminalOnly ?? [],
       //  ★ **승인은 한 층만 그린다.** codex 는 자기 실시간 층(mountCodexLive)이 이미 승인 카드를
@@ -3208,6 +3210,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     void loginGate();
     live = mountCodexLive({
       sessionId: target.id, view, dock: liveDock,
+      anchor: wrap,   // #5398 — 이 세션 화면이 안 보이면 실시간 층의 스트림도 끊어 둔다(다시 보이면 hello 로 따라잡는다)
       liveTurn: () => cur?.t ?? null,
       poke: () => pokePoll(),
       onSettled: () => {
@@ -3239,21 +3242,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ⚠ **하네스·모드를 안 가리고 연다.** 폴링이 노드를 갉는 주범이 바로 터미널 모드로 열어 둔 박스
   //   세션이고(#3656 이 그 절반만 덜어냈다), 그 세션엔 작업 도크(runtimeMode==='chat')가 안 붙는다.
   //   연결은 세션당 한 벌이라(session-events.ts) 도크와 함께 열려도 소켓은 하나다.
+  //  #5398 — 이 화면이 안 보이면(숨은 탭 · 셸이 숨긴 세션) 연결을 끊어 둔다(session-events.ts ★). 다시 붙는 순간 서버가
+  //   감시 상태(transcript.watch)를 첫머리에 다시 준다 — 아래가 그것을 «끊긴 동안 자란 것을 지금 따라잡는다» 로 읽는다.
   const offEvents = onSessionEvents(target.id, (ev) => {
     const e = ev as { t?: string; size?: number; live?: boolean };
     if (e?.t === 'transcript.grew') { pokePoll(); return; }
     if (e?.t === 'outbox.typed') { onOutboxTyped(String((ev as { head?: unknown }).head ?? '')); return; }   // #4794 — 서버가 말을 다 쳤다
     if (e?.t === 'transcript.watch') {
       const next = e.live === true;
-      if (next === watchLive) return;
+      const changed = next !== watchLive;
       watchLive = next;
-      //  주기가 바뀌었으니 지금 걸린 타이머를 다시 건다. 켜질 땐 한 번 따라잡고(놓친 델타가 있을 수 있다),
-      //   꺼질 땐 촘촘한 주기로 곧바로 되돌아간다 — 통보가 끊긴 채 30초를 기다리면 안 된다.
+      //  ★ #5398 — 켜져 있다는 말은 **붙을 때마다** 온다(연결 첫머리). 값이 같아도 한 번 따라잡는다: 끊겨 있던 동안
+      //   (숨은 화면 · 재접속)의 `transcript.grew` 는 받지 못했고, 그대로 두면 안전망 주기(30초)까지 화면이 묵는다.
+      //   pokePoll 은 몰아치면 한 번으로 합치고, 읽은 뒤의 주기는 schedule() 이 바뀐 watchLive 로 정한다.
+      if (next) { pokePoll(); return; }
+      if (!changed) return;
+      //  꺼졌다 — 촘촘한 주기로 곧바로 되돌아간다(통보가 끊긴 채 30초를 기다리면 안 된다). 걸린 타이머를 다시 건다.
       if (pollTimer) clearTimeout(pollTimer);
       poking = false;
-      if (next) pokePoll(); else schedule();
+      schedule();
     }
-  });
+  }, { anchor: wrap });
+  //  #5398 — 화면이 다시 보이는 순간 한 번 읽는다. 숨은 탭은 폴을 건너뛰므로(poll 의 document.hidden) 그대로 두면 다음 주기까지
+  //   묵는다. 감시가 켜진 세션은 위 transcript.watch 도 같은 일을 하지만, 못 미는 세션(노드 · 못 읽는 하네스)은 이것뿐이다.
+  const shownWatch = watchShown(wrap, (shown) => { if (shown) pokePoll(); });
 
   // 기본 화면 — 코덱스를 포함해 터미널이 기본이다. Codex app-server는 대화·승인 층을 계속 제공하되,
   //  사용자가 보는 첫 화면을 대화로 강제하지 않는다. 나머지 대화 런타임·화면이 대화를 요청한 자리의 예외는 chatHome()에 둔다.
@@ -3352,7 +3364,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     viewMode() { return viewNow(); },
     reshown() { reshown(); },
     revivedHere() { return !destroyed && revivedAt > 0 && Date.now() - revivedAt < REVIVE_TRUST_MS && !goneByFrame; },
-    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); shownWatch.stop(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 
