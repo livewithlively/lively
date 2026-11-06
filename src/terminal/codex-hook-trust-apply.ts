@@ -30,7 +30,9 @@ export function hooksListCmd(codexHome: string, bin = "codex"): string {
   const ready = JSON.stringify({ jsonrpc: "2.0", method: "initialized", params: {} });
   const list = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "hooks/list", params: {} });
   const q = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
-  return `(printf '%s\\n' ${q(init)}; sleep 1; printf '%s\\n%s\\n' ${q(ready)} ${q(list)}; sleep 3) | CODEX_HOME=${q(codexHome)} ${bin} app-server 2>/dev/null`;
+  //  #5332 — 답을 기다리는 창을 3초 → 7초. 0.166.0 은 hooks/list 에 약 4.3초 걸려 답한다(실측) — 3초면 표준입력이 먼저 닫혀 서버가 답 없이
+  //   끝나고, 빈손을 «물어봤다» 로 적어 «Hooks need review» 가 세션마다 돌아왔다. 이 조회는 훅 묶음이 바뀐 첫 세션에만 돈다(지문).
+  return `(printf '%s\\n' ${q(init)}; sleep 1; printf '%s\\n%s\\n' ${q(ready)} ${q(list)}; sleep 7) | CODEX_HOME=${q(codexHome)} ${bin} app-server 2>/dev/null`;
 }
 
 /**
@@ -60,6 +62,14 @@ export function parseHooksList(stdout: string): CodexHookRow[] {
 
 const sha = (s: string): string => createHash("sha256").update(s).digest("hex");
 
+/** #5332 — 빈손 조회를 다시 해 볼 횟수(같은 훅 묶음당). */
+export const HOOK_TRUST_RETRIES = 3;
+/** 표식 파일에서 이 지문의 재시도 횟수를 읽는다(순수) — `<지문> retry <n>` 이 아니면 0. */
+export function hookTrustRetries(prev: string, fp: string): number {
+  const m = /^(\S+) retry (\d+)\s*$/.exec(String(prev || "").trim());
+  return m && m[1] === fp ? Number(m[2]) || 0 : 0;
+}
+
 /**
  * 우리가 심은 훅을 신뢰로 표시한다. **비치명** — 못 하면 false 를 돌려주고 세션은 그대로 뜬다.
  *
@@ -77,7 +87,12 @@ export async function ensureCodexHooksTrusted(o: {
     const stamp = path.join(o.codexHome, HOOK_TRUST_STAMP);
     const prev = (await o.io.read(stamp).catch(() => null)) ?? "";
     if (prev.trim() === fp) return false;                       // 같은 묶음을 이미 물어봤다 — app-server 를 띄우지 않는다
+    //  #5332 — 빈손(답이 없었다 — 시간 초과·서버 기동 실패)은 «물어봤다» 가 아니다. 지문 대신 재시도 표시를 남기고 다음 세션에서
+    //   다시 묻는다 — 단 HOOK_TRUST_RETRIES 번까지(로그인 전 등 늘 빈손인 자리에서 세션마다 몇 초씩 물지 않게).
+    const tried = hookTrustRetries(prev, fp);
+    if (tried >= HOOK_TRUST_RETRIES) return false;
     const rows = parseHooksList(await o.sh(hooksListCmd(o.codexHome, o.bin)));
+    if (!rows.length) { await o.io.write(stamp, `${fp} retry ${tried + 1}\n`); return false; }
     const patch = planCodexHookTrustPatch(current, rows, o.configFile);
     if (patch.write) await o.io.write(o.configFile, patch.text);
     //  ⚠ 지문은 **물어본 사실**을 남기는 것이다 — 고칠 게 없었어도(이미 신뢰됨) 남긴다. 안 그러면 매번 다시 띄운다.

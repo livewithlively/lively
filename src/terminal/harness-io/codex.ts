@@ -155,9 +155,26 @@ export function parseCodex(text: string, state: ParseState): { lines: ChatLine[]
       }
       // reasoning(암호화) 등 → 버린다
     }
-    // session_meta · turn_context · world_state 등 → 버린다
+    //  #5332 — turn_context 는 **매 턴 머리**에 그 턴이 실제로 쓰는 모델·추론강도를 싣는다(실측 0.157.1·0.166.0: payload.model ·
+    //   payload.effort). 0.157.1 은 thread_settings_applied 를 세션 시작에 안 적어서(실측 — 바꿀 때만 한 번), 이것을 안 읽으면
+    //   «지금» 칸이 띄울 때 플래그로만 남았다. 이어 열기로 플래그가 바뀐 뒤에도 옛 thread_settings_applied 가 아니라 이 값이 이긴다.
+    if (top === "turn_context") {
+      const m = p.model, e = p.effort;
+      if (typeof m === "string" && m) st.model = m;
+      if (typeof e === "string" && e) st.effort = e;
+    }
+    // session_meta · world_state 등 → 버린다
   }
   return { lines, state: st };
+}
+
+/** 꼬리에서 **맨 아래** 커서 줄(`›`·`❯`·`>` 로 시작)이 번호 메뉴 줄인가(#5332 — screen 머리말). */
+function numberedCursorLast(tail: readonly string[]): boolean {
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const m = /^\s*[›❯>](?:\s+(.*))?$/.exec(String(tail[i] ?? ""));
+    if (m) return /^\d+[.)]/.test(String(m[1] ?? "").trim());
+  }
+  return false;
 }
 
 export const codexIo: HarnessSessionAdapter = {
@@ -195,7 +212,10 @@ export const codexIo: HarnessSessionAdapter = {
     //   0.157.0 «Trust this folder?») 커서가 번호 앞에 서는 모양은 남는다. 컴포저는 번호 없이 `› ` 뿐이라 갈린다.
     //   종전엔 꼬리 문구만 봤고, 0.157.0 의 신뢰 창("enter continue · esc back")이 그 목록에 없어 **ready 로 읽혔다**
     //   — 그 화면에 첫 지시를 넣으면 대화상자가 삼킨다(실측 2026-09-25).
-    if (/^\s*[›❯>]\s*\d+[.)]/m.test(s)) return "dialog";
+    //  #5332 — 단 **맨 아래 커서 줄**이 번호일 때만이다. 인라인 화면(--no-alt-screen)은 지난 사람 말도 `› …` 로 그려 꼬리에
+    //   남긴다(실측 0.157.1·0.166.0) — «1. 이거 해 줘» 로 시작한 말이 꼬리에 있으면 종전 정규식은 대화상자로 읽어 아웃박스를
+    //   세웠다(클로드의 #853 과 같은 함정). 대화상자가 떠 있으면 입력칸 대신 그 메뉴가 맨 아래 커서 줄이다.
+    if (numberedCursorLast(tail)) return "dialog";
     if (/press (enter|t) to (continue|confirm|review|trust)|esc to (cancel|close|go back)|enter continue|Would you like to run|Trust this folder|Hooks need review/i.test(s)) return "dialog";
     if (/esc to interrupt/i.test(s)) return "busy";
     if (/^\s*›/m.test(s)) return "ready";
@@ -214,11 +234,20 @@ export const codexIo: HarnessSessionAdapter = {
   //      앱의 Ctrl+C 복사는 세션이 도는 기계의 클립보드로 가고, 빈 입력칸의 Ctrl+C 는 codex 를 끈다. ⌘C→^C 다리를 붙이지 않는 이유).
   //   · choiceNeedsEnter=true — 선택지 위에서 '1' 만 보내면 커서조차 안 움직인다. Enter 까지 가야 골라진다
   //     (claude 와 반대다 — 폰 키 줄이 이 값을 보고 Enter 를 붙인다).
-  //   · pastePlaceholder=false — 여러 줄 붙여넣기는 접히지 않고 입력칸에 그대로 펼쳐진다(«+N lines» 표식이 없다).
+  //   · pastePlaceholder=true — #5332 실측(0.157.1·0.166.0): 1000자 넘는 붙여넣기는 «[Pasted Content N chars]» 로 접힌다
+  //     (종전 false 는 짧은 여러 줄만 본 값이었다 — 긴 첫 지시를 자동 전송하면 «안 들어갔다» 로 보고 다시 붙였다).
+  //     짧은 붙여넣기는 그대로 펼쳐진다 — 화면은 본문 대조와 표식을 둘 다 본다.
+  //   · copyBridge=false — codex 의 Ctrl+C 는 복사가 아니다: 입력칸이 차 있으면 지우고, 비었으면 **codex 를 끈다**.
+  //     appMouse=false 라 다리가 설 일이 없어야 하지만, 전체화면으로 뜬 옛 세션 등 마우스 보고가 켜진 화면에서도 ^C 를 안 보낸다.
+  //   · pasteBurst=true — #5332 실측(0.157.1·0.166.0, tmux 한 묶음으로 두 번 쓰기): 글 뒤에 CR 이 같은 읽힘에 붙으면 제출이
+  //     아니라 **줄바꿈**이 된다(붙여넣기 뭉치 판정). 1500자 맨 글은 0.157.1 에서 1024자 «[Pasted Content 1024 chars]» 로
+  //     잘려 접혔다. 괄호 표지로 감싼 글은 한 줄이든 여러 줄이든 그대로 들어가고 뒤따르는 CR 은 곧바로 제출됐다.
+  //   · permModes=false — 클로드의 Shift+Tab 권한 모드가 없다(폰 «모드» 단추를 감춘다).
   //   · startDialogRe — 부팅 길목에 대화상자가 **셋**이다: 폴더 신뢰 · 훅 검토 · 업데이트 알림. 셋 다 "Press enter to …"
   //     꼬리를 달고 번호 메뉴('› 1. …')를 쓴다. 이 위에서 Enter 를 치면 그 Enter 를 대화상자가 먹는다.
   term: {
-    appMouse: false, choiceNeedsEnter: true, pastePlaceholder: false,
+    appMouse: false, choiceNeedsEnter: true, pastePlaceholder: true,
+    copyBridge: false, pasteBurst: true, permModes: false,
     //  판마다 문구가 바뀌므로(0.153.4 → 0.157.0 에서 신뢰 창이 통째로 다시 쓰였다) **번호 메뉴**를 첫 줄에 둔다.
     startDialogRe: /›\s*\d+[.)]\s|Do you trust the contents|Trust this folder|Folder access|Hooks need review|Update available|Press enter to (continue|confirm)|enter continue/i,
   },
