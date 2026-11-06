@@ -5,9 +5,9 @@
 //  · 로그인: 구성원 본인 칸 kind=nas_ftp, secret=FTP 비밀번호, meta {username}. 통합(게이트웨이) 폴백 없음 —
 //    남의 계정이나 공용 계정으로 열리면 «본인 권한 범위 안에서만 본다»는 이 기능의 전제가 깨진다.
 import { getMemberSecret, resolveMemberSecret, GATEWAY_OWNER } from "../../org/credentials/member-secret-store.js";
-import { FtpSession } from "../ftp/ftp-client.js";
+import { FtpSession, FtpError } from "../ftp/ftp-client.js";
 import { encodeRawPath } from "../ftp/ftp-list.js";
-import { NasIndexCache } from "./nas-index.js";
+import { NasIndexCache, INDEX_MAX_CONCURRENT_BUILDS } from "./nas-index.js";
 import { currentTenant } from "../../org/tenant-context.js";
 
 export const NAS_SERVER_KIND = "nas_ftp_server";
@@ -54,8 +54,28 @@ export async function openNasSession(memberId: string): Promise<{ session: FtpSe
   return { session, username: login.username };
 }
 
-/** 프로세스 하나에 하나 — 구성원별 파일명 색인. */
-export const nasIndexCache = new NasIndexCache();
+// ── 오류 분류 ────────────────────────────────────────────────────────────────────────────────
+
+export interface NasErrorReply {
+  status: number;
+  /** AI 세션·사람에게 보여도 되는 고정 문구. 원문(소켓 오류의 사설 IP·포트, 서버 응답문, DNS 이름)은 담지 않는다. */
+  message: string;
+  /** 사람이 고칠 수 있는 예상된 거절(설정·자격·폴더) — 원문을 로그로 남기지 않는다. */
+  expected: boolean;
+}
+
+/** 오류 → 내보낼 상태·문구. 도구 응답(nas-files)과 색인 상태(nasIndexCache 의 last_error)가 같은 분류를 쓴다. */
+export function nasErrorReply(e: unknown): NasErrorReply {
+  if (e instanceof NasConfigError) return { status: e.status, message: e.message, expected: true };
+  if (e instanceof FtpError && e.code === 530) {
+    return { status: 403, message: "NAS 로그인 실패 — 내 nas_ftp 자격의 아이디·비밀번호를 확인하세요(me_credential_set)", expected: true };
+  }
+  if (e instanceof FtpError && e.code === 550) return { status: 404, message: "NAS 에 그 폴더가 없거나 내 계정으로 열 수 없습니다", expected: true };
+  return { status: 502, message: "NAS 에 접속하지 못했습니다 — 잠시 뒤 다시 시도하세요", expected: false };
+}
+
+/** 프로세스 하나에 하나 — 구성원별 파일명 색인. 실패는 분류 문구로만 남긴다(nasErrorReply). */
+export const nasIndexCache = new NasIndexCache(Date.now, INDEX_MAX_CONCURRENT_BUILDS, (e) => nasErrorReply(e).message);
 
 // 테넌트도 키에 넣는다 — 중앙 모드에서 구성원 id 공간이 테넌트마다 따로일 수 있다(같은 프로세스 캐시를 나눠 쓴다).
 export const nasIndexKey = (memberId: string, username: string): string => `${currentTenant()?.id ?? "_"}\u0000${memberId}\u0000${username}`;

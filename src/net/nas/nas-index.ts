@@ -109,8 +109,16 @@ export interface IndexState {
   builtAt: number | null;
   result: CrawlResult | null;
   building: Promise<CrawlResult> | null;
+  /** 마지막 실패를 errorText 로 분류한 문구(원문 아님). nas_find 응답의 last_error 로 그대로 나간다. */
   error: string | null;
 }
+
+/**
+ * 실패 → 색인 상태에 남길 문구. 원문(소켓 오류의 사설 IP·포트, FTP 서버 응답문)은 상태를 거쳐 AI 응답에 실리므로
+ *  여기서 걸러야 한다. 기본값은 아무것도 옮기지 않는 고정 문구다 — 분류기를 안 준 캐시도 원문을 흘리지 않게.
+ */
+export type IndexErrorText = (e: unknown) => string;
+const NO_RAW_ERROR: IndexErrorText = () => "색인을 만들지 못했습니다";
 
 export const INDEX_TTL_MS = 12 * 60 * 60_000;
 /** 동시에 들고 있는 구성원 색인 수 — 넘으면 가장 오래된 것을 버린다(메모리 상한). */
@@ -126,7 +134,11 @@ export class NasIndexCache {
   private states = new Map<string, IndexState>();
   private running = 0;
   private queue: Array<() => void> = [];
-  constructor(private readonly now: () => number = Date.now, private readonly maxConcurrent = INDEX_MAX_CONCURRENT_BUILDS) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly maxConcurrent = INDEX_MAX_CONCURRENT_BUILDS,
+    private readonly errorText: IndexErrorText = NO_RAW_ERROR,
+  ) {}
 
   private async slot<T>(fn: () => Promise<T>): Promise<T> {
     if (this.running >= this.maxConcurrent) await new Promise<void>((r) => this.queue.push(r));
@@ -158,7 +170,7 @@ export class NasIndexCache {
     if (s.building) return s.building;
     const p = this.slot(run).then(
       (r) => { s.result = r; s.builtAt = this.now(); s.error = null; return r; },
-      (e: unknown) => { s.error = e instanceof Error ? e.message : String(e); throw e; },
+      (e: unknown) => { s.error = this.errorText(e); throw e; },
     ).finally(() => { s.building = null; });
     p.catch(() => {}); // 기다리는 쪽이 없을 수 있다(첫 호출이 시간 안에 못 받고 돌아간 경우)
     s.building = p;

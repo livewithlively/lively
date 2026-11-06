@@ -6,26 +6,24 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { logger } from "../log.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { FtpError } from "../net/ftp/ftp-client.js";
 import { parseListing, displayPath, encodeRawPath, decodeRawPath, isSafeRawPath } from "../net/ftp/ftp-list.js";
 import { crawl, searchEntries, type NasEntry, type CrawlResult } from "../net/nas/nas-index.js";
-import { NasConfigError, openNasSession, resolveNasLogin, resolveNasServer, nasIndexCache, nasIndexKey, nasDownloadPath } from "../net/nas/nas-access.js";
+import { nasErrorReply, openNasSession, resolveNasLogin, resolveNasServer, nasIndexCache, nasIndexKey, nasDownloadPath } from "../net/nas/nas-access.js";
 
 /** 첫 색인을 기다리는 최대 시간. 넘으면 «만드는 중»으로 답하고 색인은 뒤에서 계속 만든다(MCP 호출을 오래 붙잡지 않게). */
 export const FIRST_INDEX_WAIT_MS = 20_000;
 
 const BODY_NOTE = "파일 본문은 이 도구로 읽지 않습니다. download_url 은 사람이 라이블리에 로그인한 브라우저에서 열어 내려받습니다.";
 
-// 소켓 오류 원문(사설 IP·포트)은 AI 세션으로 보내지 않고 로그에만 남긴다.
+// 소켓 오류 원문(사설 IP·포트)은 AI 세션으로 보내지 않는다 — 문구는 nasErrorReply 의 분류뿐이고, 원문은 로그에만 남긴다.
+const toHttp = (e: unknown): HttpError => {
+  if (e instanceof HttpError) return e;
+  const r = nasErrorReply(e);
+  return new HttpError(r.status, r.message);
+};
 function rethrow(e: unknown, memberId?: string): never {
-  if (e instanceof NasConfigError) throw new HttpError(e.status, e.message);
-  if (e instanceof HttpError) throw e;
-  if (e instanceof FtpError && e.code === 530) {
-    throw new HttpError(403, "NAS 로그인 실패 — 내 nas_ftp 자격의 아이디·비밀번호를 확인하세요(me_credential_set)");
-  }
-  if (e instanceof FtpError && e.code === 550) throw new HttpError(404, "NAS 에 그 폴더가 없거나 내 계정으로 열 수 없습니다");
-  logger.warn({ err: e, member: memberId }, "[nas] NAS 접속 실패");
-  throw new HttpError(502, "NAS 에 접속하지 못했습니다 — 잠시 뒤 다시 시도하세요");
+  if (!(e instanceof HttpError) && !nasErrorReply(e).expected) logger.warn({ err: e, member: memberId }, "[nas] NAS 접속 실패");
+  throw toHttp(e);
 }
 
 // 링크의 절대 주소 base 는 응답마다 한 번만 구한다(gatewayUrl 이 조직 프로필을 DB 에서 읽는다).
@@ -87,13 +85,19 @@ const nasFind: Capability = {
     const key = nasIndexKey(memberId, username);
     if (i.refresh || !nasIndexCache.isFresh(key)) {
       const building = nasIndexCache.build(key, async () => {
-        const { session } = await openNasSession(memberId);
         try {
-          const r = await crawl((dir) => session.list(dir));
-          logger.info({ member: memberId, dirs: r.dirs, entries: r.entries.length, failedDirs: r.failedDirs, truncated: r.truncated }, "[nas] 파일명 색인 완료");
-          return r;
-        } finally {
-          await session.close();
+          const { session } = await openNasSession(memberId);
+          try {
+            const r = await crawl((dir) => session.list(dir));
+            logger.info({ member: memberId, dirs: r.dirs, entries: r.entries.length, failedDirs: r.failedDirs, truncated: r.truncated }, "[nas] 파일명 색인 완료");
+            return r;
+          } finally {
+            await session.close();
+          }
+        } catch (e) {
+          // 뒤에서 다시 만들다 실패하면 기다리는 호출이 없을 수 있다 — 원문은 여기서 로그로만 남긴다(상태엔 분류 문구만)
+          if (!nasErrorReply(e).expected) logger.warn({ err: e, member: memberId }, "[nas] 파일명 색인 실패");
+          throw e;
         }
       });
       const state = nasIndexCache.get(key);
@@ -101,7 +105,7 @@ const nasFind: Capability = {
         building.then(() => "done" as const, () => "failed" as const),
         new Promise<"timeout">((r) => setTimeout(() => r("timeout"), FIRST_INDEX_WAIT_MS).unref()),
       ]);
-      if (waited === "failed" && !state.result) rethrow(await building.catch((e: unknown) => e), memberId);
+      if (waited === "failed" && !state.result) throw toHttp(await building.catch((e: unknown) => e)); // 원문 로그는 위에서 남겼다
       if (waited === "timeout" && !state.result) {
         return { indexing: true, message: "NAS 파일명 색인을 만드는 중입니다(다른 사람 색인이 먼저 돌고 있으면 더 걸립니다). 몇 분 뒤 같은 검색을 다시 부르세요.", note: BODY_NOTE };
       }
@@ -113,7 +117,7 @@ const nasFind: Capability = {
     return {
       total: found.total,
       items: found.items.map((e) => toItem(e, base)),
-      // 다시 만들기가 실패하면 직전 색인으로 답하되 그 사실을 last_error 로 알린다
+      // 다시 만들기가 실패하면 직전 색인으로 답하되 그 사실을 last_error 로 알린다(분류 문구 — nasIndexCache 가 원문을 담지 않는다)
       index: { ...indexInfo(r, state.builtAt), refreshing: !!state.building, last_error: state.error },
       note: BODY_NOTE,
     };

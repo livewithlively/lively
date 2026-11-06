@@ -215,15 +215,31 @@ await t("NasIndexCache.build: 성공하면 result·builtAt 설정, error=null, b
   assert.equal(s.building, null);
 });
 
-await t("NasIndexCache.build: 실패하면 error 에 메시지, 기존 result 유지, building=null", async () => {
+// error 는 nas_find 응답의 last_error 로 그대로 나간다 — 소켓 오류 원문(사설 IP·포트)이 담기면 AI 세션으로 샌다.
+const RAW_SOCKET_ERROR = "FTP 연결 오류: connect ECONNREFUSED 10.1.2.3:21";
+const RAW_FRAGMENTS = ["10.1.2.3", ":21", "ECONNREFUSED"];
+
+await t("NasIndexCache.build: 실패하면 기존 result 유지·building=null, 분류기를 안 줬으면 error 는 원문 없는 고정 문구", async () => {
   const c = new NasIndexCache(() => 0);
   const r = result("old");
   await c.build("k", async () => r);
-  await c.build("k", async () => { throw new Error("boom-msg"); }).catch(() => {});
+  await c.build("k", async () => { throw new Error(RAW_SOCKET_ERROR); }).catch(() => {});
   const s = c.get("k");
   assert.equal(s.result, r);
-  assert.match(String(s.error), /boom-msg/);
   assert.equal(s.building, null);
+  assert.ok(typeof s.error === "string" && s.error.length > 0, `error=${s.error}`);
+  for (const frag of RAW_FRAGMENTS) assert.ok(!s.error.includes(frag), `원문 조각 ${frag} → ${s.error}`);
+});
+
+await t("NasIndexCache.build: 분류기를 주면 error 는 그 문구(분류기는 던져진 오류 자체를 받는다), 다시 성공하면 null", async () => {
+  const seen: unknown[] = [];
+  const c = new NasIndexCache(() => 0, 2, (e) => { seen.push(e); return "분류된 문구"; });
+  const boom = new Error(RAW_SOCKET_ERROR);
+  await c.build("k", async () => { throw boom; }).catch(() => {});
+  assert.equal(c.get("k").error, "분류된 문구");
+  assert.deepEqual(seen, [boom]);
+  await c.build("k", async () => result("new"));
+  assert.equal(c.get("k").error, null);
 });
 
 await t("NasIndexCache.isFresh: result 있고 builtAt 후 12시간 미만일 때만", async () => {
@@ -257,8 +273,8 @@ await t("NasIndexCache: 아직 안 만든(실패만 한) 키가 먼저 버려진
   clock = 20_000;
   await c.build("k10", async () => result("k10"));
   for (let i = 1; i <= 10; i++) assert.equal(c.isFresh(`k${i}`), true, `k${i}`);
-  // 버려졌으면 실패 기록(error)도 함께 사라진다
-  assert.doesNotMatch(String(c.get("never").error ?? ""), /fail-never/);
+  // 버려졌으면 실패 기록(error)도 함께 사라진다 — 남아 있으면 분류 문구가 있고, 버려졌으면 새 칸이라 null 이다
+  assert.equal(c.get("never").error, null);
 });
 
 await t("NasIndexCache: 진행 중인 키는 버리지 않는다", async () => {
