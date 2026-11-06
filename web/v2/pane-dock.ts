@@ -122,7 +122,8 @@ const M = DOCK_METRICS;
 const GAP = 4;
 /** 아이콘 한 변 — 이음매는 22~32(짧은 알약), 곁칸 아래는 곁칸 폭을 따라 26~48(floatIconSize).
  *  머리 줄은 40~56(#5319 4차, 원준 2026-11-05 «사이즈 더 키워야» — 아이콘 아래 이름표 15px 를 단다, 칸 폭 = 아이콘 + TOP_LABEL). */
-const SIZE = { seam: { min: 22, max: 32 }, float: { min: 26, max: 48 }, top: { min: 40, max: 56 } } as const;
+//  머리 줄 독(top)은 #5319 A안(원준 2026-11-06 «독 아이콘은 이쁜데 사이즈가 너무 커 어색»)으로 56 → 44(아이콘 22). 이름표는 평소 없고 올리면 말풍선.
+const SIZE = { seam: { min: 22, max: 32 }, float: { min: 26, max: 48 }, top: { min: 34, max: 44 } } as const;
 /** 머리 줄 독 옆에 남겨 둘 폭 — [＋] 40 · 사이 4 · 줄 안 여백 8×2(42-v2-dock.css 와 짝). [열린 탭 ∨] 는 한 앱이 둘 넘게 떴을 때만 서고, 그땐 줄이 옆으로 민다. */
 const TOP_RESERVE = 60;
 /** 머리 줄 독 칸의 폭 = 아이콘 + 이만큼 — 이름표(«프로젝트» 15px ≈ 56px)가 이웃과 붙지 않을 몫. */
@@ -487,7 +488,7 @@ export function mountDock(host: DockHost): DockHandle {
   // ── 이름표 — 꼬리 달린 말풍선(macOS 독) ─────────────────────────────────────
   //  곁칸 아래 독은 아이콘 위에, 이음매 독은 **세션 쪽**으로(곁칸은 앱이 열리는 자리라 비워 둔다). 끌거나 메뉴가 떠 있는 동안엔 안 띄운다.
   function showTip(b: HTMLElement): void {
-    if (dragging || ctxIsOpen() || home === 'top') return;          // 머리 줄 독은 이름이 아이콘 아래 늘 보인다 — 같은 말을 또 띄우지 않는다
+    if (dragging || ctxIsOpen()) return;          // 머리 줄 독도 띄운다(아래쪽) — #5319 A안부터 이름표를 평소 숨기니 이게 이름이다(원준 «호버하면 이름 드러나게»)
     tipFor = b;
     tip.textContent = b.dataset.name || '';
     tip.dataset.side = tipSide();

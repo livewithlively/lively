@@ -350,3 +350,24 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
   .pn-dock, .pn-dock-ic, .pn-dock-shelf, .pn-dock-more, .pn-dock-preview, .pn-dock-tile-ic { transition: none !important; }
   .pn-dock-it.bounce .pn-dock-ic, .pn-dock[data-home="top"] .pn-dock-it.bounce .pn-dock-ic, .pn-dock-ghost.poof, .pn-dock-more.open .pn-dock-more-grid, .pn-dock-tip, .pn-adraw { animation: none !important; }
 }
+
+/* ── #5319 A안(원준 2026-11-06 «독 자체의 아이콘은 이쁜거같음. 근데 사이즈가 너무 커지니까 어색» · «평상시에는 이름 안 써 있다가 호버하면 드러나게») ──
+   머리 줄 독을 반으로: 타일 56 → 44(안 아이콘 22, pane-dock.ts SIZE.top) · 이름표는 평소 없음 — 올리면(키보드 초점도) 아래로 말풍선(.pn-dock-tip,
+   data-side=bottom) · 켜진 앱은 타일 아래 밑줄(색만으로 말하지 않는다). 독 줄 = 8 + 44 + 8 = 60. 파일 줄(53)이 있으면 60 + 53 = 113 —
+   세션 머리줄(--pn-bighead-h)과 두 열의 아랫선이 다시 한 줄이다. 파일 줄이 없으면 줄은 113 그대로 두고 타일을 세로 가운데에 — 아랫선을 지킨다.
+   ⚠ 위 [data-home="top"] 규칙(타일 56 · 이름표 15px)은 그대로 두고 여기서 덮는다(check-css-drops — 셀렉터 목록을 고치지 않는다). */
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-lb { display: none; }
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-it { width: calc(var(--dk-s, 44px) + 8px); gap: 0; padding: 0 0 8px; }
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-it .pn-dock-ic { transition: width .2s cubic-bezier(.2, .8, .3, 1), height .2s cubic-bezier(.2, .8, .3, 1), filter .12s, translate .12s; }
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-it:hover .pn-dock-ic { translate: 0 -1px; filter: brightness(1.05); }   /* 이름이 없으니 손이 닿았다는 표시를 조금 더 */
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-it.on::after { left: 8px; right: 8px; }
+.pn-wrap .pn-pane.dock-top .pn-dock[data-home="top"] .pn-dock-sep { align-self: flex-end; height: 24px; margin: 0 0 18px; }   /* 타일(아래 8 ~ 52) 가운데 30 에 맞춘다 */
+/* 파일 줄이 없는 때 — 줄 113 안에서 타일 · [＋] 세로 가운데 */
+.pn-wrap .pn-pane.dock-top:not(.dock-sub) > .pn-tabbar { align-items: center; }
+.pn-wrap .pn-pane.dock-top:not(.dock-sub) > .pn-tabbar > .pn-dock-slot { align-items: center; }
+.pn-wrap .pn-pane.dock-top:not(.dock-sub) .pn-dock[data-home="top"] .pn-dock-shelf { align-items: center; }
+/* 파일 줄이 있는 때 — 독 줄 60(선 1 포함) + 파일 줄 53 = 113 */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar { background-position: 0 59px, 0 0; }   /* 두 줄 사이 선 */
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { height: 59px; }
+.pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { height: 59px; }
+
