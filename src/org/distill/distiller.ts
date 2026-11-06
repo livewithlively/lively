@@ -585,6 +585,33 @@ export function buildRequeueTaskWhere(sel: RequeueSelection, p: Params): string 
   return c.join(" AND ");
 }
 
+/** org_distiller_requeue 입력(REST 본문·MCP 인자)을 고르기 조건으로 바꾼다. 틀린 값은 RangeError(호출부가 400).
+ *  REST 는 zod 를 거치지 않는다 — 여기서 엄격히 보지 않으면 틀린 값이 «없는 값» 으로 떨어져 대상이 넓어진다:
+ *   · task_ids 에 숫자가 아닌 원소(`["12a"]`)만 있으면 id 고르기가 빠지고 requester+since 기간 전체가 대상이 된다.
+ *   · until 이 문자열이 아니면 무시돼 since 이후 전부가 대상이 된다.
+ *  그래서 «준 값은 맞는 모양이어야 한다» 로 막는다. dry_run 도 boolean 만 받는다(문자열 "false" 를 실행으로 읽지 않는다). */
+export function requeueInputFromRest(input: Record<string, unknown>): { sel: RequeueSelection; dryRun: boolean } {
+  let taskIds: number[] | null = null;
+  if (input.task_ids !== undefined && input.task_ids !== null) {
+    const raw = input.task_ids;
+    if (!Array.isArray(raw) || raw.length === 0) throw new RangeError("task_ids 는 배치 id(양의 정수)를 하나 이상 담은 배열이어야 한다");
+    const bad = raw.filter((v) => typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0);
+    if (bad.length) throw new RangeError(`task_ids 에 양의 정수가 아닌 값이 있다: ${JSON.stringify(bad.slice(0, 5))}`);
+    taskIds = raw as number[];
+  }
+  const text = (k: "requester" | "since" | "until" | "distiller"): string | null => {
+    const v = input[k];
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "string") throw new RangeError(`${k} 는 문자열이어야 한다`);
+    return v.trim() || null;
+  };
+  if (input.dry_run !== undefined && typeof input.dry_run !== "boolean") throw new RangeError("dry_run 은 true 또는 false 여야 한다");
+  return {
+    sel: { taskIds, requester: text("requester"), since: text("since"), until: text("until"), distillerKey: text("distiller") },
+    dryRun: input.dry_run !== false,
+  };
+}
+
 /** 고르기 조건이 틀리면 RangeError(호출부가 400 으로 바꾼다). DB 오류는 그대로 올라간다. */
 export async function requeueDistillerSeen(sel: RequeueSelection, dryRun: boolean): Promise<RequeueResult> {
   const p = new Params();
@@ -615,6 +642,9 @@ export async function requeueDistillerSeen(sel: RequeueSelection, dryRun: boolea
       `DELETE FROM org_distiller_seen x WHERE x.task_id = ANY($1::bigint[]) AND ${noKnowledge} RETURNING x.task_id`, [taskIds]);
     const b = await itemsPool.query(
       `DELETE FROM org_stranded_seen x WHERE x.task_id = ANY($1::bigint[]) AND ${noKnowledge} RETURNING x.task_id`, [taskIds]);
+    //  판정 기록을 지우면 잔량이 되살아난다 — clearDistillerSeen 과 같이 커버리지 캐시의 옛 숫자를 버린다(#5147).
+    //   안 하면 «requeued: N» 을 받고도 org_distiller_list 의 잔량이 캐시가 풀릴 때까지 옛 숫자로 남아 되돌림이 안 먹은 것처럼 보인다.
+    if ((a.rowCount ?? 0) + (b.rowCount ?? 0) > 0) bumpCoverageVersion();
     const count = new Map<number, number>();
     for (const r of [...a.rows, ...b.rows]) count.set(Number(r.task_id), (count.get(Number(r.task_id)) ?? 0) + 1);
     rows = [...count].map(([task_id, n]) => ({ task_id, n }));

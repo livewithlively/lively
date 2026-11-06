@@ -13,7 +13,7 @@ import {
   listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, listSourceChannels, buildDistillerPrompt,
   distillerSectionViews, measureFilterImpact, mergeDraftDistiller,
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller,
-  requeueDistillerSeen, REQUEUE_MAX_TASKS
+  requeueDistillerSeen, requeueInputFromRest, REQUEUE_MAX_TASKS
 } from "../../org/distill/distiller.js";
 import { actorOf, restRead, restWork } from "./shared.js";
 import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
@@ -242,17 +242,16 @@ export const ingestDistillersCapabilities: Capability[] = [
   restWork("org_distiller_requeue", "증류 배치 다시 처리(배치 단위)",
     "고른 증류 배치가 «판정함» 으로 남긴 자료를 인박스에 되돌린다 — 레인 전체를 비우는 reset_seen 대신 그 배치만. " +
     "배치가 일을 못 하고도 성공으로 끝난 경우(판 안에 도구가 없었다·인증이 깨졌다 등)에 쓴다 — 실패로 끝난 배치는 서버가 이미 되돌린다. " +
-    "고르기: task_ids(배치 id 목록) 또는 requester+since(+until·distiller). 둘 다 없거나 시각이 ISO 8601 이 아니면 400. 성공(done)으로 끝난 배치만 대상이다. " +
+    "고르기: task_ids(배치 id 목록) 또는 requester+since(+until·distiller). 둘 다 없거나 시각이 ISO 8601 이 아니면 400 — " +
+    "task_ids 에 양의 정수가 아닌 값이 섞였거나 빈 배열이어도 400 이다(틀린 id 를 빼고 기간 전체로 넓히지 않는다). 성공(done)으로 끝난 배치만 대상이다. " +
     `한 번에 배치 ${REQUEUE_MAX_TASKS}개까지. 지식이 이미 연결된 자료는 건드리지 않는다(kept_with_knowledge). ` +
     "dry_run=true(기본)면 셈만 하고 지우지 않는다 — 먼저 셈을 보고 dry_run=false 로 실행한다.",
     [{ method: "POST", paths: ["/api/ui/org/distillers/requeue"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>) => {
-      const ids = Array.isArray(input.task_ids) ? input.task_ids.map(Number) : null;
-      const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
       try {
-        return await requeueDistillerSeen({
-          taskIds: ids, requester: str(input.requester), since: str(input.since), until: str(input.until), distillerKey: str(input.distiller),
-        }, input.dry_run !== false);
+        //  REST 본문은 zod 를 거치지 않는다 — 모양 검사는 requeueInputFromRest 한 곳에서(틀린 값이 «없는 값» 으로 떨어져 대상이 넓어지지 않게).
+        const { sel, dryRun } = requeueInputFromRest(input);
+        return await requeueDistillerSeen(sel, dryRun);
       } catch (e) {
         if (e instanceof RangeError) throw new HttpError(400, e.message);
         throw e;

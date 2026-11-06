@@ -17,7 +17,8 @@
 // 실행: npm run build && node dist/org/distill/requeue-seen.test.js
 import assert from "node:assert/strict";
 import { itemsPool } from "../../db/client.js";
-import { requeueDistillerSeen, buildRequeueTaskWhere, Params, REQUEUE_MAX_TASKS } from "./distiller.js";
+import { requeueDistillerSeen, buildRequeueTaskWhere, requeueInputFromRest, Params, REQUEUE_MAX_TASKS } from "./distiller.js";
+import { coverageVersion } from "./coverage-version.js";
 
 let pass = 0;
 const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
@@ -408,6 +409,50 @@ const seenKeys = (): string[] => model.seen.map((s) => `${s.table}:${s.task_id}:
   assert.throws(() => buildRequeueTaskWhere({ requester: "a", since: "어제" }, new Params()), RangeError);
   assert.throws(() => buildRequeueTaskWhere({ taskIds: [1], until: "not-a-date" }, new Params()), RangeError);
   ok("리뷰 반영 — 레인 key 정확 일치·done 배치만·날짜 형식 오류는 RangeError");
+}
+
+// 메인테이너 리뷰 — 지운 뒤 커버리지 캐시를 버린다(clearDistillerSeen 과 같은 짝). 안 버리면 «requeued: N» 을 받고도
+//  org_distiller_list 의 잔량이 캐시가 풀릴 때까지 옛 숫자로 남아, 사람이 되돌림이 안 먹었다고 보고 다시 부른다.
+{
+  scene();
+  curSel = { taskIds: [10, 20] };
+  const v0 = coverageVersion();
+  await requeueDistillerSeen(curSel, true);
+  assert.equal(coverageVersion(), v0, "C1 dry-run 은 아무것도 안 지웠는데 캐시를 버렸다");
+  const r = await requeueDistillerSeen(curSel, false);
+  assert.ok(r.requeued > 0, "C2 준비 — 지울 기록이 있어야 한다");
+  assert.ok(coverageVersion() > v0, "C2 판정 기록을 지웠는데 커버리지 캐시 세대를 올리지 않았다 — 잔량이 옛 숫자로 남는다");
+  const v1 = coverageVersion();
+  const again = await requeueDistillerSeen(curSel, false);   // 이미 지운 뒤 — 지울 것이 없다
+  assert.equal(again.requeued, 0, "C3 준비 — 두 번째 실행엔 지울 것이 없어야 한다");
+  assert.equal(coverageVersion(), v1, "C3 지운 것이 없는데 캐시를 버렸다");
+  ok("리뷰 반영 — 실제로 지웠을 때만 커버리지 캐시 세대를 올린다(C1·C2·C3)");
+}
+
+// 메인테이너 리뷰 — REST 본문은 zod 를 안 거친다. 틀린 값이 «없는 값» 으로 떨어지면 고르기가 넓어진다.
+{
+  const SINCE = "2026-10-01T00:00:00Z";
+  //  E1~E5 — 틀린 id 를 빼고 남은 조건(requester+since)으로 넓어지던 경우. 400 이어야 한다.
+  for (const task_ids of [["12a"], [12, "13"], [0], [-1], [1.5], [2 ** 53], [], "12", 12, { 0: 12 }]) {
+    assert.throws(() => requeueInputFromRest({ task_ids, requester: "alice", since: SINCE }), RangeError,
+      `task_ids=${JSON.stringify(task_ids)} 가 통과했다 — 틀린 id 가 빠지고 의뢰자의 기간 전체가 대상이 된다`);
+  }
+  //  E7·E8 — 문자열이 아닌 기간·의뢰자. until 이 무시되면 since 이후 전부가 대상이 된다.
+  assert.throws(() => requeueInputFromRest({ requester: "alice", since: SINCE, until: 1767225600000 }), RangeError, "E7 숫자 until 이 통과했다");
+  assert.throws(() => requeueInputFromRest({ requester: ["alice"], since: SINCE }), RangeError, "E8 배열 requester 가 통과했다");
+  //  E9 — dry_run 은 boolean 만. 문자열 "false" 를 실행으로도, 조용한 dry-run 으로도 읽지 않는다.
+  for (const dry_run of ["false", 0, "no"]) {
+    assert.throws(() => requeueInputFromRest({ task_ids: [1], dry_run }), RangeError, `E9 dry_run=${JSON.stringify(dry_run)} 가 통과했다`);
+  }
+  //  E6·E10·E11·E12 — 맞는 입력은 그대로. 기본은 dry-run, 공백은 걷고, null 은 없는 값, 최소 id 1 은 통과.
+  assert.deepEqual(requeueInputFromRest({ task_ids: [1] }), {
+    sel: { taskIds: [1], requester: null, since: null, until: null, distillerKey: null }, dryRun: true,
+  }, "E10·E12 dry_run 을 안 주면 dry-run, id 1 은 유효");
+  assert.deepEqual(requeueInputFromRest({ requester: "  alice ", since: SINCE, distiller: "lane-a", dry_run: false, task_ids: null }), {
+    sel: { taskIds: null, requester: "alice", since: SINCE, until: null, distillerKey: "lane-a" }, dryRun: false,
+  }, "E6·E10·E11 null task_ids 는 없는 값, dry_run:false 는 실행, 공백 제거");
+  assert.equal(requeueInputFromRest({ requester: "alice", since: SINCE }).sel.taskIds, null, "E6 task_ids 를 안 주면 id 조건이 없다");
+  ok("리뷰 반영 — REST 입력의 틀린 task_ids·문자열 아닌 기간·boolean 아닌 dry_run 은 RangeError(400), 맞는 입력은 그대로(E1~E12)");
 }
 
 console.log(`\nrequeue-seen tests: ${pass} passed`);

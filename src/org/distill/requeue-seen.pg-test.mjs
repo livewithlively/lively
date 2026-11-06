@@ -11,11 +11,13 @@
 //   R2 실행 — 대상 배치의 레인·방치 기록만 지운다. 지식 연결 자료·다른 의뢰자 배치·진행 중 배치의 기록은 남는다
 //   R3 재등장 — 지운 자료가 레인 잔량(countDistillerBacklog)에 다시 잡힌다
 //   R4 레인 key 정확 일치 — key 의 `_` 가 다른 레인(`X` 자리)의 배치를 고르지 않는다
+//   R5 기간 — since 이전·until 이후에 접수된 배치는 고르지 않는다
+//   R6 재판정 — 뒤 배치가 같은 자료를 다시 판정했으면 옛 배치를 되돌려도 그 판정은 남는다
 import assert from "node:assert/strict";
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 await (await import(`${DIST}/boot/schemas.js`)).initAllSchemas();
-const { requeueDistillerSeen, getDistiller, listDistillers, countDistillerBacklog } = await import(`${DIST}/org/distill/distiller.js`);
+const { requeueDistillerSeen, getDistiller, listDistillers, countDistillerBacklog, markDistillerSeen } = await import(`${DIST}/org/distill/distiller.js`);
 const { upsertDistiller } = await import(`${DIST}/org/store.js`);
 
 let pass = 0;
@@ -87,6 +89,41 @@ const backlogBefore = await countDistillerBacklog(lane, await listDistillers(tru
   const after = await countDistillerBacklog(lane, await listDistillers(true));
   assert.equal(after, backlogBefore + 1, `R3 되돌린 S1 이 레인 잔량에 다시 잡혀야 한다(before ${backlogBefore}, after ${after})`);
   ok("R3 재등장 — 지운 자료가 레인 잔량에 다시 잡힌다");
+}
+
+// R5 — 기간(since·until) 밖 배치는 고르지 않는다. (메인테이너 리뷰: 시험 배치가 전부 «1시간 전» 이라 기간 조건을 지워도 초록이었다.)
+const srcAt = async (label, ago) => {
+  const [r] = await q(`INSERT INTO source(kind, title, body_md, occurred_at) VALUES ($1, $2, $3, now() - $4::interval) RETURNING id`,
+    [KIND, `rq-pg ${label}`, `본문 ${label} — 증류 대상이 될 만큼 충분히 긴 내용이다.`, ago]);
+  src.push(Number(r.id));
+  return Number(r.id);
+};
+const taskAt = async (ago) => Number((await q(
+  `INSERT INTO org_task(requester, requester_session, prompt, status, created_at) VALUES ($1,$2,'p','done', now() - $3::interval) RETURNING id`,
+  [ME, `cron:distill-sources-headless#${LANE}`, ago]))[0].id);
+{
+  const S7 = await srcAt("7", "3 days"), S8 = await srcAt("8", "1 hour");
+  const T6 = await taskAt("3 days"), T7 = await taskAt("1 hour");
+  await seen(S7, T6); await seen(S8, T7);
+  const recent = await requeueDistillerSeen({ ...sel, distillerKey: LANE }, true);   // since = 2시간 전
+  assert.ok(!recent.by_task.some((x) => x.task_id === T6), `R5 since 이전(3일 전)에 접수된 배치를 골랐다: ${JSON.stringify(recent.by_task)}`);
+  assert.ok(recent.by_task.some((x) => x.task_id === T7), "R5 기간 안 배치(1시간 전)를 놓쳤다");
+  const old = await requeueDistillerSeen({
+    requester: ME, since: new Date(Date.now() - 4 * 86400e3).toISOString(), until: new Date(Date.now() - 2 * 86400e3).toISOString(), distillerKey: LANE,
+  }, true);
+  assert.deepEqual(old.by_task.map((x) => x.task_id), [T6], `R5 until 이후(1시간 전) 배치까지 골랐거나 기간 안 배치를 놓쳤다: ${JSON.stringify(old.by_task)}`);
+  ok("R5 기간 — since 이전·until 이후 배치는 고르지 않는다");
+}
+// R6 — 같은 자료를 뒤 배치가 다시 판정했으면(markDistillerSeen 이 task_id 를 새 배치로 덮는다) 옛 배치를 되돌려도 그 판정은 남는다.
+{
+  const S9 = await srcAt("9", "1 hour");
+  const T8 = await taskAt("50 minutes"), T9 = await taskAt("20 minutes");
+  await seen(S9, T8);
+  await markDistillerSeen(lane.id, [S9], T9);   // 재판정 — 운영 경로 그대로
+  const r = await requeueDistillerSeen({ taskIds: [T8] }, false);
+  assert.equal(r.requeued, 0, "R6 옛 배치에 남은 기록이 없어야 한다(task_id 가 새 배치로 옮겨졌다)");
+  assert.ok((await laneSeen()).includes(S9), "R6 옛 배치를 되돌리다 뒤 배치의 판정까지 지웠다 — 그 자료가 다시 증류된다");
+  ok("R6 재판정 — 옛 배치 되돌리기가 뒤 배치의 판정을 지우지 않는다");
 }
 
 // ── 정리 ──
