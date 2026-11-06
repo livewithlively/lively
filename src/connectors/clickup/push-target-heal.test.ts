@@ -2,7 +2,7 @@
 //  잠그는 사고: 오판정으로 엉뚱한 오류에 재시도, 무한 재시도, 고친 좌표를 기록하지 않아 매 push 마다 같은 400 반복.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isParentNotInList, createUnderParent, isRowScopedLookupFailure } from "./push-target.js";
+import { isParentNotInList, isNestedSubtaskForbidden, createUnderParent, isRowScopedLookupFailure } from "./push-target.js";
 
 const ORIG = "901814368850";
 const HEALED = "901817591515";
@@ -40,6 +40,27 @@ function harness(opts: {
     },
   };
 }
+
+// ── A2. isNestedSubtaskForbidden ────────────────────────────────────
+//  참이면 드레인이 그 행을 닫는다(되돌릴 수 없는 판정이 아니라 재편집 때 다시 열리지만, 오판하면 반출이 조용히 사라진다).
+
+test("표 — 400 + ITEM_002 만 중첩 subtask 금지로 판정한다", () => {
+  const TABLE: Array<[string, unknown, boolean]> = [
+    ["운영에서 받은 그대로", new Error(`ClickUp 400 /list/${ORIG}/task: {"err":"Cannot make subtasks of subtasks","ECODE":"ITEM_002"}`), true],
+    ["다른 400(ITEM_137)", item137(), false],
+    ["ECODE 접두가 같은 다른 코드", new Error('ClickUp 400 /list/9018/task: {"ECODE":"ITEM_0021"}'), false],
+    ["500 본문에 섞인 ITEM_002", new Error("ClickUp 500 /list/9018/task: upstream said ITEM_002"), false],
+    ["429 본문에 섞인 ITEM_002", new Error("ClickUp 429 /list/9018/task: ITEM_002"), false],
+    ["Error 가 아닌 문자열", 'ClickUp 400 /list/9018/task: {"ECODE":"ITEM_002"}', false],
+    ["message 만 흉내낸 객체", { message: 'ClickUp 400 x: {"ECODE":"ITEM_002"}' }, false],
+    ["null", null, false],
+  ];
+  for (const [label, e, want] of TABLE) {
+    assert.equal(isNestedSubtaskForbidden(e), want,
+      want ? `${label}: 못 알아보면 거절로 세여 여러 건이 들어올 때 일괄 거절로 크론이 선다`
+           : `${label}: 중첩 금지로 오판하면 그 항목의 반출이 닫혀 조용히 사라진다`);
+  }
+});
 
 // ── A. isParentNotInList ────────────────────────────────────────────
 
