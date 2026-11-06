@@ -389,3 +389,18 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-sub-acts { height: var(--pn-file-row); }
 .pn-wrap .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs > .pn-tabwrap { height: var(--pn-tab-h); margin-block: calc((var(--pn-file-row) - 1px - var(--pn-tab-h)) / 2); }
 
+
+/* ── #5319 ② 탭 줄을 머리 높이 안으로(원준 2026-11-06 «세로로 공간 차지가 너무 길다 · 위쪽에 넣으면 앱 아이콘이 너무 작아질 텐데» → «추천으로») ──
+   독 줄 112 안에서 타일(52 + 밑줄 8 = 60)은 60 만 쓰고 위아래 30 씩 비어 있었다 — 그 여백을 탭 줄에 준다. 기본 113 에서:
+   독 줄 68(위 여백 8 + 타일 52 + 밑줄 8) + 탭 줄 44(탭 34 · 위 3 아래 7 — 켜진 탭 밑줄 3 이 줄 바닥에 닿는다) = 112 + 선 1 = 113.
+   타일은 그대로 52(--pn-dk-cap 은 독 줄 - 8 — 위 여백은 슬롯이 맡는다). 두 줄 사이 선은 긋지 않는다 — 오른쪽 가로선은 세션 머리 아랫선
+   하나뿐이라 선이 어긋날 데가 없다(처음 A안은 60 에 선이 하나 더 있어 «선이 어긋나 보였다»). 손잡이는 다시 그 아랫선 위(bottom 0).
+   머리를 키우면(~150) 슬롯 안에서 타일이 가운데로 — 왼쪽 제목 줄 가운데(두 줄을 가운데 맞춘 큰 머리)와 같이 내려간다(150: 둘 다 52.5).
+   105 아래로 줄이면 두 줄이 못 들어가므로 .pn-wrap.hd-hang(head-grip.ts HANG_BELOW) — 위 규칙 그대로(독 줄 = H-1 · 탭 줄 53 은 선 아래).
+   105~112 는 위 여백이 8 → 0 으로 줄어 맞춘다. */
+.pn-wrap:not(.hd-hang) .pn-pane.dock-top.dock-sub { --pn-file-row: 44px; --pn-tab-h: 34px; --pn-dock-row: calc(var(--pn-bighead-h, 113px) - 1px - var(--pn-file-row)); --pn-dk-cap: calc(var(--pn-dock-row) - 8px); }
+.pn-wrap:not(.hd-hang) .pn-pane.dock-top.dock-sub > .pn-tabbar { background-image: none; }
+.pn-wrap:not(.hd-hang) .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { box-sizing: border-box; padding-top: clamp(0px, calc(var(--pn-bighead-h, 113px) - 105px), 8px); }
+.pn-wrap:not(.hd-hang) .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { padding-top: clamp(0px, calc(var(--pn-bighead-h, 113px) - 105px), 8px); }
+.pn-wrap:not(.hd-hang) .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs > .pn-tabwrap { margin-block: 3px 7px; }
+.pn-wrap:not(.hd-hang) .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-head-grip { top: auto; bottom: 0; }

@@ -8,6 +8,10 @@ import { el } from '../core.js';
 export const HEAD_H = { def: 113, min: 52, max: 150 } as const;
 /** 이 아래로 끌면 큰 머리가 두 줄에서 **한 줄**이 된다(원준 2026-11-06 «2열 이하로 댕겨서 줄이려면 줄일 수 있도록») — .pn-wrap.hd-one(42-v2-panes.css). */
 export const ONE_ROW_BELOW = 80;
+/** 이 아래로 끌면 곁칸 탭 줄이 머리 높이 안에 못 들어가 선 아래로 늘어진다(.pn-wrap.hd-hang — 42-v2-dock.css ②). 기본(113)은 타일 52 를
+ *  줄이지 않고 독 줄 68 + 탭 줄 44 가 선 안에 든다(원준 2026-11-06 «세로로 너무 길다 · 위쪽에 넣으면 아이콘이 작아질 텐데» → «추천으로»).
+ *  타일 52 + 밑줄 8 + 탭 줄 44 = 104 라 105 가 하한(105 에선 위 여백 0). */
+export const HANG_BELOW = 105;
 const KEY = 'v2.head.h';
 const STEP = 4;   // 키보드 한 칸
 
@@ -21,6 +25,7 @@ export function applyHeadH(wrap: HTMLElement, h: number | null): void {
   if (h == null || h === HEAD_H.def) wrap.style.removeProperty('--pn-bighead-h');
   else wrap.style.setProperty('--pn-bighead-h', Math.round(h) + 'px');
   wrap.classList.toggle('hd-one', (h ?? HEAD_H.def) < ONE_ROW_BELOW);
+  wrap.classList.toggle('hd-hang', (h ?? HEAD_H.def) < HANG_BELOW);
 }
 const clampH = (h: number): number => Math.round(Math.max(HEAD_H.min, Math.min(HEAD_H.max, h)));
 const currentH = (wrap: HTMLElement): number => parseFloat(getComputedStyle(wrap).getPropertyValue('--pn-bighead-h')) || HEAD_H.def;
