@@ -53,6 +53,36 @@ function isInjectedUserText(t: string): boolean {
   return /^\s*(#\s*AGENTS\.md instructions\b|<[a-z][a-z0-9_]*>)/i.test(t);
 }
 
+// ── 입력칸에 치던 글이 있나 (#5332) ───────────────────────────────────────────────────
+//  모델·추론강도 바꾸기는 입력칸에 `/model …` 한 줄을 쳐서 제출한다. 사람이 치던 글이 있으면 그 뒤에 붙어 **한 메시지로 나간다**
+//  (실측 0.166.0). claude 는 Ctrl+S 로 치워 두지만(catalog runtimeDraftStash) codex 엔 그런 키가 없고, Ctrl+C 는 글이 있으면
+//  지워 기록(↑)에 넣지만 **빈 입력칸이면 codex 를 끈다**(실측: 한 번에 «To continue this session, run: codex resume …» 로 종료).
+//  그래서 «비었다» 가 확실할 때만 명령을 넣는다 — 이 판정이 그 근거다.
+//  · 빈 입력칸은 흐린 안내문을 보여 준다. 0.166.0 바이너리에 든 안내문은 둘뿐이다(그 밖의 예시 문구는 없다 — strings 실측).
+//  · 입력칸 = 맨 아래 «› » 행 + 그 아래 두 칸 들여쓴 이어지는 행들(빈 행에서 끝난다 — 그 아래가 발치다).
+//  · 번호 메뉴(«› 1. …»)는 입력칸이 아니라 대화상자다 → unknown(아무것도 넣지 않는 쪽).
+export const CODEX_COMPOSER_PLACEHOLDERS: readonly string[] = ["Ask Codex to do anything", "Ask a follow-up question"];
+export type ComposerState = "empty" | "draft" | "unknown";
+export function codexComposerState(pane: string): ComposerState {
+  const rows = String(pane || "").split("\n").map((r) => r.replace(/\s+$/, ""));
+  let at = -1;
+  for (let i = rows.length - 1; i >= 0; i--) if (/^›(\s|$)/.test(rows[i])) { at = i; break; }
+  if (at < 0) return "unknown";
+  const head = rows[at].replace(/^›\s?/, "").trim();
+  if (/^\d+[.)]\s/.test(head)) return "unknown";
+  const more = at + 1 < rows.length && /^ {2}\S/.test(rows[at + 1]) && !/^ {2}(GPT|gpt)-|context left|for shortcuts|to queue message/.test(rows[at + 1]);
+  if (more) return "draft";
+  if (!head || CODEX_COMPOSER_PLACEHOLDERS.includes(head)) return "empty";
+  //  좁은 화면에서 안내문이 «…» 로 잘린 모양도 빈 입력칸이다(잘린 앞부분이 안내문의 머리와 같을 때만).
+  const cut = head.endsWith("…") ? head.slice(0, -1).trimEnd() : "";
+  if (cut.length >= 6 && CODEX_COMPOSER_PLACEHOLDERS.some((ph) => ph.startsWith(cut))) return "empty";
+  return "draft";
+}
+
+/** 아웃박스가 명령을 넣지 않고 마감할 때 사람에게 보일 문장(#5332) — 라우트가 409 로 그대로 싣는다. */
+export const CODEX_DRAFT_REFUSAL = "입력칸에 치던 글이 있어요 — Codex 는 치던 글을 잠깐 치워 둘 수 없어서, 그 글을 보내거나 지운 뒤 다시 골라 주세요";
+export const CODEX_NOT_READY_REFUSAL = "Codex 입력칸이 보이지 않아요(목록·대화상자가 떠 있거나 아직 뜨는 중) — 닫은 뒤 다시 골라 주세요";
+
 export function parseCodex(text: string, state: ParseState): { lines: ChatLine[]; state: ParseState } {
   const st: ParseState = { ...state };
   const lines: ChatLine[] = [];
@@ -80,6 +110,10 @@ export function parseCodex(text: string, state: ParseState): { lines: ChatLine[]
       } else if (k === "thread_settings_applied") {
         const m = asObj(p.thread_settings)?.model;
         if (typeof m === "string" && m) st.model = m;
+        //  #5332 — 추론강도도 여기 실린다(실측 0.166.0: thread_settings.reasoning_effort). 화면 상단 «지금» 칸이 이 값을 따른다
+        //   (`/model --reasoning=high` 뒤 다음 턴부터 «high»). 없으면 종전처럼 비워 둔다.
+        const e = asObj(p.thread_settings)?.reasoning_effort;
+        if (typeof e === "string" && e) st.effort = e;
       }
       // agent_message(중복) · token_count 등 → 버린다
     } else if (top === "response_item") {
@@ -107,10 +141,10 @@ export function parseCodex(text: string, state: ParseState): { lines: ChatLine[]
           const t = String(co.text ?? "");
           if (co.type === "output_text" && t.trim()) blocks.push({ type: "text", text: t });
         }
-        if (blocks.length) lines.push({ type: "assistant", timestamp: ts, message: { role: "assistant", content: blocks, model: st.model as string | undefined } });
+        if (blocks.length) lines.push({ type: "assistant", timestamp: ts, message: { role: "assistant", content: blocks, model: st.model as string | undefined }, ...(st.effort ? { effort: String(st.effort) } : {}) });
       } else if (k === "custom_tool_call") {
         const id = String(p.call_id || p.id || ""); if (!id) continue;
-        lines.push({ type: "assistant", timestamp: ts, message: { role: "assistant", content: [{ type: "tool_use", id, name: String(p.name || "tool"), input: p.input ?? {} }], model: st.model as string | undefined } });
+        lines.push({ type: "assistant", timestamp: ts, message: { role: "assistant", content: [{ type: "tool_use", id, name: String(p.name || "tool"), input: p.input ?? {} }], model: st.model as string | undefined }, ...(st.effort ? { effort: String(st.effort) } : {}) });
       } else if (k === "custom_tool_call_output") {
         const id = String(p.call_id || ""); if (!id) continue;
         const parts: string[] = [];
@@ -121,9 +155,26 @@ export function parseCodex(text: string, state: ParseState): { lines: ChatLine[]
       }
       // reasoning(암호화) 등 → 버린다
     }
-    // session_meta · turn_context · world_state 등 → 버린다
+    //  #5332 — turn_context 는 **매 턴 머리**에 그 턴이 실제로 쓰는 모델·추론강도를 싣는다(실측 0.157.1·0.166.0: payload.model ·
+    //   payload.effort). 0.157.1 은 thread_settings_applied 를 세션 시작에 안 적어서(실측 — 바꿀 때만 한 번), 이것을 안 읽으면
+    //   «지금» 칸이 띄울 때 플래그로만 남았다. 이어 열기로 플래그가 바뀐 뒤에도 옛 thread_settings_applied 가 아니라 이 값이 이긴다.
+    if (top === "turn_context") {
+      const m = p.model, e = p.effort;
+      if (typeof m === "string" && m) st.model = m;
+      if (typeof e === "string" && e) st.effort = e;
+    }
+    // session_meta · world_state 등 → 버린다
   }
   return { lines, state: st };
+}
+
+/** 꼬리에서 **맨 아래** 커서 줄(`›`·`❯`·`>` 로 시작)이 번호 메뉴 줄인가(#5332 — screen 머리말). */
+function numberedCursorLast(tail: readonly string[]): boolean {
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const m = /^\s*[›❯>](?:\s+(.*))?$/.exec(String(tail[i] ?? ""));
+    if (m) return /^\d+[.)]/.test(String(m[1] ?? "").trim());
+  }
+  return false;
 }
 
 export const codexIo: HarnessSessionAdapter = {
@@ -161,7 +212,10 @@ export const codexIo: HarnessSessionAdapter = {
     //   0.157.0 «Trust this folder?») 커서가 번호 앞에 서는 모양은 남는다. 컴포저는 번호 없이 `› ` 뿐이라 갈린다.
     //   종전엔 꼬리 문구만 봤고, 0.157.0 의 신뢰 창("enter continue · esc back")이 그 목록에 없어 **ready 로 읽혔다**
     //   — 그 화면에 첫 지시를 넣으면 대화상자가 삼킨다(실측 2026-09-25).
-    if (/^\s*[›❯>]\s*\d+[.)]/m.test(s)) return "dialog";
+    //  #5332 — 단 **맨 아래 커서 줄**이 번호일 때만이다. 인라인 화면(--no-alt-screen)은 지난 사람 말도 `› …` 로 그려 꼬리에
+    //   남긴다(실측 0.157.1·0.166.0) — «1. 이거 해 줘» 로 시작한 말이 꼬리에 있으면 종전 정규식은 대화상자로 읽어 아웃박스를
+    //   세웠다(클로드의 #853 과 같은 함정). 대화상자가 떠 있으면 입력칸 대신 그 메뉴가 맨 아래 커서 줄이다.
+    if (numberedCursorLast(tail)) return "dialog";
     if (/press (enter|t) to (continue|confirm|review|trust)|esc to (cancel|close|go back)|enter continue|Would you like to run|Trust this folder|Hooks need review/i.test(s)) return "dialog";
     if (/esc to interrupt/i.test(s)) return "busy";
     if (/^\s*›/m.test(s)) return "ready";
@@ -175,13 +229,25 @@ export const codexIo: HarnessSessionAdapter = {
   //  #4135 — 웹 터미널이 쓰는 화면 사실. **claude 와 셋 다 다르다**(실측 2026-09-24):
   //   · appMouse=false — codex TUI 는 alt 화면도 마우스 리포트도 안 쓴다(tmux `alternate_on=0 mouse_any_flag=0`).
   //     그래서 드래그·휠·복사가 **브라우저 기본으로 그냥 된다** — ⌘C 다리(#972)도, ⌥드래그 안내도 이 세션엔 필요 없다.
+  //     ⚠ #5332: 0.16x 는 기본이 alt 화면 + 마우스 보고(1003+SGR)로 바뀌었다 — 이 값이 참이려면 `--no-alt-screen` 으로 띄워야 하고,
+  //      그래서 catalog codex `tuiArgv` 가 늘 붙인다. 그 플래그 전에 뜬 세션은 다시 열 때까지 전체화면이다(끌기가 앱으로 간다 —
+  //      앱의 Ctrl+C 복사는 세션이 도는 기계의 클립보드로 가고, 빈 입력칸의 Ctrl+C 는 codex 를 끈다. ⌘C→^C 다리를 붙이지 않는 이유).
   //   · choiceNeedsEnter=true — 선택지 위에서 '1' 만 보내면 커서조차 안 움직인다. Enter 까지 가야 골라진다
   //     (claude 와 반대다 — 폰 키 줄이 이 값을 보고 Enter 를 붙인다).
-  //   · pastePlaceholder=false — 여러 줄 붙여넣기는 접히지 않고 입력칸에 그대로 펼쳐진다(«+N lines» 표식이 없다).
+  //   · pastePlaceholder=true — #5332 실측(0.157.1·0.166.0): 1000자 넘는 붙여넣기는 «[Pasted Content N chars]» 로 접힌다
+  //     (종전 false 는 짧은 여러 줄만 본 값이었다 — 긴 첫 지시를 자동 전송하면 «안 들어갔다» 로 보고 다시 붙였다).
+  //     짧은 붙여넣기는 그대로 펼쳐진다 — 화면은 본문 대조와 표식을 둘 다 본다.
+  //   · copyBridge=false — codex 의 Ctrl+C 는 복사가 아니다: 입력칸이 차 있으면 지우고, 비었으면 **codex 를 끈다**.
+  //     appMouse=false 라 다리가 설 일이 없어야 하지만, 전체화면으로 뜬 옛 세션 등 마우스 보고가 켜진 화면에서도 ^C 를 안 보낸다.
+  //   · pasteBurst=true — #5332 실측(0.157.1·0.166.0, tmux 한 묶음으로 두 번 쓰기): 글 뒤에 CR 이 같은 읽힘에 붙으면 제출이
+  //     아니라 **줄바꿈**이 된다(붙여넣기 뭉치 판정). 1500자 맨 글은 0.157.1 에서 1024자 «[Pasted Content 1024 chars]» 로
+  //     잘려 접혔다. 괄호 표지로 감싼 글은 한 줄이든 여러 줄이든 그대로 들어가고 뒤따르는 CR 은 곧바로 제출됐다.
+  //   · permModes=false — 클로드의 Shift+Tab 권한 모드가 없다(폰 «모드» 단추를 감춘다).
   //   · startDialogRe — 부팅 길목에 대화상자가 **셋**이다: 폴더 신뢰 · 훅 검토 · 업데이트 알림. 셋 다 "Press enter to …"
   //     꼬리를 달고 번호 메뉴('› 1. …')를 쓴다. 이 위에서 Enter 를 치면 그 Enter 를 대화상자가 먹는다.
   term: {
-    appMouse: false, choiceNeedsEnter: true, pastePlaceholder: false,
+    appMouse: false, choiceNeedsEnter: true, pastePlaceholder: true,
+    copyBridge: false, pasteBurst: true, permModes: false,
     //  판마다 문구가 바뀌므로(0.153.4 → 0.157.0 에서 신뢰 창이 통째로 다시 쓰였다) **번호 메뉴**를 첫 줄에 둔다.
     startDialogRe: /›\s*\d+[.)]\s|Do you trust the contents|Trust this folder|Folder access|Hooks need review|Update available|Press enter to (continue|confirm)|enter continue/i,
   },

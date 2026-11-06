@@ -2,8 +2,9 @@
 //  분리 이유: CRUD 와 완전히 다른 관심사(질의 계획·벡터·랭킹)인데 한 파일에 있어 검색 튜닝 diff 가 저장 경로와
 //  충돌했다. 공개 표면은 그대로 — knowledge-store.ts 가 이 모듈을 재수출하므로 기존 호출부는 무수정.
 //  공용 조각(가시성 술어·아이콘 표현식)은 knowledge-common.ts, grep 매처·RRF 상수는 search-util.ts.
+import type { PoolClient } from "pg";
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, withTx } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
   type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, exactFirst, titleFirst,
@@ -63,7 +64,12 @@ function searchFilterSql(opts: { injection?: string; provenance?: string; catego
 
 /** 어떤 길로 찾았나(#5201) — 기록(knowledge_search_log)이 호출마다 남긴다. */
 export type KnowledgeSearchRoute = "hybrid-chunk" | "hybrid-chunk-grep" | "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
-export interface SearchRouteDiag { route?: KnowledgeSearchRoute }
+export interface SearchRouteDiag {
+  route?: KnowledgeSearchRoute;
+  /** 벡터 채널이 무엇을 썼나 — 조각으로 찾았으면 그때 쓴 조각 판정(chunkIndex 결과), 문서 벡터로 찾았으면 null, 벡터 채널이 돌지 않았으면 없다(undefined).
+   *  약함 판정이 같은 벡터로 재게 그대로 넘긴다(knowledgeSearchStrength). null 과 없음은 뜻이 다르다 — 넘길 때 `?? null` 로 접지 마라. */
+  chunkIndex?: ChunkIndex | null;
+}
 
 /**
  * 이 찾기가 쓸 BM25 낱말(#5201) — 쓸 수 없으면 null.
@@ -74,6 +80,34 @@ async function bm25Terms(qstr: string, opts: { plain?: boolean; includeUnsearcha
   if (opts.plain || opts.includeUnsearchable) return null;
   const terms = lexQueryTerms(qstr);
   return terms.length && await lexReady() ? terms : null;
+}
+
+/**
+ * BM25 문장은 중첩 반복을 끄고 돌린다(#5234) — 공용 표에서 플래너가 워크스페이스 행 수를 1로 짚으면 낱말 행마다 문서를 처음부터 훑는다
+ *  (매니지드 실측: 시간이 낱말 행 수에 정비례 · 1만 6,807행 6.0초. 같은 조건을 재현해 끄면 표본 p95 990ms → 19ms). SET LOCAL 이라 트랜잭션이 끝나면 되돌아간다.
+ */
+function withoutNestloop<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
+  return withTx(async (c) => {
+    await c.query(`SET LOCAL enable_nestloop = off`);
+    return fn(c);
+  });
+}
+
+/**
+ * 하이브리드의 낱말 후보 — BM25 상위 문서 이름을 순서대로 낸다. 한 문장으로 따로 고른다: 하이브리드 본문까지 중첩 반복을 끄면 지식 · 조각 표를 통째로 읽고,
+ *  본문에서 점수를 지식 표와 이으면 지식 표 행 수를 잘못 짚었을 때 그 자리가 다시 제곱이 된다. 본문 쿼리는 이름만 받는다. grep 은 본문이 지식 표뿐이라 한 문장으로 끈다.
+ */
+async function lexCandidates(qstr: string, terms: readonly string[], opts: Parameters<typeof searchFilterSql>[0], viewer?: Viewer): Promise<string[]> {
+  const params: unknown[] = [];
+  const vis = await knowledgeVisWhere(viewer, params);
+  const bm = bm25Sql(terms, params, vis);
+  const filters = searchFilterSql(opts, params).join(" AND ");
+  const first = exactFirst("k.name", qstr, "name", params);
+  params.push(HYBRID_CANDIDATES);
+  const rows = await withoutNestloop((c) => q(c,
+    `WITH ${bm} SELECT k.name FROM bm b JOIN knowledge k ON k.name = b.name WHERE ${filters}
+      ORDER BY ${first}b.score DESC, k.updated_at DESC LIMIT $${params.length}`, params));
+  return rows.map((r) => r.name);
 }
 
 /** 지식 검색이 받는 공통 거르기 — categories(#5100)는 카테고리 id 목록(category 인자를 풀어 넣는다 · 앱 맥락 범위는 여기서 교집합으로 더해진다). */
@@ -129,9 +163,9 @@ export async function searchKnowledge(
     const tf = titleFirst("k.title", p, params);                // 제목에 모든 낱말이 든 것이 본문만 스친 최근 문서에 잘리지 않게(#4530)
     const bm = bmTerms ? bm25Sql(bmTerms, params, vis) : null;
     params.push(Math.min(opts.limit ?? 20, 100));
-    return q(itemsPool,
-      `${bm ? `WITH ${bm} ` : ""}SELECT ${sel} FROM knowledge k ${bm ? "LEFT JOIN bm ON bm.name = k.name " : ""}WHERE ${where} AND ${vis}
-       ORDER BY ${first}${tf}${keptFirst(opts)}${bm ? "bm.score DESC NULLS LAST, " : ""}k.updated_at DESC LIMIT $${params.length}`, params);
+    const sql = `${bm ? `WITH ${bm} ` : ""}SELECT ${sel} FROM knowledge k ${bm ? "LEFT JOIN bm ON bm.name = k.name " : ""}WHERE ${where} AND ${vis}
+       ORDER BY ${first}${tf}${keptFirst(opts)}${bm ? "bm.score DESC NULLS LAST, " : ""}k.updated_at DESC LIMIT $${params.length}`;
+    return bm ? withoutNestloop((c) => q(c, sql, params)) : q(itemsPool, sql, params);
   }, { plain: opts.plain });
   const { result: rows, plan } = await find(terms).catch((e) => {
     if (!terms) throw e;
@@ -176,11 +210,13 @@ export async function hybridSearchKnowledge(
   const qvec = qe.vec;
   if (!qvec && !terms) return searchKnowledge(qstr, opts, viewer, diag);   // off · 쿼리 임베딩 실패 + 색인 없음 → 폴백
   if (!qvec && idOnly) { if (diag) diag.route = "lexical"; return []; }    // 낱말 채널은 방금 돌았다
-  const ix = qvec ? await chunkIndex() : null;
+  //  조각을 쓸지는 이 찾기가 볼 범위(카테고리 제한)의 조각으로 잰다(chunkIndex 주석). 범위는 아래 rrfSearch 가 같은 인자로 다시 묻는다(요청 안에서 앱 범위는 한 번만 푼다).
+  //   범위를 못 읽으면 여기서 그대로 실패한다 — 종전에도 rrfSearch · searchKnowledge 가 같은 오류를 다시 던져 찾기가 실패했다(범위 없이 찾지 않는다).
+  const ix = qvec ? await chunkIndex({ categories: await knowledgeCategoryRestriction(viewer, opts.categories) }) : null;
   if (ix) {
     try {
       const rows = await rrfSearch(qstr, qvec, terms, opts, viewer, ix);
-      if (diag) diag.route = terms ? "hybrid-chunk" : "hybrid-chunk-grep";
+      if (diag) { diag.route = terms ? "hybrid-chunk" : "hybrid-chunk-grep"; diag.chunkIndex = ix; }
       return rows;
     } catch (e) {
       console.warn(`[embeddings] 조각 검색 실패 — 문서 벡터로: ${(e as Error)?.message}`);
@@ -188,7 +224,7 @@ export async function hybridSearchKnowledge(
   }
   try {
     const rows = await rrfSearch(qstr, qvec, terms, opts, viewer);
-    if (diag) diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical";
+    if (diag) { diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical"; if (qvec) diag.chunkIndex = null; }
     return rows;
   } catch (e) {
     console.warn(`[embeddings] 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
@@ -205,7 +241,9 @@ export async function hybridSearchKnowledge(
  *  **던지지 않는다**(검색 응답을 막지 않는다) — 못 재면 {topSim:null, lexical:false}(약한 쪽 — 보조 안내가 붙는 쪽)로 답한다.
  */
 export async function knowledgeSearchStrength(qstr: string, names: readonly string[],
-  opts: { termsQuery?: string; termsNeeded?: (n: number) => number } = {}): Promise<{ topSim: number | null; lexical: boolean }> {
+  opts: { termsQuery?: string; termsNeeded?: (n: number) => number;
+    /** 그 찾기의 벡터 채널이 쓴 것(SearchRouteDiag.chunkIndex) — 주면(null 포함) 그대로 따른다. 없으면 워크스페이스 전체로 잰다(범위를 모르는 호출). */
+    chunkIndex?: ChunkIndex | null } = {}): Promise<{ topSim: number | null; lexical: boolean }> {
   const list = [...new Set(names)].slice(0, 100);
   if (!list.length) return { topSim: null, lexical: false };
   //  낱말 먼저 — 맞은 지식이 있으면 «강함» 이라 의미 거리는 재지 않는다(임베딩을 부르지 않는다 · 3차 리뷰).
@@ -242,7 +280,8 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
     const qe = await embedQuery(qstr);
     if (qe.vec) {
       //  찾기가 조각으로 찾았으면 조각으로 잰다 — 끝 절로만 맞는 문서는 문서 벡터가 멀어, 맞는 1위가 있어도 «약하다» 가 된다.
-      const ix = await chunkIndex();
+      //   카테고리를 지정한 찾기는 범위의 조각으로 켜지므로 워크스페이스 전체 판정과 다를 수 있다 — 찾기가 넘긴 것을 따른다.
+      const ix = opts.chunkIndex !== undefined ? opts.chunkIndex : await chunkIndex();
       const r = await one(itemsPool,
         `SELECT max(1 - (embedding_vector <=> $1::${ix ? ix.cast : "vector"}))::float8 AS s FROM ${ix ? "knowledge_chunk" : "knowledge"} WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
         [toVectorLiteral(qe.vec), list]) as { s?: number | null } | undefined;
@@ -296,8 +335,10 @@ async function rrfSearch(
   //   결과가 통째로 비는 리콜 붕괴가 난다(#1291 R2-#6). 최종 필터로도 이름·본문은 DB 밖으로 안 나가므로 누출은 없다.
   //   (렉시컬 채널만 미리 걸러도 되지만, 술어를 두 군데 쓰면 한쪽만 고치는 사본 결함이 생긴다 — 한 곳으로 모은다.)
   const lexWhere = terms ? "" : grepWhereSql(parsed, { ...opts, categories }, params);
-  const bmFilters = terms ? searchFilterSql({ ...opts, categories }, params).join(" AND ") : "";
-  params.push(HYBRID_CANDIDATES); const candP = `$${params.length}`;
+  //  #5234 BM25 후보는 따로 고르고(lexCandidates) 여기서는 순서가 매겨진 이름만 받는다. 그때 벡터도 없으면 후보 수를 쓰는 자리가 없어 싣지 않는다(쓰지 않는 매개변수 — 아래 ⚠).
+  const lexNames = terms ? await lexCandidates(qstr, terms, { ...opts, categories }, viewer) : null;
+  let candP = "";
+  if (!lexNames || qvec) { params.push(HYBRID_CANDIDATES); candP = `$${params.length}`; }
   // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
   //  ⚠ 질의 벡터가 없으면 이 자리를 통째로 건너뛴다 — SQL 에 안 쓰는 매개변수를 넘기면 Postgres 가 타입을 못 정해 거부한다.
   let vecCte = "";
@@ -319,11 +360,8 @@ async function rrfSearch(
   const first = exactFirst("k.name", qstr, "name", params);
   //  렉시컬 순위도 «제목에 모든 낱말이 든 것 먼저» (#4530) — 종전엔 최신순뿐이라 RRF 에 «제목이 맞았다» 는 신호가 하나도 없었다.
   const tf = terms ? "" : titleFirst("k.title", parsed, params);
-  const lexChannel = terms ? `${bm25Sql(terms, params, vis)},
-    lex AS (
-      SELECT k.name, row_number() OVER (ORDER BY ${first}b.score DESC, k.updated_at DESC) AS rank
-      FROM bm b JOIN knowledge k ON k.name = b.name WHERE ${bmFilters} ORDER BY ${first}b.score DESC, k.updated_at DESC LIMIT ${candP}
-    )` : `lex AS (
+  if (lexNames) params.push(lexNames);
+  const lexChannel = lexNames ? `lex AS (SELECT name, rank FROM unnest($${params.length}::text[]) WITH ORDINALITY AS u(name, rank))` : `lex AS (
       SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC) AS rank
       FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT ${candP}
     )`;

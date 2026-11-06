@@ -205,6 +205,9 @@ test("F6 못 끝난 작업의 안내 — 작업 번호 · 기다린 시간 · ap
   assert.match(t, /app_job_get \{"id": 77, "wait": 25\}/);
   assert.ok(BG_WAIT_SEC > 0 && BG_WAIT_SEC < 240, "claude.ai · 데스크톱 커넥터가 240초에서 끊는다");
   assert.ok(BG_PROGRESS_SEC > 0 && BG_PROGRESS_SEC < 300 && BG_PROGRESS_SEC < BG_WAIT_SEC, "Claude Code 는 5분 무소식이면 끊는다");
+  //  키트의 stdio MCP 다리(kit/cli/lively-mcp-gateway.mjs)는 도구 부르기를 «60초 동안 아무것도 오지 않으면» 끊는다 — 진행 알림이 그보다 자주 와야
+  //   200초 기다림이 다리에서 끊기지 않는다(그 다리가 처음부터 끝까지를 60초로 재던 때는 작업 번호를 잃었다).
+  assert.ok(BG_PROGRESS_SEC < 60, "키트 MCP 다리의 응답 없음 시한(60초)보다 자주 알린다");
 });
 
 test("F7 진행 알림을 못 받는 요청의 기다림 — 흔한 MCP 클라이언트(TS SDK)의 기본 요청 시한 60초보다 짧고 진행 알림 기다림보다 길지 않다 · 운영 의존이 두 값을 그대로 쓴다", async () => {

@@ -19,7 +19,7 @@ const check = (name, cond, detail = "") => {
 
 // ── 상류(게이트웨이) 스텁 ──────────────────────────────────────────────────
 //  받은 요청을 전부 기록한다(헤더 포함) — 신원·하네스 stamp 단언의 관측 장치.
-function startUpstream({ tools = [], sse = true } = {}) {
+function startUpstream({ tools = [], sse = true, dripList = false, holdOpen = false, noEol = false } = {}) {
   const seen = [];
   const srv = createServer((req, res) => {
     let body = "";
@@ -27,6 +27,49 @@ function startUpstream({ tools = [], sse = true } = {}) {
     req.on("end", () => {
       let msg = {}; try { msg = JSON.parse(body); } catch { /* */ }
       seen.push({ method: msg.method, headers: req.headers, params: msg.params });
+      //  오래 걸리는 툴 흉내(E29~E33) — 앱 백그라운드 도구처럼 응답을 붙잡는다.
+      //   slow_progress: 3초 동안 진행 알림을 흘린 뒤 결과 · slow_silent: 머리도 안 보내고 3초 뒤 결과 ·
+      //   slow_stall: 머리와 진행 알림 하나를 보낸 뒤 침묵 · slow_split: CRLF · 여러 바이트 글자가 든 결과를 한 바이트씩 ·
+      //   slow_endless: 진행 알림만 끝없이(전체 상한 시험)
+      //  dripList: tools/list 를 SSE 주석 줄로 3초 동안 흘리다 답한다(E34 — 목록은 종전처럼 처음부터 끝까지를 잰다).
+      if (dripList && msg.method === "tools/list") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        const iv = setInterval(() => res.write(": ka\n"), 300);
+        res.on("close", () => clearInterval(iv));
+        setTimeout(() => { clearInterval(iv); res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: state.tools } })}\n\n`); }, 3000);
+        return;
+      }
+      //  holdOpen: 응답 프레임을 쓰고 연결을 닫지 않는다(E35) · noEol: 응답을 줄끝 없이 쓰고 닫는다(E36).
+      if (msg.method === "tools/call" && (holdOpen || noEol)) {
+        const data = `data: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: `called:${msg.params?.name}` }] } })}`;
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (noEol) { res.end(data); return; }
+        res.write(`event: message\n${data}\n\n`);
+        const t = setTimeout(() => res.end(), 7000);   // 다리가 끝을 기다리면 시험이 먼저 실패하고, 이 뒤에 스텁이 닫힌다
+        res.on("close", () => clearTimeout(t));
+        return;
+      }
+      const slow = ["slow_progress", "slow_silent", "slow_stall", "slow_split", "slow_endless"];
+      if (msg.method === "tools/call" && slow.includes(msg.params?.name)) {
+        const name = msg.params.name;
+        const frame = (o, nl = "\n") => `event: message${nl}data: ${JSON.stringify(o)}${nl}${nl}`;
+        const progress = (n) => frame({ jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: msg.params?._meta?.progressToken, progress: n } });
+        const result = (text) => ({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text } ] } });
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (name === "slow_split") {
+          const bytes = Buffer.from(frame(result("한글🙂 split"), "\r\n"));
+          let i = 0;
+          const iv = setInterval(() => { if (i < bytes.length) res.write(bytes.subarray(i, ++i)); else { clearInterval(iv); res.end(); } }, 1);
+          return;
+        }
+        if (name === "slow_stall") { res.flushHeaders(); res.write(progress(1)); setTimeout(() => res.end(frame(result("late"))), 4000); return; }
+        let n = 0;
+        const iv = name === "slow_silent" ? null : setInterval(() => { n++; res.write(progress(n)); }, name === "slow_endless" ? 300 : 400);
+        res.on("close", () => { if (iv) clearInterval(iv); });
+        if (name === "slow_endless") return;
+        setTimeout(() => { if (iv) clearInterval(iv); res.end(frame(result(`called:${name}`))); }, 3000);
+        return;
+      }
       let result;
       if (msg.method === "tools/list") result = { tools: state.tools };
       else if (msg.method === "tools/call") result = { content: [{ type: "text", text: `called:${msg.params?.name}` }] };
@@ -114,6 +157,7 @@ process.env.LIVELY_MCP_WATCH_MS = "150";      // 워처를 테스트 속도로
 process.env.LIVELY_MCP_PROBE_TIMEOUT_MS = "1500";
 process.env.LIVELY_MCP_LIST_TIMEOUT_MS = "1500";
 process.env.LIVELY_MCP_CALL_TIMEOUT_MS = "1500";
+process.env.LIVELY_MCP_CALL_MAX_MS = "4500";        // 전체 상한(E33) — E29 의 3초 붙잡기보다 길게
 delete process.env.LIVELY_GATEWAY_URL;
 delete process.env.LIVELY_TOKEN;
 //  ⚠ 세션 자격도 반드시 지운다(#2251) — 라이블리 세션 **안에서** 테스트를 돌리면 게이트웨이가 그 pane 에
@@ -435,6 +479,109 @@ try {
       call("delegate_run", { wait_sec: 600 }) === 600_000 + slack, `got=${call("delegate_run", { wait_sec: 600 })}`);
     check("E23 delegate_run(wait=false, 즉시접수) → 기본 CALL 타임아웃(길게 줄 이유 없음)",
       call("delegate_run", { wait: false, wait_sec: 600 }) === base, `got=${call("delegate_run", { wait: false, wait_sec: 600 })}`);
+  }
+  // E29 — 앱 백그라운드 도구처럼 상류가 응답을 붙잡고 진행 알림을 흘리면, 응답 없음 시한(여기 1.5초)은 알림마다 다시 잰다 —
+  //  3초 뒤 온 결과를 받고(종전엔 처음부터 재 1.5초에 끊어 작업 번호를 잃었다), 알림은 하네스에 그 토큰 그대로 넘긴다.
+  {
+    const up = await startUpstream({ tools: T(["slow_progress"]) });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 271, method: "tools/call", params: { name: "slow_progress", arguments: {}, _meta: { progressToken: "pt-1" } } });
+    const r = await p.waitFor(271, 8000);
+    const prog = p.msgs.filter((m) => m.method === "notifications/progress");
+    const at = (m) => p.msgs.indexOf(m);
+    check("E29 진행 알림이 흐르는 동안은 기다려 결과를 받고, 알림을 하네스에 넘긴다(응답보다 먼저)",
+      r?.result?.content?.[0]?.text === "called:slow_progress" && !r?.result?.isError && prog.length >= 3
+        && prog.every((m) => m.params?.progressToken === "pt-1" && m.id === undefined && at(m) < at(r)),
+      `r=${JSON.stringify(r)} progress=${prog.length}`);
+    await p.end(); await up.close();
+  }
+  // E30 — 아무것도 오지 않으면 종전처럼 응답 없음 시한에 끊고 툴 오류로 돌려준다(멎은 게이트웨이를 오래 붙잡지 않는다).
+  {
+    const up = await startUpstream({ tools: T(["slow_silent"]) });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    const t0 = Date.now();
+    p.send({ jsonrpc: "2.0", id: 281, method: "tools/call", params: { name: "slow_silent", arguments: {}, _meta: { progressToken: "pt-2" } } });
+    const r = await p.waitFor(281, 6000);
+    const ms = Date.now() - t0;
+    check("E30 아무것도 오지 않으면 시한에 끊는다(툴 오류 · 연결 유지)",
+      r?.result?.isError === true && /응답 없음/.test(r?.result?.content?.[0]?.text || "") && ms < 2800, `ms=${ms} r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
+  }
+  // E31 — 머리와 진행 알림 하나가 온 뒤 멎으면, 마지막으로 받은 때부터 응답 없음 시한에 끊는다(흘려 읽기 중의 침묵).
+  {
+    const up = await startUpstream({ tools: T(["slow_stall"]) });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    const t0 = Date.now();
+    p.send({ jsonrpc: "2.0", id: 311, method: "tools/call", params: { name: "slow_stall", arguments: {}, _meta: { progressToken: "pt-3" } } });
+    const r = await p.waitFor(311, 6000);
+    const ms = Date.now() - t0;
+    check("E31 알림 하나 뒤 침묵하면 시한에 끊는다(진행 알림은 넘겼다)",
+      r?.result?.isError === true && /아무것도 오지 않았습니다/.test(r?.result?.content?.[0]?.text || "") && ms >= 1400 && ms < 3500
+        && p.msgs.some((m) => m.method === "notifications/progress" && m.params?.progressToken === "pt-3"),
+      `ms=${ms} r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
+  }
+  // E32 — 프레임이 바이트 단위로 쪼개져 와도(CRLF · 여러 바이트 글자) 응답을 그대로 맞춘다.
+  {
+    const up = await startUpstream({ tools: T(["slow_split"]) });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 321, method: "tools/call", params: { name: "slow_split", arguments: {} } });
+    const r = await p.waitFor(321, 6000);
+    check("E32 바이트 단위로 쪼개진 SSE 응답(CRLF · 한글 · 이모지)을 그대로 받는다", r?.result?.content?.[0]?.text === "한글🙂 split" && !r?.result?.isError,
+      `r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
+  }
+  // E33 — 진행 알림만 끝없이 오면 전체 상한(여기 4.5초)에서 끊고, 까닭을 «전체 상한»으로 말한다(«아무것도 오지 않았다»가 아니다).
+  {
+    const up = await startUpstream({ tools: T(["slow_endless"]) });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    const t0 = Date.now();
+    p.send({ jsonrpc: "2.0", id: 331, method: "tools/call", params: { name: "slow_endless", arguments: {}, _meta: { progressToken: "pt-4" } } });
+    const r = await p.waitFor(331, 9000);
+    const ms = Date.now() - t0;
+    const text = r?.result?.content?.[0]?.text || "";
+    check("E33 끝없는 진행 알림은 전체 상한에서 끊고 그 까닭을 말한다", r?.result?.isError === true && /전체 상한/.test(text) && !/아무것도 오지 않았습니다/.test(text) && ms >= 4300 && ms < 7000,
+      `ms=${ms} r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
+  }
+  // E34 — tools/list 는 응답 없음을 «아무것도 오지 않은 시간»으로 재지 않는다: 바이트가 흘러와도 목록 시한(여기 1.5초)에 끊고 스냅샷으로 답한다
+  //  (하네스가 기다리다 서버를 실패로 표시하기 전에 답해야 한다 — #1079). 흘려 읽기는 도구 부르기에만 켠다.
+  {
+    const up = await startUpstream({ tools: T(["drip_a"]), dripList: true });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    const t0 = Date.now();
+    p.send({ jsonrpc: "2.0", id: 341, method: "tools/list" });
+    const r = await p.waitFor(341, 6000);
+    const ms = Date.now() - t0;
+    check("E34 흘러오는 tools/list 도 목록 시한에 끊고 스냅샷으로 답한다", Array.isArray(r?.result?.tools) && ms < 2600, `ms=${ms} r=${JSON.stringify(r)?.slice(0, 200)}`);
+    await p.end(); await up.close();
+  }
+  // E35 — 응답 프레임이 온 뒤 상류가 연결을 닫지 않아도 거기서 읽기를 멈추고 곧바로 답한다.
+  //  시각에 기대지 않으려고 응답 없음 시한이 긴 도구(delegate_run · 50초)로 잰다 — 끝을 기다리면 시험 시한 안에 답이 오지 않는다.
+  {
+    const up = await startUpstream({ tools: T(["delegate_run"]), holdOpen: true });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 351, method: "tools/call", params: { name: "delegate_run", arguments: { wait_sec: 20 } } });
+    const r = await p.waitFor(351, 5000);
+    check("E35 응답 뒤 연결이 열려 있어도 곧바로 답한다(끝을 기다리지 않는다)", r?.result?.content?.[0]?.text === "called:delegate_run" && !r?.result?.isError, `r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
+  }
+  // E36 — 응답이 줄끝 없이 끝나도 받는다(마지막 조각 · 통째로 읽던 때와 같다).
+  {
+    const up = await startUpstream({ tools: T(["no_eol"]), noEol: true });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 361, method: "tools/call", params: { name: "no_eol", arguments: {} } });
+    const r = await p.waitFor(361, 5000);
+    check("E36 줄끝 없이 끝난 응답도 받는다", r?.result?.content?.[0]?.text === "called:no_eol" && !r?.result?.isError, `r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
   }
   // ── E24 피어(하네스) 소멸 = 이 프로세스가 죽어야 하는 유일한 경우 (#2213 릭 회귀) ──────────
   //  왜 하위프로세스로 재는가: 이 방어는 **진짜 stdio 로 서빙할 때만** 무장한다(가짜 스트림으로 무장하면

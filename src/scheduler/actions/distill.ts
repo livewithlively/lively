@@ -2,11 +2,24 @@
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
 import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { logger } from "../../log.js";
+import { BINARY_TRIAGE_RULE } from "../../org/distill/binary-triage.js";
+import type { DistillerRow } from "../../org/distill/distiller.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 증류는 세션이 수 분에 걸쳐 knowledge_save+source_link_knowledge 로 수행).
 //  멱등: 지식화된 자료는 knowledge_source 링크가 생겨 다음 배치의 source_undistilled 에서 빠진다(수렴).
 export async function runDistillInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+  return oneDispatchAtATime(() => injectBatch(params));
+}
+
+// #5235 — 증류 잡은 한 번에 하나만 배치를 낸다. 앞 잡이 판정을 기록한 뒤에 다음 잡이 고른다(왜 = org/distill/dispatch-lock.ts).
+//  차례를 못 얻으면 실패가 아니라 «안 돌았다» 다. deferred 는 엔진이 실행으로 기록하지 않는다(engine.executeAndRecord) — 잡은 due 로 남아 다음 틱이 다시 본다.
+export async function oneDispatchAtATime(run: () => Promise<{ status: string; summary: unknown }>, opts?: { waitMs?: number }): Promise<{ status: string; summary: unknown }> {
+  const { withDistillDispatch } = await import("../../org/distill/dispatch-lock.js");
+  return (await withDistillDispatch(run, opts)) ?? { status: "deferred", summary: { skipped: "다른 증류 잡이 배치를 내는 중이라 이번에는 돌지 않았습니다" } };
+}
+
+async function injectBatch(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const sessionRef = params.session ? String(params.session) : "";
   if (!sessionRef) return { status: "error", summary: { error: "타깃 상시 세션 미설정 — 관리탭 스케줄러에서 상시 세션을 선택하세요." } };
 
@@ -42,10 +55,16 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
 // #1289 자료 distill 헤드리스판 — 증류기별로 **각각** 헤드리스 배치를 접수한다(세션판과 달리 병렬 가능).
 //  중첩 방지 마커를 증류기별로 갈라(cron:<job>#<key>) 한 증류기의 전 배치가 다른 증류기를 막지 않게 한다.
 export async function runDistillHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
+  return oneDispatchAtATime(() => enqueueBatches(params, jobId, createdBy));
+}
+
+async function enqueueBatches(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
   const pick = await pickDistillerBatch(params, { one: false });
   if (pick.error) return { status: "error", summary: { error: pick.error } };
   if (pick.skipped) return { status: "ok", summary: { skipped: pick.skipped } };
   if (!pick.batches.length) return idleSummary(pick.considered, {});
+  const { laneMarker } = await import("../../org/distill/lanes.js");
+  const jobs = await distillJobIdsSafe();
   const out: unknown[] = [];
   for (const b of pick.batches) {
     // 실행 계정 우선순위: **증류기 설정 > 잡 params**(#4052 — 분류·관리와 같게) > 워크스페이스 실행 멤버(#4012 T1) > 잡 created_by.
@@ -60,7 +79,12 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
       prompt: await applyPromptOverride(params, b), requester, jobId,
       harness: headlessHarness(params, b),
       ...headlessRun(b, params),
-      marker: b.key ? "cron:" + jobId + "#" + b.key : undefined,
+      marker: b.key ? laneMarker(jobId, b.key) : undefined,
+      //  (#5235) 한 레인의 배치는 **어느 잡에서든** 한 번에 하나다 — 표식이 잡마다 달라 옛 중첩 가드는 다른 잡의 배치를 못 봤다.
+      //   맡은 레인이 없는 배치도 같다. 판정 기록은 접수가 끝나야 남아서(acceptedTaskId) 배정이 실패하는 동안엔 줄만으로 못 막는다 —
+      //   다음 잡이 같은 자료를 또 집는다(실측: 노드가 없는 CI).
+      //   이 목록은 증류 잡만 담는다. 표식 뒷부분만 비교하면 key 공간이 따로인 카테고리 레인(둘 다 default 가 있다)까지 막는다.
+      guardMarkers: jobs.map((id) => (b.key ? laneMarker(id, b.key) : "cron:" + id)),
       // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
       nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
@@ -84,7 +108,44 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     else if (acceptedId != null) await markStrandedSeenSafe(b.ids, acceptedId);
     out.push({ distiller: b.key, status: r.status, ...(r.summary as Record<string, unknown>) });
   }
-  return { status: "ok", summary: { batches: out } };
+  return { status: "ok", summary: { batches: out, ...(params.lanes_only === true ? { lanes_only: true } : {}) } };
+}
+
+/** 증류 잡의 액션 — 이 파일이 그 실행을 정의한다. */
+export const DISTILL_ACTIONS: ReadonlySet<string> = new Set(["distill_sources", "distill_sources_headless"]);
+
+/** 이번 실행이 낼 것 — 맡은 레인이 없는 자료(unassigned)를 따로 말한다. 없으면 null. */
+export interface DistillRunPlan {
+  lanes: Array<{ distiller: string; sources: number; backlog: number }>;
+  /** sources = 이번 기본 기준 배치 · total = 앞으로 그 배치들이 집을 전체. */
+  unassigned: { sources: number; total: number } | null;
+  notice: string | null; skipped: string | null; error: string | null;
+}
+
+/**
+ * 이 실행을 접수하지 않고 무엇이 나갈지만 말한다(#5235 · cron_run_plan).
+ *
+ *  레인을 지정하지 않은 잡은 맡은 레인이 없는 자료도 기본 기준으로 함께 낸다. 반만 켜도 나머지가 굶지 않게 한 의도된 동작이고(#1631)
+ *   바꾸지 않는다. 다만 그걸 **돌린 뒤에야** 알 수 있었다 — 고객사 첫 세팅에서 레인 하나를 시범으로 돌리자 슬랙 자료 50건이 기본 기준 배치로
+ *   붙어 나가 손으로 취소했다. 판정은 실행과 같은 pickDistillerBatch 하나다. 안내용 판정을 따로 두면 말과 실행이 갈린다.
+ */
+export async function planDistillRun(action: string, params: Record<string, unknown>): Promise<DistillRunPlan> {
+  const pick = await pickDistillerBatch(params, { one: action === "distill_sources" });
+  const lanes = pick.batches.filter((b) => b.key).map((b) => ({ distiller: String(b.key), sources: b.ids.length, backlog: b.backlog }));
+  const fallback = pick.batches.find((b) => !b.key);
+  let unassigned: DistillRunPlan["unassigned"] = null;
+  let notice: string | null = null;
+  if (fallback) {
+    //  실행이 집는 쪽과 같은 술어로 센다 — 레인이 있으면 방치 판정, 레인이 하나도 없으면 전역 폴백(판정 기록을 안 보고, 링크가 하나라도 있으면 뺀다).
+    //   갈리면 «이번 5건 · 전체 0건» 이나 나가지 않을 자료까지 «남은 N건» 으로 말하게 된다(둘 다 실측).
+    const claiming = pick.claiming ?? [];
+    const total = claiming.length
+      ? await (await import("../../org/distill/distiller.js")).countStrandedSources(claiming)
+      : await (await import("../../v6/source-store.js")).countUndistilledSources();
+    unassigned = { sources: fallback.ids.length, total };
+    notice = `맡은 증류기가 없는 자료 ${unassigned.sources}건(앞으로 나갈 전체 ${unassigned.total}건)이 기본 기준으로 나갑니다 — 증류기 몫만 돌리려면 lanes_only=true 로 실행하세요.`;
+  }
+  return { lanes, unassigned, notice, skipped: pick.skipped ?? null, error: pick.error ?? null };
 }
 
 interface DistillBatch {
@@ -122,7 +183,7 @@ async function onboardingHoldsDistill(): Promise<boolean> {
 //  · 미지정 → enabled 증류기 전부(배정 순서). one=true 면 그중 잔량 있는 첫 하나만.
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
-  Promise<{ batches: DistillBatch[]; considered: number; error?: string; skipped?: string }> {
+  Promise<{ batches: DistillBatch[]; considered: number; error?: string; skipped?: string; claiming?: DistillerRow[] }> {
   //  (#5167) 처음 설정을 막 끝낸 사람이 있고 리브가 아직 정리 지시를 안 받았으면 쉰다 — 기본 증류가 올린 파일을 카테고리 없이 먼저
   //   집으면 리브가 세울 레인이 빈손이 된다(org/liv/setup-status.ts 머리말). 리브가 지시를 받거나(distill_at) 하루가 지나면 풀린다.
   //   레인을 이름으로 부른 잡(params.distiller)은 쉬지 않는다 — 그런 잡은 사람이나 리브가 그 레인을 골라 세운 것이다.
@@ -162,7 +223,10 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //  «맡은» 레인 = 켜진 레인 + 자격 실패로 자동 정지된 레인. 배치는 켜진 레인만 내고,
   //   폴백 판정·방치 계산은 맡은 레인 기준으로 한다(isAutoDisabledLane 머리주석).
   const claiming = all.filter((d) => d.enabled || isAutoDisabledLane(d));
+  //  (#5235) 사람이 손으로 돌릴 때 고르는 값 — 이번 실행은 켜진 레인 몫만 낸다. 기본 기준 배치(아래 두 곳)를 내지 않는다.
+  const lanesOnly = params.lanes_only === true;
   if (!claiming.length) {
+    if (lanesOnly) return { batches: [], considered: 0, skipped: "켜진 증류기가 없어 낼 자료가 없습니다 — 증류기 몫만 돌리는 실행이라 기본 기준으로도 내지 않았습니다" };
     // 폴백 — 증류기 미등록/전부 꺼짐: 구 전역 인박스 + 기본 프롬프트(종전 동작 그대로).
     const { listUndistilledSources } = await import("../../v6/source-store.js");
     let inbox: Record<string, unknown>[];
@@ -173,7 +237,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       distillerId: null, key: null, ids: inbox.map((s) => Number(s.id)), backlog: inbox.length,
       prompt: buildDistillPrompt(inbox.length, policySummary), targeting: null,
       requester: null, harness: null, model: null, effort: null,
-    }], considered: 0 };
+    }], considered: 0, claiming };
   }
 
   //  #4052 후속 — 전용 잡이 켜진 증류기는 **그 잡이** 맡는다(예: 처음 설정이 심은 local-files 전용 10분 잡).
@@ -204,7 +268,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //   실측: 자료 12건이 방치된 채 잡은 매번 «정상» 이었다(원준님 매니지드 워크스페이스).
   //  ⚠ «인박스가 비었다» 가 아니라 «어느 켜진 레인의 **스코프에도** 안 든다» 로 재야 한다.
   //   인박스는 이미 판정(seen)한 것을 빼므로, 처리 중인 자료까지 방치로 세면 **두 번 증류**하게 된다.
-  if (!batches.length || !opt.one) {
+  if (!lanesOnly && (!batches.length || !opt.one)) {
     //  #4824 — 한 배치 = 볼 수 있는 사람이 같은 자료(oneAudienceGroup · 나머지는 다음 배치로). 기록·대상 지정이 같은 집합을 쓴다.
     const stranded = await listStrandedSources(claiming, 50, null).then(oneAudienceGroup).catch(() => [] as Record<string, unknown>[]);
     if (stranded.length) {
@@ -226,7 +290,9 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       });
     }
   }
-  return { batches, considered: enabled.length };
+  //  (#5235) 여기서 idleSummary 로 넘기면 «stranded: 0» 이라고 말하게 된다 — 뺀 것이지 없는 것이 아니다.
+  if (lanesOnly && !batches.length) return { batches, considered: enabled.length, skipped: "켜진 증류기 몫에 새로 낼 자료가 없습니다 — 맡은 증류기가 없는 자료는 이번 실행에서 뺐습니다" };
+  return { batches, considered: enabled.length, claiming };
 }
 
 //  «할 일 없음» 을 말하기 전에 **실제로 센다**(#1631, 원준님 2026-08-31).
@@ -247,6 +313,14 @@ async function idleSummary(considered: number, extra: Record<string, unknown>): 
   return { status: "ok", summary: {
     skipped: "켜진 증류기가 이미 판정함(처리 중) — 새로 낼 배치 없음",
     undistilled, stranded: 0, distillers: considered, ...extra } };
+}
+
+// 증류 잡 id 전부(꺼진 잡 포함 — 꺼도 이미 나간 배치는 돈다). 못 읽으면 빈 목록 — 자기 표식만 보는 종전 가드로 돌아간다.
+async function distillJobIdsSafe(): Promise<string[]> {
+  try {
+    const { readDistillJobs } = await import("../../org/distill/ensure-job.js");
+    return (await readDistillJobs()).map((j) => j.id);
+  } catch { return []; }
 }
 
 // 전용 잡이 맡은 증류기 — 잡 목록을 못 읽으면 아무것도 빼지 않는다(종전 동작: 전체 잡이 켜진 증류기 전부를 집는다).
@@ -326,7 +400,7 @@ function buildDistillPrompt(count: number, policySummary: string, targeted = fal
     (targeted
       ? `② 위에 지정된 대상 자료만 다뤄 — 목록을 새로 조회하지 마(source_undistilled 금지). `
       : `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). `) +
-    `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — 스텁의 filename·mime·channel 로 **볼 가치부터 판단**하고(밈·UI캡처·스크린샷 등 노이즈면 fetch 없이 skip), 가치 있으면 source_artifact(source_id)로 원본을 임시경로에 받아 그 path 를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 내용을 확보해(unavailable=삭제/이동이면 skip). 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
+    `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — ${BINARY_TRIAGE_RULE} 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
     `④ 가치 있으면 knowledge_similar 로 중복 확인 → 없으면 knowledge_save 로 증류(명확한 제목+전문, 어느 자료에서 왔는지 명시, category=내용에 맞는 도메인, type 지정). ` +
     `⑤ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정해. ${policySummary} lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리돼(승인 전엔 검색·주입에 안 뜸), 승인되면 active. drop 이면 저장하지 마(skip). ` +
     `⑥ knowledge_save 에 derived_from:[이 지식이 나온 자료 id 전부] 를 꼭 실어 — 저장과 자료↔지식 연결이 한 번에 된다(따로 source_link_knowledge 를 부르지 마). 잠긴 자료(볼 수 있는 사람만)의 내용은 더 넓게 보이는 기존 지식에 합치지 말고 새 지식으로 따로 써(합치면 서버가 409 로 거절한다). ` +

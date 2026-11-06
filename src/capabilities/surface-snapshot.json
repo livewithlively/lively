@@ -413,7 +413,7 @@
   "rest": [
    "POST /api/ui/org/member/reset-password"
   ],
-  "input_hash": "4ed624ebe4f60b35"
+  "input_hash": "160459e1264b1b93"
  },
  {
   "name": "org_member_remove",
@@ -993,7 +993,7 @@
   "rest": [
    "POST /api/ui/org/embeddings/chunk-search"
   ],
-  "input_hash": "b8724fce31395713"
+  "input_hash": "34f81246ef82b147"
  },
  {
   "name": "org_mcp_servers",
@@ -1144,7 +1144,7 @@
   "rest": [
    "POST /api/ui/org/pipeline/run-now"
   ],
-  "input_hash": "7272b62987de18ab"
+  "input_hash": "d9df0adf5218ea95"
  },
  {
   "name": "org_collector_discover",
@@ -1264,7 +1264,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "eca1f0a5ec9e48f2"
+  "input_hash": "a9b97ff4a5afeb00"
  },
  {
   "name": "org_distiller_remove",
@@ -2862,7 +2862,7 @@
   "mcp": true,
   "mutates": false,
   "rest": [],
-  "input_hash": "8eb98c3baa73c9cb"
+  "input_hash": "740f3343039250aa"
  },
  {
   "name": "source_trash_list",
@@ -3922,7 +3922,17 @@
   "rest": [
    "POST /api/ui/cron/:id/run"
   ],
-  "input_hash": "e9f5a6623f0f7ef5"
+  "input_hash": "7e3dfb45ed67a0f0"
+ },
+ {
+  "name": "cron_run_plan",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/cron/:id/run-plan"
+  ],
+  "input_hash": "c55c5e0068a50942"
  },
  {
   "name": "list_unmapped",
@@ -5674,7 +5684,7 @@
   "rest": [
    "POST /api/ui/ai-runs"
   ],
-  "input_hash": "3d22611bc509f4a2"
+  "input_hash": "db9221ba20989c31"
  },
  {
   "name": "app_ai_run_get",
@@ -5824,7 +5834,7 @@
   "rest": [
    "POST /api/ui/agent-jobs"
   ],
-  "input_hash": "1c99b94efae8cdcd"
+  "input_hash": "e7923309c8a52b2c"
  },
  {
   "name": "agent_job_get",

@@ -341,12 +341,25 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/knowledge-chunk-search.pg-test.mjs
+      # ⑤-b1e2 조각을 쓸지 범위별로 잰다 — 카테고리를 지정한 찾기 · 앱 범위 안의 소환은 그 카테고리 조각의 98% 로 켜진다(다른 카테고리의 큰 묶음을 기다리지 않는다).
+      #    조각 · 카테고리 연결 · 공개범위가 한 셈에 묶여 있어 실제 pgvector 로 본다.
+      - name: 조각 검색 범위별 준비 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/knowledge-chunk-scope.pg-test.mjs
       # ⑤-b1f 조각 색인 · 찾기의 워크스페이스 격리(#5204) — 벡터 후보에 워크스페이스 조건이 없어 행 보안이 격리의 전부다. 앱 역할 + FORCE RLS 로 본다.
       - name: 조각 워크스페이스 격리 PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/knowledge-chunk-rls.pg-test.mjs
+      # ⑤-b1g 백필 CLI(#5232) — `.env` 로 켠 박스 그대로 CLI 를 자식 프로세스로 띄운다. 숫자 설정 없이 1초를 넘기는 문서 · 시간 상한 · 종료코드 · 채운 벡터를 실제 DB 로 본다.
+      - name: 백필 CLI PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/embedding-backfill-cli.pg-test.mjs
       # ⑤-b2 증류기 «카테고리 붙이기» 레인(#4194, 저장소 org_classifier) — 사각지대를 **스코프**로 세는지(인박스로 세면 이미
       #    본 지식까지 «영영 못 받는다» 로 센다) · 폐지된 재분류 모드 레인이 «일하는 레인» 으로 안 잡히는지 · 잔량이 상한 없이
       #    세지는지 · 카테고리를 잃은 지식(반려·휴지통 복원)의 '봤다' 기록이 지워지는지(지식이 붙은 분류 삭제는 #4233 부터 409). 전부 SQL 조건이다.
@@ -355,6 +368,20 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/classifier-lanes.pg-test.mjs
+      # ⑤-b3 증류 레인 설정이 실제로 듣는지(#5235) — liv- 키 레인의 목적지(비우기·되살리기·없는 서랍)를 다시 읽은 행으로, 레인을 지정하지 않은
+      #    증류 실행의 계획(cron_run_plan)·lanes_only 를 접수된 org_task 행으로 잰다. 두 결함 다 «저장은 200 인데 안 듣는다» 라 응답으로는 못 잡는다.
+      - name: 증류 레인 설정 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/distill/lane-settings.pg-test.mjs
+      # ⑤-b4 증류 잡 정비·겹침·1회성 시각(#5235 보강) — 레인 저장이 사람이 끈 잡을 되살리나 · 두 잡이 같은 자료를 집나 · 1회성이 시각을 지키나.
+      #    셋 다 SQL 과 동시 실행에서만 드러나 잡 행 · 접수된 위탁 행 · 실제 틱으로 잰다.
+      - name: 증류 잡 정비·겹침 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/distill/lane-jobs.pg-test.mjs
       # ⑤-c 수집 판(#3994 T3) — 매니지드에서 수집을 게이트웨이 밖 일시 유닛으로 뺀 경로의 **run 행 상태 전이**.
       #    판 엔트리를 실제 프로세스로 띄우고(수집 자식까지 진짜 run-sync), 게이트웨이 경로는 가짜 op 소켓 앞에서 돌린다.
       #    «판 먼저·행 나중» · 자기 행을 본 뒤에만 수집 · 끝 기록은 running 행에만 · 취소는 행을 먼저 닫는다 ·

@@ -54,8 +54,9 @@ services:
 
   # ── 임베딩 사이드카(선택, profile=embeddings) — OpenAI-compatible /v1/embeddings(Ollama, CPU). ──
   #  스왑: 다른 모델=EMBEDDINGS_MODEL + ollama pull; 다른 런타임/외부 API=EMBEDDINGS_BASE_URL 교체.
+  #  ⚠ 판을 고정한다 — latest 면 박스마다 설치 시점의 판이 깔린다. 올릴 땐 아래 두 줄을 같은 판으로(deploy/enable-embeddings.test.mjs).
   embeddings:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.13
     profiles: ["embeddings"]
     ports:
       - "127.0.0.1:${EMBEDDINGS_PORT:-11434}:11434"   # 네이티브 게이트웨이가 localhost 로 접근
@@ -65,7 +66,7 @@ services:
     restart: unless-stopped
 
   embeddings-init:   # 최초 1회 모델 pull(멱등). store 의 임베딩 호출 전에 모델 준비.
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.13
     profiles: ["embeddings"]
     depends_on: [embeddings]
     environment:

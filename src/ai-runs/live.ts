@@ -4,7 +4,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { RateWindow } from "../apps/app-chat-send.js";
-import { PROXY_TOKEN_PREFIX, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
+import { PROXY_TOKEN_PREFIX, callerUnattended, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
 import { parseAccountSettings } from "./plan.js";
 
 /** 워크스페이스 Anthropic API 키의 자격 금고 kind(org_credential_set kind=anthropic_api_key · owner=gateway). */
@@ -108,6 +108,13 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     //  «라이블리 MCP 만»(ai.mcp_only) — 앱 판 지시와 같은 판에서 읽고 · 이어받기 · 형식 재시도는 원래 작업 행의 값.
     mcpOnly: async (app, who, job) => (await import("../apps/app-job-mcp-only.js")).resolveJobMcpOnly(app, who, job),
     jobMcpOnly: async (jobId) => (await import("../agent-jobs/store.js")).agentJobMcpOnly(jobId),
+    //  작업별 라이블리 도구 허용 목록(ai.tools) — 같은 판에서 읽고 · 이어받기는 겹치는 것만 · 형식 재시도는 원래 작업 행의 목록.
+    toolAllowlist: async (app, who, job) => (await import("../apps/app-job-tools.js")).resolveJobTools(app, who, job),
+    jobToolAllowlist: async (jobId) => (await import("../agent-jobs/store.js")).agentJobToolAllowlist(jobId),
+    //  생각 깊이(effort) — 이어받기(안 주면) · 형식 재시도는 원래 작업 행의 값(판이 하네스에 실은 그 값).
+    jobEffort: async (jobId) => (await import("../agent-jobs/store.js")).agentJobEffort(jobId),
+    //  작업 행의 도구 호출 단계 — 작업 실행 하나 보기가 싣는다.
+    jobSteps: async (jobId) => (await import("../agent-jobs/store.js")).agentJobSteps(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,
@@ -153,8 +160,19 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     isAdmin,
     isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
     memberFacts: memberFactsOf,
+    //  #1639 — 앞단 서명 신원(사람의 브라우저 요청)에는 행이 없다. 도구 부르기 · 백그라운드 작업의 돌기 신원은 시작할 때 잰 표시를 읽는다.
+    appServerUnattended: async (user) => {
+      if (user.appCallId != null) return (await import("../apps/app-server-call-store.js")).appCallUnattended(user.appCallId);
+      if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobUnattended(user.appJobId);
+      return false;
+    },
   };
   return cached;
+}
+
+/** #1639 이 호출이 사람이 보지 않는 자리에서 왔나(service.callerUnattended) — 앱 도구 · 백그라운드 작업의 시작이 재서 그 행에 남긴다. */
+export async function appCallerUnattended(c: { member: string; tokenHashPrefix?: string | undefined; session?: string | undefined }): Promise<boolean> {
+  return callerUnattended(c, await liveAiRunDeps());
 }
 
 /**

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import {
-  listIngestPolicies, upsertIngestPolicy, removeIngestPolicy, ingestObservability, upsertDistiller, removeDistiller,
+  listIngestPolicies, upsertIngestPolicy, removeIngestPolicy, ingestObservability, saveDistiller, removeDistiller,
   type DistillerUpsertInput
 } from "../../org/store.js"; // #1289 자료 증류기 CRUD
 // #1289 자료 증류기 — 스코프(배타 배정)·커버리지·프롬프트 조립. CRUD 는 store, 이건 읽기·판정 계층.
@@ -142,6 +142,7 @@ export const ingestDistillersCapabilities: Capability[] = [
     "각 항목의 input 이 종류(source|knowledge). 두 종류는 저장소가 따로라 id·key 공간이 겹친다(예: 둘 다 default) — 자료 레인은 org_distiller_upsert·remove·preview 로, 카테고리 붙이기 레인은 org_distiller_category_upsert·remove·preview 로 다룬다(섞어 부르면 400·404). " +
     "coverage = 자료 레인 커버리지(레인별 잔량 · 어느 레인에도 안 걸리는 자료와 그 채널) + coverage.knowledge(미분류 지식 수 · 켜진 레인 어디에도 안 걸리는 수 · 레인별 잔량). " +
     "배정은 종류마다 priority 내림차순 — 한 자료·지식은 가장 앞선 레인 하나에만 간다. 켜진 자료 레인이 없으면 전 자료 공통 기본 증류, 켜진 카테고리 붙이기 레인이 없으면 미분류 지식 전부를 기본 기준 하나로 본다. " +
+    "켜진 자료 레인이 있어도 coverage.uncovered(맡은 레인이 없는 자료)는 버려지지 않는다 — 레인을 지정하지 않은 증류 잡이 돌 때 기본 기준으로 함께 나간다(cron_run_plan 으로 미리 본다). " +
     "이미 붙은 카테고리가 틀린 것(재분류)은 증류기가 아니라 점검(관리기 «분류 어긋남 보정»)이 한다.",
     [{ method: "GET", paths: ["/api/ui/org/distillers"], parse: () => ({}) }],
     async () => {
@@ -168,19 +169,21 @@ export const ingestDistillersCapabilities: Capability[] = [
     "스코프: match_kinds(slack·email…)·match_system·include/exclude_channels·include/exclude_authors·exclude_bots·min_chars·lookback_days. " +
     "기준: criteria_md(무엇을 지식화하나 — 팀마다 다른 자유서술). " +
     "형식: format_md(결과 문서 모양)·target_category(분류 고정)·default_type(page-type)·name_prefix·thread_aware(스레드를 한 지식으로). " +
-    "실행: batch_size·mode(headless|session)·session_ref·harness(AI 제공자)·model·effort·requester. priority 높을수록 자료를 먼저 가져간다.",
+    "실행: batch_size·mode(headless|session)·session_ref·harness(AI 제공자)·model·effort·requester. priority 높을수록 자료를 먼저 가져간다. " +
+    "켜진 채 저장하면 응답 job_plan 이 이 레인을 돌릴 잡을 말한다 — action=create 면 레인을 맡을 잡이 없어 전체 잡(distill-lanes)을 새로 만든 것이고(맡은 레인이 없는 자료도 기본 기준으로 함께 나간다), " +
+    "uncovered=true 면 돌릴 잡이 없다(꺼진 잡을 되살리지 않는다 — cron_set 으로 켠다).",
     [{ method: "POST", paths: ["/api/ui/org/distillers"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       refuseForeignFields(input);
       const existing = input.id !== undefined && input.id !== null && input.id !== ""
         ? await getDistiller(Number(input.id)) : (input.key ? await getDistiller(String(input.key).trim()) : undefined);
       await refuseCategoryLaneRef(input, !!existing, "upsert");
-      const distiller = await upsertDistiller(input as DistillerUpsertInput, actorOf(user), "web");
+      const { row: distiller, job_plan } = await saveDistiller(input as DistillerUpsertInput, actorOf(user), "web");
       // 기준을 바꿔 **이미 보고 버린 자료를 다시 보고 싶을 때** — 판정 이력을 비운다.
       //  증류된 자료는 knowledge_source 가 계속 거르므로 중복 증류는 안 난다(되돌아오는 건 '버린 것'뿐).
       let reset = 0;
       if (input.reset_seen === true) reset = await clearDistillerSeen(Number((distiller as Record<string, unknown>).id));
-      return { distiller, ...(input.reset_seen === true ? { reset_seen: reset } : {}) };
+      return { distiller, ...(job_plan ? { job_plan } : {}), ...(input.reset_seen === true ? { reset_seen: reset } : {}) };
     }, {
       id: z.number().optional(),
       key: z.string().optional().describe("증류기 식별자(소문자 슬러그). 같은 key 로 다시 저장하면 갱신."),
@@ -198,7 +201,7 @@ export const ingestDistillersCapabilities: Capability[] = [
       lookback_days: z.number().nullable().optional().describe("최근 N일만. 비우면 전체(백필)."),
       criteria_md: z.string().nullable().optional(),
       format_md: z.string().nullable().optional(),
-      target_category: z.string().nullable().optional(),
+      target_category: z.string().nullable().optional().describe("이 레인의 지식이 갈 카테고리 key(이미 있는 활성 카테고리만). 비우면 배치가 내용으로 고른다. ⚠ key 가 liv-<카테고리key> 인 레인은 key 가 곧 목적지다 — 그 카테고리가 있으면 비울 수 없고(400) 안 주면 key 에서 채운다. 그 카테고리가 없으면 비워진다."),
       default_type: z.string().nullable().optional(),
       name_prefix: z.string().nullable().optional(),
       thread_aware: z.boolean().optional().describe("스레드(부모·답글)를 묶어 하나의 지식으로(기본 true)."),

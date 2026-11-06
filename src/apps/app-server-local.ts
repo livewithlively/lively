@@ -36,7 +36,7 @@ import type * as lam from "../net/aws/lambda-lite.js";
 import { stateDir } from "../ops/state-dir.js";
 import { blobTenant } from "./app-blob-store.js";
 import { HTTP_INTEGRATION_CT } from "./app-server-stream.js";
-import { GUARD_READY_PATH } from "./app-server-guard.js";
+import { GUARD_HEADER, GUARD_READY_PATH } from "./app-server-guard.js";
 import {
   DockerDriver, DockerError, GUARD_IN_CONTAINER, appRunPolicy, buildRunPolicy, type AppRunSpec, type BuildRunSpec, type ContainerDriver,
 } from "./app-server-docker.js";
@@ -502,7 +502,20 @@ function sendStream(r: Resolved, l: Live, req: ReturnType<typeof requestOfEvent>
           done();
         }
       }
-      resolve({ status: 200, executedVersion: o.version, contentType: HTTP_INTEGRATION_CT, events: events() });
+      const answer = (): void => resolve({ status: 200, executedVersion: o.version, contentType: HTTP_INTEGRATION_CT, events: events() });
+      //  검사 층의 «앱에 못 닿음» — 앱이 부르는 도중 끝나면 같은 컨테이너의 검사 층이 잠깐 더 살아 있어 이 502 로 답할 수 있다(앱이 끝난 뒤 컨테이너가 멈출 때까지 틈이 있다).
+      //   끊긴 것과 같은 일이므로 위 hreq error 와 같은 판정을 탄다 — 안 그러면 누가 먼저냐에 따라 같은 사고가 함수 오류도 되고 앱 응답도 된다(그때는 죽은 컨테이너도 안 걷힌다).
+      //   컨테이너가 살아 있으면(앱만 못 닿았다) 검사 층의 답을 그대로 넘긴다.
+      if (res.statusCode === 502 && res.headers[GUARD_HEADER] === "app-unreachable") {
+        void diedDuring(r, l, o).then((out) => {
+          if (!out) { answer(); return; }
+          res.destroy();
+          done();
+          resolve(out);
+        }, answer);
+        return;
+      }
+      answer();
     });
     hreq.end(req.body);
   });
@@ -511,6 +524,7 @@ function sendStream(r: Resolved, l: Live, req: ReturnType<typeof requestOfEvent>
 /**
  * 부르는 도중 컨테이너가 죽었나(메모리 상한 · 앱이 끝남) — 죽었으면 Lambda 와 같은 꼴의 함수 오류(Runtime.OutOfMemory · Runtime.ExitError)로 돌려주고
  *  죽은 컨테이너를 걷는다(다음 부르기가 새로 띄운다). 끊긴 직후엔 Docker 가 아직 «도는 중» 이라 할 수 있어 2초까지 다시 본다. 살아 있으면 null(망 오류).
+ *  연결이 끊겼을 때와 검사 층이 «앱에 못 닿음» 으로 답했을 때 부른다(sendStream).
  */
 async function diedDuring(r: Resolved, l: Live, o: { id: string; t0: number; memMb: number; initMs: number | null; version: string }): Promise<lam.StreamInvokeOut | null> {
   let st = await r.driver.state(l.name).catch(() => null);

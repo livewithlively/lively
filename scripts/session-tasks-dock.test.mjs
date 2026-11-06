@@ -66,11 +66,18 @@ const task = (o) => ({ id: "t", kind: "shell", title: "작업", status: "running
     "⑱ 화면은 **스냅샷만** 본다 — 접기를 다시 하지 않는다(두 벌이면 갈린다)");
   //  ⑲ 연결 살림은 #3699 에서 **세션당 한 벌**(web/session-events.ts)로 옮겼다 — 대화 파일 통보가 같은
   //   통로를 쓰는데 표면마다 각자 열면 같은 세션에 소켓이 둘이 된다. 불변식은 그대로고 소유자만 바뀌었다.
-  ok(/onSessionEvents\(o\.sessionId, handle\)/.test(dock),
+  ok(/onSessionEvents\(o\.sessionId, handle[,)]/.test(dock),
     "⑲ 도크가 공용 연결(session-events)을 쓴다 — 표면마다 SSE 를 따로 열지 않는다");
+  //  #5398 — 도크는 **세션 화면의 바깥 틀**을 넘겨, 그 화면이 안 보이면 연결을 놓게 한다. 도크 자신(host)을 넘기면
+  //   도는 작업이 없어 도크가 숨을 때 화면이 보이는데도 끊긴다(승인이 안 온다).
+  ok(/onSessionEvents\(o\.sessionId, handle, \{ anchor: o\.anchor \?\? null \}\)/.test(dock),
+    "⑲-b 도크가 화면의 바깥 틀(anchor)을 연결에 넘긴다(#5398)");
+  ok(/mountSessionTasks\(liveDock, \{[^}]*anchor: wrap,/.test(chat),
+    "⑲-c 대화창이 도크에 자기 바깥 틀(wrap)을 넘긴다 — 도크 자리(liveDock)가 아니다(#5398)");
   const bus = read("web/session-events.ts");
   ok(/SILENCE_MS/.test(bus), "⑳ 말 없는 연결을 살아 있다고 착각하지 않는다(하트비트 침묵 감시)");
-  ok(/if \(cur\.subs\.size\) return;/.test(bus),
+  //  #5398 — 구독이 남으면 닫지 않되, 남은 구독이 아무도 안 보면 그 자리에서 끊는다(실행으로는 scripts/session-stream-shown.test.mjs S10·S11).
+  ok(/if \(cur\.subs\.size\) \{ reconcile\(cur\); return; \}[^\n]*\n\s*cur\.closed = true;/.test(bus),
     "㉑ 마지막 구독이 떠나면 연결을 닫는다 — 서버에선 이 연결이 대화 파일 감시의 참조다(#3699)");
 }
 

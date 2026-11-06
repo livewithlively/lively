@@ -1160,6 +1160,25 @@ export function launchNames(harnesses = []) {
   return names.length ? names : ["claude"];
 }
 
+/** 설치 끝 안내 — «어디서 켜면 맥락이 따라오나» 를 이 컴퓨터의 기록 범위(#5016) 그대로 말한다.
+ *  종전 «아무 폴더에서든» 은 기본값이 «작업 폴더에서만» 이 된 뒤 거짓이 됐다 — 배선은 ✓ 인데 일반 폴더에선 맥락이 안 들어온다.
+ *  scope 가 없으면 아직 모른다(설치 시드가 못 닿음 · 구 게이트웨이) — 지금은 켜져 있어도 서버 기본값이 «작업 폴더에서만» 이라 첫 세션에
+ *  사본을 받으면 일반 폴더가 꺼진다(record-scope.mjs 머리말). 그래서 단정하지 않는다. needsRoot 면 등록 명령을 함께 보여 준다. */
+export function launchNotice(label, { scope = null, roots = 0 } = {}) {
+  if (scope === "anywhere") return { line: `이제 아무 폴더에서든 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
+  if (!scope) return { line: `이제 ${label} 를 켜면 회사 맥락이 따라옵니다. 일반 폴더에서 꺼져 있으면 그 폴더에서 lively work-root add 를 실행하세요.`, needsRoot: false };
+  if (roots > 0) return { line: `이제 작업 폴더(${roots}개)에서 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
+  return { line: `아직 작업 폴더가 없어, 일반 폴더에서는 ${label} 를 켜도 회사 맥락이 들어오지 않습니다.`, needsRoot: true };
+}
+
+export async function sayLaunchNotice(harnesses, out = say) {
+  const launch = launchNotice(launchNames(harnesses).map(bold).join(" · "), (await recordScopeState()) || {});
+  out(`  ${launch.line}`);
+  if (!launch.needsRoot) return;
+  out(`  쓰는 폴더에서 한 번 실행하세요: ${bold("lively work-root add")}`);
+  out(dim("  (모든 폴더에서 켜려면: lively scope anywhere — 개인 폴더의 대화도 워크스페이스에 기록됩니다)"));
+}
+
 // ── WSL 안내(#5041) — 윈도우에 깐 라이블리는 WSL 안의 AI 가 쓰지 않는다 ─────────────────────────
 //  WSL 의 Cursor·Claude Code 는 리눅스 홈(~/.cursor·~/.claude)을 읽는다. 윈도우의 Cursor 로 WSL 폴더를 열어도 Cursor 는
 //  WSL 쪽 ~/.cursor/mcp.json 을 읽고 MCP 를 WSL 안에서 띄운다(Cursor 포럼 직원 답변 2026-05-08, 3.3.12 편집기 창). 고객 PC 가
@@ -1360,7 +1379,7 @@ async function syncKit({ label, offerHarness, want = "" }) {
 
     say("");
     say(green(bold("=== 끝! ===")));
-    say(`  이제 아무 폴더에서든 ${launchNames(harnesses).map(bold).join(" · ")} 를 켜면 회사 맥락이 따라옵니다.`);
+    await sayLaunchNotice(harnesses);
     say(dim("  (훅은 세션 시작에 스냅샷됩니다 — 이미 켜 둔 세션이 있으면 껐다 켜세요.)"));
     say(dim("  상태 확인: ") + bold("lively status") + dim("    문제 진단: ") + bold("lively doctor"));
     // WSL(#5041) — 윈도우에서 install·setup 할 때만(자동·수동 update 마다 되풀이하지 않는다 — status 가 흐린 한 줄로 늘 보여 준다).
@@ -1968,6 +1987,7 @@ async function cmdUninstall(opts) {
 async function gatherStatus() {
   const gw = gateway(), tok = token();
   const st = {
+    recordScope: await recordScopeState(),   // 파일만 읽는다 — 네트워크가 죽어도 값이 나온다(아래 이른 return 앞이어야 한다)
     cli: CLI_VERSION,
     gateway: { url: gw || null, reachable: false, error: null },
     account: { authenticated: false, id: null, name: null },
@@ -2400,6 +2420,9 @@ async function cmdStatus(opts) {
   //  사람에겐 할 일이 없다. 경고색으로 매번 재촉하지 않는다(격리 리뷰 #5041).
   const wsl = wslHint(gateway(), wslDistros());
   if (wsl) say(dim(`  WSL           ${wsl.distros.join(", ")}   WSL 안의 AI 는 이 설치를 쓰지 않습니다 — WSL 에서도 쓰려면 WSL 터미널에서: ${wsl.cmd}`));
+  // 기록 범위(#5016) — 배선이 전부 ✓ 여도 지금 폴더가 범위 밖이면 맥락이 안 들어온다. 사본이 없으면(scope 없음) 판정도 «켬» 이라 줄을 안 쓴다.
+  const sc = st.recordScope;
+  if (sc?.scope) say(`  기록 범위     ${scopeSummary(sc, (ok) => (ok ? green("켜짐") : yellow("꺼짐")))}`);
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
   if (st.node?.registered) {
@@ -2429,6 +2452,7 @@ async function cmdStatus(opts) {
       say(dim("     (opencode 는 ~/.claude/skills 도 함께 읽습니다 — 위 수치는 opencode 전용 자리에 심은 것만 셉니다)"));
     }
   }
+  if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold("lively work-root add"));
 }
 
 async function cmdDoctor(opts) {
@@ -2582,6 +2606,8 @@ async function cmdDoctor(opts) {
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
   chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
+  // 꺼진 폴더는 고장이 아니라 설정이다 — 실패로 세지 않되, «모두 정상» 인데 맥락이 안 들어오는 일이 없게 값을 보여 준다.
+  if (st.recordScope?.scope) chk("기록 범위", true, scopeSummary(st.recordScope, (ok) => (ok ? "켜짐" : "꺼짐 — 쓰는 폴더에서: lively work-root add")));
 
   if (opts.json) { jsonOut({ status: st, checks }); return; }
   say(`\n${bold("라이블리 진단")}\n`);
@@ -2800,6 +2826,18 @@ async function loadRecordScope() {
   catch { die("이 설치엔 기록 범위 모듈이 없습니다 — `lively update` 로 키트를 최신으로 받으세요."); }
 }
 const SCOPE_LABEL = { work_folders: "작업 폴더에서만", anywhere: "어디서나" };
+// 기록 범위 현황 — 설치 끝 안내·status·doctor 가 같은 값을 본다. 판정 모듈이 없는 옛 설치면 null 이다(진단은 여기서 죽으면 안 된다).
+async function recordScopeState() {
+  try {
+    const rs = await import(new URL("../hooks/record-scope.mjs", import.meta.url).href);
+    const settings = rs.effectiveSettings(LIVELY);
+    const dir = sessionFolderOf(rs);
+    const d = rs.decideRecordScope({ env: process.env, dir, lively: LIVELY });
+    return { scope: settings?.scope ?? null, roots: rs.workRootsOf(LIVELY, settings).length, dir, inScope: d.inScope, reason: d.reason };
+  } catch { return null; }
+}
+// 사람이 읽는 한 줄 — 켜짐·꺼짐 표기만 표면마다 다르다(status 는 색, doctor 는 할 일까지).
+const scopeSummary = (sc, onOff) => `${SCOPE_LABEL[sc.scope]}${sc.scope === "work_folders" ? ` · 작업 폴더 ${sc.roots}개` : ""} · 지금 폴더 ${onOff(sc.inScope)}`;
 // 등록·삭제 결과를 서버에 올렸는지 한 줄로 — 못 올렸으면 언제 다시 하는지까지 말한다.
 const syncNote = (synced) => synced ? "" : dim("\n  지금은 서버에 못 닿아 이 컴퓨터에만 저장했습니다 — 다음 세션 시작 때 서버(웹 설정)에도 올립니다.");
 
@@ -2819,7 +2857,7 @@ async function cmdScope(rest) {
   if (!rs.SCOPES.includes(arg)) die("기록 범위는 work-folders 또는 anywhere 중 하나여야 합니다.", 2);
   const r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), scope: arg });
   say(green(`기록 범위 → ${bold(SCOPE_LABEL[arg])}`) + dim(arg === "anywhere"
-    ? "  (어느 폴더에서 켠 AI 든 라이블리에 연결됩니다)"
+    ? "  (어느 폴더에서 켠 AI 든 라이블리에 연결되고 대화도 워크스페이스에 기록됩니다)"
     : "  (작업 폴더·라이블리 프로젝트 폴더에서 켠 AI 만 연결됩니다 — 목록: lively work-root)") + syncNote(r.synced));
 }
 
@@ -3162,13 +3200,15 @@ async function cmdSetup(opts = {}) {
 
 // 설치 완료 안내 — 클라우드·자체 호스팅 **두 출구가 같은 말**을 하도록 한 자리에 둔다(정적 문구만 · #1024).
 //  자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
-function setupDoneHints() {
-  say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
+export function setupDoneHints(out = say) {
+  out(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
   // 노드 연결은 **login·install 과 별개의 단계**다 — 이 안내가 없으면 설치를 끝낸 사람이 [내 컴퓨터] 목록에
   //  자기 기계가 없는 것을 보고 "연결이 실패했다"고 읽는다(실제로는 아무도 시키지 않은 명령이 남아 있는 것).
   //  문서(#/learn/docs/nodes)엔 두 줄로 적혀 있지만 설치 흐름의 어느 출력에도 나오지 않았다.
   //  ⚠ 선택이다 — 웹에서 이 컴퓨터로 세션을 열거나 작업을 맡길 때만 필요한 상시 데몬이라 «시키지» 않고 알린다.
-  say(dim("  ") + bold("lively node --daemon") + dim(" 을 실행하면 이 컴퓨터가 [내 컴퓨터] 목록에 연결됩니다(선택 — 웹에서 세션 열기·작업 위탁)."));
+  out(dim("  ") + bold("lively node --daemon") + dim(" 을 실행하면 이 컴퓨터가 [내 컴퓨터] 목록에 연결됩니다(선택 — 웹에서 세션 열기·작업 위탁)."));
+  // `curl … | sh` 는 자식 셸이라 이 창의 PATH 는 그대로다 — 바로 `lively status` 를 치면 설치가 안 된 것처럼 보인다(실측: 고객이 본 그 오류가 그대로 다시 나온다).
+  out(dim(`  (지금 창에서 'lively: command not found' 가 나면 ${WIN ? "새 PowerShell 창을 여세요" : "새 터미널을 여세요"})`));
 }
 
 // ── 10. 인자 파싱 · 디스패치 ───────────────────────────────────────────────

@@ -67,5 +67,34 @@ const mainTs = read("web/v2/main.ts");
 check(/installedAppId: \(\) => \{ const t = tabsApi\?\.current\(\); return t && \/\^#\\\/i\\\/\/\.test\(t\.route\) \? t\.appId : null; \}/.test(mainTs),
   "W9 셸이 #/i/… 화면에서만 그 탭의 앱 id 를 레일에 알려 준다(세션 화면의 appId 는 넘기지 않는다)");
 
+//  #5319 4차(원준 2026-11-05 «홈과 자료 이거 두 개를 맨 위에 고정된 앱으로») — 자료를 홈 바로 뒤에 기기당 한 번 고정한다.
+//   #2423 청소(옛 기본값의 자료 내리기)보다 뒤에 돌고, 정본이 도착하면 그 한 번만 정본에도 끼운다(그 뒤 사람이 빼면 그대로).
+{
+  const railTs = read("web/v2/rail.ts");
+  const initAt = railTs.indexOf("if (!localStorage.getItem(SRC_UNPIN_STORE))"), pinAt = railTs.indexOf("if (!localStorage.getItem(SRC_PIN_STORE))");
+  check(initAt > 0 && pinAt > initAt && /const SRC_PIN_STORE = deviceStore\('lively_v2_rail_src_pinned_5319'\);/.test(railTs),
+    "P1 자료 고정은 기기당 한 번 · #2423 청소 뒤에 돈다");
+  check(/out\.splice\(h >= 0 \? h \+ 1 : 0, 0, 'sources'\);/.test(railTs) && /if \(list\.includes\('sources'\)\) return \[\.\.\.list\];/.test(railTs),
+    "P2 자리는 홈 바로 뒤(홈이 없으면 맨 앞) · 이미 있으면 그대로");
+  check(/const pinNow = pinnedSrcThisLoad;\n\s*pinnedSrcThisLoad = false;\n\s*if \(pinNow && !order\.includes\('sources'\)\)/.test(railTs),
+    "P3 정본이 도착하면 이번 로드에 처음 고정한 경우에만 정본에도 끼운다 — 다시 읽기마다 사람의 빼기를 되돌리지 않는다");
+  const sideTs = read("web/v2/side.ts");
+  check(!/v2-langtg/.test(sideTs) && /function retireScreenLang\(\): void \{ if \(screenLangOn\(\)\) setScreenLang\(false\); \}/.test(sideTs) && /function navRow\(\): HTMLElement \{\n\s*retireScreenLang\(\);/.test(sideTs),
+    "P4 맨 윗줄 «EN» 알약은 없다 — 켜 둔 채 남은 영어 보기는 한 번 끈다(끌 문이 없어졌으므로)");
+}
+
+//  #5319 4차 1안(원준 2026-11-05) — 사이드바를 접으면 검색이 레일 맨 위로 오고, 맨 윗줄은 창을 가로지르지 않는다(레일이 보일 때).
+{
+  const railTs = read("web/v2/rail.ts"), mainTs2 = read("web/v2/main.ts"), railCss = read("public/styles/47-v2-rail.css");
+  check(/class: 'v2-rail-it v2-rail-search'[\s\S]*?onclick: \(\) => hooks\.onSearch\?\.\(\)/.test(railTs) && /el\('div', \{ class: 'v2-rail-top' \}, el\('div', \{ class: 'v2-rail-ws' \}, stackTile\(\)\), search\)/.test(railTs)
+    && /onSearch: \(\) => omniOpen\(\),\s+\/\/ #5319/.test(mainTs2),
+    "P5 레일 맨 위(워크스페이스 아래) [검색] 칸이 통합검색을 연다");
+  check(/\.v2-rail-search \{ display: none; \}/.test(railCss) && /#v2-root\.topbar-web\.side-closed:not\(\.rail-hidden\) \.v2-rail-search \{ display: flex;/.test(railCss)
+    && /#v2-root\.has-topbar\.topbar-web\.side-closed:not\(\.rail-hidden\) > \.v2-topbar \{\s+grid-column: 1 \/ 3;/.test(railCss)
+    && /side-closed:not\(\.rail-hidden\) > \.v2-topbar > \.v2-side-nav \{ display: none; \}/.test(railCss)
+    && /side-closed:not\(\.rail-hidden\) > \.v2-main,[\s\S]*?\{ grid-row: 1 \/ -1; \}/.test(railCss),
+    "P6 [검색] 칸은 브라우저에서 사이드바를 접었을 때만 서고, 그때 맨 윗줄은 레일 칸 위에만(☰) — 본문 · 우측 사이드바는 맨 위부터. 레일까지 걷으면 종전 전폭 줄(☰ 를 잃지 않게)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

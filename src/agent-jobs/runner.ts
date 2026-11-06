@@ -89,6 +89,9 @@ export interface RunnerJob {
   tailMax: number;
   resultMax: number;
   stderrMax: number;
+  /** 도구 호출 단계 — 싣는 최근 단계 수 · 단계 하나의 입력 앞머리 길이(plan.ts STEPS_MAX · STEP_INPUT_MAX). 없으면(옛 게이트웨이) 판의 기본값. */
+  stepsMax?: number;
+  stepInputMax?: number;
   /**
    * #5101 API 키 작업(과 #5082 도커 실행면의 구독 작업) — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다
    *  먼저). 그 작업의 빈 설정 폴더(구독 작업은 덮은 projects/)는 끝나면 사라져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면
@@ -254,6 +257,23 @@ const saveTranscript = async () => {
 };
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
+// 도구 호출 단계 — tool_use 를 본 때 시작, 같은 id 의 tool_result 를 본 때 끝(하네스가 줄을 내는 대로 읽으므로 그 사이가 곧 호출에 걸린 시간이다).
+//  이름 · 입력 앞머리 · 시각 · 오류만 싣는다(도구 결과 글은 싣지 않는다). 최근 STEPS_MAX 개만 — 넘치면 오래된 것부터 버린다. 박동 · 결과에 함께 보낸다.
+const STEPS_MAX = J.stepsMax > 0 ? J.stepsMax : 200, STEP_INPUT_MAX = J.stepInputMax > 0 ? J.stepInputMax : 160;
+const steps = [], stepById = new Map();
+const preview = (v) => { let t = ""; try { t = typeof v === "string" ? v : JSON.stringify(v); } catch (e) {} return String(t == null ? "" : t).slice(0, STEP_INPUT_MAX); };
+const onToolUse = (c) => {
+  const st = { id: typeof c.id === "string" ? c.id : null, name: String(c.name || "?").slice(0, 120), input: preview(c.input), started_at: new Date().toISOString(), ended_at: null, is_error: false };
+  steps.push(st);
+  if (st.id) stepById.set(st.id, st);
+  while (steps.length > STEPS_MAX) { const old = steps.shift(); if (old.id) stepById.delete(old.id); }
+};
+const onToolResult = (c) => {
+  const st = typeof c.tool_use_id === "string" ? stepById.get(c.tool_use_id) : null;
+  if (!st || st.ended_at) return;
+  st.ended_at = new Date().toISOString();
+  st.is_error = c.is_error === true;
+};
 const onLine = (line) => {
   if (!line.trim()) return;
   events++;
@@ -263,8 +283,11 @@ const onLine = (line) => {
   if (ev && ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
     for (const c of ev.message.content) {
       if (c && c.type === "text" && c.text) pushTail(c.text);
-      else if (c && c.type === "tool_use") pushTail("▸ " + c.name);
+      else if (c && c.type === "tool_use") { pushTail("▸ " + c.name); onToolUse(c); }
     }
+  }
+  if (ev && ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
+    for (const c of ev.message.content) if (c && c.type === "tool_result") onToolResult(c);
   }
 };
 let child;
@@ -291,14 +314,14 @@ const finish = async (code, signal) => {
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
   await saveTranscript();
-  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null }, 24);
+  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null, steps }, 24);
   clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   process.exit(0);
 };
 const deadline = setTimeout(() => kill("timeout"), J.timeoutMs);
 const ticker = setInterval(async () => {
-  const r = await call("tick", { events, tail: tail.join("\n"), conversation_id: conv, model }, 1);
+  const r = await call("tick", { events, tail: tail.join("\n"), conversation_id: conv, model, steps }, 1);
   if (r && (r.cancel === true || r.gone === true)) kill("canceled");
 }, J.tickMs);
 if (!child) { finish(127, null); }
@@ -314,6 +337,16 @@ else {
 
 /** 하네스 모델 이름 모양 — 별칭(sonnet·opus·haiku)이나 전체 id. `-` 로 시작하면 플래그로 읽히므로 막는다. */
 export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
+
+/**
+ * 하네스의 생각 깊이(`claude -p --effort <level>`)가 받는 값 — 실측(2026-11-02, claude 2.1.316 `claude --help`: low, medium, high, xhigh, max).
+ *  앱 AI 실행이 받는 값(capabilities/ai-runs 의 effort)과 판이 하네스에 넘기는 값이 이 한 목록이다. 사람 세션 폼 · 위탁의 화이트리스트가 쓰는
+ *  claude 하네스 카탈로그(terminal/catalog.ts 의 --effort 선택지)와 같은 다섯 값이다 — 하네스가 값을 늘려 한쪽만 고치면 ai-runs/effort-wiring.test EI0 가 잡는다.
+ */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORT_LEVELS)[number];
+/** (순수) 하네스가 받는 effort 값인가 — 목록 밖의 글(플래그처럼 보이는 것 포함)이 하네스 인자에 들어가지 않게. */
+export const isEffort = (v: unknown): v is Effort => typeof v === "string" && (EFFORT_LEVELS as readonly string[]).includes(v);
 
 /**
  * (순수) 작업용 claude 인자.
@@ -341,9 +374,13 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *    (apiKeyHelper 등 — 실측 2026-10-30, claude 2.1.314: tools [] 인데 그 명령이 돌고, user 만 주면 돌지 않는다). 앱 폴더는 구성원 · 작업 AI 가 고칠 수 있다.
  *    ⚠ 위 앱 판 지시의 ⚠ 와 같이 user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 그 계정으로 도는 다른 작업(도구가 열린 작업)이 그 settings 에
  *     apiKeyHelper 를 심으면 이 작업도 그 명령을 돌린다. «MCP 만» 은 이 작업의 AI 를 막는 것이지, 같은 계정의 다른 작업이 남긴 설정까지 막지는 않는다.
+ *  · effort(앱 AI 실행이 준 생각 깊이 — `--effort <level>`)는 준 작업에만 싣는다. 안 주면 인자가 없다(하네스 · 실행 계정의 기본 그대로).
+ *    같은 에이전트를 깊이만 바꿔 재 보는 앱(정책 질의응답의 high · xhigh · max 비교)이 이 인자로 잰다 — 빠지면 모든 판이 기본 깊이로 돌아 비교가 거짓이 된다.
+ *    단발(bare)도 싣는다 — 구독 단발도 작업 컨테이너의 하네스로 돈다. 값은 EFFORT_LEVELS 중 하나만(모델 이름과 같은 까닭 — 접수가 이미 거르지만 여기서 한 번 더).
  */
-export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean; mcpOnly?: boolean }): string[] {
+export function claudeJobArgv(o: { model?: string | null; effort?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean; mcpOnly?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
+  if (o.effort && !isEffort(o.effort)) throw new Error(`effort 값 형식 밖: ${JSON.stringify(o.effort)} — ${EFFORT_LEVELS.join(" · ")} 중 하나`);
   return [
     "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
     "--settings", JSON.stringify({ disableAllHooks: true }),
@@ -355,6 +392,7 @@ export function claudeJobArgv(o: { model?: string | null; resume?: string | null
     ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER] : []),
     ...(o.system || o.mcpOnly ? ["--setting-sources", "user"] : []),
     ...(o.model ? ["--model", o.model] : []),
+    ...(o.effort ? ["--effort", o.effort] : []),
     ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];
 }

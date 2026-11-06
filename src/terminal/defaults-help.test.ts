@@ -35,6 +35,18 @@ test("A1 자동 승인은 그 AI 의 승인 건너뛰기 플래그를 넣는다"
   //  #5058 — 오토모드 표식(@auto_mode)은 자동 승인보다 약하다: 자동 승인이 없을 때만, 그 하네스의 autoModeArgv(없으면 자동 승인 플래그)를 붙이고 표식을 남긴다.
   assert.match(code(readSrc("terminal/sessions.ts")), /else if \(String\(input\.flags\?\.\[AUTO_MODE_FLAG\] \?\? ""\) === "1"\) \{\s*if \(harness\.autoModeArgv\) cmd\.push\(\.\.\.harness\.autoModeArgv\);\s*else if \(harness\.autoApproveFlag\) cmd\.push\(harness\.autoApproveFlag\);\s*appliedFlags\[AUTO_MODE_FLAG\] = "1";/);
 });
+test("A2 확인 후 실행(@auto_mode=0)은 그 하네스의 묻기 argv 를 넣는다 — 기기 설정을 따르지 않는다(#5321)", () => {
+  assert.match(code(readSrc("terminal/sessions.ts")), /else if \(String\(input\.flags\?\.\[AUTO_MODE_FLAG\] \?\? ""\) === "0"\) \{\s*if \(harness\.askModeArgv\) cmd\.push\(\.\.\.harness\.askModeArgv\);\s*appliedFlags\[AUTO_MODE_FLAG\] = "0";/);
+});
+test("A3 화면은 세 칸을 표식으로 싣고, 모르는 하네스엔 싣지 않는다(오토모드가 자동 승인으로 올라가지 않게) (#5321)", () => {
+  const c = code(readWeb("v2/run-picker.ts"));
+  assert.match(c, /if \(d\.approve === 'auto' && h\?\.hasAutoMode\) flags\['@auto_mode'\] = '1';/);
+  assert.match(c, /else if \(d\.approve === 'ask' && h\?\.hasAskMode\) flags\['@auto_mode'\] = '0';/);
+  assert.match(c, /autoApprove: d\.approve === 'bypass' && !!h\?\.hasAutoApprove/);
+});
+test("A4 기억이 없으면 오토모드, 옛 자동 승인=true 는 자동 승인으로 옮겨 읽는다 (#5321)", () => {
+  assert.match(code(readWeb("v2/run-prefs.ts")), /const approve: ApproveMode = isApprove\(p\.approveMode\) \? p\.approveMode : p\.autoApprove === true \? 'bypass' : 'auto';/);
+});
 test("V1 기록 범위를 실제로 강제하는 곳은 작업 기록 한 곳뿐이다", () => {
   //  소비자가 늘면(지식·자료 등) 이 테스트가 빨갛게 되고, 그때 (?) 문구의 «작업 기록에만» 도 같이 고쳐야 한다.
   const dir = srcPath("capabilities");

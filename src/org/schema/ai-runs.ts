@@ -50,6 +50,10 @@ export async function initAiRuns(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_depth INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_reason TEXT`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_resume_root_idx ON org_app_ai_run(resume_root) WHERE resume_root IS NOT NULL`);
+  //  effort — 앱이 준 하네스 생각 깊이(작업 컨테이너 실행만 — 단발 + API 키 프록시는 접수가 거절한다). 보기 · 목록이 model 옆에 싣는다.
+  //   하네스가 실제로 받는 값은 작업 행(org_agent_job.effort)의 것이고 이 칸은 실행의 기록이다. 접수 때 정해지고 안 바뀐다.
+  //   ⚠ 롤 창 — 이 칸은 ai-runs/store 의 COLS 에 넣지 않는다(store.RUN_EFFORT_COL 머리말).
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS effort TEXT`);
   //  그 앱의 기록(최근 것부터) · 내 기록 · 열린 실행(동시 상한 셈 · 정비) · 작업 행 → 실행 행 · 프록시 토큰 → 실행 행.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_app_idx ON org_app_ai_run(app_id, id DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_requester_idx ON org_app_ai_run(requester, id DESC)`);

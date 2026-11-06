@@ -235,6 +235,9 @@ try {
       `assetHits=${serving.assetHits || 0} preloaded=${preloaded}\n${r.err.slice(-400)}`);
     // 받기 스크립트는 claude 몫에서 stdout 에 재로드 JSON 을 낸다 — 설치의 stdout(앱 모드에선 NDJSON 이벤트 줄)에 새면 안 된다.
     check("③ 설치 — 미리 받기 출력이 CLI stdout 에 안 샘", !r.out.includes("reloadSkills"), r.out.slice(-300));
+    // #5259 — 설치 끝은 어디서 켜면 맥락이 따라오나를 말한다(문구·범위별 갈래는 install-scope-notice.test.mjs).
+    const done = r.err.indexOf("끝!");
+    check("③ 설치 — 끝 안내가 실제 install 에서 나온다", done >= 0 && r.err.indexOf("회사 맥락", done) > done, r.err.slice(-300));
   }
 
   // ④ **MCP 등록 인자** — 이 CLI(registerClaudeMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는

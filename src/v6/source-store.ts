@@ -348,16 +348,26 @@ export async function listSourceUploaders(viewer?: Viewer): Promise<SourceUpload
 //   목록을 열 때는 자기 뷰어로 걸러 제목이 새지 않게 한다(listUnmappedKnowledge 와 같은 갈래).
 //  withAudienceKey(#4824) — 증류 스케줄러만 켠다(배치를 같은 대상끼리 묶는 열쇠). 도구 응답(source_undistilled)에는 싣지 않는다 —
 //   열쇠가 «그 잠긴 자료를 누가 보나» 의 사람 id 목록이라, 비공개 채널 구성원 명단과 같은 급의 사생활이다.
+const UNDISTILLED_WHERE = `s.lifecycle='active'
+       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)`;
+
 export async function listUndistilledSources(limit = 50, viewer?: Viewer, withAudienceKey = false): Promise<Record<string, unknown>[]> {
   const params: unknown[] = [Math.min(limit, 500)];
   const vis = await sourceVisWhere(viewer, params);
   return q(itemsPool,
     `SELECT ${S_LIST_SEL}${withAudienceKey ? `, ${AUD_KEY_SQL} AS aud_key` : ""} FROM source s
-     WHERE s.lifecycle='active'
-       AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
+     WHERE ${UNDISTILLED_WHERE}
        AND ${vis}
      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT $1`,
     params);
+}
+
+/** listUndistilledSources 가 상한 없이 집을 수 — 실행 계획의 «앞으로 나갈 전체»(#5235). 목록과 같은 술어다. */
+export async function countUndistilledSources(viewer?: Viewer): Promise<number> {
+  const params: unknown[] = [];
+  const vis = await sourceVisWhere(viewer, params);
+  const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM source s WHERE ${UNDISTILLED_WHERE} AND ${vis}`, params);
+  return Number((rows[0] as { n: number } | undefined)?.n ?? 0);
 }
 
 // 단건 + 파생 지식(knowledge_source 역방향) + 스레드/계층 관계(부모·답글/자식) — 자료 상세용.

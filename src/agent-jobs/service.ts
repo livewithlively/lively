@@ -26,6 +26,7 @@
 //  관리자는 남의 작업의 상태·오류만 본다 — 프롬프트·답·진행 꼬리는 보낸 사람 것이다(작업은 그 사람의 홈·지식으로 돈다).
 //  #5081 공용 시트 작업(앱 AI 실행이 접수 — ai-runs)은 예외다: 자리(홈 · Claude 로그인)는 시트 계정, 작업 AI 의 라이블리 신원은 보낸 사람(앱 서버 급)이다.
 //   시트 지정을 거두거나 시트 계정이 높은 권한을 얻거나 보낸 사람이 구성원이 아니게 되면 위와 같이 띄우지 않고 · 멈춘다(live.assertJobAllowed).
+//  #1639 앱 서버가 보낸 본인 구독 작업(앱 AI 실행이 접수 — ai-runs)도 예외다: 자리는 물은 사람 본인의 홈, 작업 AI 의 토큰은 앱 서버 급이다. 이 입구(agent_job_run)는 그대로 앱 서버를 거절한다.
 //
 //  ⚠ 청/녹 두 슬롯이 같은 작업을 볼 수 있다 — 상태 전이는 전부 store 의 «지금 상태가 이것일 때만» 쓰기로 한 번만 넘어간다.
 import { HttpError } from "../http-error.js";
@@ -34,11 +35,11 @@ import type { LivelyUser } from "../context.js";
 import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
-  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
-  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
-  PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX,
+  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, STEP_INPUT_MAX, STEPS_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
+  jobSessionId, noNul, parseBootFailure, parseRunnerReport, parseSteps, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX, type AgentJobStep,
 } from "./plan.js";
-import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
+import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type Effort, type RunnerJob } from "./runner.js";
 import { BROKER_GATEWAY, type PaneView } from "./surface.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
 
@@ -48,7 +49,7 @@ export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
     | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat"
-    | "setAgentJobTranscript" | "agentJobTranscript" | "agentJobTranscriptConv" | "pruneAgentJobTranscripts">;
+    | "setAgentJobTranscript" | "agentJobTranscript" | "agentJobTranscriptConv" | "pruneAgentJobTranscripts" | "setAgentJobSteps" | "agentJobSteps">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 판을 띄울 수 있는 배포인가(매니지드 브로커 · 셀프호스트 박스 위 실행면 — surface.ts). */
   available(): Promise<boolean>;
@@ -68,8 +69,10 @@ export interface AgentJobDeps {
   assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
-  /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
-  mintMcpToken(job: AgentJobRow): Promise<{ token: string; tokenHash: string } | null>;
+  /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유.
+   *  toolCeiling 은 그 작업의 도구 상한(작업 행 tool_allowlist — 앱의 ai.tools) · null 이면 상한 없음.
+   *  필수 인자다 — 빠뜨리면 그 작업이 앱 동의 전체로 돈다(컴파일이 잡게). */
+  mintMcpToken(job: AgentJobRow, opts: { toolCeiling: readonly string[] | null }): Promise<{ token: string; tokenHash: string } | null>;
   /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
    *  at — 판이 보는 게이트웨이 주소와 실을 워크스페이스(#5082 paneView — 프록시도 그 아래 · 그 워크스페이스로). */
   jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
@@ -79,6 +82,12 @@ export interface AgentJobDeps {
   /** «라이블리 MCP 만» 작업인가(작업 행 mcp_only — 앱 AI 실행이 접수 때 부른 사람의 판의 ai.mcp_only 로 적는다). 그렇다면 판이 내장 도구를 끈다.
    *  던지면 그 작업은 돌지 않는다(내장 도구를 연 채 띄우지 않는다). 필수다 — 배선이 빠지면 그 작업들이 도구를 연 채 돈다(컴파일이 잡게). */
   jobMcpOnly(job: AgentJobRow): Promise<boolean>;
+  /** 작업별 라이블리 도구 허용 목록(작업 행 tool_allowlist — 앱 AI 실행이 접수 때 부른 사람의 판의 ai.tools 로 적는다). null = 좁히지 않음.
+   *  판이 뜰 때 작업 토큰의 도구 상한으로 싣는다. 던지면 그 작업은 돌지 않는다(앱 동의 전체로 띄우지 않는다). 필수다(jobMcpOnly 와 같은 까닭). */
+  jobToolAllowlist(job: AgentJobRow): Promise<string[] | null>;
+  /** 하네스 생각 깊이(작업 행 effort — 앱 AI 실행이 접수 때 받은 값). null = 하네스 기본. 판이 하네스 인자(`--effort`)로 싣는다.
+   *  던지면 그 작업은 돌지 않는다(받은 깊이를 모른 채 기본 깊이로 띄우지 않는다). 필수다 — 배선이 빠지면 그 작업들이 말없이 기본 깊이로 돈다. */
+  jobEffort(job: AgentJobRow): Promise<Effort | null>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   /**
@@ -181,11 +190,13 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
 /**
  * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 답·진행 꼬리는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
  *  프롬프트는 본인이 하나 보기(agent_job_get)로 물을 때만(withPrompt) — 접수·취소 응답엔 싣지 않는다(최대 10만 자).
+ *  도구 호출 단계도 하나 보기가 읽어 줄 때만(steps — 행 밖 칸 · store.STEPS_COL) · 본인에게만 · 없으면 빈 배열.
  */
-export function publicJob(r: AgentJobRow, o: { own: boolean; withPrompt?: boolean; position?: number | null }): Record<string, unknown> {
+export function publicJob(r: AgentJobRow, o: { own: boolean; withPrompt?: boolean; position?: number | null; steps?: AgentJobStep[] | null }): Record<string, unknown> {
   return {
     ...jobHead(r),
     ...(o.own ? { result: r.result, output_tail: r.output_tail } : { has_result: r.result !== null }),
+    ...(o.own && o.steps !== undefined ? { steps: o.steps ?? [] } : {}),
     ...(o.own && o.withPrompt ? { prompt: r.prompt } : {}),
     ...(o.position != null ? { queue_position: o.position } : {}),
   };
@@ -225,6 +236,8 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   let resumeConv: string | null = null;
   let resumeJobId: number | null = null;
   let mcpOnly = false;
+  let toolAllowlist: string[] | null = null;
+  let effort: Effort | null = null;
 
   if (input.resume_job_id !== undefined && input.resume_job_id !== null) {
     const rid = Number(input.resume_job_id);
@@ -240,6 +253,11 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     //  앞 작업이 «라이블리 MCP 만» 이었으면 이어받는 작업도 그렇다 — 앱 AI 실행이 MCP 만으로 시작한 대화를 이 길로 이어도 내장 도구를 열지 않는다.
     //   못 읽으면 던진다(값을 모른 채 도구를 연 작업으로 넣지 않는다).
     mcpOnly = await d.jobMcpOnly(prev);
+    //  도구 허용 목록도 앞 작업의 것을 잇는다(같은 까닭 — 이 길로 이어도 앱 동의 전체로 열지 않는다). 못 읽으면 던진다.
+    toolAllowlist = await d.jobToolAllowlist(prev);
+    //  생각 깊이(effort)도 앞 작업의 값을 잇는다 — 앱 AI 실행이 정한 깊이로 시작한 대화를 이 길로 이으면 같은 깊이로 돈다(이 입구는 effort 를 받지 않는다).
+    //   못 읽으면 던진다(값을 모른 채 기본 깊이로 넣지 않는다).
+    effort = await d.jobEffort(prev);
   } else {
     if (input.app_id !== undefined && input.app_id !== null && input.app_id !== "") {
       const a = String(input.app_id);
@@ -266,7 +284,10 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     timeoutSec: timeoutSecOf(input.timeout_min, p),
     homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
     sharedSeat: false, // 이 길은 본인 구독뿐이다(#5081 공용 시트는 앱 AI 실행 — ai-runs — 으로만 생긴다)
+    appServerOwn: false, // 앱 서버는 이 길로 못 온다(assertMaySubmit) — #1639 앱 서버의 본인 구독도 앱 AI 실행으로만 생긴다
     mcpOnly,           // 이어받는 작업이면 앞 작업의 값 · 새 작업은 false(ai.mcp_only 는 작업 이름을 다는 앱 AI 실행의 것이다)
+    toolAllowlist,     // 같다 — 이어받는 작업이면 앞 작업의 목록 · 새 작업은 null(ai.tools 도 앱 AI 실행의 것이다)
+    effort,            // 같다 — 이어받는 작업이면 앞 작업의 깊이 · 새 작업은 null(하네스 기본 — effort 는 앱 AI 실행이 받는다)
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
@@ -381,7 +402,12 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   if (!booted) throw new HttpError(409, "이미 시작한 작업입니다");   // 두 판이 겹쳐 물었다 — 먼저 온 쪽만
   let t: { token: string; tokenHash: string } | null = null;
   let why = "실행 계정이 활성 구성원이 아닙니다";
-  try { t = await d.mintMcpToken(booted); } catch (e) { why = String((e as Error)?.message ?? e); }
+  let toolCeiling: string[] | null = null;
+  //  도구 상한(작업별 허용 목록)을 먼저 읽는다 — 못 읽으면 토큰을 굽지 않는다(앱 동의 전체로 띄우지 않는다 · 아래 «신원을 못 만들었다» 와 같은 길).
+  try {
+    toolCeiling = await d.jobToolAllowlist(booted);
+    t = await d.mintMcpToken(booted, { toolCeiling });
+  } catch (e) { why = String((e as Error)?.message ?? e); }
   if (!t) {
     logger.warn({ job: booted.id, err: why }, "[agent-job] 작업 AI 의 라이블리 신원을 못 만들었다 — 돌리지 않는다");
     const ended = await d.store.finishAgentJob(booted.id, { status: "failed", error: `작업 AI 의 신원을 만들지 못했습니다: ${why}`.slice(0, 600), from: ["running"] });
@@ -400,11 +426,13 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //   놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말). 없거나 다른 대화의 기록이면 돌리지 않는다(하네스가 «대화 없음» 으로 곧바로 죽는 것보다 까닭이 분명하다).
   //  #5082 — 앱 판 지시(ai.instructions — 작업 행에 실린 글)도 여기서 읽는다. 못 읽으면 신원 · env 와 같은 규칙(돌리지 않는다).
   //  «라이블리 MCP 만» 표시(ai.mcp_only — 작업 행)도 같다 — 못 읽으면 내장 도구를 연 채 띄우지 않고 돌리지 않는다(닫힌 쪽).
+  //  생각 깊이(effort — 작업 행)도 같다 — 못 읽으면(손상 값 포함) 기본 깊이로 띄우지 않고 돌리지 않는다.
   let env: Record<string, string> = {};
   let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
   let transcript: { conv: string; gz: string } | null = null;
   let system: string | null = null;
   let mcpOnly = false;
+  let effort: Effort | null = null;
   try {
     if (d.paneView) view = await d.paneView(booted);
     env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
@@ -417,6 +445,10 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     }
     system = d.jobSystem ? await d.jobSystem(booted) : null;
     mcpOnly = await d.jobMcpOnly(booted);
+    effort = await d.jobEffort(booted);
+    //  깊이를 정한 작업은 물려받은 CLAUDE_CODE_EFFORT_LEVEL 을 지운다 — 하네스는 그 변수를 `--effort` 보다 앞세운다(실측 claude 2.1.316: 변수 low + 인자 max →
+    //   요청 low). 박스 · tmux · 컨테이너 환경에 그 변수가 있으면 요청한 깊이가 말없이 바뀐다. 빈 값은 판이 «그 변수를 지워라»로 읽는다(runner).
+    if (effort) env = { ...env, CLAUDE_CODE_EFFORT_LEVEL: "" };
   } catch (e) {
     const why = String((e as Error)?.message ?? e);
     logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
@@ -429,12 +461,12 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
   const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: `${view.gateway}/mcp`,
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
-  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0, mcpOnly }, "[agent-job] 판이 섰다");
+  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0, mcpOnly, toolCeiling: toolCeiling == null ? null : toolCeiling.length, effort }, "[agent-job] 판이 섰다");
   return {
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
-    argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),
+    argv: claudeJobArgv({ model: booted.model, effort, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
-    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
+    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX, stepsMax: STEPS_MAX, stepInputMax: STEP_INPUT_MAX,
     //  #5101 API 키 작업(#5082 도커 실행면이면 구독 작업도)만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더 · 덮은 projects/ 가 끝나면 사라진다 ·
     //   관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면 앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
     ...(bundledTranscript(booted.account_kind, d) && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
@@ -520,7 +552,14 @@ export async function onTick(id: number, presented: string, body: unknown, d: Ag
   const tail = typeof b.tail === "string" ? noNul(b.tail).slice(-TAIL_MAX) : "";
   const r = await d.store.tickAgentJob(id, { tail, conversationId: convIdOf(b.conversation_id) });
   if (!r) throw new HttpError(410, "끝난 작업입니다");
+  await saveSteps(id, parseSteps(b.steps), d);
   return r;
+}
+
+/** 판이 보낸 도구 호출 단계를 적는다 — 곁기록이라 못 적어도 박동 · 결과 보고를 막지 않는다(결과 보고가 실패하면 답이 사라진다). 안 보냈거나(옛 판) 비었으면 그대로 둔다. */
+async function saveSteps(id: number, steps: AgentJobStep[] | null | undefined, d: AgentJobDeps): Promise<void> {
+  if (!steps?.length) return;
+  await d.store.setAgentJobSteps(id, steps).catch((e) => logger.warn({ err: e, job: id }, "[agent-job] 도구 호출 단계를 적지 못했다"));
 }
 
 /** 판의 마지막 보고 — 상태·답을 적고, 조금 뒤 걷고, 다음 대기 작업을 띄운다. */
@@ -533,6 +572,7 @@ export async function onResult(id: number, presented: string, body: unknown, d: 
     duration_ms: rep.result.duration_ms, cost_usd: rep.result.cost_usd, usage: rep.result.usage, model: rep.model,
     truncated: (rep.result.text?.length ?? 0) >= RESULT_TEXT_MAX,
   } : null;
+  await saveSteps(id, rep.steps, d);   // 끝내기 전에 — 끝난 작업으로 보인 뒤에는 단계가 바뀌지 않는다(적기는 도는 작업에만)
   const ended = await d.store.finishAgentJob(id, {
     status: out.status, error: out.error, result, exitCode: rep.exit_code, conversationId: rep.conversation_id, tail: rep.tail, from: ["running"],
   });
@@ -700,7 +740,9 @@ export async function getAgentJobFor(id: number, user: LivelyUser, d: AgentJobDe
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
   if (!row || !canSeeJob(row, user, await sharedSeatJobFor(row, user, d))) throw new HttpError(404, "없는 작업입니다");
   const position = row.status === "queued" ? await d.store.queuePosition(row.id).catch(() => null) : null;
-  return publicJob(row, { own: row.requester === memberOf(user), withPrompt: true, position });
+  const own = row.requester === memberOf(user);
+  const steps = own ? await d.store.agentJobSteps(row.id).catch(() => null) : null;
+  return publicJob(row, { own, withPrompt: true, position, steps });
 }
 
 export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {

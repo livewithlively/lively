@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { cronDue } from "./cron-due.js";
+import { cronDue, runOnceDue } from "./cron-due.js";
 
 const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const ENGINE = r("./engine.ts");
@@ -29,7 +29,7 @@ test("표 A — «마지막 실행 이후 첫 매치가 지났는가»로 판정
     cronDue({ expr: daily430, lastRunAt: "2026-09-15T19:30:00Z", now: ms("2026-09-16T00:00:00Z"), tz: KST }),
     false, "A2 이미 돈 잡을 또 due 로 본다");
 
-  //  A3 한 번도 안 돌았다 → due. run_once 가 이미 같은 규율이다(engine.ts).
+  //  A3 한 번도 안 돌았다 → due. 반복 잡의 규칙이다 — 1회성은 아래 runOnceDue(O 표).
   assert.equal(cronDue({ expr: daily430, lastRunAt: null, now: ms("2026-09-16T08:00:00Z"), tz: KST }), true,
     "A3 한 번도 안 돈 잡이 첫 실행을 틱 격자에 기댄다");
   assert.equal(cronDue({ expr: daily430, lastRunAt: "", now: ms("2026-09-16T08:00:00Z"), tz: KST }), true,
@@ -91,9 +91,74 @@ test("표 B·C — 건드리지 않은 축이 그대로고, 새 판정이 실제
   assert.ok(!/cronMatches\(parseCron\(job\.cron_expr\)/.test(ENGINE), "C2 옛 판정이 남아 있다");
   assert.ok(!/nowMin !== lastMin/.test(ENGINE), "C2 옛 분 비교가 남아 있다");
 
-  //  B1 1회성 분기 — 종전 그대로.
-  assert.match(ENGINE, /if \(job\.run_once\) return !job\.last_run_at/, "B1 run_once 분기가 바뀌었다");
+  //  B1 1회성 분기 — 저장 시각을 기준으로 시각을 지킨다(#5235, 아래 O 표).
+  assert.match(ENGINE, /if \(job\.run_once\) return runOnceDue\(\{ expr: job\.cron_expr, lastRunAt: job\.last_run_at, savedAt: job\.updated_at, now, tz \}\)/,
+    "B1 1회성 분기가 시각을 안 본다 — 저장한 시각과 상관없이 다음 틱에 돈다");
+  assert.ok(ENGINE.indexOf("runOnceDue({") < ENGINE.indexOf("if (job.cron_expr) return cronDue({"),
+    "B1 1회성 판정이 시각형 판정보다 뒤에 있다 — 안 돈 1회성이 바로 due 가 된다");
   //  B2·B3 주기형 분기 — 종전 그대로(last + interval, 최소 60초 하한).
   assert.match(ENGINE, /return now - last >= Math\.max\(60, Number\(job\.interval_sec\) \|\| 600\) \* 1000/,
     "B2 주기형 판정이 바뀌었다 — 이번 범위가 아니다");
+});
+
+// ── 1회성 잡의 시각 (#5235) — 사양 표 O ─────────────────────────────────────────
+//  실측 2026-11-02: cron_expr 를 4분 간격으로 준 run_once 잡 30개를 저장했더니 다음 틱에 30개가 전부 queued 였다.
+const SAVED = "2026-11-02T08:00:00Z";
+const EVENING = "0 18 * * *";
+
+test("O1 시각이 없으면 다음 틱에 돈다(종전)", () => {
+  assert.equal(runOnceDue({ now: ms(SAVED) }), true);
+  assert.equal(runOnceDue({ expr: null, lastRunAt: null, savedAt: SAVED, now: ms(SAVED) }), true);
+  assert.equal(runOnceDue({ expr: "", now: ms(SAVED) }), true, "빈 값도 시각 없음이다");
+});
+test("O2 ★ 시각이 있으면 저장 뒤 첫 매치 전엔 안 돈다", () => {
+  assert.equal(runOnceDue({ expr: EVENING, savedAt: SAVED, now: ms("2026-11-02T08:00:30Z"), tz: "UTC" }), false, "저장 직후 틱");
+  assert.equal(runOnceDue({ expr: EVENING, savedAt: SAVED, now: ms("2026-11-02T17:59:59Z"), tz: "UTC" }), false);
+});
+test("O3 첫 매치가 지나면 돈다 — 틱 격자에 기대지 않는다", () => {
+  assert.equal(runOnceDue({ expr: EVENING, savedAt: SAVED, now: ms("2026-11-02T18:03:20Z"), tz: "UTC" }), true);
+  assert.equal(runOnceDue({ expr: EVENING, savedAt: SAVED, now: ms("2026-11-05T00:00:00Z"), tz: "UTC" }), true, "오래 밀려도 돈다");
+});
+test("O4 정각이면 돈다(경계)", () => {
+  assert.equal(runOnceDue({ expr: EVENING, savedAt: SAVED, now: ms("2026-11-02T18:00:00Z"), tz: "UTC" }), true);
+});
+test("O5 이미 돌았으면 시각 유무와 상관없이 안 돈다", () => {
+  const lastRunAt = "2026-11-02T07:00:00Z";
+  assert.equal(runOnceDue({ lastRunAt, now: ms("2026-12-01T00:00:00Z") }), false);
+  assert.equal(runOnceDue({ expr: EVENING, lastRunAt, savedAt: SAVED, now: ms("2026-12-01T00:00:00Z"), tz: "UTC" }), false);
+});
+test("O6 저장이 오늘 매치 뒤면 다음 매치까지 안 돈다 — 지난 시각을 바로 돌리지 않는다", () => {
+  const savedAt = "2026-11-02T19:00:00Z";
+  assert.equal(runOnceDue({ expr: EVENING, savedAt, now: ms("2026-11-02T19:00:30Z"), tz: "UTC" }), false);
+  assert.equal(runOnceDue({ expr: EVENING, savedAt, now: ms("2026-11-03T18:00:00Z"), tz: "UTC" }), true, "다음 매치에는 돈다");
+});
+test("O7 잘못된 표현식은 안 돈다", () => {
+  assert.equal(runOnceDue({ expr: "이상한 값", savedAt: SAVED, now: ms("2027-01-01T00:00:00Z"), tz: "UTC" }), false);
+});
+test("O8 ★ 저장 시각을 모르면 시각형은 안 돈다 — «모름» 을 due 로 접지 않는다", () => {
+  for (const savedAt of [undefined, null, "", "   ", "시각 아님"]) {
+    assert.equal(runOnceDue({ expr: EVENING, savedAt, now: ms("2027-01-01T00:00:00Z"), tz: "UTC" }), false, String(savedAt));
+  }
+});
+test("O9 조직 시간대 벽시계로 읽는다 — 18시 KST 는 09시 UTC", () => {
+  const o = { expr: EVENING, savedAt: SAVED, tz: "Asia/Seoul" };
+  assert.equal(runOnceDue({ ...o, now: ms("2026-11-02T08:59:59Z") }), false);
+  assert.equal(runOnceDue({ ...o, now: ms("2026-11-02T09:00:00Z") }), true);
+});
+test("O9b 드라이버가 준 Date 도 같다 — pg 는 TIMESTAMPTZ 를 Date 로 준다", () => {
+  const savedAt = new Date(SAVED) as unknown as string;
+  assert.equal(runOnceDue({ expr: EVENING, savedAt, now: ms("2026-11-02T08:30:00Z"), tz: "UTC" }), false);
+  assert.equal(runOnceDue({ expr: EVENING, savedAt, now: ms("2026-11-02T18:00:00Z"), tz: "UTC" }), true);
+});
+test("O2b ★ 프로젝트 재현 — 4분 간격 30개를 저장해도 지난 시각의 잡만 돈다", () => {
+  const start = ms("2026-11-02T18:02:00Z");
+  const jobs = Array.from({ length: 30 }, (_, i) => {
+    const at = new Date(start + (i + 1) * 4 * 60_000);
+    return { expr: `${at.getUTCMinutes()} ${at.getUTCHours()} 2 11 *`, savedAt: new Date(start).toISOString(), tz: "UTC" };
+  });
+  const dueAt = (now: number) => jobs.filter((j) => runOnceDue({ ...j, now })).length;
+  assert.equal(dueAt(start + 30_000), 0, "저장 직후 틱에 전부 돌았다(실측 사고)");
+  assert.equal(dueAt(start + 4 * 60_000), 1);
+  assert.equal(dueAt(start + 40 * 60_000), 10);
+  assert.equal(dueAt(start + 120 * 60_000), 30);
 });

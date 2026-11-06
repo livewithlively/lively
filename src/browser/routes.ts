@@ -12,12 +12,16 @@
 import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { currentTenant } from "../org/tenant-context.js";
+import { EXECUTION_SESSION_ID_RE } from "../org/auth/agent-identity.js";
+import { publishNotify } from "../v6/notify-bus.js";
+import { hereSlug } from "../v6/notify-scope.js";
 import { browserRelay, relayKey, HOST_ID_RE, BROWSER_PROTOCOL, APP_PRINCIPAL_REFUSAL, isAppPrincipal, type BrowserRelay } from "./relay.js";
 
 /** keepalive 주석 주기 — 프록시·로드밸런서가 조용한 연결을 끊는 것을 막는다(알림 스트림과 같은 값). */
 const PING_MS = 25_000;
 
 const clip = (v: unknown, max: number): string => String(v ?? "").slice(0, max);
+let revealSeq = 0;
 
 /**
  * @param app express 앱
@@ -124,5 +128,28 @@ export function registerBrowserRoutes(
       sessions: Array.isArray(b.sessions) ? b.sessions.map((s) => String(s)) : undefined,
     });
     res.json({ ok });
+  });
+
+  /**
+   * 브라우저 호스트와 셸이 다른 창이어도 해당 세션의 웹 칸을 연다.
+   * 브라우저 명령의 성공 여부와는 독립인 UI 힌트라 구독자가 없어도 성공으로 받는다.
+   */
+  app.post("/api/ui/browser/host/reveal", ...mw, (req, res) => {
+    const key = keyOf(req, res);
+    if (!key) return;
+    const u = userOf(req)!; // keyOf 가 사람 신원과 userId 를 이미 확인했다.
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const session = clip(b.session, 80);
+    const tabNo = typeof b.tab === "number" ? b.tab : (typeof b.tab === "string" && /^\d+$/.test(b.tab) ? Number(b.tab) : NaN);
+    if (!EXECUTION_SESSION_ID_RE.test(session) || !Number.isSafeInteger(tabNo) || tabNo < 1 || tabNo > 999) {
+      res.status(400).json({ error: "올바른 session·tab 이 필요합니다" });
+      return;
+    }
+    const ts = Date.now();
+    const delivered = publishNotify({ ws: hereSlug(), member: u.userId }, {
+      type: "browser", kind: "reveal", session, tab: String(tabNo),
+      key: `b:${session}:${tabNo}:${ts}:${++revealSeq}`, ts,
+    });
+    res.json({ ok: true, delivered });
   });
 }

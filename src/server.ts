@@ -71,6 +71,7 @@ export function buildServer(
   readOnly?: boolean, // 읽기전용 세션(#1007) — true 면 registerMcpCapabilities 가 쓰기 capability 를 등록 스킵(tools/list 소거).
   incognito?: boolean, // 인코그니토 세션(#1007+) — true 면 capability·db 툴 전부 스킵(빈 표면 = 사실상 연결없음).
   appId?: string | null, // 앱 토큰 세션(#1780 v2.1) — EXEMPT 배관 도구를 tools/list 에서 감춘다. 일반 토큰 null.
+  toolCeiling?: readonly string[] | null, // 도구 상한(앱 AI 작업 토큰 — ai.tools) — 그 밖의 도구는 등록하지 않는다(tools/list 에서 감춤). null = 상한 없음.
 ): McpServer {
   const server = new McpServer({ name: "context-ontology", version: "0.1.0" });
   // registerTool 단일 wrap — 두 일을 한 경로에서 한다(capability·db·dynamic 모든 등록이 여길 지난다):
@@ -79,6 +80,10 @@ export function buildServer(
   const orig = server.registerTool.bind(server);
   server.registerTool = ((name: string, config: unknown, handler: ToolHandler) => {
     if (overrides?.get(name) === false) return undefined;
+    //  (1b) 도구 상한(앱 AI 작업 토큰)이 있으면 그 밖의 도구는 등록하지 않는다 — capability · db · 동적 · 프록시 등록이 모두 여길 지난다
+    //   (buildServer 가 돌아간 뒤의 등록도). 이 서버(/mcp)에서는 등록하지 않은 도구는 부를 수도 없다. 다른 토큰으로 만든 서버를 이어 쓰거나
+    //   능력 REST 로 부르는 길의 경계는 핸들러의 requireAppTool(apps/principal 의 상한 판정)이다. 빈 상한([])은 아무것도 등록하지 않는다.
+    if (toolCeiling != null && !toolCeiling.includes(name)) return undefined;
     const tag = (config as { _meta?: Record<string, unknown> } | undefined)?._meta?.[TOOL_APP_META_KEY];
     const cb = typeof handler === "function" ? instrument(name, handler, harness, typeof tag === "string" ? tag : null) : handler;
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);

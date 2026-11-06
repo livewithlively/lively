@@ -87,7 +87,7 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
     const body = new ReadableStream({ start(c) { push = (s) => c.enqueue(new TextEncoder().encode(s)); finish = () => c.close(); } });
     return { status: 200, ok: true, body };
   };
-  const { startLiveSync, onAppEvent } = await import(join(root, "public/app/v2/live-sync.js"));
+  const { startLiveSync, onAppEvent, onBrowserEvent } = await import(join(root, "public/app/v2/live-sync.js"));
   let changes = 0;
   const apps = [];
   const off = onAppEvent((ev) => apps.push(ev));
@@ -97,6 +97,7 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
 
   const app = (k) => `event: app\ndata: ${JSON.stringify({ type: "app", kind: k, app_id: "crm", session: "box-a", table: "contacts", op: "insert", source: "mcp" })}\n\n`;
   const sess = `event: session\ndata: ${JSON.stringify({ type: "session", id: "box-a", phase: "idle" })}\n\n`;
+  const browser = (tab) => `event: browser\ndata: ${JSON.stringify({ type: "browser", kind: "reveal", session: "box-a", tab: String(tab) })}\n\n`;
 
   push(app("data")); await tick(); await tick();
   eq([apps.length, apps[0] && apps[0].kind, changes], [1, "data", 0], "S6-1 앱 사건은 앱 칸으로만 — 사이드바를 다시 읽지 않는다");
@@ -104,6 +105,13 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   eq([apps.length, changes], [1, 1], "S6-2 세션 사건은 종전대로 사이드바를 다시 읽게 한다");
   push(app("attach") + sess); await tick(); await tick();
   eq([apps.length, changes], [2, 2], "S6-3 섞여 오면 앱 칸 + 사이드바 한 번");
+  push(browser(2)); await tick(); await tick();
+  const browsers = [];
+  const offBrowser = onBrowserEvent((ev) => browsers.push(ev));
+  eq([browsers.length, browsers[0] && browsers[0].session, browsers[0] && browsers[0].tab, changes], [1, "box-a", "2", 2], "S6-4 브라우저 사건은 마운트 직전 것도 재생하고 사이드바를 다시 읽지 않는다");
+  push(browser(3)); await tick(); await tick();
+  eq([browsers.length, browsers[1] && browsers[1].tab, changes], [2, "3", 2], "S6-5 브라우저 사건은 브라우저 칸으로만 즉시 간다");
+  offBrowser();
   off();
   push(app("detach")); await tick(); await tick();
   eq(apps.length, 2, "S6 해지한 청취자는 더 안 받는다");

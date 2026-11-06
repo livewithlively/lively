@@ -8,7 +8,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, SYSTEM_PROMPT_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
+import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, SYSTEM_PROMPT_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, EFFORT_LEVELS, claudeJobArgv } from "./runner.js";
+import { parseSteps } from "./plan.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -76,6 +77,19 @@ process.stdin.on("end", () => {
   out({ type: "assistant", message: { content: [{ type: "text", text: "일하는 중" }, { type: "tool_use", name: "Bash" }] } });
   process.stderr.write("fake stderr line\\n");
   if (process.env.FAKE_MODE === "hang") { setInterval(() => {}, 1000); return; }
+  if (process.env.FAKE_MODE === "tools") {
+    //  도구 호출 단계 — 두 호출을 내고 150ms 뒤 결과(하나는 오류 · 모르는 id 하나)를 돌려준 다음, 끝나지 않는 호출 하나를 더 낸다.
+    out({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "toolu_1", name: "mcp__lively__knowledge_search", input: { q: "검색어", limit: 20 } },
+      { type: "tool_use", id: "toolu_2", name: "mcp__lively__knowledge_get", input: { name: "x".repeat(400) } }] } });
+    setTimeout(() => {
+      out({ type: "user", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "toolu_1", content: "도구 결과 글은 싣지 않는다" },
+        { type: "tool_result", tool_use_id: "toolu_2", is_error: true, content: "없는 문서" },
+        { type: "tool_result", tool_use_id: "toolu_unknown", content: "모르는 호출" }] } });
+      out({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_3", name: "Read", input: "plain" }] } });
+    }, 150);
+  }
   setTimeout(() => {
     out({ type: "result", subtype: "success", is_error: false, result: "끝난 답", num_turns: 2, duration_ms: 42, total_cost_usd: 0.01, usage: { input_tokens: 3 }, session_id: "0a1b2c3d-0000-4000-8000-000000000001" });
     process.exit(1);   // 답을 내고 1 로 끝나는 하네스도 있다 — 판은 종료코드를 그대로 보고한다
@@ -95,7 +109,7 @@ interface Seen {
 
 /** 가짜 게이트웨이 — 시나리오별 응답. */
 async function gateway(o: {
-  mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
+  mode: "ok" | "hang" | "tools"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
   /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기 · 머리만 주고 멈추기. */
   bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
   /** #5101 부트 응답에 더할 칸(transcriptMax · transcript …) · 하네스 env 에 더할 것(CLAUDE_CONFIG_DIR 자리표 · 가짜 하네스 모드). */
@@ -216,6 +230,32 @@ await t("R2 정상 — 박동 · 결과 한 번(답·대화 id·종료코드) ·
     assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
     assert.equal(h.mcpMode, 0o600);
     assert.ok(!fs.existsSync(h.argv[1]), "판이 끝나면 임시 폴더(프롬프트·MCP 파일)를 지운다");
+  } finally { await g.close(); }
+});
+
+await t("ST1 도구 호출 단계 — tool_use 를 본 때 시작 · 같은 id 의 tool_result 를 본 때 끝 · 오류 · 입력 앞머리만(결과 글 없음) · id 없는 · 끝나지 않은 호출은 끝 없음 · 박동과 결과에 함께", async () => {
+  const record = path.join(tmp, "st1.json");
+  const g = await gateway({ mode: "tools", timeoutMs: 20_000, record });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const r = g.seen.results[0] as Record<string, any>;
+    const steps = r.steps as Array<Record<string, any>>;
+    assert.deepEqual(steps.map((s) => s.name), ["Bash", "mcp__lively__knowledge_search", "mcp__lively__knowledge_get", "Read"]);
+    const [bash, search, get, read] = steps;
+    assert.equal(bash.id, null);
+    assert.equal(bash.ended_at, null, "id 없는 호출은 결과와 짝지을 수 없다");
+    assert.equal(search.id, "toolu_1");
+    assert.equal(search.input, JSON.stringify({ q: "검색어", limit: 20 }));
+    assert.equal(search.is_error, false);
+    const took = Date.parse(search.ended_at) - Date.parse(search.started_at);
+    assert.ok(took >= 100 && took < 5_000, `호출 시간 ${took}ms`);
+    assert.equal(get.is_error, true);
+    assert.equal(get.input.length, 160, "입력은 앞머리만");
+    assert.equal(read.input, "plain");
+    assert.equal(read.ended_at, null, "끝나지 않은 호출");
+    assert.ok(!JSON.stringify(steps).includes("도구 결과 글은 싣지 않는다"), "도구 결과 글은 싣지 않는다");
+    assert.deepEqual(parseSteps(steps), steps, "판이 보낸 모양을 게이트웨이 해석이 그대로 받는다 — 키 이름이 어긋나면 단계가 말없이 버려진다");
+    assert.ok(g.seen.ticks.length >= 1 && g.seen.ticks.every((k) => Array.isArray(k.steps)), "박동에도 단계가 실린다");
   } finally { await g.close(); }
 });
 
@@ -460,6 +500,57 @@ await t("mcp_only S17·S23 판(진짜 노드) — 받은 하네스 인자의 `--
     assert.notEqual(h.argv[h.argv.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
     assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
     assert.equal(h.mcpMode, 0o600);
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
+});
+
+// ── 앱 AI 실행의 생각 깊이(effort — 하네스 `claude -p --effort <level>`) — 하네스 인자 ──
+//  이게 틀리면: 앱이 준 깊이가 하네스에 안 닿아 모든 판이 기본 깊이로 돌거나(깊이를 견주는 앱의 비교가 거짓이 된다), 목록 밖 글이 하네스 인자로 들어간다.
+const EFFORT_SHAPES: Array<Parameters<typeof claudeJobArgv>[0]> = [
+  { mcp: true }, { mcp: true, model: "sonnet", resume: RESUME }, { mcp: false, bare: true }, { mcp: true, mcpOnly: true, system: true }, { mcp: false, bare: true, mcpOnly: true },
+];
+
+await t("effort E1 claudeJobArgv — 준 값은 `--effort <값>` 한 쌍(다섯 값 모두 · 단발 · «MCP 만» · 지시 · 모델 · 이어받기와 함께) · 그 밖의 인자는 종전 그대로", () => {
+  assert.deepEqual([...EFFORT_LEVELS], ["low", "medium", "high", "xhigh", "max"], "claude 2.1.316 `--effort` 가 받는 다섯 값");
+  for (const effort of EFFORT_LEVELS) {
+    for (const o of EFFORT_SHAPES) {
+      const a = claudeJobArgv({ ...o, effort });
+      const what = `${effort} ${JSON.stringify(o)} → ${JSON.stringify(a)}`;
+      assert.equal(count(a, "--effort"), 1, what);
+      assert.equal(a[a.indexOf("--effort") + 1], effort, what);
+      assert.deepEqual(without(a, "--effort"), claudeJobArgv(o), `effort 말고는 같다 — ${what}`);
+    }
+  }
+});
+
+await t("effort E2 claudeJobArgv — 안 주면(생략 · null · 빈 글) `--effort` 가 없다(하네스 기본 · 무회귀)", () => {
+  for (const effort of [undefined, null, ""]) {
+    for (const o of EFFORT_SHAPES) {
+      const a = claudeJobArgv({ ...o, effort });
+      assert.ok(!a.includes("--effort"), `${JSON.stringify(effort)} ${JSON.stringify(o)} → ${JSON.stringify(a)}`);
+      assert.deepEqual(a, claudeJobArgv(o));
+    }
+  }
+});
+
+await t("effort E3 claudeJobArgv — 목록 밖 값은 던진다(다른 낱말 · 대문자 · 앞뒤 공백 · 플래그 · 숫자 · 셸 글자)", () => {
+  for (const bad of ["ultra", "HIGH", "Max", " high", "high ", "--dangerously-skip-permissions", "-p", "max;rm -rf /", "1", "high,max"]) {
+    assert.throws(() => claudeJobArgv({ mcp: true, effort: bad }), /effort/, JSON.stringify(bad));
+    assert.throws(() => claudeJobArgv({ mcp: false, bare: true, effort: bad }), /effort/, `단발도 — ${JSON.stringify(bad)}`);
+  }
+});
+
+await t("effort E4 판(진짜 노드) — 받은 하네스 인자의 `--effort <값>` 을 빠뜨리지 않고 그대로 하네스에 넘긴다", async () => {
+  const record = path.join(tmp, "ef1.json");
+  const harness = claudeJobArgv({ mcp: true, model: "sonnet", effort: "xhigh" }).slice(1);   // 판이 받는 그대로(맨 앞 claude 만 가짜 하네스로)
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, bootExtra: { argv: [process.execPath, FAKE, ...harness] } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.equal(count(h.argv, "--effort"), 1, JSON.stringify(h.argv));
+    assert.equal(h.argv[h.argv.indexOf("--effort") + 1], "xhigh");
+    assert.equal(h.argv[h.argv.indexOf("--model") + 1], "sonnet");
+    assert.equal(h.argv.length, harness.length, "인자 수 그대로");
     assert.equal(g.seen.results.length, 1);
   } finally { await g.close(); }
 });

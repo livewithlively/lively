@@ -9,9 +9,10 @@
 //   동의 창을 띄우고, 동의하면 POST /apps/:id/grant(선언 상한 그대로 — 서버가 매니페스트 부분집합으로 고정)한 뒤
 //   **한 번** 재시도한다. 거절하면 조용히 멈춘다(세션 안 뜸).
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 앱 아이콘 선언
-import { api, el, toast } from '../core.js';
+import { api, el, state, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
 import { toolExplain } from '../lib/tool-explain.js';   // #4632 동의 창 도구 칩의 쉬운 설명
+import { aiRunConsentText, type AiAccountSnapshot } from '../lib/ai-run-consent.js';   // 동의 창 «AI 실행» 줄 — 이 앱이 실제로 쓰는 실행 계정
 import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 화면 앱 판정 한 벌
 
 export interface SessionApp {
@@ -135,12 +136,27 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
       || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], server: false, tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [], appFolder: false,
         editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null, ...appStateOf(null),
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {}, icon: null };
-    if (!(await appConsent(app))) return false;
+    const aiRun = app.tools.includes('app_ai_run') ? await aiRunLine(appId) : undefined;
+    if (!(await appConsent(app, aiRun))) return false;
     await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });
     return true;
   })().finally(() => { grantInFlight.delete(appId); });
   grantInFlight.set(appId, run);
   return run;
+}
+
+/**
+ * 동의 창 «AI 실행» 줄의 글 — 워크스페이스 실행 계정 설정(app_ai_account · 구성원 누구나 · 동의 전에도 읽힌다)으로 이 앱이 실제로 쓰는 계정을 말한다(lib/ai-run-consent).
+ *  못 읽거나 늦으면(AI_ACCOUNT_WAIT_MS) 계정을 단정하지 않는 문구로 — 동의 창은 기다리게 하지 않는다.
+ */
+const AI_ACCOUNT_WAIT_MS = 2500;
+async function aiRunLine(appId: string): Promise<string> {
+  let timer = 0;
+  const snap = await Promise.race([
+    (api('/api/ui/ai-account') as Promise<AiAccountSnapshot>).catch(() => null),
+    new Promise<null>((r) => { timer = window.setTimeout(() => r(null), AI_ACCOUNT_WAIT_MS); }),
+  ]).finally(() => window.clearTimeout(timer));
+  return aiRunConsentText(snap, appId, String((state.me && state.me.userId) || ''));
 }
 
 export async function spawnAppSession(
@@ -195,7 +211,7 @@ async function postAppSession(appId: string, opts?: { title?: string; projectId?
 
 // ── 동의(grant) 창 — 이 앱을 내 자격으로 쓰겠다는 확인. 선언 상한(scope·도구)을 그대로 보여 준다. ──
 //  네이티브 confirm() 은 안 쓴다(브라우저 모달은 이벤트를 막는다) — DOM 오버레이 + Esc/밖클릭 취소.
-function appConsent(app: SessionApp): Promise<boolean> {
+function appConsent(app: SessionApp, aiRunText?: string): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') finish(false); };
@@ -250,11 +266,12 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.tools.includes('agent_job_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '에이전트 작업' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '이 앱 화면에서 내가 보낸 지시를 별도 작업 컨테이너에서 내 이름으로 돌려요. 내 Claude 구독을 쓰고 내 홈의 파일과 로그인에 닿아요. 앱 서버나 자동화가 혼자 보내지는 않아요.' }))) : null,
-        // AI 실행(#4488 앱 v2-9) — '앱이 AI 를 돌리나(누구 돈 · 누구 계정으로)'. 실행 계정은 워크스페이스가 정한다: API 키면 워크스페이스 돈,
-        //  구독이면 **내 구독**(내가 이 앱 화면에서 보낸 요청만 · 내 자리). 설계 §5 «grant 항목 — 내 AI 계정 사용 · 붙은 세션에서 실행 · 새 대화 만들기» 를 한 줄에.
+        // AI 실행(#4488 앱 v2-9) — '앱이 AI 를 돌리나(누구 돈 · 누구 계정으로)'. 실행 계정은 워크스페이스가 정하고(작업별 > 앱별 > 기본값 > API 키 —
+        //  src/ai-runs/plan.ts resolveAccount) 묻는 사람의 구독으로 넘어가는 길은 없다. 그래서 고정 문구 대신 이 앱이 실제로 쓰는 계정을 말한다 —
+        //  API 키 · 공용 시트(#5081) · 내 구독 · 남의 구독 · 정해지지 않음(lib/ai-run-consent · ensureAppGrant 가 설정을 읽어 넘긴다).
         app.tools.includes('app_ai_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: 'AI 실행' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱이 AI에게 일을 시킬 수 있어요. 워크스페이스 API 키가 있으면 그 돈으로, 없으면 내 Claude 구독으로 돌아요(내가 이 앱 화면에서 보낸 요청만, 내 이름으로 새 대화). 실행 기록은 이 앱의 AI 실행 목록에 남아요.' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: aiRunText ?? aiRunConsentText(null, app.id, '') }))) : null,
         // 백그라운드 작업(#4486 앱 v2-7) — '앱 서버가 내 이름으로 뒤에서 일을 하나'. 서버를 둔 앱(web.server)이 함의한다. 화면을 닫아도 15분까지 돈다.
         app.tools.includes('app_job_start') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '백그라운드 작업' }),
           el('div', { class: 'v2-consent-chips' },

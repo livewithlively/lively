@@ -221,7 +221,7 @@ export const knowledgeSearch: Capability = {
     const deadline = Date.now() + HINT_BUDGET_MS;
     const hint = await withinMs(HINT_BUDGET_MS, async () => {
       const { collectHintFor } = await import("../../org/collect/unit-find.js");
-      return collectHintFor({ q: input.q, names: entries.map((e) => e.name), member: String(user.userId), isAdmin: isAdmin(user), deadline });
+      return collectHintFor({ q: input.q, names: entries.map((e) => e.name), member: String(user.userId), isAdmin: isAdmin(user), deadline, chunkIndex: route.chunkIndex });
     });
     return hint ? { entries, collect_hint: hint } : { entries };
   },

@@ -25,7 +25,7 @@ const agentJobRunInput = {
   timeout_min: z.number().int().positive().optional().describe("실행 시간 상한(분) — 생략하면 워크스페이스 기본, 넘으면 최대로 접는다"),
   model: z.string().max(64).optional().describe("하네스 모델(sonnet·opus·haiku 또는 전체 id). 생략하면 그 사람 기본"),
   label: z.string().optional().describe(`짧은 이름(목록에 보인다). ${softCapHint(SOFT_CAPS.agent_job_run!.label!)}`),
-  resume_job_id: z.number().int().positive().optional().describe("이 끝난 작업의 대화를 이어받는다(갈라서 잇는다 — 새 대화 id · 앞 작업의 대화는 그대로 · 같은 사람·같은 앱 · 작업 폴더도 그 작업 것 · 앞 작업이 «라이블리 MCP 만»(앱 ai.mcp_only)이었으면 이 작업도 내장 도구 없이 돈다)"),
+  resume_job_id: z.number().int().positive().optional().describe("이 끝난 작업의 대화를 이어받는다(갈라서 잇는다 — 새 대화 id · 앞 작업의 대화는 그대로 · 같은 사람·같은 앱 · 작업 폴더도 그 작업 것 · 앞 작업이 «라이블리 MCP 만»(앱 ai.mcp_only)이었으면 이 작업도 내장 도구 없이 돈다 · 앞 작업에 도구 허용 목록(앱 ai.tools)이 있었으면 이 작업의 라이블리 토큰도 그 목록으로 좁혀진다 · 앞 작업에 생각 깊이(앱 AI 실행의 effort)가 있었으면 이 작업도 그 깊이로 돈다)"),
 };
 
 const agentJobRun: Capability = {
@@ -59,7 +59,7 @@ const agentJobGet: Capability = {
   name: "agent_job_get",
   title: "에이전트 작업 보기",
   description: "에이전트 작업 하나의 상태·결과 — status(queued·starting·running·done·failed·timeout·canceled) · result(text·is_error·num_turns·cost_usd·usage) · error · " +
-    "output_tail(진행 요지) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
+    "output_tail(진행 요지) · steps(도구 호출 — [{id, name, input(앞 160자), started_at, ended_at, is_error}] · 최근 200개 · 도구 결과 글은 없다) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
   scope: "context",
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/agent-jobs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },

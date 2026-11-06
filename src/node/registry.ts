@@ -705,6 +705,14 @@ export function nodeSessionRuntime(nodeId: string, sessionId: string): string | 
   return typeof v === "string" && v ? v : undefined;
 }
 
+/** #5332 — 그 행이 스냅샷에 **있나**까지 함께 — «행 없음»(아직 안 올라옴)과 «표식 없음»(옛 번들)을 가른다(deliver-prompt nodeSessionStamp). */
+export function nodeSessionRuntimeRow(nodeId: string, sessionId: string): { row: boolean; stamp?: string } {
+  const row = states.get(keyOf(nodeId))?.sessions.find((s) => s.id === sessionId) as { runtimeRaw?: unknown } | undefined;
+  if (!row) return { row: false };
+  const v = row.runtimeRaw;
+  return typeof v === "string" && v ? { row: true, stamp: v } : { row: true };
+}
+
 // 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
 //  provision-remote.ts(assertNodeUsable 의 requireProvision 게이트)가 배치 전 사전 조회로 쓴다 — 못 할 노드를
 //   미리 걸러 사람 말로 안내한다. 강제 게이트는 nodeRpc 가 이미 한다(여긴 사전 조회용).

@@ -51,6 +51,8 @@ export interface NewAppJob {
   route: string; body: string; bodyBytes: number; label: string | null; timeoutS: number; source: string | null; parentId: number | null; depth: number;
   /** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(부른 연결의 권한 ∩ 그 사람의 앱 동의) — 돌기 신원이 그보다 넓어지지 않게. 다른 작업은 없다(NULL). */
   scopeCeiling?: string[] | null;
+  /** #1639 사람 신원이 사람이 보지 않는 자리에서 왔다 — 그 돌기 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended). 아니면 생략. */
+  unattended?: boolean;
 }
 
 /**
@@ -72,6 +74,8 @@ export async function insertAppJob(j: NewAppJob, admit: (have: { queuedApp: numb
     const row = norm(r.rows[0] as Record<string, unknown>)!;
     //  #5053 권한 상한은 그 칸을 쓰는 작업만 따로 적는다 — 위 INSERT · 칸 묶음(LIGHT)은 그대로라, 이 칸이 생기기 전(롤 창)에도 다른 작업은 깨지지 않는다.
     if (j.scopeCeiling) await c.query(`UPDATE org_app_job SET scope_ceiling=$2::text[] WHERE id=$1`, [row.id, j.scopeCeiling]);
+    //  #1639 사람이 보지 않는 자리 표시도 그 작업만 따로 적는다(같은 까닭 · 롤 창에 이 표시를 달 작업은 실패한다 — 닫힌 쪽).
+    if (j.unattended === true) await c.query(`UPDATE org_app_job SET unattended=true WHERE id=$1`, [row.id]);
     return { row };
   });
 }
@@ -81,6 +85,17 @@ export async function getAppJob(id: number, o: { view?: boolean } = {}): Promise
   if (!Number.isSafeInteger(id) || id < 1) return null;
   const r = await itemsPool.query(`SELECT ${o.view ? VIEW : LIGHT} FROM org_app_job WHERE id=$1`, [id]);
   return norm(r.rows[0] as Record<string, unknown> | undefined);
+}
+
+/** #1639 이 작업의 사람 신원이 사람이 보지 않는 자리에서 왔나 — 칸이 아직 없으면(42703 · 롤 창) 아니다(칸이 없으면 그 표시를 단 행도 없다). */
+export async function appJobUnattended(id: number): Promise<boolean> {
+  try {
+    const r = await itemsPool.query(`SELECT unattended FROM org_app_job WHERE id=$1`, [id]);
+    return (r.rows[0] as { unattended?: unknown } | undefined)?.unattended === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;
+    throw e;
+  }
 }
 
 /** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(없으면 null). 칸 묶음(LIGHT) 밖이라 따로 읽는다 — 그 작업의 돌기 신원을 풀 때만. */

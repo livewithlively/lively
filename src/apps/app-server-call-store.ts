@@ -44,16 +44,31 @@ const norm = (r: Record<string, unknown> | undefined): AppCallRow | null =>
 export interface NewAppCall {
   appId: string; purpose: string; tool: string | null; requester: string; requesterName: string | null; variant: "pub" | "draft"; alias: "cur" | "pub";
   functionName: string; level: "L0" | "L1"; scopes: string[]; timeoutS: number;
+  /** #1639 사람이 보지 않는 자리에서 부른 도구 — 그 돌기 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended). 아니면 생략. */
+  unattended?: boolean;
 }
 
 /** 부르기 한 건을 적는다(dispatched + 새 부르기 비밀). 비밀 값은 이 호출만 안다(돌려준다). */
 export async function insertAppCall(c: NewAppCall): Promise<{ row: AppCallRow; secret: string }> {
   const s = newJobSecret();
+  //  #1639 unattended 칸은 COLS 밖이고 그 부르기일 때만 적는다 — 롤 창(칸이 아직 없을 때)에 다른 부르기가 깨지지 않게. 그 부르기는 실패한다(닫힌 쪽).
+  const flag = c.unattended === true;
   const r = await itemsPool.query(
-    `INSERT INTO org_app_call(app_id, purpose, tool, requester, requester_name, variant, alias, function_name, level, scopes, timeout_s, call_hash)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text[],$11,$12) RETURNING ${COLS}`,
+    `INSERT INTO org_app_call(app_id, purpose, tool, requester, requester_name, variant, alias, function_name, level, scopes, timeout_s, call_hash${flag ? ", unattended" : ""})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text[],$11,$12${flag ? ", true" : ""}) RETURNING ${COLS}`,
     [c.appId, c.purpose, c.tool, c.requester, c.requesterName, c.variant, c.alias, c.functionName, c.level, c.scopes, c.timeoutS, s.hash]);
   return { row: norm(r.rows[0] as Record<string, unknown>)!, secret: s.secret };
+}
+
+/** #1639 이 부르기가 사람이 보지 않는 자리에서 왔나 — 칸이 아직 없으면(42703 · 롤 창) 아니다(칸이 없으면 그 표시를 단 행도 없다). */
+export async function appCallUnattended(id: number): Promise<boolean> {
+  try {
+    const r = await itemsPool.query(`SELECT unattended FROM org_app_call WHERE id=$1`, [id]);
+    return (r.rows[0] as { unattended?: unknown } | undefined)?.unattended === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;
+    throw e;
+  }
 }
 
 export async function getAppCall(id: number): Promise<AppCallRow | null> {

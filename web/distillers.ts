@@ -28,12 +28,21 @@ import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { isWholeDistillJob } from './lib/stage-job-pick.js';
+import { confirmDistillRun } from './distill-run-check.js';   // #5235 기본 기준으로 함께 나갈 자료를 누르기 전에
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 import { LIV_CARD, LIV_ROW, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
 import { countLiv } from './lib/liv-mark.js';
+import { laneJobNote } from './lib/lane-job-note.js';   // #5235 레인을 돌릴 자동 실행이 생겼는지 · 없는지
 import { fillLaneEditor, fillLaneRetired, renderFillJob } from './distill-fill.js';    // #4194 카테고리 붙이기(옛 「분류기」) — #4135 부터 따로 절을 두지 않고 같은 목록의 카드다
 import { type RunsByMachine, distillerToday, fetchRecentRuns, machineRuns, machineSum, recentLine } from './context-machine-runs.js';   // #4135 카드 안의 최근 실행
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+
+//  저장 알림 — 레인을 돌릴 자동 실행이 새로 생겼거나 없으면 함께 말한다(#5235). 길어서 평소보다 오래 띄운다.
+function savedToast(res: any, done: string): void {
+  const note = laneJobNote(res?.job_plan);
+  if (!note) { toast(done); return; }
+  toast(`${done}. ${note.text}`, note.warn, 9000);
+}
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
@@ -198,7 +207,9 @@ function faceStack(d): HTMLElement {
   return wrap;
 }
 
-// ── 현황 띠 — 숫자 셋. 어느 증류기도 안 읽는 자료가 있으면 그 칸이 경고색이 된다. ──
+// ── 현황 띠 — 숫자 셋. 맡은 증류기가 없는 자료가 있으면 그 칸이 경고색이 된다. ──
+//  (#5235) 종전 문구는 «어느 증류기도 읽지 않는다 · 이대로 두면 지식이 되지 않는다» 였는데 #1631 뒤로 사실이 아니다 — 자동 실행이 돌면
+//   기본 기준으로 나간다. 화면이 반대로 말해서, 증류기 하나를 시범으로 돌린 사람이 이 자료가 함께 나가는 것을 예상할 수 없었다.
 function statsStrip(cov, onN: number, total: number) {
   const tile = (n: string, l: string, k = '') => el('div', { class: 'dsl-stat' + (k ? ' ' + k : '') },
     el('b', { class: 'dsl-stat-n num', text: n }), el('span', { class: 'dsl-stat-l', text: l }));
@@ -211,11 +222,11 @@ function statsStrip(cov, onN: number, total: number) {
     //   둘을 갈라 보인다 — 읽을 것과 읽고 넘긴 것이 한 숫자면 «증류가 밀렸다» 로 읽힌다.
     tile(unread.toLocaleString() + '건', '아직 읽지 않은 자료', unread > 0 ? '' : 'is-ok'),
     tile(passed.toLocaleString() + '건', '읽었지만 지식으로 안 만든 자료'),
-    tile((cov.uncovered || 0).toLocaleString() + '건', '어느 증류기도 읽지 않는 자료', cov.uncovered > 0 ? 'is-warn' : 'is-ok'));
+    tile((cov.uncovered || 0).toLocaleString() + '건', '맡은 증류기가 없는 자료', cov.uncovered > 0 ? 'is-warn' : 'is-ok'));
   if (cov.uncovered > 0 && onN > 0 && (cov.uncovered_channels || []).length) {
     const issue = el('div', { class: 'cxc-issue cxc-issue-block' },
-      el('b', { text: '이 채널들은 어느 증류기도 읽지 않습니다' }),
-      el('span', { text: ' — 이대로 두면 지식이 되지 않습니다. 어느 증류기의 「읽을 채널」에 넣거나, 안전망 증류기를 켜세요.' }),
+      el('b', { text: '이 채널들은 맡은 증류기가 없습니다' }),
+      el('span', { text: ' — 자동 실행이 돌 때마다 증류기의 기준이 아니라 기본 기준으로 지식이 됩니다. 기준을 정하려면 어느 증류기의 「읽을 채널」에 넣거나, 안전망 증류기를 켜세요.' }),
       el('div', { class: 'cxc-chips' }, ...cov.uncovered_channels.map((c) => el('span', { class: 'pill', text: (c.channel || '(채널 없음)') + ' · ' + c.n.toLocaleString() }))));
     return el('div', {}, strip, issue);
   }
@@ -253,7 +264,7 @@ function distillerCard(d, st, catName, rerender, runs: import('./context-runs.js
   sw.checked = !!d.enabled;
   sw.addEventListener('change', async () => {
     const next = sw.checked; sw.disabled = true;
-    try { await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: next }) }); toast(next ? '켰습니다' : '껐습니다'); rerender(); }
+    try { savedToast(await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: next }) }), next ? '켰습니다' : '껐습니다'); rerender(); }
     catch (e) { toast(e.message, true); sw.checked = !next; sw.disabled = false; }
   });
   acts.append(sw, el('a', { class: 'btn btn-ghost btn-sm', href: pageHref(d.key), text: '설정' }));
@@ -373,7 +384,7 @@ function distillerRowCompact(d, st, catName, rerender) {
   const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': `${d.label || d.key} 켜기` }) as HTMLInputElement;
   sw.addEventListener('change', async () => {
     sw.disabled = true;
-    try { await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: true }) }); toast('켰습니다'); rerender(); }
+    try { savedToast(await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: true }) }), '켰습니다'); rerender(); }
     catch (e) { toast(e.message, true); sw.checked = false; sw.disabled = false; }
   });
   acts.append(sw, el('a', { class: 'btn btn-ghost btn-sm', href: pageHref(d.key), text: '설정' }));
@@ -910,16 +921,16 @@ function editorPage(d, isNew: boolean): HTMLElement {
     if (body.key === NEW_KEY) { showStep('basic'); toast("'new' 는 주소에서 '새 증류기'를 뜻해 식별자로 쓸 수 없습니다", true); (keyIn as HTMLInputElement).focus(); return; }
     (saveBtn as HTMLButtonElement).disabled = true;
     try {
-      await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify(body) });
+      const res: any = await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify(body) });
       if (isNew) {
         // 만든 즉시 그 증류기의 주소로 — replace 라 뒤로가기가 '/new'(빈 폼)로 되돌아가지 않는다.
         //  해시가 바뀌므로 라우터가 이 페이지를 저장된 값으로 다시 그린다.
         dirtyGuard = null;
-        toast('증류기를 만들었습니다');
+        savedToast(res, '증류기를 만들었습니다');
         location.replace(pageHref(body.key));
         return;
       }
-      toast('저장했습니다');
+      savedToast(res, '저장했습니다');
       titleEl.textContent = body.label || body.key;
       markClean();
     } catch (e) { toast('실패 — ' + e.message, true); }
@@ -1017,6 +1028,7 @@ async function runJobCard(rerender) {
     //  #4052 후속 — 켜진 레인 전부를 접수하는 전체 잡을 대표로 보인다. 처음 설정이 심은 local-files 전용 잡(10분)이
     //   목록 앞에 오면 카드가 그 주기로 말하고, 끌 때 그 잡만 꺼져 나머지 레인은 계속 돌았다.
     prefer: isWholeDistillJob,
+    beforeRun: (job) => confirmDistillRun(String(job.id)),
     // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
     unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
       ? '지금 등록된 증류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'

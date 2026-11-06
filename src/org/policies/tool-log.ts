@@ -187,6 +187,7 @@ export const SECRET_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
   org_oauth_client_upsert: ["clientSecret"],
   workspace_link_set: ["token"],
   workspace_activate: ["app_dsn"],   // 앱 role 비밀번호가 든 Postgres 접속 문자열
+  org_member_reset_password: ["password"],   // 관리자가 정한 임시 비번 — 여러 사람이 같은 값일 수 있다
   //  #4993 AI 브라우저 — 사람 대신 남의 사이트에 치는 글(인증 코드 · 개인정보) · 페이지에서 돌린 코드 · 올릴 파일의 받기 주소(짧은 수명 자격).
   //   설명문이 «비밀은 직접 치지 말라» 고 해도 강제가 아니다 — 기록이 그 약속에 기대면 안 된다(#4993 격리 리뷰).
   browser_act: ["text"],

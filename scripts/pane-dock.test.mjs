@@ -74,12 +74,15 @@ eq([D.dragScale(36, 50, -4), D.dragScale(36, 50, 0)], [1.28, 1.39], "SC5b 들어
 eq([D.dragScale(36, 36, 1.8), D.dragScale(36, 36, 2.2), D.dragScale(36, 36, -1.8)], [1, 1.06, 1], "SC6 경계 — 보통 ±0.05 는 보통으로 붙는다, 0.06 은 그대로");
 
 // 고정 목록 (N1–N5)
-const known = (t) => ["tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
-eq(D.readDockPins(null, known), ["tasks", "files", "knowledge", "web", "timeline"], "N1 정한 적 없으면 기본 다섯");
+const known = (t) => ["console", "tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
+eq(D.readDockPins(null, known), ["console", "tasks", "files", "knowledge", "web"], "N1 정한 적 없으면 기본 다섯 — 콘솔이 맨 앞, 타임라인은 없다(#5319 원준 2026-11-05)");
+eq(D.readDockPins(["tasks", "files", "knowledge", "web", "timeline"], known), ["console", "tasks", "files", "knowledge", "web"], "N1b 옛 기본 다섯을 그대로 적어 둔 목록은 새 기본값을 따른다");
+eq(D.readDockPins(["tasks", "files", "knowledge", "web", "timeline"], (t) => t !== "console"), ["tasks", "files", "knowledge", "web", "timeline"], "N1d 콘솔이 없는 판이면 옛 목록 그대로(옮겨 갈 곳이 없다)");
+eq(D.readDockPins(["files", "tasks", "knowledge", "web", "timeline"], known), ["files", "tasks", "knowledge", "web", "timeline"], "N1c 순서를 바꿔 둔 목록(사람이 고른 것)은 그대로");
 eq(D.readDockPins(["~"], known), [], "N2 «다 뺐다» 표식이면 빈 독(기본으로 돌아가지 않는다)");
 eq(D.readDockPins(["web", "bogus", "web", "files"], known), ["web", "files"], "N3 모르는 종류·중복은 걷고 순서는 지킨다");
-eq(D.readDockPins(["bogus"], known), ["tasks", "files", "knowledge", "web", "timeline"], "N4 전부 모르는 종류(부품이 사라짐)면 기본값");
-eq(D.readDockPins(null, (t) => t !== "timeline"), ["tasks", "files", "knowledge", "web"], "N4b 기본값에서도 모르는 종류는 걷는다");
+eq(D.readDockPins(["bogus"], known), ["console", "tasks", "files", "knowledge", "web"], "N4 전부 모르는 종류(부품이 사라짐)면 기본값");
+eq(D.readDockPins(null, (t) => t !== "console"), ["tasks", "files", "knowledge", "web"], "N4b 기본값에서도 모르는 종류는 걷는다");
 eq(D.writeDockPins([]), ["~"], "N5 빈 목록은 표식으로 적는다(저장소가 빈 목록을 «적은 적 없음»으로 지우므로)");
 eq(D.readDockPins(D.writeDockPins([]), known), [], "N5b 표식을 적고 다시 읽으면 빈 독");
 
@@ -95,12 +98,12 @@ eq(D.movePin(["a", "b"], "z", 1), ["a", "z", "b"], "T3b 고정 안 된 것을 �
 const all = () => true;
 const loose = (t) => !["tasks", "files", "knowledge", "liv"].includes(t);
 const dp = D.dockPins(null, all, loose);
-eq([dp.base, dp.shown], [["tasks", "files", "knowledge", "web", "timeline"], ["web", "timeline"]], "B2 저장 없음 · 좁힌 화면 — base 는 기본 다섯, 보이는 것은 고를 수 있는 둘");
-eq(D.togglePin(dp.base, "web"), ["tasks", "files", "knowledge", "timeline"], "B2b 좁힌 화면에서 웹을 빼도 안 보이는 고정 셋은 남는다(리뷰 실측: [timeline] 하나만 남았다)");
+eq([dp.base, dp.shown], [["console", "tasks", "files", "knowledge", "web"], ["console", "web"]], "B2 저장 없음 · 좁힌 화면 — base 는 기본 다섯, 보이는 것은 고를 수 있는 둘");
+eq(D.togglePin(dp.base, "web"), ["console", "tasks", "files", "knowledge"], "B2b 좁힌 화면에서 웹을 빼도 안 보이는 고정 셋은 남는다(리뷰 실측: [timeline] 하나만 남았다)");
 eq(D.dockPins(["tasks", "files"], all, loose).shown, [], "B3 고정이 전부 이 화면에서 못 고르는 것이면 빈 독 — 기본값으로 채우지 않는다(안 보이는 것 ≠ 없어진 것)");
 eq(D.dockPins(["tasks", "files"], all, loose).base, ["tasks", "files"], "B3b 그래도 base 는 적힌 그대로");
 eq(D.dockPins(["~"], all, loose), { base: [], shown: [] }, "B4 «다 뺐다» 표식이면 둘 다 빈 목록");
-eq(D.dockPins(["gone"], (t) => t !== "gone", all).base, ["tasks", "files", "knowledge", "web", "timeline"], "B5 적힌 것이 전부 없어진 종류(부품이 사라진 판)면 base 는 기본값");
+eq(D.dockPins(["gone"], (t) => t !== "gone", all).base, ["console", "tasks", "files", "knowledge", "web"], "B5 적힌 것이 전부 없어진 종류(부품이 사라진 판)면 base 는 기본값");
 eq(D.movePinBefore(["a", "b", "c", "d"], "a", "d"), ["b", "c", "a", "d"], "B6 놓은 자리 = 바로 뒤의 고정 앱 앞");
 eq(D.movePinBefore(["a", "b", "c"], "a", null), ["b", "c", "a"], "B6b 뒤가 없으면(null) 맨 뒤");
 eq(D.movePinBefore(["a", "b", "c"], "a", "zz"), ["b", "c", "a"], "B6c 없는 이웃이면 맨 뒤(자리를 잃지 않는다)");
@@ -238,7 +241,7 @@ check([".pn-fbody", ".pn-knlist", ".pn-knr-scroll", ".pn-tl .tl-scroll", ".pn-pr
   && [".pn-tk", ".pn-liv"].every((c) => lifts.includes(c)) && /\.pn-pane\[data-zone="side"\] \.pn-ed-ta \{ padding-bottom: calc\(12px \+ var\(--pn-dock-b, 0px\)\); \}/.test(PANES_CSS),
   "W13b 목록 상자(자료 · 지식 목록 · 지식 읽기 · 타임라인 · 미리보기 · 뷰어 · 앱 · 세션 파일)는 끝에만 독 두께만큼 빈 자리 · 입력칸 앱(프로젝트 · 리브)은 앱 끝에 · 고치기 칸은 아래 안 여백", JSON.stringify({ lists, lifts }));
 //  곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 서랍만 없다 · 크기와 놓일 자리 윤곽이 손잡이 몫을 안다.
-check(/if \(!host\.narrow\(\)\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
+check(/if \(!host\.narrow\(\) && home !== 'top'\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
   && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /SEP \+ HANDLE_FLOAT;\n\s*const fit = \(max: number\): number => floatIconSize\(W, n, \{[^}]*extra, grow/.test(DOCK) && /const w = Math\.min\(W - 2 \* M\.margin, floatWidth\(n, s, extra\)\)/.test(DOCK),
   "W14 손잡이는 이음매 · 곁칸 아래 둘 다(서랍만 없다) — 곁칸 아래 크기와 끌 때의 윤곽이 손잡이 몫(HANDLE_FLOAT)을 셈한다");
 //  곁칸 아래 좌우 자리(원준 10-07) — 자리 · 끌어 놓기 · 윤곽이 모두 규칙(floatCenter · floatAt)을 타고, 자리를 못 정했으면 열쇠째 안 적는다.
@@ -246,5 +249,141 @@ check(/st\.left = floatCenter\(host\.narrow\(\) \? DOCK_DEFAULTS\.fx : prefs\.fx
 check(/const fx = floatAt\([^;]*f\.lo, f\.hi\);\n\s*if \(fx !== undefined\) target\.fx = fx;/.test(DOCK), "W15b 끌어 놓은 좌우 자리는 규칙(floatAt)이 정한다 — 못 정하면 열쇠째 뺀다(undefined 를 적으면 옛 자리가 지워진다)");
 check(/floatCenter\(t\.fx \?\? prefs\.fx, f\.lo, f\.hi\) - w \/ 2/.test(DOCK), "W15c 놓일 자리 윤곽도 같은 좌우 자리에 그린다");
 check(/const half = w \/ 2 \+ \(magOn\(\) \? \(MAG_GROW \* s\) \/ 2 : 0\) \+ M\.margin;/.test(DOCK), "W15d 좌우 구간은 확대로 불어날 몫(양쪽 반씩)과 바깥 여백을 남긴다 — 끝에 둔 독을 확대해도 곁칸 테두리에서 안 잘린다");
+//  #5319 머리 줄 독(원준 2026-11-04 «독이랑 위에 하나로 합치자») — 넓은 화면은 곁칸 맨 위 줄에 붙박이로 선다.
+const PANES_TS = read("web/v2/panes.ts");
+check(/topSlot = host\.narrow\(\) \? null : host\.top\?\.\(\) \?\? null;/.test(DOCK) && /home = topSlot \? 'top' : effectiveHome\(prefs, !!geom\);/.test(DOCK)
+  && /top: \(\) => \(dockTop\(\) \? dockSlot : null\),/.test(PANES_TS) && /const dockTop = \(\): boolean => !narrow\(\);/.test(PANES_TS),
+  "W16 넓은 화면의 독은 곁칸 머리 줄(dockSlot)에 선다 — 좁은 폭(서랍)만 종전 자리");
+check(/if \(home === 'top'\) return;\s+\/\/[^\n]*\n\s*if \(t\.closest\('\.pn-dock-sep'\)\) \{ beginResize\(e\); return; \}/.test(DOCK)
+  && /minNow = prefs\.min && !host\.narrow\(\) && home !== 'top';/.test(DOCK) && /&& !minNow && home !== 'top';/.test(DOCK)
+  && /const z = h && h !== 'top' \? dockInset\(h, size, M, minNow\)/.test(DOCK),
+  "W16b 머리 줄 독은 붙박이 — 독 끌기 · 크기 끌기 · 접기 · 확대가 없고, 본문이 비킬 여백도 없다");
+check(/if \(home === 'top'\) return \[\{ label: '고정한 앱 되돌리기'/.test(DOCK) && /home === 'top' \? 'bottom'/.test(DOCK) && /\.pn-dock-tip\[data-side="bottom"\]/.test(read("public/styles/42-v2-dock.css")),
+  "W16c 머리 줄 독의 설정은 고정 되돌리기 하나 · 이름표는 아래로");
+check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-name/.test(PANES_TS)
+  && /\[열린 탭 ∨\] 은 세우지 않는다[^\n]*\n\s*pane\.tail\.replaceChildren\(\.\.\.\[\n\s*sessionOnly \? null : addBtn\(zone\),/.test(PANES_TS)
+  && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-tabs \{ display: none; \}/.test(DOCK_CSS),
+  "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 [＋] 만 남긴다([열린 탭 ∨] 없음 — 독 아래 탭 줄이 하나하나를 다 보인다) · 켜진 앱 이름은 아이콘 아래 이름표가 말한다");
+{
+  const RAIL_CSS = read("public/styles/47-v2-rail.css");
+  check(/\.pn-body:not\(\.cm\) \.sc-head--big \.sc-titlebox \.sc-title-t \{ max-width: 22em; \}/.test(read("public/styles/36-chat.css")),
+    "W16q 큰 머리 제목은 칸이 넓어도 한글 22자 안팎(22em)에서 멈추고 …로 끊는다 — 닿는 데까지 늘이지 않는다");
+  check(/\.v2-rail-stack \.v2-wscard-big \{[^}]*width: 40px; height: 40px;/.test(RAIL_CSS) && /\.v2-rail\.closed \.v2-rail-me \.v2-ava \{ width: 36px; height: 36px;/.test(RAIL_CSS),
+    "W16r 레일 워크스페이스 타일 40px · 내 아바타 36px — 레일 칸(63×58) 사이에서 점처럼 뜨지 않게");
+}
+//  #5319 독 아래 탭 줄(2026-11-05 — 뷰어 여럿 중 하나를 고를 수 없었다 · «탭 사이즈가 충분히 크게»).
+{
+  const TABS_LIB = read("web/lib/pane-tabs.ts");
+  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions' && !!actApp && appOf\(k\) === actApp;/.test(PANES_TS)
+    && /function appOf\(k: TabKey\): string \{ return isFileTab\(k\) \? 'files' : tabBase\(k\); \}/.test(PANES_TS)
+    && /actApp: \(\) => \{ const a = panes\.get\('side'\)\?\.act \?\? null; return a \? appOf\(a\) : null; \}/.test(PANES_TS)
+    && /const aa = host\.actApp\?\.\(\) \?\? null; if \(aa\) items = items\.map/.test(DOCK)
+    && /const MUST_APP: TabKey = 'console';/.test(PANES_TS) && /if \(isDefaultApp\(key\)\) return;/.test(PANES_TS)
+    && /function isPinned\(k: TabKey\): boolean \{ return lay\.pin\.includes\(k\) \|\| isDefaultApp\(k\); \}/.test(PANES_TS)
+    && /label: isDefaultApp\(key\) \? '기본 앱에서 빼기' : '기본 앱으로 두기', icon: 'pin', off: key === MUST_APP,/.test(PANES_TS)
+    && /ensureDefaultApps\(\);\n\s*saveLayout\(\);   \/\/ loadLayout/.test(PANES_TS)
+    && /&& !\(!narrow\(\) && isFileTab\(k\) && lay\.side\.includes\(k\)\)\);/.test(PANES_TS)
+    && /const sub = top && list\.some\(inSub\);/.test(PANES_TS)
+    && /w\.classList\.toggle\('pn-sub-off', top && !inSub\(k\)\)/.test(PANES_TS)
+    && /classList\.contains\('pn-tabwrap'\) && !n\.classList\.contains\('pn-sub-off'\)/.test(PANES_TS),
+    "W16k 독 아래 탭 줄 = 켜진 앱의 탭만(뷰어 탭은 자료 앱 몫 · 자료 칸이 켜진다) — 독엔 [뷰어] 칸이 없다 · 기본 앱(콘솔은 늘 · 사람마다 더하기)은 늘 열려 있고 × 없음 · 숨은 탭은 폭을 나눠 갖지 않는다");
+  check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: flex; flex-wrap: wrap;/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar::after \{ content: ""; order: 1; flex: 0 0 100%; height: 0; \}/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ order: 0; flex: 1 1 0; min-width: 0; height: calc\(var\(--pn-bighead-h, 113px\) - 1px\); \}/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tab \{[^}]*font-size: 15px;/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tabwrap\.on::after \{ content: "";/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar:not\(\.shrunk\):not\(\.has-more\) \.pn-tab-more \{ display: none; \}/.test(DOCK_CSS),
+    "W16l 독 아래 파일 탭 줄 — 두 줄은 서로의 폭을 나눠 갖지 않는다(격자일 땐 아래 단추 폭만큼 독이 좁아져 아이콘이 잘렸다) · 독 줄 높이 그대로 · 글자 15px · 켜진 탭 밑줄");
+  check(/export const SUB_TAB_METRICS: Metrics = \{ icon: 76, minLabel: 190,/.test(TABS_LIB)
+    && /const met = sub \? SUB_TAB_METRICS : TAB_METRICS;/.test(PANES_TS)
+    && /if \(sub && plan\.mode === 'icons'\) \{/.test(PANES_TS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs \{ flex-wrap: nowrap;[^}]*overflow-x: auto;/.test(DOCK_CSS),
+    "W16m 3안 — 파일 탭 줄은 한 줄(줄 바꿈은 세로를 먹었다) · 아이콘으로 접지 않고 이름 일곱 자쯤에서 멈춘 뒤 옆으로 미끄러진다");
+  check(/function dockViewerBar\(pane: Pane, key: TabKey \| null\): void \{/.test(PANES_TS)
+    && /dockViewerBar\(pane, top && pane\.root\.classList\.contains\('dock-sub'\) && !!act && isFileTab\(act\) \? act : null\)/.test(PANES_TS)
+    && /\.pn-sub-acts \.pn-ed-name \{ display: none; \}/.test(DOCK_CSS)
+    && /@container pnsidebar \(max-width: 519px\) \{\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-web-btn\.ic \{ display: none; \}\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-sub-fold \{ display: none; \}/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top > \.pn-tabbar \{ container: pnsidebar \/ inline-size; \}/.test(DOCK_CSS)
+    && /\.pn-sub-acts \.pn-web-btn\.ic\.pn-sub-more \{ display: none;/.test(DOCK_CSS)
+    && /\.pn-sub-acts \.pn-web-btn\.ic\.pn-sub-more:not\(\[hidden\]\) \{ display: inline-flex; \}/.test(DOCK_CSS),
+    "W16o 3안 — 뷰어의 이름 줄을 걷고 단추를 파일 탭 줄 오른쪽 끝으로 옮긴다 · 곁칸이 좁으면(머리 줄 520 미만) 아이콘 단추를 [⋯] 로 접고 넓으면 늘어선다");
+  check(/return tabBase\(key\) === 'editor' \? 'doc' : d\.icon;/.test(PANES_TS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tabwrap\.on \.pn-tab-x \{ opacity: 1; pointer-events: auto; \}/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tab-x \{ left: auto; right: 8px;/.test(DOCK_CSS)
+    && /if \(nx && px != null\) \{ pane\.frozen\.set\(nx, px\);/.test(PANES_TS)
+    && /moreBtn\(zone, inSub\)/.test(PANES_TS),
+    "W16p 파일 탭 아이콘은 하나(종류마다 바꾸지 않는다) · × 는 탭 오른쪽 끝, 켜진 탭은 늘 보인다 · 마우스로 닫으면 오른쪽 탭이 그 폭을 물려받아 × 가 커서 밑에 · [n ▾] 는 열어 둔 파일만");
+  check(/function edgeFade\(sc: HTMLElement\): void \{/.test(PANES_TS) && /dockSlot\.addEventListener\('wheel'/.test(PANES_TS)
+    && /if \(zone === 'side'\) \{ dock\?\.sync\(\); if \(top\) requestAnimationFrame\(revealDockOn\); \}/.test(PANES_TS)
+    && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-dock-slot\.fade-r, \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs\.fade-r \{/.test(DOCK_CSS),
+    "W16n 옆으로 미는 줄(독 · 독 아래 탭) — 잘린 쪽 끝은 흐리고 · 세로 휠로 밀고 · 켜진 앱은 보이는 자리로 끌어온다(반쯤 잘린 이름표가 깨진 것으로 읽히지 않게)");
+}
+//  #5319 4차(원준 2026-11-05) — 머리 줄 독 = 세션 머리줄과 같은 높이 · 이름표 · 선반 없음 · 아이콘 40~56.
+check(/\.pn-pane\.dock-top > \.pn-tabbar \{ height: var\(--pn-bighead-h, 113px\);/.test(DOCK_CSS)
+  && /\.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ height: var\(--pn-bighead-h\);/.test(PANES_CSS) && /--pn-bighead-h: 113px;/.test(PANES_CSS),
+  "W16f 곁칸 머리 줄 독과 세션 큰 머리가 같은 높이(--pn-bighead-h)를 읽는다 — 두 열의 아랫선이 한 줄");
+check(/\.pn-dock\[data-home="top"\] \.pn-dock-shelf \{[^}]*background: none;[^}]*box-shadow: none; \}/.test(DOCK_CSS)
+  && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;[^}]*font-size: 15px;/.test(DOCK_CSS)
+  && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on \.pn-dock-lb \{ font-weight: 700;/.test(DOCK_CSS)
+  && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on::after \{ content: "";/.test(DOCK_CSS)
+  && /el\('span', \{ class: 'pn-dock-lb', 'aria-hidden': 'true', text: name \}\)/.test(DOCK)
+  && /top: \{ min: 36, max: 52 \}/.test(DOCK) && /if \(dragging \|\| ctxIsOpen\(\)\) return;/.test(DOCK),
+  "W16g 머리 줄 독 — 선반(유리 상자) 없음 · 아이콘 아래 이름표 15px · 켜진 앱은 굵게 + 밑줄(색만으로 말하지 않는다) · 아이콘 40~56 · 꼬리 이름표는 안 띄운다");
+check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\s+const mb = moreBtn\(\);/.test(DOCK) && /sessionOnly \? null : addBtn\(zone\),\n\s*\]\.filter/.test(PANES_TS),
+  "W16e 머리 줄엔 «앱 더하기» 가 하나 — 독의 [모든 앱] 칸 대신 줄 끝 [＋](앱 서랍)");
+//  #5319 4차 스테이지(원준 2026-11-05 «어이없게 잘리는 것 없도록») — 큰 머리는 칸 셋: 둘째 줄 선택기 폭이 첫 줄 이름을 굶기지 않는다.
+{
+  const CHAT_CSS = read(path.join(root, "public/styles/36-chat.css"));
+  check(/\.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto auto;[^}]*column-gap: 0;/.test(CHAT_CSS)
+    && /\.sc-head--big \.sc-head-top \{ grid-row: 1; grid-column: 1 \/ 3;/.test(CHAT_CSS)
+    && /\.sc-head--big > \.sc-head-r \{ grid-row: 1; grid-column: 3;[^}]*margin-left: 24px; \}/.test(CHAT_CSS)
+    && /\.sc-head--big > \.sc-run-top \{ grid-row: 2; grid-column: 2 \/ 4;[^}]*margin-left: 24px; \}/.test(CHAT_CSS),
+    "W16h 큰 머리 칸 셋 — 첫 줄 이름 [1~2] · 단추 [3], 둘째 줄 연결 상태 [1] · 선택기 [2~3]");
+  check(/\.sc-head--big \.sc-sub \.sc-termstat:not\(\[hidden\]\) \{ display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;/.test(CHAT_CSS)
+    && /\.sc-head--big \.sc-title-t \{ min-width: 3em; \}/.test(CHAT_CSS)
+    && /@container schead \(max-width: 520px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big > \.sc-run-top \.sc-ax-me:not\(\[hidden\]\) \{ display: none; \} \}/.test(CHAT_CSS)
+    && /@container schead \(max-width: 460px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big \.sc-faces \{ display: none; \} \}/.test(CHAT_CSS),
+    "W16i 좁은 칸 — 연결 상태는 …로 줄고(잘려 나가지 않는다) · 이름은 세 글자 바닥 · 접는 차례 680 복제·옮기기 → 520 선택기 → 480 자료 → 460 얼굴");
+  const SC = read(path.join(root, "web/session-chat.ts"));
+  check(/const duo = !!duoBtn && f && m;/.test(SC) && /if \(forkBtn\) forkBtn\.hidden = !f \|\| duo;/.test(SC)
+    && /row\(ICONS\.copy, '복제', '지금까지의 대화를 아는 세션을 하나 더'/.test(SC)
+    && /if \(wideMq\.matches\) \{ subLead\.append\(facesEl, \.\.\.leadParts\(\)\);/.test(SC)
+    && /el\('div', \{ class: 'sc-sub' \}, subLead, subSep, subActs, \.\.\.\(opts\.bigHead \? \[fixPair\] : \[\]\), metaEl\)/.test(SC)
+    && /subActs\.append\(\.\.\.sessActs\(\)\); headR\.insertBefore\(fixPair, moreBtn\);/.test(SC)
+    && /\.sc-head--big > \.sc-head-r \.sc-termstat:not\(\[hidden\]\) \{ display: block; min-width: 0; max-width: 12em;/.test(CHAT_CSS)
+    && /\.pn-body:not\(\.cm\) \.sc-head--big \.sc-act \{[^}]*border: 1px solid transparent; border-radius: 999px;/.test(CHAT_CSS)
+    && /\.pn-body:not\(\.cm\) \.sc-head--big \.sc-act:hover \{ color: var\(--blue\); border-color: var\(--line-net\);/.test(CHAT_CSS)
+    && /@container schead \(max-width: 640px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big \.sc-act-duo-t \{ display: none; \} \}/.test(CHAT_CSS),
+    "W16s 머리줄 3-B — 둘 다 되면 [복제·옮기기 ▾] 하나(메뉴에서 고른다) · 하나만 되면 그 단추 · 넓은 화면은 첫 줄 오른쪽 [연결 상태 | 화면 복구] [⋯], 둘째 줄 왼쪽 얼굴 · [자료] │ [복제·옮기기] · 이전 단추 모양(쉴 땐 글자, 올리면 테두리 알약 + 파란 글자)");
+  check(/\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: none; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-it \{ width: calc\(var\(--dk-s, 44px\) \+ 8px\); gap: 0; padding: 0 0 8px; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ height: var\(--pn-dock-row\); align-items: center; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-position: 0 var\(--pn-dock-row\), 0 0; row-gap: 0; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top:not\(\.dock-sub\) > \.pn-tabbar > \.pn-dock-slot \{ align-items: center; \}/.test(DOCK_CSS)
+    && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;/.test(DOCK_CSS),
+    "W16t #5319 A안 — 머리 줄 독 타일 44 · 이름표는 평소 숨기고 올리면 말풍선 · 독 줄 = 세션 머리줄 높이(타일 세로 가운데) · 탭 줄 53 은 그 선 아래로 · 옛 규칙은 지우지 않고 덮는다");
+  const GRIP = read(path.join(root, "web/v2/head-grip.ts"));
+  check(/export const HEAD_H = \{ def: 113, min: 52, max: 150 \} as const;/.test(GRIP) && /export const ONE_ROW_BELOW = 80;/.test(GRIP)
+    && /wrap\.classList\.toggle\('hd-one', \(h \?\? HEAD_H\.def\) < ONE_ROW_BELOW\);/.test(GRIP)
+    && /\.pn-wrap\.hd-one \.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ display: flex; flex-wrap: nowrap;/.test(PANES_CSS)
+    && /head\.append\(runTop, headGrip\(\)\)/.test(SC) && /sidePane\.bar\.append\(subActs, headGrip\(\)\);/.test(read(path.join(root, "web/v2/panes.ts")))
+    && /applyHeadH\(wrap, savedHeadH\(\)\);/.test(read(path.join(root, "web/v2/panes.ts")))
+    && /\.pn-wrap \{ --hd-r: clamp\(32px, calc\(\(var\(--pn-bighead-h\) - 15px\) \/ 2\), 36px\); --hd-b: var\(--hd-r\); \}/.test(PANES_CSS)
+    && /grid-template-rows: var\(--hd-r, 36px\) var\(--hd-r, 36px\);/.test(CHAT_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub \{ --pn-dock-row: calc\(var\(--pn-bighead-h, 113px\) - 1px\); --pn-file-row: 53px;/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-head-grip \{ bottom: auto; top: calc\(var\(--pn-dock-row\) - 5px\); \}/.test(DOCK_CSS)
+    && /if \(home === 'top'\) pane\.style\.setProperty\('--pn-dk-s', size \+ 'px'\);/.test(DOCK),
+    "W16u 머리 줄 높이 손잡이(#5319) — 52~150(기본 113) 한 값(--pn-bighead-h)을 세션 큰 머리 · 곁칸 독 줄이 같이 읽는다 · 80 아래는 한 줄 머리(hd-one) · 독 줄 = H-1 · 탭 줄 53 은 선 아래 · 손잡이는 그 선 위");
+  check(/export const HANG_BELOW = 105;/.test(GRIP) && /wrap\.classList\.toggle\('hd-hang', \(h \?\? HEAD_H\.def\) < HANG_BELOW\);/.test(GRIP)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub \{ --pn-file-row: 44px; --pn-tab-h: 34px; --pn-dock-row: calc\(var\(--pn-bighead-h, 113px\) - 1px - var\(--pn-file-row\)\); --pn-dk-cap: calc\(var\(--pn-dock-row\) - 8px\); \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-image: none; \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ box-sizing: border-box; padding-top: clamp\(0px, calc\(var\(--pn-bighead-h, 113px\) - 105px\), 8px\); \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs > \.pn-tabwrap \{ margin-block: 3px 7px; \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-head-grip \{ top: auto; bottom: 0; \}/.test(DOCK_CSS),
+    "W16v ② 탭 줄을 머리 높이 안으로(#5319 원준 «세로로 너무 길다») — 105 이상이면 독 줄 68(위 8 + 타일 52 + 밑줄 8) + 탭 줄 44(탭 34) = 선 안 113 · 타일은 안 줄인다(cap = 독 줄 - 8) · 두 줄 사이 선 없음 · 손잡이는 아랫선 · 105 아래는 hd-hang 으로 옛 규칙(탭 줄이 선 아래)");
+  const TERM_HTML = read(path.join(root, "public/terminal.html"));
+  check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
+    "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");
+}
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);

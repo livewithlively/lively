@@ -3,6 +3,7 @@
 import type pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import type { AiAccountSettings, AiRunStatus, Executor, ResumeLink, RunKind } from "./plan.js";
+import type { Effort } from "../agent-jobs/runner.js";
 
 export interface AiRunRow {
   id: number;
@@ -54,22 +55,29 @@ export interface NewAiRun {
   sharedSeat: boolean;
   /** #5101 이어받은 실행이면 그 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭) — 없으면(새 질문) 생략 · null. RUN_RESUME_COLS 머리말(롤 창). */
   resume?: ResumeLink | null;
+  /** 하네스 생각 깊이(작업 컨테이너 실행만 — 실행에 쓰는 값은 작업 행의 것이고 이것은 기록) — 없으면 생략 · null. RUN_EFFORT_COL 머리말(롤 창). */
+  effort?: Effort | null;
 }
 
 /** 실행 행 하나를 넣는 SQL(insertAiRun · insertResumedAiRun 이 같은 글을 쓴다). */
 function insertRunSql(n: NewAiRun): { sql: string; args: unknown[] } {
   //  #5081 shared_seat 칸은 공용 시트 실행일 때만 적는다 — RUN_SHARED_SEAT_COL 머리말(롤 창에서 다른 실행의 접수가 «없는 칸» 으로 깨지지 않게).
-  //  #5101 이어받기 칸 넷도 같은 까닭으로 이어받은 실행일 때만 적는다(RUN_RESUME_COLS 머리말).
+  //  #5101 이어받기 칸 넷도 같은 까닭으로 이어받은 실행일 때만 적는다(RUN_RESUME_COLS 머리말). effort 칸도 값을 준 실행일 때만(RUN_EFFORT_COL 머리말).
   const shared = n.sharedSeat === true;
   const rs = n.resume ?? null;
-  const extraCols = `${shared ? `, ${RUN_SHARED_SEAT_COL}` : ""}${rs ? `, ${RUN_RESUME_COLS.join(", ")}` : ""}`;
-  const extraVals = `${shared ? ", true" : ""}${rs ? ", $16, $17, $18, $19" : ""}`;
+  const effort = n.effort ?? null;
+  const args: unknown[] = [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
+    n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, ...(rs ? [rs.of, rs.root, rs.depth, rs.reason] : [])];
+  //  effort 의 자리 번호는 앞 값들 뒤다(이어받기 칸이 있으면 $20, 없으면 $16).
+  if (effort != null) args.push(effort);
+  const effortRef = effort != null ? `$${args.length}` : null;
+  const extraCols = `${shared ? `, ${RUN_SHARED_SEAT_COL}` : ""}${rs ? `, ${RUN_RESUME_COLS.join(", ")}` : ""}${effortRef ? `, ${RUN_EFFORT_COL}` : ""}`;
+  const extraVals = `${shared ? ", true" : ""}${rs ? ", $16, $17, $18, $19" : ""}${effortRef ? `, ${effortRef}` : ""}`;
   return {
     sql: `INSERT INTO org_app_ai_run(status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, model, label, prompt,
                                 system_prompt, schema, started_at${extraCols})
      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, CASE WHEN $1='running' THEN now() ELSE NULL END${extraVals}) RETURNING ${COLS}`,
-    args: [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
-      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, ...(rs ? [rs.of, rs.root, rs.depth, rs.reason] : [])],
+    args,
   };
 }
 
@@ -159,6 +167,26 @@ export async function aiRunSharedSeat(id: number): Promise<boolean> {
   }
 }
 
+/**
+ * 하네스 생각 깊이(org_app_ai_run.effort)도 COLS 에 넣지 않고 따로 읽는다(aiRunEffort · listAiRuns) — RUN_SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  값을 준 실행을 넣을 때만 적고(insertAiRun), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 effort 를 실은 실행을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 부르는 쪽(service.submitRun)이 503 으로 다시 보내라고 한다
+ *   (작업 행의 effort 와 같다 — 받은 깊이를 기록 없이 · 기본 깊이로 돌리지 않는다).
+ *  이 칸은 보기 · 목록에 싣는 기록이다 — 하네스가 받는 값은 작업 행(agent-jobs/store.EFFORT_COL)에서 읽는다. 그래서 적힌 글을 그대로 돌려준다.
+ */
+export const RUN_EFFORT_COL = "effort";
+export async function aiRunEffort(id: number): Promise<string | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await itemsPool.query(`SELECT ${RUN_EFFORT_COL} AS e FROM org_app_ai_run WHERE id=$1`, [id]);
+    const e = r.rows[0]?.e;
+    return typeof e === "string" && e !== "" ? e : null;
+  } catch (e) {
+    if (isUndefinedColumn(e)) return null;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
 /** 프록시 토큰(sha256) → 열린 실행 행. 끝난 실행의 토큰은 없는 토큰이다. */
 export async function getAiRunByToken(tokenHash: string): Promise<AiRunRow | null> {
   const r = await itemsPool.query(`SELECT ${COLS} FROM org_app_ai_run WHERE proxy_token_hash=$1 AND status IN ('queued','running')`, [tokenHash]);
@@ -231,29 +259,41 @@ export async function openRunCountOf(requester: string): Promise<number> {
 }
 
 export interface AiRunListFilter { appId: string | null; requester: string | null; status: string | null; limit: number }
-/** shared_seat = 공용 시트로 돈 실행인가(#5081 — 실행 행의 표시 · RUN_SHARED_SEAT_COL). 내 실행 판정(service.isOwnRun)이 쓴다. */
-export type AiRunSummaryRow = Omit<AiRunRow, "prompt" | "result" | "schema" | "system_prompt" | "proxy_token_hash"> & { prompt_preview: string; has_result: boolean; shared_seat: boolean };
+/**
+ * shared_seat = 공용 시트로 돈 실행인가(#5081 — 실행 행의 표시 · RUN_SHARED_SEAT_COL). 내 실행 판정(service.isOwnRun)이 쓴다.
+ *  effort = 그 실행에 준 하네스 생각 깊이(RUN_EFFORT_COL · 없으면 null) — 목록이 model 옆에 싣는다.
+ */
+export type AiRunSummaryRow = Omit<AiRunRow, "prompt" | "result" | "schema" | "system_prompt" | "proxy_token_hash"> & { prompt_preview: string; has_result: boolean; shared_seat: boolean; effort: string | null };
 /**
  * 실행 목록 — requester 를 주면 «내 실행»(보낸 것 + 내 구독으로 도는 것 · 공용 시트로 돈 실행은 빼고 — service.isOwnRun 과 한 뜻).
- *  #5081 공용 시트 표시는 실행 행의 칸이다(RUN_SHARED_SEAT_COL). 그 칸이 아직 없으면(롤 창) 표시 없이 다시 읽는다 — 칸이 없으면 그 칸을 단 실행도 없다.
+ *  #5081 공용 시트 표시와 effort 는 실행 행의 칸이다(RUN_SHARED_SEAT_COL · RUN_EFFORT_COL). 칸이 아직 없으면(롤 창) 새 칸부터 하나씩 빼고 다시 읽는다 —
+ *   먼저 effort(가장 새 칸)만 빼고, 그래도 없으면 공용 시트 표시까지 뺀다(false). 칸이 없으면 그 칸을 단 실행도 없으니 빈 값이 맞다.
+ *   ⚠ 한 번에 둘 다 빼지 않는다 — 공용 시트 칸이 있는데 effort 칸 하나 때문에 표시를 false 로 읽으면 시트 계정의 «내 실행» 에 남의 실행이 섞인다.
  */
 export async function listAiRuns(f: AiRunListFilter): Promise<AiRunSummaryRow[]> {
-  const sql = (seat: string): string =>
+  const sql = (seat: string, effort: string): string =>
     `SELECT * FROM (
        SELECT r.id, r.status, r.app_id, r.requester, r.requester_kind, r.source, r.job_name, r.kind, r.account_kind, r.account_member, r.executor, r.job_id, r.model,
               r.label, left(regexp_replace(r.prompt, '\\s+', ' ', 'g'), 200) AS prompt_preview, (r.result IS NOT NULL) AS has_result, r.error, r.session_note, r.retries,
-              r.input_tokens, r.output_tokens, r.created_at, r.started_at, r.ended_at, r.updated_at, ${seat} AS shared_seat
+              r.input_tokens, r.output_tokens, r.created_at, r.started_at, r.ended_at, r.updated_at, ${seat} AS shared_seat, ${effort} AS effort
          FROM org_app_ai_run r
         WHERE ($1::text IS NULL OR r.app_id=$1) AND ($3::text IS NULL OR r.status=$3)
      ) x
       WHERE ($2::text IS NULL OR requester=$2 OR (account_kind='subscription' AND account_member=$2 AND NOT shared_seat))
       ORDER BY id DESC LIMIT $4`;
   const args = [f.appId, f.requester, f.status, f.limit];
-  const r = await itemsPool.query(sql(`r.${RUN_SHARED_SEAT_COL}`), args).catch((e) => {
-    if ((e as { code?: string })?.code === "42703") return itemsPool.query(sql("false"), args);   // undefined_column — 마이그레이션 전(머리말)
+  const shapes: ReadonlyArray<readonly [string, string]> = [
+    [`r.${RUN_SHARED_SEAT_COL}`, `r.${RUN_EFFORT_COL}`], [`r.${RUN_SHARED_SEAT_COL}`, "NULL::text"], ["false", "NULL::text"],
+  ];
+  const read = (i: number): Promise<pg.QueryResult> => itemsPool.query(sql(...shapes[i]!), args).catch((e) => {
+    if (isUndefinedColumn(e) && i + 1 < shapes.length) return read(i + 1);   // undefined_column — 마이그레이션 전(머리말)
     throw e;
   });
-  return r.rows.map((x) => ({ ...x, id: Number(x.id), job_id: x.job_id == null ? null : Number(x.job_id), shared_seat: x.shared_seat === true } as unknown as AiRunSummaryRow));
+  const r = await read(0);
+  return r.rows.map((x) => ({
+    ...x, id: Number(x.id), job_id: x.job_id == null ? null : Number(x.job_id), shared_seat: x.shared_seat === true,
+    effort: typeof x.effort === "string" && x.effort !== "" ? x.effort : null,
+  } as unknown as AiRunSummaryRow));
 }
 
 /** 이 앱이 만든 대화(이어받기용) — 끝난 작업 실행 중 대화 id 가 남은 것(작업 행 join). */
@@ -283,6 +323,19 @@ export async function tokensUsedTodayByApp(appId: string): Promise<number> {
   const r = await itemsPool.query(
     `SELECT COALESCE(sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0)::bigint AS n
        FROM org_app_llm_call WHERE app_id=$1 AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, [appId]);
+  return Number(r.rows[0]?.n ?? 0);
+}
+/**
+ * 오늘(UTC) 앱 서버가 본인 구독으로 보낸 실행이 쓴 토큰(#1639 · plan.isAppServerOwn · 공용 시트로 돈 실행은 뺀다) — 구독 작업은 프록시를 지나지 않아 org_app_llm_call 에
+ *  안 남는다. 실행 행의 입력 + 출력 칸만 센다 — 캐시 토큰(result.usage 안) · 도는 중인 실행 · 보고 없이 끝난 실행(시간 초과 · 취소)은 안 들어가 프록시 합(네 종류)보다 적게
+ *  센다. 구독은 워크스페이스 돈이 아니라서 앱이 뒤에서 쓰는 양의 바깥 끝만 잡는다.
+ */
+export async function appServerOwnTokensToday(appId: string): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT COALESCE(sum(COALESCE(input_tokens, 0)::bigint + COALESCE(output_tokens, 0)::bigint), 0)::bigint AS n
+       FROM org_app_ai_run
+      WHERE app_id=$1 AND requester_kind='app_server' AND account_kind='subscription' AND account_member=requester AND NOT shared_seat
+        AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, [appId]);
   return Number(r.rows[0]?.n ?? 0);
 }
 

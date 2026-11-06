@@ -67,7 +67,7 @@ export const MCP_TOOL_JOB_SOURCE = "mcp-tool";
  *  막는 것: 작업 종류(agent 는 AI 실행 입구로) · 라우트 · 시간 상한(15분 너머는 작업 컨테이너로) · 본문 상한 · 앱(보임 · 켜짐 · 동의) · 서버(올라감 · 이 판의
  *  검사 층 · 멈춤) · 작업이 시작한 작업의 깊이 · 앱 대기 줄 · 하루 수.
  */
-export async function startAppJob(input: Record<string, unknown>, user: LivelyUser, ctx: { source?: string; scopeCeiling?: string[] } = {}, deps: AppJobDeps = liveAppJobDeps()): Promise<Record<string, unknown>> {
+export async function startAppJob(input: Record<string, unknown>, user: LivelyUser, ctx: { source?: string; scopeCeiling?: string[]; unattended?: boolean } = {}, deps: AppJobDeps = liveAppJobDeps()): Promise<Record<string, unknown>> {
   if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
   const typeErr = jobTypeError(input.type);
   if (typeErr) throw new HttpError(400, typeErr);
@@ -121,11 +121,15 @@ export async function startAppJob(input: Record<string, unknown>, user: LivelyUs
   //   (부른 연결의 권한 ∩ 동의)까지만 돈다. 앱 코드가 작업 하나로 그 상한을 넘지 못하게.
   const inherited = user.appServer === true && (user.appCallId !== undefined || parentCapped) ? [...user.scopes] : undefined;
   const scopeCeiling = ctx.scopeCeiling ?? inherited;
+  //  #1639 사람이 보지 않는 자리 — 부르는 쪽이 잰 것(도구 · 능력)이거나, 이 호출의 돌기 신원이 달고 있는 것을 물려받는다. 앱 코드가 작업 하나로 그 표시를 벗지 못하게.
+  const unattended = ctx.unattended === true
+    || (user.appJobId != null && await js.appJobUnattended(user.appJobId))
+    || (user.appCallId != null && await (await import("./app-server-call-store.js")).appCallUnattended(user.appCallId));
   const tokenHash = (alias === "pub" ? row.pub_token_hash : row.cur_token_hash) ?? null;
   const out = await js.insertAppJob({
     appId, requester: user.userId, variant, alias, functionName: row.function_name, lambdaVersion: version, tokenHash,
     route: String(input.route), body: enc.json, bodyBytes: enc.bytes, label: jobLabelOf(input.label), timeoutS: to.timeout,
-    source: scopeCeiling ? MCP_TOOL_JOB_SOURCE : actorSource(user, ctx.source), parentId, depth, ...(scopeCeiling ? { scopeCeiling } : {}),
+    source: scopeCeiling ? MCP_TOOL_JOB_SOURCE : actorSource(user, ctx.source), parentId, depth, ...(scopeCeiling ? { scopeCeiling } : {}), ...(unattended ? { unattended } : {}),
   }, (have) => jobAdmissionError(policy, have)?.error ?? null);
   if ("denied" in out) throw new HttpError(429, out.denied);
   logger.info({ app: appId, job: out.row.id, alias, version, source: out.row.source }, "[app-jobs] 작업을 받았다(#4486)");

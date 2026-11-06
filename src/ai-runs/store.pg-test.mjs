@@ -4,6 +4,7 @@
 // 왜 이 계층인가: 이 설계의 약속 — 한 번만 끝남 · 프록시 토큰은 열린 실행에만 · 사람당 동시 셈은 열린 실행만 · 하루 토큰은 오늘 · 그 앱 · 네 종류 합 ·
 //  재시도는 열린 실행만 — 이 전부 **SQL 한 문장의 조건**이다. 가짜 저장소(service.test)는 그 조건을 흉내 낼 뿐이라 조건을 지워도 초록이다.
 //  T1~T11 · #5081 T12~T16(설정 칸 잠금 · 감사는 같은 트랜잭션 · 공용 시트로 돈 실행은 시트 계정의 «내 실행» 이 아님 · 지정 도구 · 비활성 회수 · 실행 계정 설정 도구 · 처리기 단위 원자성).
+//  T19 생각 깊이(effort — 준 실행만 칸에 적음 · COLS 밖 · 목록 · 롤 창에서 공용 시트 표시를 지키며 칸 하나씩 빼고 다시 읽기).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 if (!process.env.ITEMS_DATABASE_URL) { console.error("ITEMS_DATABASE_URL 이 필요하다(실 Postgres)"); process.exit(2); }
 const { itemsPool } = await import(`${DIST}/db/client.js`);
@@ -83,6 +84,27 @@ try {
   await call(); await itemsPool.query(`UPDATE org_app_llm_call SET created_at = now() - interval '2 days' WHERE app_id=$1 AND id = (SELECT max(id) FROM org_app_llm_call WHERE app_id=$1)`, [APP]);
   const used = await st.tokensUsedTodayByApp(APP);
   chk("T7 하루 토큰 — 입력+출력+캐시 읽기·쓰기 · 오늘 · 그 앱만", used === 10, String(used));
+
+  // ── T7b 앱 서버의 본인 구독이 쓴 토큰(#1639) — 앱 서버 · 구독 · 본인 · 공용 시트 아님 · 오늘 · 그 앱만 · 도는 중인 실행(값 없음)은 0 으로 ──
+  const ownRun = async (over = {}, toks = [10, 20]) => {
+    const r = await st.insertAiRun(base({ requester: `${REQ}own`, requesterKind: "app_server", accountKind: "subscription", accountMember: `${REQ}own`, executor: "job", status: "queued", ...over }));
+    if (toks) await st.finishAiRun(r.id, { status: "done", result: { text: "답" }, error: null, inputTokens: toks[0], outputTokens: toks[1] });
+    return r;
+  };
+  await ownRun();                                                                                   // 30 — 센다
+  await ownRun({}, null);                                                                           // 도는 중 — 값 없음
+  await ownRun({}, [5, null]);                                                                      //  5 — 한쪽만 있어도 센다
+  await ownRun({ requesterKind: "member" });                                                        // 사람이 앱 화면에서 — 안 센다
+  await ownRun({ requester: `${REQ}other` });                                                       // 남의 구독(앱 서버) — 안 센다
+  await ownRun({ accountKind: "api_key", accountMember: null, requester: `${REQ}own` });            // API 키 — 안 센다(프록시 계측이 센다)
+  await ownRun({ sharedSeat: true });                                                               // 공용 시트로 돈 실행 — 안 센다
+  await ownRun({ appId: `${APP}other` });                                                           // 다른 앱 — 안 센다
+  const oldOwn = await ownRun();                                                                    // 어제 — 안 센다
+  await itemsPool.query(`UPDATE org_app_ai_run SET created_at = now() - interval '2 days' WHERE id=$1`, [oldOwn.id]);
+  const ownUsed = await st.appServerOwnTokensToday(APP);
+  chk("T7b 앱 서버의 본인 구독 토큰 — 입력+출력 · 앱 서버 · 구독 · 본인 · 공용 시트 아님 · 오늘 · 그 앱만", ownUsed === 35, String(ownUsed));
+  chk("T7c 프록시 하루 토큰은 그대로 — 실행 행을 더하지 않는다", (await st.tokensUsedTodayByApp(APP)) === 10, String(await st.tokensUsedTodayByApp(APP)));
+  await itemsPool.query(`DELETE FROM org_app_ai_run WHERE app_id LIKE $1 AND requester LIKE $2`, [`${APP}%`, `${REQ}o%`]);
 
   // ── T8 목록 — 앱 · 사람 · 상태 필터 · 요지 200자 · has_result ──
   const list = await st.listAiRuns({ appId: APP, requester: `${REQ}a`, status: null, limit: 10 });
@@ -282,6 +304,70 @@ try {
   const fourth = await st.insertResumedAiRun(base({ prompt: "넷째", resume: lf }), 2);
   chk("T18c 띄운 뒤 실패(작업 행 있음)는 센다 — 상한 2 에서 넷째는 limit",
     "limit" in fourth && fourth.limit === 2 && (await st.resumeCountOfRoot(qf.id)) === 2, JSON.stringify(fourth));
+
+  // ── T19 생각 깊이(effort — 앱 AI 실행의 `claude -p --effort`) — 준 실행만 칸에 적는다 · 따로 읽는다(COLS 밖) · 목록 · 칸이 아직 없을 때(롤 창) ──
+  //  이게 틀리면: 보기 · 목록이 준 깊이를 보여 주지 않거나, 이어받기와 함께 넣을 때 값 번호가 어긋나 엉뚱한 칸에 적히거나,
+  //  롤 창에 effort 칸 하나 때문에 공용 시트 표시까지 버려 시트 계정의 «내 실행» 에 남의 실행이 섞인다.
+  await cleanup();
+  {
+    const SEAT2 = `${REQ}seat2`;
+    const agentRun = (extra = {}) => base({ executor: "job", status: "queued", kind: "agent", ...extra });
+    const e1 = await st.insertAiRun(agentRun({ effort: "xhigh" }));
+    const e0 = await st.insertAiRun(agentRun());
+    const eNull = await st.insertAiRun(agentRun({ effort: null }));
+    const eRes = await st.insertAiRun(agentRun({ effort: "max", resume: { of: e1.id, root: e1.id, depth: 1, reason: "깊이를 올려 다시" } }));
+    const eLocked = await st.insertResumedAiRun(agentRun({ effort: "low", resume: { of: e1.id, root: e1.id, depth: 1, reason: null } }), 5);
+    const r1 = await row(e1.id);
+    chk("RE1 effort — 준 실행만 칸에 남고 읽기가 그대로 돌려준다 · 안 준 실행 · null 은 null · 없는 id · 0 은 null · 행 읽기(COLS)엔 그 칸이 없다",
+      (await st.aiRunEffort(e1.id)) === "xhigh" && r1.effort === "xhigh" && (await st.aiRunEffort(e0.id)) === null && (await row(e0.id)).effort === null
+        && (await st.aiRunEffort(eNull.id)) === null && (await row(eNull.id)).effort === null && (await st.aiRunEffort(2 ** 40)) === null && (await st.aiRunEffort(0)) === null
+        && !Object.keys(e1).includes("effort") && !Object.keys(await st.getAiRun(e1.id)).includes("effort"),
+      JSON.stringify({ e1: r1.effort, keys: Object.keys(e1) }));
+    chk("RE1b 이어받기 줄과 함께 넣어도(값 번호 $20) 줄 · effort 가 각자 제자리 — 잠금 안 접수(insertResumedAiRun)도 같다",
+      (await st.aiRunEffort(eRes.id)) === "max" && JSON.stringify(await st.aiRunResumeLink(eRes.id)) === JSON.stringify({ of: e1.id, root: e1.id, depth: 1, reason: "깊이를 올려 다시" })
+        && "row" in eLocked && (await st.aiRunEffort(eLocked.row.id)) === "low" && (await st.aiRunResumeLink(eLocked.row.id))?.reason === null,
+      JSON.stringify({ eRes: await st.aiRunEffort(eRes.id), link: await st.aiRunResumeLink(eRes.id), locked: "row" in eLocked ? eLocked.row.id : eLocked }));
+    const listed = await st.listAiRuns({ appId: APP, requester: `${REQ}a`, status: null, limit: 50 });
+    const eff = (rows, id) => rows.find((r) => r.id === id)?.effort;
+    chk("RE2 목록 — 실행마다 effort(안 준 실행은 null)",
+      eff(listed, e1.id) === "xhigh" && eff(listed, e0.id) === null && eff(listed, eNull.id) === null && eff(listed, eRes.id) === "max" && eff(listed, eLocked.row.id) === "low",
+      JSON.stringify(listed.map((r) => [r.id, r.effort])));
+    //  롤 창 — 공용 시트로 돈 남의 실행과, 시트 계정 구독으로 도는 공용 시트 아닌 실행을 하나씩 둔다. effort 칸만 없을 때 목록이 공용 시트 표시를 버리면
+    //   시트 계정의 «내 실행» 에 남의 실행이 섞인다.
+    const seatShared = await st.insertAiRun(agentRun({ accountKind: "subscription", accountMember: SEAT2, requester: `${REQ}b`, prompt: "남의 질문", sharedSeat: true }));
+    const seatOwn = await st.insertAiRun(agentRun({ accountKind: "subscription", accountMember: SEAT2, requester: `${REQ}c`, prompt: "초대받은 사람의 일" }));
+    const seatList = async () => (await st.listAiRuns({ appId: APP, requester: SEAT2, status: null, limit: 50 })).map((r) => r.id).sort((x, y) => x - y);
+    const beforeRoll = await seatList();
+    //  ⚠ 시험용 DB 전용 — 칸을 지웠다 되살리면 값은 NULL 로 돌아온다(깊이가 실린 실행 행이 있는 DB 에서 돌리면 그 기록이 사라진다).
+    await itemsPool.query(`ALTER TABLE org_app_ai_run DROP COLUMN IF EXISTS effort`);
+    let rollList = null, rollErr = null, rollRead = null, plain = null, effInsert = null, seatRoll = null;
+    try {
+      try { rollList = await st.listAiRuns({ appId: APP, requester: `${REQ}a`, status: null, limit: 50 }); } catch (e) { rollErr = e; }
+      seatRoll = await seatList();
+      rollRead = await st.aiRunEffort(e1.id);
+      plain = await st.insertAiRun(base({ prompt: "칸 없을 때 보통 실행" }));
+      try { await st.insertAiRun(agentRun({ prompt: "칸 없을 때 effort 실행", effort: "high" })); } catch (e) { effInsert = e; }
+    } finally { await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS effort TEXT`); }
+    const effMade = (await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_ai_run WHERE app_id=$1 AND prompt=$2`, [APP, "칸 없을 때 effort 실행"])).rows[0].n;
+    chk("RE3 effort 칸이 없을 때 — 목록은 돈다(effort null) · 공용 시트 표시는 그대로 지킨다(시트 계정 목록 불변) · 읽기 null · 보통 접수 됨 · effort 접수만 42703(행 없음)",
+      rollErr === null && (rollList ?? []).length >= 5 && (rollList ?? []).every((r) => r.effort === null)
+        && JSON.stringify(beforeRoll) === JSON.stringify([seatOwn.id]) && JSON.stringify(seatRoll) === JSON.stringify([seatOwn.id]) && seatShared.id > 0
+        && rollRead === null && plain?.id > 0 && effInsert?.code === "42703" && effMade === 0,
+      JSON.stringify({ err: rollErr?.message, rows: (rollList ?? []).map((r) => [r.id, r.effort]), beforeRoll, seatRoll, rollRead, plain: plain?.id, code: effInsert?.code, effMade }));
+    //  둘 다 없을 때(공용 시트 칸 이전의 DB) — 목록은 여전히 돈다(표시 false · effort null). 끝나면 두 칸을 되돌린다(같은 DDL).
+    await itemsPool.query(`ALTER TABLE org_app_ai_run DROP COLUMN IF EXISTS effort, DROP COLUMN IF EXISTS shared_seat`);
+    let bothList = null, bothErr = null;
+    try {
+      try { bothList = await st.listAiRuns({ appId: APP, requester: null, status: null, limit: 50 }); } catch (e) { bothErr = e; }
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+      await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS effort TEXT`);
+    }
+    chk("RE4 공용 시트 · effort 칸이 다 없을 때 — 목록은 돈다(표시 false · effort null)",
+      bothErr === null && (bothList ?? []).length >= 8 && (bothList ?? []).every((r) => r.shared_seat === false && r.effort === null),
+      JSON.stringify({ err: bothErr?.message, n: (bothList ?? []).length }));
+  }
+  await cleanup();
 
   // ── T14 공용 시트 지정 도구(app_ai_service_seat_set) — 실제 구성원 표 · 설정 칸 · 감사 ──
   const { upsertMember } = await import(`${DIST}/org/store/members.js`);
