@@ -277,7 +277,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
   try { const pr = await api('/api/ui/v6/projects/' + pid).then((dd) => dd && (dd.project || dd)); projectRepos = ((pr && pr.repos) || []).filter(Boolean); } catch (_) { /* 레포 조회 실패 — 레포 선택 없이 */ }
   const harnessCat: any = {
     claude: { label: 'Claude Code', prov: 'Anthropic', models: ['', 'fable', 'opus', 'sonnet', 'haiku'], efforts: [], hasAuto: true },
-    codex: { label: 'Codex', prov: 'OpenAI', models: ['', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], hasAuto: true },
+    codex: { label: 'Codex', prov: 'OpenAI', models: ['', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], hasAuto: true },
   };
   // #1758 — 목록·이름은 서버 카탈로그가 준다(v2/run-picker 가 캐시). 홈 입력창과 **같은 표**를 읽어야 두 화면의 말이 갈리지 않는다.
   const cat: RunHarness[] = await runCatalog();
