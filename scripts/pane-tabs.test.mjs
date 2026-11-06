@@ -206,7 +206,7 @@ const removeFn = fn("  function removeTab(zone: Zone, key: TabKey): void {");
 check(/if \(DERIVED_TABS\.has\(tabBase\(key\)\)\) \{ const z = zoneOf\(key\) \|\| zone; revealZone\(z\); activate\(z, key\); return; \}/.test(removeFn),
   "S5d 안 켠 붙은 앱 탭의 닫기는 걷지 않고 켠다 — 걷기만 하면 곧 되살아나 아무 일도 안 한 것이 된다");
 const closeFn = fn("  function closeTab(zone: Zone, key: TabKey, o?: { pointer?: boolean }): void {");
-check(/if \(o\?\.pointer && pane && !narrow\(\)\) freeze\(pane\);/.test(closeFn), "S6 마우스로 닫으면 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다");
+check(/if \(o\?\.pointer && pane && !narrow\(\)\) \{\n\s*freeze\(pane\);/.test(closeFn), "S6 마우스로 닫으면 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다");
 check(/bar\.addEventListener\('pointerleave', \(\) => thaw\(p\)\)/.test(PANES), "S6b 줄에서 손을 떼면 푼다");
 check(/if \(pane\.frozen\) applyFreeze\(pane\); else fit\(pane\);/.test(PANES), "S6c 다시 그릴 때 얼려 둔 폭을 지킨다");
 const moreFn = fn("  function moreBtn(zone: Zone, only?: (k: TabKey) => boolean): HTMLElement {");

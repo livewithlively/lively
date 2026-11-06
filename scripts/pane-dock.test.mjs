@@ -288,7 +288,7 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
   check(/function dockViewerBar\(pane: Pane, key: TabKey \| null\): void \{/.test(PANES_TS)
     && /dockViewerBar\(pane, top && pane\.root\.classList\.contains\('dock-sub'\) && !!act && isFileTab\(act\) \? act : null\)/.test(PANES_TS)
     && /\.pn-sub-acts \.pn-ed-name \{ display: none; \}/.test(DOCK_CSS)
-    && /@container pnsidebar \(max-width: 519px\) \{\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-web-btn\.ic, \.pn-sub-acts \.pn-ed-bar \.pn-sub-fold \{ display: none; \}/.test(DOCK_CSS)
+    && /@container pnsidebar \(max-width: 519px\) \{\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-web-btn\.ic \{ display: none; \}\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-sub-fold \{ display: none; \}/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top > \.pn-tabbar \{ container: pnsidebar \/ inline-size; \}/.test(DOCK_CSS),
     "W16o 3안 — 뷰어의 이름 줄을 걷고 단추를 파일 탭 줄 오른쪽 끝으로 옮긴다 · 곁칸이 좁으면(머리 줄 520 미만) 아이콘 단추를 [⋯] 로 접고 넓으면 늘어선다");
   check(/return tabBase\(key\) === 'editor' \? 'doc' : d\.icon;/.test(PANES_TS)

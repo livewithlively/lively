@@ -267,7 +267,9 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-sub-listslot, .pn-sub-barslot { display: contents; }
 .pn-sub-acts .pn-ed-bar { display: flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; min-width: 0; }
 .pn-sub-acts .pn-ed-name { display: none; }   /* 이름은 탭이 말한다 */
+.pn-sub-acts .pn-web-btn.ic, .pn-sub-acts .pn-sub-more { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; }
 .pn-sub-acts .pn-web-btn.ic, .pn-sub-acts .pn-sub-fold, .pn-sub-acts .pn-sub-more { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; }
+.pn-sub-acts .pn-web-btn.ic .pn-i, .pn-sub-acts .pn-sub-more .pn-i { width: 16px; height: 16px; }
 .pn-sub-acts .pn-web-btn.ic .pn-i, .pn-sub-acts .pn-sub-fold .pn-i, .pn-sub-acts .pn-sub-more .pn-i { width: 16px; height: 16px; }
 .pn-sub-acts .pn-sub-more[hidden] { display: none; }
 .pn-pane.dock-top .pn-sub-acts .pn-tab-more.pn-sub-list { display: inline-flex; align-items: center; gap: 2px; width: auto; height: 34px; padding: 0 6px 0 10px;
@@ -276,7 +278,8 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 /* 넓으면 단추가 늘어서고 [⋯] 는 없다 · 좁으면(머리 줄 520 미만) 아이콘 단추를 [⋯] 하나로 접는다. 고치는 중의 [← 보기] · [저장](글자 단추)은 늘 선다. */
 .pn-sub-acts .pn-sub-more { display: none; }
 @container pnsidebar (max-width: 519px) {
-  .pn-sub-acts .pn-ed-bar .pn-web-btn.ic, .pn-sub-acts .pn-ed-bar .pn-sub-fold { display: none; }
+  .pn-sub-acts .pn-ed-bar .pn-web-btn.ic { display: none; }
+  .pn-sub-acts .pn-ed-bar .pn-sub-fold { display: none; }
   .pn-sub-acts .pn-ed-bar .pn-fine { display: none; }
   .pn-sub-acts .pn-sub-more:not([hidden]) { display: inline-flex; }
 }
