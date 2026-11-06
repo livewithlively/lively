@@ -45,7 +45,7 @@ export interface RunHarness {
   // (#5321) 오토모드·확인 후 실행을 argv 로 말할 수 있나(서버 catalog autoModeArgv·askModeArgv).
   hasAutoMode?: boolean; hasAskMode?: boolean;
   // 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만 — 서버 catalog.ts runtimeCmd).
-  runtime?: { model?: boolean; effort?: boolean };
+  runtime?: { model?: boolean; effort?: boolean; both?: boolean };   // both — 두 축을 한 줄로(#5332 codex)
 }
 
 /** 추론강도 값 → 사람 말. 서버가 주는 값은 low|medium|high|xhigh|max 로 하네스마다 일부만 쓴다. */

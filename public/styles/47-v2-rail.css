@@ -38,9 +38,10 @@
    접힘 = **스택 타일**. 슬랙 좌상단의 그것: 타일 한 장이 앞에, 뒤에 한 장이 아래로 살짝 겹쳐 '여럿'을 말한다.
    뒤 타일은 잉크 채널 틴트라 라이트에선 어둡게, 다크에선 밝게 — 어느 테마에서든 캔버스보다 한 톤 뜬다. */
 .v2-rail-ws { display: flex; justify-content: center; padding: 0 0 6px; }
-.v2-rail-stack { position: relative; display: inline-grid; place-items: start center; width: 44px; height: 46px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 12px; }
-.v2-rail-stack .v2-wscard-big { position: relative; z-index: 1; width: 36px; height: 36px; border-radius: 10px; font-size: 16px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .18); transition: transform 120ms ease; }
-.v2-rail-stack::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 3px; height: 13px; border-radius: 0 0 9px 9px; background: var(--rail-on); }
+/* #5319(원준 2026-11-06 «사이즈 좀 작다») — 타일 36 → 40 · 바깥 44×46 → 48×50. 레일 칸(63×58 · 아이콘 24) 사이에서 점처럼 떠 보였다. */
+.v2-rail-stack { position: relative; display: inline-grid; place-items: start center; width: 48px; height: 50px; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 12px; }
+.v2-rail-stack .v2-wscard-big { position: relative; z-index: 1; width: 40px; height: 40px; border-radius: 11px; font-size: 18px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .18); transition: transform 120ms ease; }
+.v2-rail-stack::after { content: ''; position: absolute; left: 9px; right: 9px; bottom: 3px; height: 14px; border-radius: 0 0 10px 10px; background: var(--rail-on); }
 .v2-rail-stack:hover .v2-wscard-big { transform: translateY(-1px); }
 .v2-rail-stack:focus-visible { outline: 2px solid var(--rail-fg-on); outline-offset: 2px; }
 /* 펼침 = switcher.ts 의 문패 카드 그대로(부품을 두 벌로 두지 않는다). */
@@ -275,7 +276,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-rail-avaw { position: relative; display: inline-flex; flex: none; line-height: 0; }
 .v2-rail-avaw::after { content: ''; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--mint); border: 2px solid var(--rail-bg); }
 .v2-rail-me .v2-rail-t { font-size: 13px; font-weight: 600; color: var(--rail-fg); }
-.v2-rail.closed .v2-rail-me .v2-ava { width: 32px; height: 32px; font-size: 13px; }
+.v2-rail.closed .v2-rail-me .v2-ava { width: 36px; height: 36px; font-size: 14px; }   /* #5319 32 → 36(원준 2026-11-06 «사이즈 좀 작다») */
 .v2-rail.closed .v2-rail-me .v2-rail-t { display: none; }
 .v2-rail.closed .v2-rail-me { padding: 6px 2px; }
 
@@ -848,4 +849,42 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   #v2-root.rail-mode.side-closed.no-aside { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 0 0; }
   #v2-root.side-closed > .v2-side { overflow: hidden; visibility: hidden; border-right: 0; }
   #v2-root.side-closed > .v2-side + .v2-split-x { overflow: hidden; }
+}
+
+/* ── #5319 KRDS 글자 단계 — 레일 · 사이드바 목록(원준 2026-11-05 4차 확정) ─────────────────────────────────────────
+   레일 이름 13/500(켜진 칸 700) · 묶음 이름 13/700 · 줄 이름 15/500 · 둘째 줄 13 · 바닥 세 단추 13/500. 줄 높이는 글자를 따라 24 + 20.
+   넓은 화면만 — 태블릿 · 폰 레일은 자기 크기(위 @media)를 쓴다. */
+@media (min-width: 901px) {
+  .v2-rail.closed .v2-rail-t { font-size: 13px; font-weight: 500; line-height: 1.5; }
+  .v2-rail.closed .v2-rail-it.on .v2-rail-t { font-weight: 700; }
+  .v2-app-group, .v2-home-cards .v2-app-group { font-size: 13px; font-weight: 700; line-height: 1.5; }
+  .v2-home-cards .v2-app-inst:not(.v2-app-inst--past) .v2-app-inst-title,
+  .v2-home-cards .v2-pg--rows .v2-app-inst--past .v2-app-inst-title { font-size: 15px; font-weight: 500; line-height: 1.5; }
+  .v2-home-cards .v2-app-inst.on:not(.v2-app-inst--past) .v2-app-inst-title { font-weight: 700; }
+  .v2-app-inst-meta, .v2-app-inst-ask, .v2-app-inst-pj { font-size: 13px; }
+  .v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { grid-template-rows: 24px 20px; padding-top: 4px; padding-bottom: 4px; }
+  .v2-home-cards .v2-pg--rows .v2-app-inst-ask, .v2-home-cards .v2-pg--rows .v2-app-inst-pj { line-height: 20px; }
+  .v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin, .v2-home-cards .v2-pg--rows .v2-app-inst-trash { top: 5px; }
+  .v2-home-cards .v2-older { font-size: 15px; font-weight: 500; }
+  .v2-dock-t { font-size: 13px; font-weight: 500; }
+}
+
+/* ── #5319 4차 1안(원준 2026-11-05) — 사이드바를 접으면 검색이 레일 맨 위로 온다 ──────────────────────────
+   종전(①-d, 43-v2-topbar-search.css)엔 접는 순간 [‹][›][검색] 줄이 창을 가로질러 본문 · 우측 사이드바가 42px 을 잃었다
+   («검색이 굉장히 중요하긴 하지만 저게 저렇게 한 줄을 통채로 차지할 이유가 없다»). 사이드바가 펴져 있으면 검색칸은 사이드바 맨 위 그대로다.
+   [검색] 칸은 늘 그려 두고(rail.ts) 여기서만 세운다 — 브라우저(topbar-web)에서 사이드바가 접혔고 레일이 보일 때.
+   데스크톱 앱은 창 맨 윗줄(타이틀바)이 [‹][›][검색] 을 그대로 들고 있어 세우지 않는다. 좁은 폭(≤900)은 서랍이라 해당 없다. */
+.v2-rail-search { display: none; }
+@media (min-width: 901px) {
+  #v2-root.topbar-web.side-closed:not(.rail-hidden) .v2-rail-search { display: flex; margin: 2px auto 4px; }
+  #v2-root.topbar-web.side-closed:not(.rail-hidden) .v2-rail-top > .v2-rail-search { align-self: stretch; margin: 2px 6px 4px; }   /* 다른 칸과 같은 폭(63) — 켜짐 · 올림 상자가 혼자 좁지 않게 */
+  /*  줄은 ①-b 처럼 레일 칸 위에만 — ☰ 하나만 든다. 본문 · 손잡이 · 우측 사이드바는 다시 맨 위부터 선다. */
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-topbar {
+    grid-column: 1 / 3; border-bottom: 0; border-right: 0; background: var(--rail-bg);
+  }
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-topbar > .v2-side-nav { display: none; }
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-side + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-main,
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-main + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-aside { grid-row: 1 / -1; }
 }

@@ -5,12 +5,53 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── 골격 ── */
-.pn-wrap { --pn-head-h: 42px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.pn-wrap { --pn-head-h: 42px; --pn-bighead-h: 113px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+/* #5319 머리 줄 높이 사다리(원준 2026-11-06 «경계 드래그해서 높이 줄이거나 키울 수 있게 · 반응형으로») — 손잡이(v2/head-grip.ts)가 --pn-bighead-h 를
+   80~150 사이로 민다(기본 113). 큰 머리의 두 줄 높이(--hd-r)와 단추 높이(--hd-b)는 그 값에서 푼다:
+   ① 113 ↔ 150 · 97  줄 36 그대로, 위아래 공기만(28 ~ 8)   ② 97 → 89  공기 8 → 4   ③ 89 → 80  줄 · 단추 36 → 32.5(글자 15 그대로)
+   곁칸 머리 줄 독의 사다리는 42-v2-dock.css(--pn-dock-row). */
+.pn-wrap { --hd-r: clamp(32px, calc((var(--pn-bighead-h) - 15px) / 2), 36px); --hd-b: var(--hd-r); }
 /* #4443 — **머리 줄 높이는 한 값**(원준 2026-09-30: "상단 탭 부분 높이 … 터미널 세션의 상단 바 부분이랑 같게 맞춰라"). 곁칸 탭 줄과
    세션 머리줄(.sc-head)이 같은 --pn-head-h 를 읽어, 두 열의 아래선이 한 줄로 이어진다(종전 37px vs 42px 로 5px 어긋나 있었다). */
 @media (min-width: 901px) { .pn-wrap .sc-head { height: var(--pn-head-h); min-height: 0; padding-top: 0; padding-bottom: 0; } }
-/* #5319 큰 머리(세션 이름 28px + 아랫줄)는 두 줄이라 위 한 줄 높이에 묶지 않는다 — 곁칸 머리 줄도 독이 서서 같은 높이가 아니다. */
+/* #5319 큰 머리는 두 줄이라 위 한 줄 높이에 묶지 않는다. 넓은 화면(카드 아님)은 --pn-bighead-h(113 = 16 + 36 + 8 + 36 + 16 + 아랫선)로
+   못 박고(36-chat.css 큰 머리 격자) 곁칸 머리 줄 독(42-v2-dock.css .dock-top)도 같은 값을 읽어 두 열의 아랫선이 한 줄로 잇는다(원준 2026-11-05).
+   아래 auto 는 카드(.pn-body.cm)의 한 줄 머리 몫이다. */
 @media (min-width: 901px) { .pn-wrap .sc-head.sc-head--big { height: auto; min-height: var(--pn-head-h); padding-top: 14px; padding-bottom: 10px; } }
+@media (min-width: 901px) { .pn-body:not(.cm) .sc-head.sc-head--big { height: var(--pn-bighead-h); min-height: 0; padding-top: 16px; padding-bottom: 16px; } }
+/* #5319 높이 사다리 — 위아래 공기 = (높이 - 선 1 - 줄 둘 - 틈 8) / 2, 바닥 3. 150 을 넘는 공기는 가운데 정렬(align-content)이 나눈다. */
+@media (min-width: 901px) { .pn-wrap .pn-body:not(.cm) .sc-head.sc-head--big { position: relative; align-content: center;
+  padding-top: clamp(3px, calc((var(--pn-bighead-h) - 81px) / 2), 28px); padding-bottom: clamp(3px, calc((var(--pn-bighead-h) - 81px) / 2), 28px); } }
+/* 손잡이 — 머리 아랫선 위 6px 에 눕는다(머리는 overflow hidden 이라 밖으로 못 나간다). 넓은 화면의 큰 머리 · 곁칸 머리 줄 독에만. 끄는 동안 둘 다 파란 선. */
+.pn-head-grip { display: none; }
+@media (min-width: 901px) {
+  .pn-body:not(.cm) .sc-head.sc-head--big > .pn-head-grip, .pn-pane.dock-top > .pn-tabbar > .pn-head-grip { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 6px; z-index: 8; cursor: row-resize; touch-action: none; }   /* 8 — 머리 줄 독(.pn-dock z 6) 위에(실측: 독 줄 안에 누운 손잡이를 독이 가로챘다) */
+  .pn-head-grip::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--blue); opacity: 0; transition: opacity .12s; }
+  .pn-head-grip:hover::after, .pn-head-grip:focus-visible::after, body.pn-head-dragging .pn-head-grip::after { opacity: .7; }
+  .pn-head-grip:focus-visible { outline: none; }
+  body.pn-head-dragging { cursor: row-resize; user-select: none; -webkit-user-select: none; }
+  body.pn-head-dragging iframe, body.pn-head-dragging webview { pointer-events: none; }
+}
+/* 한 줄 머리(#5319, 원준 2026-11-06 «2열 이하로 댕겨서 줄이려면 줄일 수 있도록 · 우측 곁칸 라인도 같이») — 80 아래로 끌면(52까지, head-grip.ts ONE_ROW_BELOW)
+   두 줄 격자가 한 줄 flex 가 된다: [● 이름 #번호] [얼굴] [자료] │ [복제·옮기기 ▾] …… [모델 · 추론강도] [연결 상태 | 화면 복구] [⋯]. 단추는 36 그대로,
+   공기 = (H - 37) / 2. 폭은 두 줄 몫을 한 줄이 쓰니 접는 차례를 당긴다(아래 @container) — 이름은 14em 에서 …. 곁칸 독 줄은 H 를 따라 타일이 준다(42-v2-dock.css). */
+@media (min-width: 901px) {
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head.sc-head--big { display: flex; flex-wrap: nowrap; align-items: center; gap: 0 8px; --hd-r: 36px; --hd-b: 36px;
+    padding-top: clamp(2px, calc((var(--pn-bighead-h) - 37px) / 2), 20px); padding-bottom: clamp(2px, calc((var(--pn-bighead-h) - 37px) / 2), 20px); }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-head-top, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub { display: contents; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-titlebox { flex: 0 1 auto; min-width: 3em; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-titlebox .sc-title-t { max-width: 14em; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-lead, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-acts, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-sep { flex: none; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-run-top { order: 8; margin-left: auto; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-head-r { order: 9; margin-left: 0; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-act-duo-t, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-act-files > span { display: none; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; }
+  .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { max-width: 6.5em; }
+  @container schead (max-width: 1040px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-run-top > .sc-ax-me:nth-child(n+5) { display: none; } }   /* 추론강도 */
+  @container schead (max-width: 860px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-me:not([hidden]) { display: none; } }   /* 모델도 — [⋯ ▸ 이 세션 설정] 에 있다 */
+  @container schead (max-width: 720px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-faces { display: none; } }
+  @container schead (max-width: 620px) { .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-acts, .pn-wrap.hd-one .pn-body:not(.cm) .sc-head--big .sc-sub-sep { display: none; } }
+}
 /* 사이드바 열의 폭 = 적어 둔 폭(--pn-side-w)과 상한 가운데 작은 쪽(#3870). 상한 = 격자 폭 - 세션 최소 폭 360px - 손잡이 6px,
    하한 220px(web/lib/side-card-geom.ts sideCap 과 같은 식). 상한을 **그릴 때** 맞추므로 격자가 잠깐 좁아져도 적어 둔 폭은
    깎이지 않고, 격자가 다시 넓어지면 제 폭으로 돌아온다. */
@@ -1109,6 +1150,11 @@ input.pn-ffind { flex: 0 1 200px; min-width: 96px; height: 28px; padding: 0 9px;
   .pn-door.in-sess .pn-door-btn { height: 26px; padding-top: 0; padding-bottom: 0; font-size: 12px; }
   .pn-door.in-sess .btn-ghost.pn-door-btn { border-color: transparent; color: var(--ink-sub); }
   .pn-door.in-sess .btn-ghost.pn-door-btn:hover { border-color: var(--line-net); }
+  /* 4차 KRDS(원준 2026-11-05) — 프로젝트 이름 17/700 · 번호 · 상태 15 · 단추 15/500(칠한 [새 세션] 700). 줄 높이는 그대로(30px 단추). */
+  .pn-door.in-sess .pn-title { font-size: 17px; line-height: 1.5; }
+  .pn-door.in-sess .pn-eyebrow { font-size: 15px; }
+  .pn-door.in-sess .pn-door-btn { height: 30px; font-size: 15px; font-weight: 500; }
+  .pn-door.in-sess .btn-primary.pn-door-btn { font-weight: 700; }
 }
 .pn-door-side { display: inline-grid; place-items: center; width: 30px; height: 30px; margin-left: 2px; padding: 0; flex: none;
   border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; }

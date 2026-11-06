@@ -14,6 +14,7 @@ import {
 } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 import { logger } from "../../log.js";
+import { auditKnowledge } from "../../v6/knowledge-common.js";
 
 export interface ManagerRunResult {
   manager: string; kind: string;
@@ -202,8 +203,10 @@ export async function runManager(
 /**
  * 조치 적용 — **되돌릴 수 있는 것만**.
  *
- *  지금 적용하는 것은 분류 이동(move_category) 하나다. 그것도 기존 연결을 **지우지 않고**
- *  rejected 로 내려 두고 새 연결을 건다 — 잘못 옮겼어도 원래 자리가 이력에 남아 되돌릴 수 있다.
+ *  지금 적용하는 것은 분류 이동(move_category) 하나다. 지식당 분류는 한 행이라(knowledge_category_single_uq)
+ *  옛 행을 rejected 로 남겨 둔 채 새 행을 넣을 수 없다 — 그렇게 하면 23505 로 롤백돼 조치가 한 번도 적용되지 않는다.
+ *  linkKnowledgeCategory 와 같은 교체(다른 분류 DELETE 뒤 INSERT)를 쓰고, 되돌릴 근거는 감사 행(link_category,
+ *  before=옛 분류)에 남긴다. 발견을 만든 뒤 분류가 이미 바뀌었으면(from 불일치) 낡은 조치라 적용하지 않는다.
  *  본문 수정·삭제 같은 비가역 조치는 자동으로 하지 않는다(isApplicableAction 화이트리스트).
  */
 export async function applyAction(action: unknown, actor: string): Promise<boolean> {
@@ -215,16 +218,23 @@ export async function applyAction(action: unknown, actor: string): Promise<boole
     const client = await itemsPool.connect();
     try {
       await client.query("BEGIN");
-      // 기존 연결은 **지우지 않는다** — rejected 로 내려 두면 '여기 있었다'가 남아 되돌릴 수 있다.
-      if (from) {
-        await client.query(
-          `UPDATE knowledge_category SET state='rejected' WHERE name=$1 AND category_id=$2`, [name, from]);
+      const cur = (await client.query(
+        `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1 FOR UPDATE`,
+        [name])).rows[0] as { category_id: number; state: string; mapped_by: string } | undefined;
+      if (from && Number(cur?.category_id) !== from) {
+        await client.query("ROLLBACK");
+        logger.info({ name, from, current: cur?.category_id ?? null }, "관리기 분류 보정 건너뜀 — 발견 이후 분류가 바뀌었다");
+        return false;
       }
+      await client.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, to]);
       await client.query(
         `INSERT INTO knowledge_category(name, category_id, mapped_by, state, evidence)
            VALUES($1,$2,'rule','confirmed',$3)
          ON CONFLICT (name, category_id) DO UPDATE SET state='confirmed', mapped_by='rule', evidence=EXCLUDED.evidence`,
         [name, to, `관리기 자동 보정(${actor})`]);
+      await auditKnowledge(name, "link_category",
+        cur ? { category_id: Number(cur.category_id), state: cur.state, mapped_by: cur.mapped_by } : null,
+        { category_id: to, state: "confirmed", mapped_by: "rule" }, { actor }, client);
       await client.query("COMMIT");
       return true;
     } catch (e) {

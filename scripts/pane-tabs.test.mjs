@@ -206,11 +206,11 @@ const removeFn = fn("  function removeTab(zone: Zone, key: TabKey): void {");
 check(/if \(DERIVED_TABS\.has\(tabBase\(key\)\)\) \{ const z = zoneOf\(key\) \|\| zone; revealZone\(z\); activate\(z, key\); return; \}/.test(removeFn),
   "S5d 안 켠 붙은 앱 탭의 닫기는 걷지 않고 켠다 — 걷기만 하면 곧 되살아나 아무 일도 안 한 것이 된다");
 const closeFn = fn("  function closeTab(zone: Zone, key: TabKey, o?: { pointer?: boolean }): void {");
-check(/if \(o\?\.pointer && pane && !narrow\(\)\) freeze\(pane\);/.test(closeFn), "S6 마우스로 닫으면 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다");
+check(/if \(o\?\.pointer && pane && !narrow\(\)\) \{\n\s*freeze\(pane\);/.test(closeFn), "S6 마우스로 닫으면 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다");
 check(/bar\.addEventListener\('pointerleave', \(\) => thaw\(p\)\)/.test(PANES), "S6b 줄에서 손을 떼면 푼다");
 check(/if \(pane\.frozen\) applyFreeze\(pane\); else fit\(pane\);/.test(PANES), "S6c 다시 그릴 때 얼려 둔 폭을 지킨다");
-const moreFn = fn("  function moreBtn(zone: Zone): HTMLElement {");
-check(/onclick: \(\) => \{ removeTab\(zone, t\); if \(zoneTabs\(zone\)\.length\) fill\(\); else close\(\); \}/.test(moreFn), "S7 ⌄ 목록의 × 는 목록을 닫지 않고 그 줄만 걷는다");
+const moreFn = fn("  function moreBtn(zone: Zone, only?: (k: TabKey) => boolean): HTMLElement {");
+check(/onclick: \(\) => \{ removeTab\(zone, t\); if \(zoneTabs\(zone\)\.some\(\(k\) => tabBase\(k\) !== 'sessions' && \(!only \|\| only\(k\)\)\)\) fill\(\); else close\(\); \}/.test(moreFn), "S7 ⌄ 목록의 × 는 목록을 닫지 않고 그 줄만 걷는다(#5319 파일 목록은 남은 파일이 없을 때만 닫힌다)");
 const menuFn = fn("  function tabMenu(e: MouseEvent, zone: Zone, key: TabKey): void {");
 for (const [label, n] of [["'다른 탭 닫기'", "S8a"], ["'오른쪽 탭 닫기'", "S8b"], ["'파일 탭 모두 닫기'", "S8c"], ["'탭 고정'", "S8d"], ["'닫은 탭 다시 열기'", "S8e"]]) {
   check(menuFn.includes(label), `${n} 탭 우클릭 메뉴에 ${label}`);

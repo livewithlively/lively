@@ -88,6 +88,7 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
   `external_base`(3-way 머지의 공통조상)로 전진해, 다음 인바운드가 외부 편집만 골라낸다.
 - 실패 행은 `attempts`·`last_error` 가 남고 다음 틱에 재시도한다. exit 1 = 시스템성 실패(5xx·네트워크·401·403·429) 존재.
 - 행 고유 거절(그 밖의 4xx)은 실행 실패로 세지 않고(`rejected`), 같은 행이 3회 거절되면 드레인에서 뺀다(파킹 — `parked`, 경보 1회). 그 항목을 다시 편집하면 풀린다. 한 실행에서 거절이 5건 이상인데 반출이 0건이면 설정 문제로 보고 실행 실패로 올린다(파킹하지 않는다).
+- ClickUp 이 중첩 subtask 를 받지 않으면(400 `ITEM_002`, 워크스페이스·스페이스에서 중첩 subtask 가 꺼져 있을 때) 그 subtask 의 반출은 거절로 세지 않고 닫는다. 항목은 라이블리에만 남고, ClickUp 에서 중첩 subtask 를 켠 뒤 그 항목을 다시 편집하면 만들어진다. 이 동작이 들어가기 전에 이미 파킹된 `ITEM_002` 행은 아래 일괄 해제 SQL 로 풀면 다음 실행이 닫는다.
 - 파킹 행 일괄 해제(원인을 고친 뒤): `UPDATE external_outbox SET attempts=0, last_error=NULL WHERE system='clickup' AND done_at IS NULL AND attempts>=3 AND last_error ~ '^ClickUp 4[0-9]{2} ' AND last_error !~ '^ClickUp (401|403|429) '`
   조건 값은 `src/connectors/push-failure.ts` 의 `parkedParams()` 와 같아야 한다 — 그쪽을 바꾸면 이 SQL 도 고친다.
 - 배포 직후 확인: 이 동작이 들어가기 전부터 같은 4xx 로 3회 이상 실패해 온 행은 첫 실행부터 드레인에서 빠지고 **경보가 나가지 않는다**(경보는 그 실행에서 새로 파킹된 행에만 나간다). 배포 뒤 첫 실행 요약(관리 ▸ 스케줄 ▸ push 요약)의 `parked` 를 확인하고, 0 이 아니면 아래로 그 행을 보고 원인을 고친 뒤 위 SQL 로 푼다:

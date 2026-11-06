@@ -94,6 +94,17 @@ test("배선 — 시스템성만 failed, 거절은 rejected(exit 판정 밖)", (
   assert.match(b, /parksAfter\(ob\.attempts, kind\)/);
 });
 
+test("배선 — 중첩 subtask 금지(ITEM_002)는 분류 전에 닫혀 거절·실패 어느 쪽에도 세지 않는다", () => {
+  const block = DRAIN.match(/\} catch \(e\) \{\n\s*const msg[\s\S]*?\n {4}\}\n {2}\}/);
+  assert.ok(block, "행 실패 catch 블록을 못 찾았다");
+  const b = block[0];
+  const at = b.indexOf("if (isNestedSubtaskForbidden(e)) {");
+  assert.ok(at >= 0, "ITEM_002 를 따로 다루지 않는다 — 한 번에 5건 이상이면 일괄 거절로 크론이 선다");
+  assert.ok(at < b.indexOf("classifyPushFailure(e)"), "분류 뒤에 다루면 이미 rejected 로 세인 뒤다");
+  assert.match(b.slice(at), /^if \(isNestedSubtaskForbidden\(e\)\) \{\n\s*await markDone\(ob\.id\); skipped\+\+;[\s\S]*?continue;\n\s*\}/,
+    "닫지 않으면 매 틱 같은 create 가 반복되고, continue 가 없으면 아래 분류로 떨어져 거절로 센다");
+});
+
 test("배선 — 경보는 루프 밖에서 실행당 한 번", () => {
   const calls = DRAIN.match(/notifyParked\(/g) ?? [];
   assert.equal(calls.length, 1);

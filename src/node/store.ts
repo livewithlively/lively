@@ -100,8 +100,13 @@ export async function rotateNodeToken(id: string, actor?: string): Promise<{ nod
       { userId: node.owner_member, memberId: node.owner_member, scopes: [], label: `node:${id}` },
       actor ?? node.owner_member, "node-store", client,
     );
-    const r = await client.query(`UPDATE org_node SET token_hash=$2, updated_at=now() WHERE id=$1 RETURNING *`, [id, tokenHash]);
-    if (r.rowCount !== 1) throw new HttpError(404, `노드 없음: ${id}`);   // 회전 도중 삭제됐다 — 새 토큰도 롤백된다.
+    //  기대값 비교 — 위에서 읽은 토큰일 때만 바꾼다. 회전 둘이 겹치면 늦은 쪽이 앞 회전의 새 토큰을 모른 채 덮어, 그 토큰은 회수되지 않고
+    //   앞 호출자는 붙지 못하는 토큰을 받는다. 겹친 쪽은 롤백(새 토큰도 함께)하고 409 로 다시 하게 한다.
+    const r = await client.query(`UPDATE org_node SET token_hash=$2, updated_at=now() WHERE id=$1 AND token_hash IS NOT DISTINCT FROM $3 RETURNING *`, [id, tokenHash, node.token_hash]);
+    if (r.rowCount !== 1) {
+      if (!(await client.query(`SELECT 1 FROM org_node WHERE id=$1`, [id])).rowCount) throw new HttpError(404, `노드 없음: ${id}`);   // 회전 도중 삭제됐다 — 새 토큰도 롤백된다.
+      throw new HttpError(409, `노드 토큰이 그 사이 바뀌었습니다(다른 회전과 겹침) — 다시 시도하세요: ${id}`);
+    }
     // 구 토큰 회수는 **교체가 확정된 뒤**(같은 트랜잭션 안에서) — 순서가 뒤집히면 위 사고가 난다.
     if (node.token_hash) await revokeToken(node.token_hash, actor, "node-store", client).catch(() => { /* 이미 회수됐어도 계속 */ });
     return { node: r.rows[0] as OrgNode, token };

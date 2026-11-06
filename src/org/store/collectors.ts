@@ -250,6 +250,7 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
   }
 
   await syncCollectorJob(id, { presetKey, label: label || spec.label, enabled, interval }, actor);
+  if (cur?.enabled && !enabled) await stopRunningCollectorRuns(id, actor);
 
   // 감사 — 시크릿 '값'은 스냅샷에 넣지 않는다(설정된 키 목록만).
   const auditBefore = cur
@@ -354,8 +355,29 @@ export async function removeCollector(id: number, actor?: string, source?: strin
   try {
     await itemsPool.query(`DELETE FROM org_cron WHERE id = ANY($1::text[])`, [[collectorJobId(id), `${collectorJobId(id)}-full`]]);
   } catch { /* 비치명 */ }
+  await stopRunningCollectorRuns(id, actor);
   // ⚠ connector_state(커서)는 **남긴다** — 같은 instance_key 로 다시 만들면 이어받는다. 실수 삭제의 복구 여지.
   await audit("org_collector", String(id), "delete", cur, null, actor, source);
+}
+
+/**
+ * 끄거나 지운 수집기의 진행 중 실행을 멈춘다.
+ *  크론 잡만 끄면 이미 돌고 있는 실행은 끝까지 간다 — 최초 전량 수집이면 몇 시간~하루 동안, 사람이 방금 끈
+ *  수집기가 계속 자료를 쌓는다(실측: 켠 지 20초 만에 끈 수집기의 첫 실행이 25시간 돌며 약 140만 건을 넣었다).
+ *  취소된 실행은 커서를 전진시키지 않으므로 다시 켜면 다음 실행이 그 자리부터 이어 모은다.
+ */
+async function stopRunningCollectorRuns(id: number, actor?: string): Promise<void> {
+  try {
+    const rows = (await itemsPool.query(
+      `SELECT id FROM connector_run WHERE collector_id=$1 AND status='running'`, [id])).rows as Array<{ id: string | number }>;
+    if (rows.length === 0) return;
+    //  동적 import 인 이유는 kickFirstSync 와 같다(store 층이 connectors 층을 정적으로 물지 않는다).
+    const { cancelConnectorRun } = await import("../../connectors/run-tracker.js");
+    for (const r of rows) await cancelConnectorRun(Number(r.id), actor ?? null);
+  } catch (e) {
+    //  설정 저장 자체는 이미 끝났다 — 멈추지 못한 실행은 화면의 [중지]로 남긴다(저장을 실패로 돌리지 않는다).
+    console.warn(`[collector] 진행 중 실행 중지 실패(비치명) id=${id}:`, (e as Error)?.message);
+  }
 }
 
 /**

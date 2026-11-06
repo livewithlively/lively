@@ -75,7 +75,7 @@ test("배선 — 좌표는 원래 값이 있던 부모만 고치고, list_id 도
 test("배선 — 부모 카드가 지워졌으면 부모 연결을 끊고, createSafe 는 ITEM_137 에 재시도하지 않는다", () => {
   assert.match(PUSH, /if \(made\.kind === "parent_gone"\) \{[\s\S]{0,600}external_base=NULL, updated_at=now\(\) WHERE id=\$1`, \[parentId\]\)/,
     "지워진 부모 연결을 안 끊어 매 틱 같은 조회가 반복된다");
-  assert.match(PUSH, /catch \(e\) \{ if \(isParentNotInList\(e\)\) throw e;/, "ITEM_137 에 status 를 빼고 헛재시도한다");
+  assert.match(PUSH, /catch \(e\) \{ if \(isParentNotInList\(e\) \|\| isNestedSubtaskForbidden\(e\)\) throw e;/, "ITEM_137·ITEM_002 에 status 를 빼고 헛재시도한다");
 });
 
 // 부모 연결을 끊은 뒤 이 자식은 다음에 볼 때 «부모가 반출 대상이 아님» 으로 닫힌다(#1302 부모 미반출 분기) — 로그가
