@@ -1,9 +1,10 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv , harnessResumeCommand, REGISTRY_PRIMARY_SLUG } from "./catalog.js";
+import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv , harnessResumeCommand, REGISTRY_PRIMARY_SLUG, harnessLaunchArgv, launchProbeLines } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -35,6 +36,48 @@ test("#5332 Codex TUI 는 alt 화면 없이 뜬다 — 이어 열기 한 줄에�
   assert.deepEqual(c.tuiArgv, ["--no-alt-screen"]);
   assert.equal(harnessResumeCommand("codex", "abc-123"), "codex resume abc-123 --no-alt-screen");
   assert.equal(HARNESSES.find((h) => h.key === "claude")!.tuiArgv, undefined);
+});
+
+test("#5332 Codex 는 공유 백그라운드 서버 없이 뜬다 — 판이 알 때만 --no-daemon (매니지드 시작 창 실측)", () => {
+  const c = HARNESSES.find((h) => h.key === "codex")!;
+  assert.deepEqual(c.tuiProbeArgv, ["--no-daemon"]);
+  assert.equal(HARNESSES.find((h) => h.key === "claude")!.tuiProbeArgv, undefined);
+  //  스크립트에 그대로 적히므로 모양이 다른 값은 버린다(셸 문자가 못 들어온다).
+  assert.deepEqual(launchProbeLines(["--no-daemon", "--x'; rm -rf /", "-n", "--A"]).length, 1);
+  //  하네스 자신을 띄울 때만 끼운다 — 대역 명령(`sh -c …`)·다른 하네스엔 안 붙는다. 인자 자리(nres = argv[6])는 그대로다.
+  const tui = harnessLaunchArgv("codex", ["codex", "--no-alt-screen"], "linux");
+  assert.ok(tui[2]!.includes("grep -qF -- '--no-daemon'"));
+  assert.deepEqual(tui.slice(3), ["lively-launch", tui[4], tui[5], "codex", "--no-alt-screen"]);
+  assert.ok(!harnessLaunchArgv("codex", ["sh", "-c", "exit 0"], "linux")[2]!.includes("--no-daemon"));
+  assert.ok(!harnessLaunchArgv("claude", ["claude"], "linux")[2]!.includes("--help"));
+  const stop = harnessLaunchArgv("codex", ["codex", "resume", "abc", "--no-alt-screen"], "linux", { stopRule: true, resumeArgc: 2 });
+  assert.ok(stop[2]!.includes("quick_sec") && stop[2]!.includes("'--no-daemon'"));
+  assert.equal(stop[6], "2");
+  assert.deepEqual(harnessLaunchArgv("codex", ["codex"], "win32"), ["codex"]);
+});
+
+test("#5332 런처의 판 확인을 실제 셸로 — 아는 판엔 끝에 붙고, 모르는 판(≤0.155)엔 안 붙는다", { skip: process.platform === "win32" }, () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "probe-"));
+  try {
+    //  가짜 codex — `--help` 에 그 낱말을 넣을지는 환경 변수로, 실행되면 받은 인자를 한 줄로 찍는다.
+    writeFileSync(path.join(dir, "codex"), [
+      "#!/bin/sh",
+      'if [ "$1" = "--help" ]; then [ -n "$HELP_HAS" ] && echo "      --no-daemon  Run without the shared background server"; echo "Usage: codex"; exit 0; fi',
+      'echo "ARGS:$*"',
+      "exit 0",
+    ].join("\n"));
+    chmodSync(path.join(dir, "codex"), 0o755);
+    const run = (argv: string[], helpHas: boolean): string => {
+      const [bin, ...rest] = argv;
+      const r = spawnSync(bin!, rest, { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, HELP_HAS: helpHas ? "1" : "", SHELL: "/bin/sh", ENV: "" } });
+      return String(r.stdout || "");
+    };
+    const plain = ["codex", "resume", "abc", "--no-alt-screen", "--model", "gpt-6-sol"];
+    assert.match(run(harnessLaunchArgv("codex", plain, "linux"), true), /^ARGS:resume abc --no-alt-screen --model gpt-6-sol --no-daemon$/m);
+    assert.match(run(harnessLaunchArgv("codex", plain, "linux"), false), /^ARGS:resume abc --no-alt-screen --model gpt-6-sol$/m);
+    assert.match(run(harnessLaunchArgv("codex", plain, "linux", { stopRule: true, resumeArgc: 2 }), true), /^ARGS:resume abc --no-alt-screen --model gpt-6-sol --no-daemon$/m);
+    assert.match(run(harnessLaunchArgv("codex", plain, "linux", { stopRule: true, resumeArgc: 2 }), false), /^ARGS:resume abc --no-alt-screen --model gpt-6-sol$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("설치된 각 하네스의 현행 모델 목록을 반영한다", () => {
