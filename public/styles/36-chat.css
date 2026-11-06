@@ -765,9 +765,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
     .pn-body:not(.cm) .sc-head--big .sc-act-files, .pn-body:not(.cm) .sc-head--big .sc-title-pen, .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { display: none; }
     .pn-body:not(.cm) .sc-head.sc-head--big { padding-left: 20px; padding-right: 16px; } }
   @container schead (max-width: 460px) { .pn-body:not(.cm) .sc-head--big .sc-faces { display: none; } }
-  /* #5319 3-B — ≤640 묶은 단추는 이름을 접고 아이콘 + ▾ 만 · ≤600 [자료] 도 아이콘만(480 에서 통째로 접는 것은 위 ③ 그대로) */
+  /* #5319 3-B — ≤760 [자료] 는 아이콘만(둘째 줄 왼쪽을 연결 상태 글에 돌려준다 — 실측 618 에서 «재연결 중…» 이 «재연결 …» 까지 줄었다)
+     · ≤640 묶은 단추도 이름을 접고 아이콘 + ▾ 만(480 에서 [자료] 를 통째로 접는 것은 위 ③ 그대로) */
   @container schead (max-width: 640px) { .pn-body:not(.cm) .sc-head--big .sc-act-duo-t { display: none; } }
-  @container schead (max-width: 600px) {
+  @container schead (max-width: 760px) {
     .pn-body:not(.cm) .sc-head--big .sc-act-files > span { display: none; }
     .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; } }
 }
