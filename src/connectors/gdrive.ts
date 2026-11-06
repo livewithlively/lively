@@ -18,6 +18,7 @@ import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { googleAccessToken } from "./google-auth.js";
 import { extractOoxml, printableRatio, ooxmlKindFromMime } from "./ooxml.js";
+import { makeProgressLogger } from "./progress-log.js";
 
 // ── 상수 ───────────────────────────────────────────────────────────────────
 const API_BASE = "https://www.googleapis.com/drive/v3";
@@ -381,6 +382,10 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
   const folderIds = await getFolderIds();
   const q = buildFilesQuery({ since, folderIds });
 
+  // 첫 수집은 드라이브 전체를 훑는다 — 본문 export 를 파일마다 기다리느라 수천 건이면 15분을 넘긴다.
+  //  진행 로그가 없으면 러너가 정체로 보고 죽이고, 커서가 안 올라 다음 run 도 처음부터 다시 돌다 또 죽는다.
+  const progress = makeProgressLogger();
+  let seen = 0;
   let pageToken: string | undefined;
   let page = 0;
   do {
@@ -397,9 +402,11 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     if (pageToken) params.set("pageToken", pageToken);
 
     const data = await listFilesPage(`${API_BASE}/files?${params.toString()}`);
+    progress(`gdrive: ${page + 1}페이지 목록 ${data.files?.length ?? 0}건 (지금까지 ${seen}건 착수)`, true);
 
     for (const file of data.files ?? []) {
       if (!file.id) continue; // id 없는 이례적 레코드 방어
+      progress(`gdrive: ${page + 1}페이지 처리 중 — ${++seen}번째 파일`);
       try {
         let body: string | undefined;
         const bodySignal = AbortSignal.timeout(bodyTimeoutMs());

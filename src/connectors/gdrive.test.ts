@@ -1,10 +1,11 @@
 // #541 gdrive 커넥터 테스트 — DB/실네트워크 불요(백필 블록은 fetch 를 스텁한다).
 //   실행: npm run build && node dist/connectors/gdrive.test.js
 //   목적: 쿼리 인젝션 가드(since/폴더 보간) + [BINARY] 메타-스텁 포맷(통합 distill 프롬프트·slack 과의 계약)
-//         + 본문 추출 시간 상한 회귀 잠금.
+//         + 본문 추출 시간 상한 + 백필 진행 로그 배선(러너 정체 감지 오판 방지) 회귀 잠금.
 //   (OOXML 추출 골든은 ./ooxml.test.ts 로 분리 — 공용 유틸.)
 import assert from "node:assert/strict";
 import { buildFilesQuery, isRfc3339, buildBinaryStub, gdriveConnector } from "./gdrive.js";
+import { PROGRESS_LOG_INTERVAL_MS } from "./progress-log.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -109,4 +110,47 @@ t("buildBinaryStub: size/owner 부재 시 해당 필드 생략·url 합성(딥�
   pass++; console.log("ok  본문 추출 시간 상한 — 매달린 export 는 메타만 남기고 백필이 끝난다(정체 감지 반복 사망 방지)");
 }
 
-console.log(`\n${pass} passed (gdrive 쿼리 인젝션 가드 + [BINARY] 스텁 계약 + 본문 시간 상한)`);
+
+// ── 진행 로그 — 러너는 무출력 15분이면 죽인다. 백필이 파일을 처리하는 동안 stdout 에 진행을 남겨야 한다. ──
+{
+  const envKeys = ["GDRIVE_CLIENT_ID", "GDRIVE_CLIENT_SECRET", "GDRIVE_REFRESH_TOKEN"] as const;
+  const origEnv = envKeys.map((k) => process.env[k]);
+  process.env.GDRIVE_CLIENT_ID = "test-client";
+  process.env.GDRIVE_CLIENT_SECRET = "test-secret";
+  process.env.GDRIVE_REFRESH_TOKEN = "test-refresh";
+  const origFetch = globalThis.fetch;
+  const origLog = console.log;
+  // 시계를 호출마다 간격 이상 전진시켜 스로틀을 매번 통과시킨다 — 한 페이지(최대 1000건)의 export 합이 15분을
+  //  넘는 게 실제 사고였으므로, 페이지 경계 로그가 아니라 파일 단위 로그가 나가는지를 잠가야 한다.
+  const origNow = performance.now;
+  let tick = 0;
+  performance.now = () => (tick += PROGRESS_LOG_INTERVAL_MS + 1);
+  const logged: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith("https://oauth2.googleapis.com/token")) {
+      return new Response(JSON.stringify({ access_token: "at", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.includes("/files?")) {
+      const files = [1, 2, 3].map((n) => ({ id: `f${n}`, name: `doc${n}.txt`, mimeType: "text/plain", modifiedTime: "2026-11-01T00:00:00Z" }));
+      return new Response(JSON.stringify({ files }), { status: 200 });
+    }
+    return new Response("본문", { status: 200, headers: { "content-type": "text/plain" } });
+  }) as typeof fetch;
+  console.log = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
+  let items = 0;
+  try {
+    for await (const _ of gdriveConnector.backfill()) items++;
+  } finally {
+    globalThis.fetch = origFetch;
+    console.log = origLog;
+    performance.now = origNow;
+    envKeys.forEach((k, i) => { if (origEnv[i] === undefined) delete process.env[k]; else process.env[k] = origEnv[i]; });
+  }
+  assert.equal(items, 3);
+  const perFile = logged.filter((l) => l.startsWith("gdrive: ") && l.includes("번째 파일"));
+  assert.equal(perFile.length, 3, `파일 단위 진행 로그가 없다 — 한 페이지가 15분을 넘기면 정체 감지로 죽는다. stdout: ${JSON.stringify(logged)}`);
+  pass++; console.log("ok  백필 진행 로그 — 파일을 훑는 동안 stdout 에 진행을 남긴다(러너 정체 오판 방지)");
+}
+
+console.log(`\n${pass} passed (gdrive 쿼리 인젝션 가드 + [BINARY] 스텁 계약 + 본문 시간 상한 + 진행 로그)`);
