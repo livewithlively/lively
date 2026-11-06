@@ -277,6 +277,11 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-pane.dock-top .pn-sub-acts .pn-tab-more.pn-sub-list svg { width: 14px; height: 14px; }
 /* 넓으면 단추가 늘어서고 [⋯] 는 없다 · 좁으면(머리 줄 520 미만) 아이콘 단추를 [⋯] 하나로 접는다. 고치는 중의 [← 보기] · [저장](글자 단추)은 늘 선다. */
 .pn-sub-acts .pn-sub-more { display: none; }
+/* [⋯] 도 아이콘 단추(.pn-web-btn.ic)라 위 크기 규칙(0,3,0)이 «넓을 땐 숨김» 을 이겼다(실측 600px 에서 [⋯] 가 단추들과 같이 섰다) — 한 단 높여 숨긴다. */
+.pn-sub-acts .pn-web-btn.ic.pn-sub-more { display: none; color: var(--ink-sub); }
+@container pnsidebar (max-width: 519px) {
+  .pn-sub-acts .pn-web-btn.ic.pn-sub-more:not([hidden]) { display: inline-flex; }
+}
 @container pnsidebar (max-width: 519px) {
   .pn-sub-acts .pn-ed-bar .pn-web-btn.ic { display: none; }
   .pn-sub-acts .pn-ed-bar .pn-sub-fold { display: none; }
