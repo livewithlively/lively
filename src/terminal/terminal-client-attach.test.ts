@@ -86,6 +86,9 @@ class FakeNode {
   }
 }
 
+// 노드 아래 글 전부(브라우저 textContent 처럼 자손을 잇는다).
+const deepText = (n: any): string => (n instanceof FakeNode ? n.textContent + n.children.map(deepText).join("") : (n && n.textContent) || "");
+
 interface Harness {
   mod: any;
   main: FakeNode;         // 터미널 페이지 #main — 입력 바가 여기 붙는다
@@ -156,6 +159,20 @@ async function makeCtx(opts: CtxOpts = {}): Promise<Harness> {
     const rel = decodeURIComponent((u.match(/path=([^&]+)/) || [])[1] || "");
     return Promise.resolve({ ok: true, status: 200, json: async () => ({ path: "/srv/box/work/" + rel }) });
   });
+  // #5361 — 진행률을 보이려고 올리기(PUT)는 XHR 로 나간다. 어느 길로 나가든 같은 기록·같은 답(절대경로)을 준다.
+  def("XMLHttpRequest", class {
+    method = ""; url = ""; status = 0; responseText = "";
+    upload = { onprogress: null as null | ((ev: any) => void) };
+    onload: any = null; onerror: any = null; onabort: any = null; onloadend: any = null;
+    open(m: string, u: string): void { this.method = m; this.url = u; }
+    setRequestHeader(): void { /* noop */ }
+    abort(): void { this.onabort?.(); this.onloadend?.(); }
+    send(): void {
+      fetched.push(`${this.method.toUpperCase()} ${this.url}`);
+      const rel = decodeURIComponent((this.url.match(/path=([^&]+)/) || [])[1] || "");
+      setTimeout(() => { this.status = 200; this.responseText = JSON.stringify({ path: "/srv/box/work/" + rel }); this.onload?.(); this.onloadend?.(); }, 0);
+    }
+  });
 
   const mod: any = await import(`${MOD_URL}?n=${++seq}`);
   const main = new FakeNode("div");
@@ -169,7 +186,11 @@ async function makeCtx(opts: CtxOpts = {}): Promise<Harness> {
   });
   return {
     mod, main, zone, fetched, sent, asked, session,
-    toasts: () => body.children.filter((c: any) => c instanceof FakeNode && c.tag === "div").map((c: any) => c.textContent),
+    //  알림(body 의 toast)과 올리기 칸(#5361 — 터미널 판 안)에 뜬 글. 칸의 글은 자손에 나뉘어 있어 잇는다.
+    toasts: () => [
+      ...body.children.filter((c: any) => c instanceof FakeNode && c.tag === "div").map((c: any) => c.textContent),
+      ...zone.children.filter((c: any) => c instanceof FakeNode && c.className === "upq").map((c: any) => deepText(c)),
+    ],
     dock: () => main.find((n) => n.attrs.id === "mdock"),
     composer: () => main.find((n) => n.tag === "textarea"),
     attachBtn: () => main.find((n) => n.tag === "button" && /첨부/.test(n.attrs["aria-label"] || n.attrs.title || "")),

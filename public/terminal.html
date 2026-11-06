@@ -125,6 +125,30 @@
     box-shadow: 0 12px 34px rgba(0,0,0,.28); max-width: 88%; }
   .drop-note b { display: block; font-size: 14.5px; color: var(--fg); margin-bottom: 4px; }
   .drop-note span { font-size: 12.5px; color: var(--fg-dim); }
+  /* 파일 올리기 진행(#5361) — 터미널 판(#panes) 오른쪽 아래. 올리는 동안은 걷히지 않는다(알림은 2.8초 뒤 사라져, 큰 파일이
+     올라가는지 알 길이 없었다). 폰에선 #panes 가 입력 바 위에서 끝나므로 바를 덮지 않는다. 판 끝(드롭존) 안이라 이 칸 위에 놓아도 올라간다. */
+  .upq { position: absolute; right: 12px; bottom: 12px; z-index: 6; width: min(320px, calc(100% - 24px));
+    max-height: calc(100% - 24px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .upq-row { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.16); font-size: 12.5px; transition: border-color .2s, box-shadow .2s; }
+  .upq-head { display: flex; align-items: baseline; gap: 8px; }
+  .upq-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .upq-pct { flex: none; font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+  .upq-bar { height: 4px; margin: 7px 0 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+  .upq-bar > i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+  .upq-foot { display: flex; align-items: center; gap: 8px; }
+  .upq-sub { flex: 1; min-width: 0; font-size: 11.5px; line-height: 1.45; color: var(--fg-dim); }
+  .upq-btn { flex: none; padding: 3px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg2); color: var(--fg);
+    font: inherit; font-size: 11.5px; cursor: pointer; }
+  .upq-btn:hover { border-color: var(--accent); }
+  .upq-btn[hidden] { display: none; }
+  .upq-row[data-state="fail"] { border-color: var(--danger); }
+  .upq-row[data-state="fail"] .upq-sub { color: var(--danger); }
+  .upq-row[data-state="fail"] .upq-bar > i { background: var(--danger); }
+  /* 같은 파일을 다시 놓았을 때 — 이미 올라가는 줄을 잠깐 짚어 준다 */
+  .upq-row.upq-flash { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent), 0 6px 20px rgba(0,0,0,.16); }
+  body.mobile .upq { right: 8px; bottom: 8px; width: calc(100% - 16px); }
+  body.mobile .upq-btn { min-height: 32px; padding: 4px 12px; font-size: 13px; }
   .pane { position: absolute; inset: 0; display: none; flex-direction: column; }
   .pane.active { display: flex; }
   #term-host { flex: 1; min-height: 0; background: var(--term-bg); padding: 6px 8px; }
