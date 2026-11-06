@@ -700,7 +700,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     restoreTitles(p);
     const full = p.tabs.clientWidth;
     if (!full || !wraps.length) { syncMore(p); return; }       // 접힌 칸·숨은 칸 — 보일 때 ResizeObserver 가 다시 부른다
-    const tabsIn = wraps.map((w) => ({ natural: w.getBoundingClientRect().width, active: w.classList.contains('on'), pinned: w.classList.contains('pinned') }));
+    //  #5319 독 아래 탭 줄(dock-sub)의 고정 탭(기본 앱)은 이름을 보인다 — 계획기에 «고정» 으로 넘기면 아이콘 폭(76)만 받아 «콘..» 이 된다(실측).
+    const subRow = p.root.classList.contains('dock-sub');
+    const tabsIn = wraps.map((w) => ({ natural: w.getBoundingClientRect().width, active: w.classList.contains('on'), pinned: !subRow && w.classList.contains('pinned') }));
     //  탭이 나눠 쓸 폭 = 띠 안 폭 − 좌우 안 여백 − 탭 사이 간격(#4443 탭 새 옷 — lib/pane-tabs stripRoom 머리말).
     const cs = getComputedStyle(p.tabs);
     const room = (cw: number): number => stripRoom(cw, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, parseFloat(cs.columnGap) || 0, wraps.length);
