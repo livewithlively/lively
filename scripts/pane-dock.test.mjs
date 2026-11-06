@@ -273,12 +273,14 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
     && /w\.classList\.toggle\('pn-sub-off', top && !inSub\(k\)\)/.test(PANES_TS)
     && /classList\.contains\('pn-tabwrap'\) && !n\.classList\.contains\('pn-sub-off'\)/.test(PANES_TS),
     "W16k 독 아래 탭 줄 = 파일(뷰어) 탭은 하나라도 · 다른 앱은 둘 이상 떴을 때(켜진 앱과 무관) — 독엔 [뷰어] 칸이 없다 · 하나뿐인 앱은 독 아이콘이 곧 탭 · 숨은 탭은 폭을 나눠 갖지 않는다");
-  check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto; grid-template-rows: calc\(var\(--pn-bighead-h, 113px\) - 1px\) 53px;/.test(DOCK_CSS)
+  check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: flex; flex-wrap: wrap;/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar::after \{ content: ""; order: 1; flex: 0 0 100%; height: 0; \}/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ order: 0; flex: 1 1 0; min-width: 0; height: calc\(var\(--pn-bighead-h, 113px\) - 1px\); \}/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub \.pn-tab \{[^}]*font-size: 15px;/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub \.pn-tabwrap\.on::after \{ content: "";/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar:not\(\.shrunk\):not\(\.has-more\) \.pn-tab-more \{ display: none; \}/.test(DOCK_CSS),
-    "W16l 독 아래 파일 탭 줄 — 격자(독 줄 높이 그대로 · 그 아래 한 줄 53px) · 글자 15px · 켜진 탭 밑줄");
-  check(/export const SUB_TAB_METRICS: Metrics = \{ icon: 56, minLabel: 168,/.test(TABS_LIB)
+    "W16l 독 아래 파일 탭 줄 — 두 줄은 서로의 폭을 나눠 갖지 않는다(격자일 땐 아래 단추 폭만큼 독이 좁아져 아이콘이 잘렸다) · 독 줄 높이 그대로 · 글자 15px · 켜진 탭 밑줄");
+  check(/export const SUB_TAB_METRICS: Metrics = \{ icon: 76, minLabel: 190,/.test(TABS_LIB)
     && /const met = sub \? SUB_TAB_METRICS : TAB_METRICS;/.test(PANES_TS)
     && /if \(sub && plan\.mode === 'icons'\) \{/.test(PANES_TS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs \{ flex-wrap: nowrap;[^}]*overflow-x: auto;/.test(DOCK_CSS),
@@ -286,13 +288,15 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
   check(/function dockViewerBar\(pane: Pane, key: TabKey \| null\): void \{/.test(PANES_TS)
     && /dockViewerBar\(pane, top && pane\.root\.classList\.contains\('dock-sub'\) && !!act && isFileTab\(act\) \? act : null\)/.test(PANES_TS)
     && /\.pn-sub-acts \.pn-ed-name \{ display: none; \}/.test(DOCK_CSS)
-    && /@container pnsidebar \(max-width: 519px\) \{\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-web-btn\.ic \{ display: none; \}/.test(DOCK_CSS)
+    && /@container pnsidebar \(max-width: 519px\) \{\n\s*\.pn-sub-acts \.pn-ed-bar \.pn-web-btn\.ic, \.pn-sub-acts \.pn-ed-bar \.pn-sub-fold \{ display: none; \}/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top > \.pn-tabbar \{ container: pnsidebar \/ inline-size; \}/.test(DOCK_CSS),
     "W16o 3안 — 뷰어의 이름 줄을 걷고 단추를 파일 탭 줄 오른쪽 끝으로 옮긴다 · 곁칸이 좁으면(머리 줄 520 미만) 아이콘 단추를 [⋯] 로 접고 넓으면 늘어선다");
   check(/return tabBase\(key\) === 'editor' \? 'doc' : d\.icon;/.test(PANES_TS)
     && /\.pn-pane\.dock-top\.dock-sub \.pn-tabwrap\.on \.pn-tab-x \{ opacity: 1; pointer-events: auto; \}/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tab-x \{ left: auto; right: 8px;/.test(DOCK_CSS)
+    && /if \(nx && px != null\) \{ pane\.frozen\.set\(nx, px\);/.test(PANES_TS)
     && /moreBtn\(zone, inSub\)/.test(PANES_TS),
-    "W16p 파일 탭 아이콘은 하나(종류마다 바꾸지 않는다) · 켜진 탭은 × 가 늘 보인다 · [n ▾] 는 열어 둔 파일만 나열한다");
+    "W16p 파일 탭 아이콘은 하나(종류마다 바꾸지 않는다) · × 는 탭 오른쪽 끝, 켜진 탭은 늘 보인다 · 마우스로 닫으면 오른쪽 탭이 그 폭을 물려받아 × 가 커서 밑에 · [n ▾] 는 열어 둔 파일만");
   check(/function edgeFade\(sc: HTMLElement\): void \{/.test(PANES_TS) && /dockSlot\.addEventListener\('wheel'/.test(PANES_TS)
     && /if \(zone === 'side'\) \{ dock\?\.sync\(\); if \(top\) requestAnimationFrame\(revealDockOn\); \}/.test(PANES_TS)
     && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-dock-slot\.fade-r, \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs\.fade-r \{/.test(DOCK_CSS),

@@ -246,12 +246,14 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
    독 줄 높이(--pn-bighead-h)는 그대로 — 이 줄의 윗선이 세션 머리줄 아랫선과 한 줄로 잇는다. 격자로 세운다(flex-wrap 이면 독 아이콘이
    많을 때 [＋] 가 둘째 줄로 떨어진다). 탭은 KRDS 크기: 높이 40 · 글자 15/500 · 아이콘 18. 쉴 때는 글자만, 켜진 탭 = 굵게 + 밑줄 3px
    (독 이름표와 같은 말 — 색만으로 말하지 않는다). 아이콘으로 접지 않고 이름을 남긴 채 미끄러진다(lib/pane-tabs SUB_TAB_METRICS). */
-.pn-pane.dock-top.dock-sub > .pn-tabbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: calc(var(--pn-bighead-h, 113px) - 1px) 53px;
+.pn-pane.dock-top.dock-sub > .pn-tabbar { display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start;
   height: auto; column-gap: 4px;
   background: linear-gradient(var(--line), var(--line)) 0 calc(var(--pn-bighead-h, 113px) - 1px) / 100% 1px no-repeat, var(--bg); }   /* 두 줄 사이 선 — 줄 끝 흐림(mask)에 같이 흐려지지 않게 바탕에 긋는다 */
-.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { grid-row: 1; grid-column: 1; }
-.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { grid-row: 1; grid-column: 2; }
-.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs { display: flex; grid-row: 2; grid-column: 1; margin: 0 0 0 -8px; padding: 1px 4px 0 8px; gap: 4px;
+/* 두 줄은 서로의 폭을 나눠 갖지 않는다(격자였을 땐 아래 줄 단추 폭만큼 위 독이 좁아져 아이콘이 잘렸다) — 줄을 바꾸는 flex 에 빈 칸 하나로 줄을 끊는다. */
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { order: 0; flex: 1 1 0; min-width: 0; height: calc(var(--pn-bighead-h, 113px) - 1px); }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { order: 0; flex: none; height: calc(var(--pn-bighead-h, 113px) - 1px); }
+.pn-pane.dock-top.dock-sub > .pn-tabbar::after { content: ""; order: 1; flex: 0 0 100%; height: 0; }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs { display: flex; order: 2; flex: 1 1 0; min-width: 0; height: 53px; margin: 0 0 0 -8px; padding: 1px 4px 0 8px; gap: 4px;
   align-items: stretch; }
 /* 3안(원준 2026-11-06 — 1안 «줄 바꿈» 은 파일이 늘수록 세로를 먹었다): 한 줄 52 = 탭 40 + 위아래 6. 넘치면 옆으로 미끄러지고(끝은 흐림)
    [n ▾] 목록이 전부를 말한다. 뷰어의 이름 줄은 걷혀 이 줄이 그 자리를 대신한다(panes.ts dockViewerBar). */
@@ -261,12 +263,12 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 /* 줄 오른쪽 끝 — [n ▾] · 켜진 뷰어의 단추들 · [⋯](좁을 때). 폭은 곁칸 머리 줄 폭으로 잰다(pnsidebar). */
 .pn-pane.dock-top > .pn-tabbar { container: pnsidebar / inline-size; }
 .pn-sub-acts { display: none; }
-.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-sub-acts { display: flex; grid-row: 2; grid-column: 2; align-items: center; gap: 4px; min-width: 0; padding: 1px 0 0 4px; }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-sub-acts { display: flex; order: 3; flex: none; height: 53px; align-items: center; gap: 4px; min-width: 0; padding: 1px 0 0 4px; }
 .pn-sub-listslot, .pn-sub-barslot { display: contents; }
 .pn-sub-acts .pn-ed-bar { display: flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; min-width: 0; }
 .pn-sub-acts .pn-ed-name { display: none; }   /* 이름은 탭이 말한다 */
-.pn-sub-acts .pn-web-btn.ic, .pn-sub-acts .pn-sub-more { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; }
-.pn-sub-acts .pn-web-btn.ic .pn-i, .pn-sub-acts .pn-sub-more .pn-i { width: 16px; height: 16px; }
+.pn-sub-acts .pn-web-btn.ic, .pn-sub-acts .pn-sub-fold, .pn-sub-acts .pn-sub-more { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; }
+.pn-sub-acts .pn-web-btn.ic .pn-i, .pn-sub-acts .pn-sub-fold .pn-i, .pn-sub-acts .pn-sub-more .pn-i { width: 16px; height: 16px; }
 .pn-sub-acts .pn-sub-more[hidden] { display: none; }
 .pn-pane.dock-top .pn-sub-acts .pn-tab-more.pn-sub-list { display: inline-flex; align-items: center; gap: 2px; width: auto; height: 34px; padding: 0 6px 0 10px;
   border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: 14px; font-weight: 600; }
@@ -274,14 +276,16 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 /* 넓으면 단추가 늘어서고 [⋯] 는 없다 · 좁으면(머리 줄 520 미만) 아이콘 단추를 [⋯] 하나로 접는다. 고치는 중의 [← 보기] · [저장](글자 단추)은 늘 선다. */
 .pn-sub-acts .pn-sub-more { display: none; }
 @container pnsidebar (max-width: 519px) {
-  .pn-sub-acts .pn-ed-bar .pn-web-btn.ic { display: none; }
+  .pn-sub-acts .pn-ed-bar .pn-web-btn.ic, .pn-sub-acts .pn-ed-bar .pn-sub-fold { display: none; }
   .pn-sub-acts .pn-ed-bar .pn-fine { display: none; }
   .pn-sub-acts .pn-sub-more:not([hidden]) { display: inline-flex; }
 }
-/* 파일 탭의 × — 켜진 탭은 늘 보인다(지금 보는 것을 어디서 닫는지), 다른 탭은 올리면. 아이콘 자리에 선다: 닫으면 오른쪽 탭이 그 자리로
-   미끄러져 들어와 그 탭의 × 가 바로 커서 밑에 온다(연달아 닫기). 누르는 자리는 아이콘 칸 전체(26px). */
+/* 파일 탭의 × — 탭 **오른쪽 끝**(크롬 · VS Code). 왼쪽 아이콘 자리에 두니 켜진 탭의 × 가 앞 탭 이름 바로 뒤에 붙어 «앞 탭의 ×» 로
+   읽혔다(실측). 켜진 탭은 늘 보이고(지금 보는 것을 어디서 닫는지) 다른 탭은 올리면 — 자리는 늘 비워 둬 올려도 이름이 밀리지 않는다.
+   마우스로 닫으면 오른쪽 탭이 닫힌 탭의 폭을 물려받아 그 × 가 바로 커서 밑에 온다(panes.ts closeTab — 연달아 닫기). 아이콘은 늘 선다. */
 .pn-pane.dock-top.dock-sub .pn-tabwrap.on .pn-tab-x { opacity: 1; pointer-events: auto; }
-.pn-pane.dock-top.dock-sub .pn-tabwrap.on:has(.pn-tab-x) .pn-tab-lead { visibility: hidden; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap.on:has(.pn-tab-x) .pn-tab-lead { visibility: visible; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap:hover:has(.pn-tab-x) .pn-tab-lead, .pn-pane.dock-top.dock-sub .pn-tabwrap:has(.pn-tab:focus-visible):has(.pn-tab-x) .pn-tab-lead { visibility: visible; }
 .pn-pane.dock-top.dock-sub .pn-tab-x:hover { background: var(--bg-punch); color: var(--ink); }
 /* 옆으로 미는 줄의 잘린 쪽 끝 = 흐림(panes.ts edgeFade) — 반쯤 잘린 이름표가 깨진 것이 아니라 «더 있다» 로 읽힌다. */
 .pn-pane.dock-top > .pn-tabbar > .pn-dock-slot.fade-r, .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs.fade-r {
@@ -298,14 +302,14 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-pane.dock-top.dock-sub .pn-tabwrap.on { background: none; box-shadow: none; }
 .pn-pane.dock-top.dock-sub .pn-tabwrap.on::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -6px; height: 3px;
   border-radius: 2px 2px 0 0; background: var(--ink); pointer-events: none; }
-.pn-pane.dock-top.dock-sub .pn-tab { gap: 8px; padding: 0 12px 0 10px; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--ink-sub); }
+.pn-pane.dock-top.dock-sub .pn-tab { gap: 8px; padding: 0 40px 0 10px; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--ink-sub); }
 .pn-pane.dock-top.dock-sub .pn-tabwrap:hover .pn-tab { color: var(--ink); }
 .pn-pane.dock-top.dock-sub .pn-tabwrap.on .pn-tab { font-weight: 700; color: var(--ink); }
 .pn-pane.dock-top.dock-sub .pn-tabwrap.pinned .pn-tab { gap: 8px; padding: 0 12px 0 10px; justify-content: flex-start; }
 .pn-pane.dock-top.dock-sub .pn-tabwrap.pinned .pn-tab-t { display: block; }
 .pn-pane.dock-top.dock-sub .pn-tab-lead { width: 26px; height: 26px; border-radius: 8px; }
 .pn-pane.dock-top.dock-sub .pn-tab-lead .pn-i.sm { width: 18px; height: 18px; }
-.pn-pane.dock-top.dock-sub .pn-tab-x { left: 10px; margin-top: -13px; width: 26px; height: 26px; border-radius: 7px; }
+.pn-pane.dock-top.dock-sub .pn-tab-x { left: auto; right: 8px; margin-top: -13px; width: 26px; height: 26px; border-radius: 7px; }
 .pn-pane.dock-top.dock-sub .pn-tab-x .pn-i { width: 14px; height: 14px; }
 .pn-dock[data-home="top"] .pn-dock-shelf:empty { display: none; }
 .pn-dock[data-home="top"] { position: relative; width: auto; height: 100%; pointer-events: auto; }

@@ -773,7 +773,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   sidePane.bar.append(subActs);
   const SUB_ICON: Record<string, string> = { '고치기': 'pencil', '다시 불러오기': 'undo', '파일 올리기': 'up', '내려받기': 'drop' };
   subMore.onclick = (e: MouseEvent) => {
-    const btns = [...subBarSlot.querySelectorAll('button.pn-web-btn.ic')] as HTMLButtonElement[];
+    const btns = [...subBarSlot.querySelectorAll('button.pn-sub-fold')] as HTMLButtonElement[];
     const r = subMore.getBoundingClientRect();
     ctxMenu(r.left, r.bottom + 4, btns.map((b) => {
       const label = b.getAttribute('aria-label') || b.title || '';
@@ -795,7 +795,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     syncSubMore();
   }
   /** [⋯] 는 접힐 단추(아이콘 단추)가 있을 때만 선다 — 보이기는 폭이 정한다(CSS). 부품이 머리를 다시 그리면 다시 잰다. */
-  function syncSubMore(): void { subMore.hidden = !subBarSlot.querySelector('button.pn-web-btn.ic'); }
+  function syncSubMore(): void {
+    //  접을 단추 = 글자 없이 아이콘만 든 단추(고치기 · 다시 불러오기 · 올리기 · 내려받기). [← 보기] · [저장] 같은 글자 단추는 늘 선다.
+    for (const b of subBarSlot.querySelectorAll('button.pn-web-btn')) b.classList.toggle('pn-sub-fold', !(b.textContent || '').trim());
+    subMore.hidden = !subBarSlot.querySelector('button.pn-sub-fold');
+  }
   if (typeof MutationObserver === 'function') new MutationObserver(syncSubMore).observe(subBarSlot, { childList: true, subtree: true });
   const dockTop = (): boolean => !narrow();
   //  곁칸 폭에 다 안 들어가면 독은 줄 안에서 옆으로 민다(pane-dock fit) — 세로 휠로도 밀고(탭 띠와 같은 문법), 잘린 쪽 끝은 흐린다.
@@ -1254,7 +1258,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   /** 사람이 탭 하나를 닫았다(× · 휠 클릭 · 메뉴 · Delete). 마우스로 닫았으면 그 줄의 폭을 얼린다 — 다음 탭의 × 가 커서 밑에 온다. */
   function closeTab(zone: Zone, key: TabKey, o?: { pointer?: boolean }): void {
     const pane = panes.get(zone);
-    if (o?.pointer && pane && !narrow()) freeze(pane);
+    if (o?.pointer && pane && !narrow()) {
+      freeze(pane);
+      //  #5319 파일 탭 줄은 × 가 탭 오른쪽 끝이다 — 닫힌 자리로 미끄러져 들어올 오른쪽 탭이 닫힌 탭의 폭을 물려받아야 그 × 가
+      //   바로 커서 밑에 온다(크롬). 켜지더라도 그 폭을 지킨다(frozenAct). 줄에서 손을 떼면 풀려 제 폭으로 돌아간다(thaw).
+      if (pane.root.classList.contains('dock-sub') && pane.frozen) {
+        const ws = wrapsOf(pane);
+        const nx = ws[ws.findIndex((w) => w.dataset.tab === key) + 1]?.dataset.tab;
+        const px = pane.frozen.get(key);
+        if (nx && px != null) { pane.frozen.set(nx, px); if (pane.frozenAct === key) pane.frozenAct = nx; }
+      }
+    }
     removeTab(zone, key);
   }
   /** 닫은 탭을 [닫은 탭 다시 열기] 더미에 쌓는다 — 한 번에 닫은 것이 한 묶음(크롬: 한꺼번에 닫은 것은 한꺼번에 돌아온다). */
