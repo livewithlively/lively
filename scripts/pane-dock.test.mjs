@@ -274,12 +274,16 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
 //  #5319 독 아래 탭 줄(2026-11-05 — 뷰어 여럿 중 하나를 고를 수 없었다 · «탭 사이즈가 충분히 크게»).
 {
   const TABS_LIB = read("web/lib/pane-tabs.ts");
-  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions' && \(isFileTab\(k\) \|\| \(counts\.get\(tabBase\(k\)\) \?\? 0\) >= 2\);/.test(PANES_TS)
+  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions';/.test(PANES_TS)
+    && /const MUST_APP: TabKey = 'console';/.test(PANES_TS) && /if \(isDefaultApp\(key\)\) return;/.test(PANES_TS)
+    && /function isPinned\(k: TabKey\): boolean \{ return lay\.pin\.includes\(k\) \|\| isDefaultApp\(k\); \}/.test(PANES_TS)
+    && /label: isDefaultApp\(key\) \? '기본 앱에서 빼기' : '기본 앱으로 두기', icon: 'pin', off: key === MUST_APP,/.test(PANES_TS)
+    && /ensureDefaultApps\(\);\n\s*saveLayout\(\);   \/\/ loadLayout/.test(PANES_TS)
     && /&& !\(!narrow\(\) && isFileTab\(k\) && lay\.side\.includes\(k\)\)\);/.test(PANES_TS)
     && /const sub = top && list\.some\(inSub\);/.test(PANES_TS)
     && /w\.classList\.toggle\('pn-sub-off', top && !inSub\(k\)\)/.test(PANES_TS)
     && /classList\.contains\('pn-tabwrap'\) && !n\.classList\.contains\('pn-sub-off'\)/.test(PANES_TS),
-    "W16k 독 아래 탭 줄 = 파일(뷰어) 탭은 하나라도 · 다른 앱은 둘 이상 떴을 때(켜진 앱과 무관) — 독엔 [뷰어] 칸이 없다 · 하나뿐인 앱은 독 아이콘이 곧 탭 · 숨은 탭은 폭을 나눠 갖지 않는다");
+    "W16k 독 아래 탭 줄 = 열린 탭 전부(파일 · 앱, 켜진 앱과 무관) — 독엔 [뷰어] 칸이 없다 · 기본 앱(콘솔은 늘 · 사람마다 더하기)은 늘 열려 있고 × 없음 · 숨은 탭은 폭을 나눠 갖지 않는다");
   check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: flex; flex-wrap: wrap;/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar::after \{ content: ""; order: 1; flex: 0 0 100%; height: 0; \}/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ order: 0; flex: 1 1 0; min-width: 0; height: calc\(var\(--pn-bighead-h, 113px\) - 1px\); \}/.test(DOCK_CSS)
