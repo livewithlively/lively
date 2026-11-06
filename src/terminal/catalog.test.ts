@@ -11,7 +11,30 @@ test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그�
   assert.ok(models.includes("gpt-5.6-sol") && models.includes("gpt-5.6-terra") && models.includes("gpt-5.6-luna"));
   assert.ok(c.effortsByModel?.["gpt-5.6-sol"]?.includes("ultra"));
   assert.ok(!c.effortsByModel?.["gpt-5.6-luna"]?.includes("ultra"));
-  assert.ok(c.effortsByModel?.["gpt-5.4-mini"]?.includes("xhigh"));
+  //  #5332 — 0.166.0 `codex debug models` 실측: 6.1-sol·6-sol·6-luna 가 생기고 5.5·5.4·5.4-mini 는 빠졌다(고르면 «unavailable»).
+  assert.ok(models.includes("gpt-6-sol") && models.includes("gpt-6-luna"));
+  //  #5332 2차 — 배포된 codex(0.157.1)가 못 받는 모델은 목록에 두지 않는다(매 턴 400 model_not_found).
+  assert.ok(!models.includes("gpt-6.1-sol"), "0.157.1 은 gpt-6.1-sol 을 모른다");
+  assert.ok(!models.some((m) => m === "gpt-5.5" || m.startsWith("gpt-5.4")));
+  assert.ok(!c.effortsByModel?.["gpt-6-luna"]?.includes("ultra"));
+  //  모든 모델이 강도 목록을 갖는다 — 없으면 화면이 강도 칸을 못 좁힌다.
+  for (const m of models.filter(Boolean)) assert.ok(c.effortsByModel?.[m]?.length, m);
+});
+
+test("#5332 Codex 는 떠 있는 세션에서 /model 한 줄로 바꾼다 — 강도는 --reasoning= 로만", () => {
+  const c = HARNESSES.find((h) => h.key === "codex")!;
+  assert.equal(c.runtimeCmd?.model?.("gpt-6-luna"), "/model gpt-6-luna");
+  assert.equal(c.runtimeCmd?.effort?.("xhigh"), "/model --reasoning=xhigh");
+  assert.equal(c.runtimeCmd?.both?.("gpt-5.6-terra", "high"), "/model gpt-5.6-terra --reasoning=high");
+  //  치워 두기 키는 없다 — Ctrl+C 는 빈 입력칸이면 codex 를 끈다(실측). 키를 붙이면 그 사고가 난다.
+  assert.equal(c.runtimeDraftStash, undefined);
+});
+
+test("#5332 Codex TUI 는 alt 화면 없이 뜬다 — 이어 열기 한 줄에도 붙는다", () => {
+  const c = HARNESSES.find((h) => h.key === "codex")!;
+  assert.deepEqual(c.tuiArgv, ["--no-alt-screen"]);
+  assert.equal(harnessResumeCommand("codex", "abc-123"), "codex resume abc-123 --no-alt-screen");
+  assert.equal(HARNESSES.find((h) => h.key === "claude")!.tuiArgv, undefined);
 });
 
 test("설치된 각 하네스의 현행 모델 목록을 반영한다", () => {
@@ -313,7 +336,7 @@ test("[#2439] 대화 런타임 세션의 pane 은 셸이고, 안내가 하네스
 // ── #4135 셸에서 대화를 이어 여는 한 줄 — 대화를 터미널로 넘길 때 그 pane(셸)에 우리가 친다 ──
 //  종전엔 화면이 «codex resume 01a0cf18… 으로 이어가세요» 라고 **잘린 id** 를 토스트로 말해, 사람이 칠 수가 없었다.
 test("harnessResumeCommand — 표(resumeArgv)가 명령 모양을 소유한다", () => {
-  assert.equal(harnessResumeCommand("codex", "01a0cf18-7254-7cc1-b897-288b4c4cc9ac"), "codex resume 01a0cf18-7254-7cc1-b897-288b4c4cc9ac");
+  assert.equal(harnessResumeCommand("codex", "01a0cf18-7254-7cc1-b897-288b4c4cc9ac"), "codex resume 01a0cf18-7254-7cc1-b897-288b4c4cc9ac --no-alt-screen");
   assert.equal(harnessResumeCommand("claude", "0199f0e1-1111-4222-8333-444455556666"), "claude --resume 0199f0e1-1111-4222-8333-444455556666");
 });
 

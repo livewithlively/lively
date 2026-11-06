@@ -729,6 +729,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       cmd.push(...ra);
       resumeArgc = ra.length;
     }
+    //  #5332 — TUI 로 띄울 때 늘 붙이는 인자(codex `--no-alt-screen` — catalog tuiArgv 머리말). 서브커맨드(resume·fork) 뒤에 둔다.
+    //   셸 pane 으로 뜨는 길(app-server·대화 런타임·로그인)은 이 cmd 를 실행하지 않으므로 거기엔 영향이 없다.
+    if (harness.tuiArgv?.length) cmd.push(...harness.tuiArgv);
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];
       if (raw === undefined || raw === null || raw === "") continue;
