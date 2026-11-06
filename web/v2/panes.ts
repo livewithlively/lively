@@ -265,6 +265,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   /** 한꺼번에 닫기에서 빠지는 탭 — 고정 탭 · 붙은 앱(닫기 = 이 세션에서 떼기라 다른 일이 생긴다). */
   function keepInBulk(k: TabKey): boolean { return isPinned(k) || DERIVED_TABS.has(tabBase(k)); }
   function isFileTab(k: TabKey): boolean { return tabBase(k) === 'editor'; }
+  /** 탭이 속한 앱 — 뷰어(파일) 탭은 «자료» 앱 것이다(거기서 열리고, 독엔 [뷰어] 칸이 없다). #5319 독 아래 줄 · 독의 켜진 칸이 이걸로 묶는다. */
+  function appOf(k: TabKey): string { return isFileTab(k) ? 'files' : tabBase(k); }
   //  끌어 옮기기(v2/pane-tabdrag)에 넘기는 손 — 보이는 칸 · 갈 수 있는 칸 · 고정 경계 · 놓은 자리.
   const dragHost: TabDragHost = {
     bars: (): DragBar[] => [...panes.values()]
@@ -1741,9 +1743,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //   독 = 앱(한 앱에 한 칸), 이 줄 = **파일**과 여럿 뜬 앱의 하나하나. 뷰어(파일) 탭은 하나라도 늘 이 줄에 서고 독에는 [뷰어] 칸을
     //   세우지 않는다(dockKeys — 같은 것이 두 번 서지 않게, 그리고 곁칸이 좁을 때 독이 넘치지 않게). 켜진 앱과 무관하게 선다: 자료를
     //   보다가 PDF 셋 중 둘째로 한 번에 간다(자료 ↔ 파일 오가기).
-    //  ★ 앱 탭도 **늘** 선다(원준 2026-11-06 «앱 탭도 항상 보이게») — 처음엔 둘 이상 뜬 앱만 세웠는데(하나면 독 아이콘이 곧 탭), 독을 눌렀는데
-    //   아래 줄이 비는 게 «안 뜬다» 로 읽혔다. 기본 앱(콘솔)이 늘 열려 있으니 이 줄은 빌 일이 없다.
-    const inSub = (k: TabKey): boolean => tabBase(k) !== 'sessions';
+    //  ★ 줄엔 **켜진 앱의 탭만** 선다(원준 2026-11-06 «특정 앱 누르면 특정 앱의 탭만 보이게 해야지 위계상 그게 맞을 듯 · 없으면 하나 새로 여는 거고»)
+    //   — 독 = 앱, 줄 = 그 앱의 탭들. 뷰어(파일) 탭은 «자료» 앱 몫이라 자료를 누르면 [자료] 뒤에 열어 둔 파일들이 선다(appOf). 그 전엔 열린 탭 전부를
+    //   세웠는데 자료부터 웹까지 섞여 «정신이 없다». 탭이 없는 앱을 누르면 독이 하나 연다(pane-dock dockClick 'open').
+    const actK = pane.act ?? lay.act[zone];
+    const actApp = actK ? appOf(actK) : null;
+    const inSub = (k: TabKey): boolean => tabBase(k) !== 'sessions' && !!actApp && appOf(k) === actApp;
     const sub = top && list.some(inSub);
     pane.root.classList.toggle('dock-sub', sub);
     for (const [k, w] of tabNodes(pane)) w.classList.toggle('pn-sub-off', top && !inSub(k));
@@ -2074,6 +2079,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     apps: dockApps,
     tabs: () => dockKeys().map((k) => ({ key: k, type: tabBase(k) })),
     act: () => panes.get('side')?.act ?? null,
+    actApp: () => { const a = panes.get('side')?.act ?? null; return a ? appOf(a) : null; },   // #5319 파일 탭이 켜져 있으면 독의 [자료] 가 켜진다
     recent: () => [...recent.side, ...recent.bottom],
     title: (k) => tabName(k),
     face: (k) => tabFaces.get(k) ?? null,
