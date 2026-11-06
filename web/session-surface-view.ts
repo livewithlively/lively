@@ -292,3 +292,25 @@ export function answersReady(
 ): boolean {
   return questions.every((_, i) => (picked[i]?.length ?? 0) > 0);
 }
+
+/**
+ * (순수) 다시 붙은 통로가 준 «지금 걸린 물음 id 전부» 로, 화면에 남은 카드 중 **접을 것**을 고른다 (#5398).
+ *
+ *  화면은 숨으면 상태 통로를 끊는다(web/session-events.ts ★ — 평문 http 의 6연결 한도). 끊긴 동안 다른 창에서 답했거나
+ *   시간이 다해 닫힌 물음은 «닫혔다»(permission.resolved · approval-done)를 못 받았으니, 그 카드는 누를 수 없는 버튼으로 남는다.
+ *   서버가 붙는 순간 주는 전체 목록이 그것을 가르는 근거다.
+ *  · 목록에 없는 카드 → 접는다(끊긴 동안 닫혔다).
+ *  · 답을 보내는 중인 카드(busy) → 건드리지 않는다. 그 답이 고른 라벨로 접는다 — «닫힘» 으로 덮으면 무엇을 골랐는지 사라진다.
+ *  · 목록이 배열이 아니면(그 칸이 없는 옛 서버) → 아무것도 접지 않는다. 모르면 지우지 않는다.
+ *  id 는 글자로 견준다(서버가 숫자로 보내도 같은 카드다).
+ *
+ * @param cards 화면의 카드들 — [id, 답을 보내는 중인가]
+ * @param openIds 서버가 준 «지금 걸린 id 전부»
+ */
+export function staleAskIds(cards: Iterable<readonly [string, boolean]>, openIds: unknown): string[] {
+  if (!Array.isArray(openIds)) return [];
+  const open = new Set(openIds.map((x) => String(x)));
+  const out: string[] = [];
+  for (const [id, busy] of cards) if (!busy && !open.has(String(id))) out.push(String(id));
+  return out;
+}

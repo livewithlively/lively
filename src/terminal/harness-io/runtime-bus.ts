@@ -21,7 +21,7 @@
 //  codex 런타임(codex-chat-runtime.ts)은 매니지드 프로덕션에서 돌고 있다. 새 코드를 먼저 이 위에서
 //  세우고, codex 이관은 그 뒤에 별도로 한다 — 도는 것을 리팩터와 함께 흔들지 않는다.
 import { logger } from "../../log.js";
-import { applyTaskEvent, type SessionEvent, type TaskInfo } from "./session-event.js";
+import { applyTaskEvent, type PermissionAsk, type SessionEvent, type SessionFacts, type TaskInfo, type UsageInfo } from "./session-event.js";
 
 type Listener = (e: SessionEvent) => void;
 
@@ -47,6 +47,64 @@ const tasks = new Map<string, TaskInfo[]>();
 /** 지금 이 세션에서 도는(또는 방금 끝난) 작업들 — 화면이 새로 붙었을 때 되그리는 재료. */
 export function sessionTasks(sessionId: string): TaskInfo[] {
   return [...(tasks.get(sessionId) ?? [])];
+}
+
+//  ── 사실 · 사용량 — 화면이 다시 붙을 때 되그리는 재료 (#5398) ──────────────────────────────
+//  화면은 숨으면 이 통로를 끊는다(web/session-events.ts ★ — 평문 http 의 6연결 한도). 그 사이 하네스가 보낸 사실(모델 ·
+//   슬래시 목록)과 사용량은 화면이 못 받는다. 그래서 마지막 것을 들고 있다가 붙는 순간 다시 준다(routes.ts `/events`).
+//  · 사실은 **겹친다** — 하네스가 조각조각 보낸다(모델 따로, 슬래시 따로). 화면도 같은 규칙으로 겹친다(session-tasks.ts).
+//  · 사용량은 **말할 것이 있는 것만** 바꾼다 — 값 없는 사용량(턴 끝 신호)이 앞의 숫자를 지우지 않는다(화면의 규칙과 같다).
+const facts = new Map<string, SessionFacts>();
+const usage = new Map<string, UsageInfo>();
+/** 들고 있는 세션 수의 상한 — 끝날 때 비우는 런타임(claude)만 있는 게 아니라(노드 · codex) 가장 오래 안 바뀐 것부터 놓는다. */
+export const KEPT_SESSIONS_MAX = 500;
+/** 맨 뒤(가장 최근)로 옮겨 넣고, 넘치면 맨 앞(가장 오래 안 바뀐 것)부터 버린다. */
+function keep<V>(m: Map<string, V>, id: string, v: V): void {
+  m.delete(id);
+  m.set(id, v);
+  while (m.size > KEPT_SESSIONS_MAX) {
+    const first = m.keys().next();
+    if (first.done) break;
+    m.delete(first.value);
+  }
+}
+
+/** 이 세션의 마지막 사실(겹친 것). 받은 적이 없으면 null. */
+export function sessionFacts(sessionId: string): SessionFacts | null {
+  const f = facts.get(sessionId);
+  return f ? structuredClone(f) : null;   // 사본 — 받는 쪽이 고쳐도 들고 있는 값이 안 바뀐다
+}
+/** 이 세션의 마지막 사용량(말할 것이 있던 것). 받은 적이 없으면 null. */
+export function sessionUsage(sessionId: string): UsageInfo | null {
+  const u = usage.get(sessionId);
+  return u ? structuredClone(u) : null;
+}
+/**
+ * (순수) 이 사용량이 화면의 사용량 줄을 바꿀 수 있나 — 한도 창(utilization)에 숫자가 하나라도 있어야 한다.
+ *  화면은 한도 창만 그린다(web/session-surface-view.ts usageLine). 토큰 · 비용만 있는 것이나 빈 것(턴 끝 신호)은
+ *  화면이 받아도 앞의 줄을 그대로 둔다 — 그런 것으로 들고 있던 값을 덮으면 다시 붙는 화면이 줄을 잃는다.
+ */
+export function usageHasValue(u: UsageInfo | null | undefined): boolean {
+  if (!u || typeof u !== "object" || !u.utilization || typeof u.utilization !== "object") return false;
+  return Object.values(u.utilization).some((v) => typeof v === "number" && Number.isFinite(v));
+}
+
+/**
+ * 화면이 이 세션 통로에 **붙는 순간** 줄 머리 — 지금 상태 전부 (#5398). 라우트(routes.ts `/events`)가 이것을 그대로 보낸다.
+ *  화면은 숨으면 끊는다(web/session-events.ts ★). 그 사이 흐른 것은 못 받았으니 붙는 자리가 곧 재동기의 자리다.
+ *  순서: 작업 목록(비어도 — 그사이 끝나 비었으면 화면도 비운다) → 사실 → 사용량 → 걸린 물음 하나하나
+ *   → 걸린 물음 id 전부(비어도 — 끊긴 동안 닫힌 카드를 화면이 접는 근거).
+ */
+export function connectHead(sessionId: string): SessionEvent[] {
+  const out: SessionEvent[] = [{ t: "tasks.snapshot", tasks: sessionTasks(sessionId) }];
+  const f = sessionFacts(sessionId);
+  if (f) out.push({ t: "facts", facts: f });
+  const u = sessionUsage(sessionId);
+  if (u) out.push({ t: "usage", usage: u });
+  const asks = pendingAsks(sessionId);
+  for (const a of asks) out.push({ t: "permission.asked", ask: a.ask as PermissionAsk });
+  out.push({ t: "permission.pending", ids: asks.map((a) => a.id) });
+  return out;
 }
 
 /** 세션의 이벤트를 구독한다. 반환값을 부르면 해지. */
@@ -82,6 +140,14 @@ export function emitSessionEvent(sessionId: string, e: SessionEvent): void {
     const next = applyTaskEvent(tasks.get(sessionId) ?? [], e);
     tasks.set(sessionId, next);
     out = { t: "tasks.snapshot", tasks: next };
+  }
+  //  #5398 — 다시 붙는 화면에 줄 마지막 사실 · 사용량(위 «사실 · 사용량» 절). 흘리는 것은 받은 그대로다.
+  //   ⚠ 들고 있기가 흘리기를 막지 않는다 — 복사에 실패해도(복사할 수 없는 값) 그 사건은 그대로 흘린다.
+  try {
+    if (e.t === "facts" && e.facts && typeof e.facts === "object") keep(facts, sessionId, { ...(facts.get(sessionId) ?? {}), ...structuredClone(e.facts) });
+    if (e.t === "usage" && usageHasValue(e.usage)) keep(usage, sessionId, structuredClone(e.usage));
+  } catch (err) {
+    logger.warn({ sessionId, t: e.t, err: (err as Error)?.message }, "다시 붙는 화면에 줄 사실·사용량을 들지 못했다 — 사건은 그대로 흘린다");
   }
   const set = listeners.get(sessionId);
   if (!set) return;
@@ -164,9 +230,14 @@ export function resetSessionBus(sessionId: string): void {
   settleAll(sessionId, "reset");
   listeners.delete(sessionId);
   tasks.delete(sessionId);
+  facts.delete(sessionId);
+  usage.delete(sessionId);
 }
 
-/** 런타임이 끝났다 — 작업 목록도 비운다(죽은 세션의 «도는 중» 이 화면에 남지 않게). */
+/** 런타임이 끝났다 — 작업 목록도 비운다(죽은 세션의 «도는 중» 이 화면에 남지 않게).
+ *  #5398 — 다시 붙는 화면에 줄 사실 · 사용량도 함께 비운다: 끝난 런타임의 것을 새로 연 화면에 되살리지 않는다(종전과 같은 그림). */
 export function clearSessionTasks(sessionId: string): void {
   tasks.delete(sessionId);
+  facts.delete(sessionId);
+  usage.delete(sessionId);
 }
