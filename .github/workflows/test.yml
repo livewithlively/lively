@@ -134,6 +134,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/auth/session-revoke.pg-test.mjs
+      # NAS 파일 도구(#1678) — 목으로는 못 보는 것: 본인 칸이 없을 때 관리자 칸의 공용 계정으로 **폴백하지 않나** · 서버 주소를
+      #  관리자 칸에서만 읽나(구성원이 정한 주소로 붙지 않나) · 내려받기가 실제 쿠키 세션으로만 열리고 유효한 Bearer 는 401 인가 ·
+      #  매니지드에서 꺼지나 · 이전 색인이 있을 때 다시 만들기 실패의 원문이 nas_find 응답에 실리지 않나. 금고 칸·세션·토큰이 실물이어야 갈린다.
+      - name: NAS 파일 도구 접속·내려받기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/net/nas/nas-access.pg-test.mjs
       # ④-c 세션 «보임 축»(#3855·#3857) — 목으로는 못 보는 것: **치움이 실제로 남는가 · 되살리기가 풀지 않는가**.
       #    치움의 정본은 org_app_instance 두 칸(status·closed_reason)이고 판정이 전부 SQL 조건이라, 조건 하나를
       #    지워도 목 풀은 초록이다. 사유로 사람/시스템을 가르는지 · 멱등 · 남의 행 불가 · restore 승계를 read-back 으로 본다.
