@@ -246,13 +246,18 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
    독 줄 높이(--pn-bighead-h)는 그대로 — 이 줄의 윗선이 세션 머리줄 아랫선과 한 줄로 잇는다. 격자로 세운다(flex-wrap 이면 독 아이콘이
    많을 때 [＋] 가 둘째 줄로 떨어진다). 탭은 KRDS 크기: 높이 40 · 글자 15/500 · 아이콘 18. 쉴 때는 글자만, 켜진 탭 = 굵게 + 밑줄 3px
    (독 이름표와 같은 말 — 색만으로 말하지 않는다). 아이콘으로 접지 않고 이름을 남긴 채 미끄러진다(lib/pane-tabs SUB_TAB_METRICS). */
-.pn-pane.dock-top.dock-sub > .pn-tabbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: calc(var(--pn-bighead-h, 113px) - 1px) 53px;
+.pn-pane.dock-top.dock-sub > .pn-tabbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: calc(var(--pn-bighead-h, 113px) - 1px) auto;
   height: auto; column-gap: 4px;
   background: linear-gradient(var(--line), var(--line)) 0 calc(var(--pn-bighead-h, 113px) - 1px) / 100% 1px no-repeat, var(--bg); }   /* 두 줄 사이 선 — 줄 끝 흐림(mask)에 같이 흐려지지 않게 바탕에 긋는다 */
 .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { grid-row: 1; grid-column: 1; }
 .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { grid-row: 1; grid-column: 2; }
 .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs { display: flex; grid-row: 2; grid-column: 1 / -1; margin: 0 -8px; padding: 1px 8px 0; gap: 4px;
   align-items: stretch; }
+/* 줄을 바꿔 다 보인다 — 열어 둔 파일 하나하나가 늘 눈에 보이고 한 번에 눌린다(옆으로 미끄러지면 가려진 파일을 찾아 밀어야 한다).
+   한 줄 52 = 탭 40 + 위아래 6. 세 줄(파일 예닐곱 개)을 넘으면 그 안에서 세로로 민다. */
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs { flex-wrap: wrap; align-content: flex-start; row-gap: 0; overflow-x: hidden; overflow-y: auto;
+  max-height: calc(52px * 3 + 1px); }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs > .pn-tabwrap { height: 40px; max-width: 100%; }
 /* 옆으로 미는 줄의 잘린 쪽 끝 = 흐림(panes.ts edgeFade) — 반쯤 잘린 이름표가 깨진 것이 아니라 «더 있다» 로 읽힌다. */
 .pn-pane.dock-top > .pn-tabbar > .pn-dock-slot.fade-r, .pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs.fade-r {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent); }

@@ -47,7 +47,7 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, seedConsoleTab, showZone, stripRoom, SUB_TAB_METRICS, TAB_METRICS, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, seedConsoleTab, showZone, stripRoom, SUB_TAB_METRICS, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
@@ -659,21 +659,22 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  탭이 나눠 쓸 폭 = 띠 안 폭 − 좌우 안 여백 − 탭 사이 간격(#4443 탭 새 옷 — lib/pane-tabs stripRoom 머리말).
     const cs = getComputedStyle(p.tabs);
     const room = (cw: number): number => stripRoom(cw, parseFloat(cs.paddingLeft) || 0, parseFloat(cs.paddingRight) || 0, parseFloat(cs.columnGap) || 0, wraps.length);
-    //  #5319 독 아래 탭 줄은 큰 탭이고 아이콘으로 접지 않는다 — 같은 뷰어 아이콘만 남으면 어느 파일인지 모른다. 이름을 남긴 채 미끄러진다.
-    const sub = p.root.classList.contains('dock-sub');
-    const met = sub ? SUB_TAB_METRICS : TAB_METRICS;
-    let plan = planTabs(tabsIn, room(full), met);
+    //  #5319 독 아래 큰 탭 줄은 접지도 옆으로 미끄러지지도 않고 **줄을 바꿔 다 보인다**(42-v2-dock.css flex-wrap) — 열어 둔 파일이
+    //   몇 개든 하나하나가 늘 눈에 보이고 한 번에 눌린다(«뷰어 여러개 떠있을때 특정한걸 선택할수가 없음»). 폭은 제 이름만큼(상한 max).
+    if (p.root.classList.contains('dock-sub')) {
+      const m = SUB_TAB_METRICS;
+      wraps.forEach((w, i) => { const t = tabsIn[i]; w.style.width = Math.max(m.icon, Math.min(Math.ceil(t.natural), t.active ? m.activeMax : m.max)) + 'px'; });
+      fitTitles(p);
+      syncMore(p);
+      return;
+    }
+    let plan = planTabs(tabsIn, room(full));
     if (plan.mode !== 'full') {
       p.bar.classList.add('shrunk');                            // ⌄ 가 선다 — 그 폭을 뺀 줄에 다시 앉힌다
-      plan = planTabs(tabsIn, room(p.tabs.clientWidth), met);
-    }
-    //  큰 탭 줄은 아이콘 폭으로 접는 대신 이름을 남긴 바닥 폭(minLabel)에서 멈추고 줄이 미끄러진다.
-    if (sub && plan.mode === 'icons') {
-      const pw = plan.widths;
-      plan = { ...plan, widths: tabsIn.map((t, i) => (t.active && !t.pinned ? pw[i] : Math.min(Math.max(met.icon, Math.ceil(t.natural)), met.minLabel))) };
+      plan = planTabs(tabsIn, room(p.tabs.clientWidth));
     }
     wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
-    p.bar.classList.toggle('compact', plan.mode === 'icons' && !sub);
+    p.bar.classList.toggle('compact', plan.mode === 'icons');
     fitTitles(p);
     syncMore(p);        // 접고도 남는 넘침만 '더 있다'(그늘)로 말한다
   }
@@ -1647,9 +1648,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     for (const [k, w] of tabNodes(pane)) w.classList.toggle('pn-sub-off', top && !inSub(k));
     if (top) {
       sideHide = null;
-      //  [열린 탭 ∨] — 독 아래 줄이 섰을 때만 만들고, 보이기는 그 줄이 넘칠 때뿐이다(CSS 42-v2-dock.css .dock-sub). 다 보이면 같은 것을 두 번 말한다.
+      //  [열린 탭 ∨] 은 세우지 않는다 — 독 아래 탭 줄이 줄을 바꿔 하나하나를 다 보인다(같은 것을 두 번 말하지 않게 · 독 줄 폭도 아낀다).
       pane.tail.replaceChildren(...[
-        sub ? moreBtn(zone) : null,
         sessionOnly ? null : addBtn(zone),
       ].filter(Boolean) as HTMLElement[]);
       pane.bar.hidden = false;
@@ -1666,7 +1666,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (pane.frozen) applyFreeze(pane); else fit(pane);
     // 켜진 탭이 띠 밖으로 밀려 있으면 끌어온다(셸 탭 줄과 같은 문법 — tabs.ts). 'nearest' 라 이미 보이면 안 움직인다.
     const onTab = pane.tabs.querySelector('.pn-tabwrap.on') as HTMLElement | null;
-    if (onTab && pane.tabs.scrollWidth > pane.tabs.clientWidth + 1) onTab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    if (onTab && (pane.tabs.scrollWidth > pane.tabs.clientWidth + 1 || pane.tabs.scrollHeight > pane.tabs.clientHeight + 1)) onTab.scrollIntoView({ inline: 'nearest', block: 'nearest' });   // 큰 탭 줄은 세 줄 넘으면 세로로 민다
 
     // 켜진 부품만 보이게(나머지는 살려 둔 채 숨긴다 — 탭을 오가도 대화·스크롤이 그대로다).
     if (act) ensurePart(pane, act);
