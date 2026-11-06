@@ -371,8 +371,9 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
   //  (stdio 프록시로 가면 이 헤더들은 프록시가 상류 호출에 붙인다 — 같은 이름·같은 값, 출처만 설정→env/토큰파일.)
   //  Windows 는 심 대신 node 직결(stdio-launch.mjs 머리말 — 배치 실행이 막힌 PC 에서 심이 못 뜬다).
+  const cliPath = join(LIVELY, "lib", "lively.mjs");
   const stdio = (sub) => stdioLaunch
-    ? stdioLaunch.livelyStdioEntry({ win: process.platform === "win32", shim, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs"), sub })
+    ? stdioLaunch.livelyStdioEntry({ win: process.platform === "win32", shim, nodeExe: process.execPath, cliPath, sub })
     : { type: "stdio", command: shim, args: [sub], env: {} };
   want["lively"] = canProxy
     ? stdio("mcp")
@@ -402,17 +403,24 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   for (const [name, entry] of Object.entries(want)) {
     const cur = servers[name];
     if (!cur) { servers[name] = entry; added++; log(`MCP additive 등록: ${name}`); continue; } // 없는 서버 = 통째로 add(종전)
-    // #1079 — additive 무손실의 **유일한 예외**: 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
-    //  이건 '멤버 값 덮어쓰기'가 아니라 **우리가 심은 항목의 전송방식 교정**이다(같은 게이트웨이·같은 신원·같은 툴 이름).
-    //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
-    // 두 번째 예외 — 우리가 심은 심 직결형(lively.cmd)을 node 직결로 옮긴다. 사람이 바꾼 항목(command·args 가 다름)은 그대로 둔다.
-    if ((name === "lively" || name === "lively-local") && entry.type === "stdio" && entry.command !== shim
-        && stdioLaunch && stdioLaunch.isOurShimEntry(cur, shim, entry.args[entry.args.length - 1])) {
-      //  사람이 붙인 env 는 이월한다 — command·args 만 우리 것이라고 판정했으므로 그 밖의 값은 멤버 값이다.
-      servers[name] = { ...entry, env: (cur.env && typeof cur.env === "object" && !Array.isArray(cur.env)) ? cur.env : entry.env }; added++;
-      log(`MCP 실행 형태 교정: ${name} 심 → node 직결(배치 실행이 막힌 PC 대응, 다음 세션 적용)`);
+    // additive 무손실의 예외 ① — 우리가 심은 stdio 항목의 **실행 형태**만 지금 기준으로 고친다(stdio-launch.mjs correctStdioEntry):
+    //  · 심 직결형(lively.cmd) → node 직결(배치 실행이 막힌 PC 대응)
+    //  · node 직결인데 그 node.exe 가 사라진 항목 → 지금 node(설치 때 구운 버전 박힌 경로가 지워지면 MCP 가 영영 죽는다)
+    //  바꾸는 건 command·args 뿐 — env·timeout 처럼 사람이 붙인 다른 필드는 멤버 값이라 그대로 둔다. 사람이 바꾼 항목(command·args 가 다름)은 손대지 않는다.
+    //  옛 stdio-launch.mjs(이 함수 없음)와 짝이 되면 교정을 건너뛴다.
+    const fix = (name === "lively" || name === "lively-local") && typeof stdioLaunch?.correctStdioEntry === "function"
+      ? stdioLaunch.correctStdioEntry(cur, entry, { shim, cliPath, sub: name === "lively" ? "mcp" : "mcp-local", exists: existsSync })
+      : null;
+    if (fix) {
+      servers[name] = fix.entry; added++;
+      log(fix.from === "dead-node"
+        ? `MCP 실행 형태 교정: ${name} 사라진 node(${cur.command}) → ${fix.entry.command} (다음 세션 적용)`
+        : `MCP 실행 형태 교정: ${name} 심 → node 직결(배치 실행이 막힌 PC 대응, 다음 세션 적용)`);
       continue;
     }
+    // 예외 ② #1079 — 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
+    //  이건 '멤버 값 덮어쓰기'가 아니라 **우리가 심은 항목의 전송방식 교정**이다(같은 게이트웨이·같은 신원·같은 툴 이름).
+    //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
     if (name === "lively" && canProxy && cur.type !== "stdio") {
       servers[name] = entry; added++;
       log("MCP transport 마이그레이션: lively http 직결 → stdio 프록시(#1079, 다음 세션 적용)");

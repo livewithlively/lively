@@ -2,6 +2,7 @@
 // Windows 에서 lively stdio MCP 와 훅이 심(lively.cmd)·맨몸 node 대신 node.exe 절대경로로 뜨는지 — 사양 테스트.
 //  배경: 보안 솔루션이 배치 실행을 막는 PC 에서 `lively.cmd` 가 «액세스가 거부되었습니다» 로 못 뜬다(2026-11-05).
 //  CLI(livelyStdioLaunch)와 self-update(livelyStdioEntry)는 같은 규칙을 따로 갖는다 — 같은 표로 함께 시험한다.
+//  self-update 가 이미 등록된 항목을 고치는 규칙(correctStdioEntry)도 여기서 win 을 주입해 잰다(통합은 self-update.test ⑮i·⑮j).
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -15,7 +16,7 @@ process.env.LIVELY_HOME = SANDBOX;
 process.env.CLAUDE_CONFIG_DIR = join(SANDBOX, ".claude");
 mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
 
-const { livelyStdioEntry, isOurShimEntry } = await import(pathToFileURL(join(HERE, "stdio-launch.mjs")));
+const { livelyStdioEntry, isOurShimEntry, correctStdioEntry } = await import(pathToFileURL(join(HERE, "stdio-launch.mjs")));
 const { livelyStdioLaunch } = await import(pathToFileURL(join(HERE, "..", "cli", "lively.mjs")));
 const { winNodeBin, winNodeToken, connectCommandFiles } = await import(pathToFileURL(join(HERE, "..", "setup", "user-install.mjs")));
 
@@ -64,6 +65,81 @@ test("심 직결형 판정 — 우리가 심은 모양만 참", () => {
   // 이미 node 직결로 옮긴 항목은 다시 교정 대상이 아니다(멱등)
   const direct = livelyStdioEntry({ win: true, shim: SHIM, nodeExe: "C:\\n\\node.exe", cliPath: CLI, sub: "mcp" });
   assert.equal(isOurShimEntry(direct, SHIM, "mcp"), false);
+});
+
+// ── 기존 등록의 교정(self-update reconcile) ──────────────────────────────────
+//  우리 것(심 직결형 · node.exe 가 사라진 node 직결형)만 command·args 를 지금 기준으로 바꾸고 나머지 필드는 그대로 둔다.
+//  win 을 주입해 비 Windows 러너에서도 Windows 모양(node 직결)을 잰다. exists 는 가짜 — 살아 있는 경로만 참.
+const OLD_NODE = "C:\\Profiles\\홍길동\\.lively\\runtime\\node-v22.14.0-win-x64\\node.exe";
+const NEW_NODE = "C:\\Profiles\\홍길동\\.lively\\runtime\\node-v22.15.0-win-x64\\node.exe";
+const aliveOnly = (...alive) => (p) => alive.includes(p);
+const wantFor = (sub, nodeExe = NEW_NODE) => livelyStdioEntry({ win: true, shim: SHIM, nodeExe, cliPath: CLI, sub });
+const fix = (cur, sub, { want = wantFor(sub), exists = aliveOnly(NEW_NODE) } = {}) =>
+  correctStdioEntry(cur, want, { shim: SHIM, cliPath: CLI, sub, exists });
+const deadEntry = (sub, extra = {}) => ({ type: "stdio", command: OLD_NODE, args: [CLI, sub], env: {}, ...extra });
+
+for (const sub of ["mcp", "mcp-local"]) {
+  test(`교정 B1 — node.exe 가 사라진 node 직결형(${sub})은 지금 node 로`, () => {
+    const r = fix(deadEntry(sub), sub);
+    assert.equal(r?.from, "dead-node");
+    assert.deepEqual(r.entry, { type: "stdio", command: NEW_NODE, args: [CLI, sub], env: {} });
+  });
+}
+
+test("교정 B2 — 사람이 붙인 env·timeout·disabled·모르는 필드는 그대로 둔다", () => {
+  const cur = deadEntry("mcp", { env: { HTTPS_PROXY: "http://proxy.corp:8080" }, timeout: 45000, disabled: false, note: "사내 프록시" });
+  assert.deepEqual(fix(cur, "mcp")?.entry, {
+    type: "stdio", command: NEW_NODE, args: [CLI, "mcp"],
+    env: { HTTPS_PROXY: "http://proxy.corp:8080" }, timeout: 45000, disabled: false, note: "사내 프록시",
+  });
+});
+
+test("교정 B3 — 살아 있는 node 를 가리키면 지금 node 와 달라도 그대로(실행마다 오가지 않는다)", () => {
+  assert.equal(fix(deadEntry("mcp"), "mcp", { exists: aliveOnly(OLD_NODE, NEW_NODE) }), null);
+});
+
+test("교정 B4~B7 — 남의 설치·사람이 바꾼 모양·node 가 아닌 실행 파일은 경로가 죽었어도 그대로", () => {
+  const OTHER_CLI = "C:\\dev\\lively-checkout\\.lively\\lib\\lively.mjs";
+  assert.equal(fix({ type: "stdio", command: OLD_NODE, args: [OTHER_CLI, "mcp"] }, "mcp"), null);           // B4 다른 설치
+  assert.equal(fix({ type: "stdio", command: OLD_NODE, args: [CLI, "mcp", "--debug"] }, "mcp"), null);     // B5 인자 추가
+  assert.equal(fix({ type: "stdio", command: OLD_NODE, args: [CLI, "mcp"] }, "mcp-local"), null);           // B6 다른 서버
+  assert.equal(fix({ type: "stdio", command: "C:\\tools\\bun.exe", args: [CLI, "mcp"] }, "mcp"), null);     // B7 node 아님
+});
+
+test("교정 B8 — stdio 항목이 아니거나 비었으면 그대로", () => {
+  for (const cur of [{ type: "http", url: "https://gw.example/mcp" }, null, undefined, OLD_NODE]) {
+    assert.equal(fix(cur, "mcp"), null, JSON.stringify(cur));
+  }
+});
+
+test("교정 B9 — 심 직결형은 node 직결로 옮기되 사람이 붙인 env·timeout 은 그대로", () => {
+  const r = fix({ type: "stdio", command: SHIM, args: ["mcp-local"], env: { LIVELY_DEBUG: "1" }, timeout: 30000 }, "mcp-local");
+  assert.equal(r?.from, "shim");
+  assert.deepEqual(r.entry, { type: "stdio", command: NEW_NODE, args: [CLI, "mcp-local"], env: { LIVELY_DEBUG: "1" }, timeout: 30000 });
+});
+
+test("교정 B10 — 이미 지금 꼴이면 그대로(멱등) · 심 꼴 기준에서 심 직결형도 그대로", () => {
+  assert.equal(fix(wantFor("mcp"), "mcp"), null);
+  const shimWant = livelyStdioEntry({ win: false, shim: SHIM, nodeExe: NEW_NODE, cliPath: CLI, sub: "mcp" });
+  assert.equal(fix({ type: "stdio", command: SHIM, args: ["mcp"], env: {} }, "mcp", { want: shimWant }), null);
+});
+
+test("교정 B11 — 죽은 node 직결형은 지금 규칙의 대상이 심이면 심으로(필드는 그대로)", () => {
+  const shimWant = wantFor("mcp", "C:\\tools\\node22.exe");   // 절대 node.exe 가 아니다 → 심 꼴
+  const r = fix(deadEntry("mcp", { env: { A: "1" } }), "mcp", { want: shimWant });
+  assert.equal(r?.from, "dead-node");
+  assert.deepEqual(r.entry, { type: "stdio", command: SHIM, args: ["mcp"], env: { A: "1" } });
+});
+
+test("교정 B12 — 저장 표기가 대소문자·구분자만 달라도 우리 것 · UNC 죽은 경로도 교정", () => {
+  const mixed = { type: "stdio", command: OLD_NODE.replace(/\\/g, "/"), args: [CLI.replace(/\\/g, "/").toUpperCase(), "mcp"] };
+  assert.deepEqual(fix(mixed, "mcp")?.entry, { type: "stdio", command: NEW_NODE, args: [CLI, "mcp"] });
+  const unc = { type: "stdio", command: "\\\\fileserver\\tools\\node.exe", args: [CLI, "mcp"] };
+  assert.equal(fix(unc, "mcp")?.entry.command, NEW_NODE);
+});
+
+test("교정 B13 — 지금 꼴이 stdio 가 아니면(롤백 스위치 http) 손대지 않는다", () => {
+  assert.equal(fix(deadEntry("mcp"), "mcp", { want: { type: "http", url: "https://gw.example/mcp", headers: {} } }), null);
 });
 
 test("훅용 node — 절대경로 node.exe 는 forward-slash 로, 그 밖은 맨몸 node", () => {

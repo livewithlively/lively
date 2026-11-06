@@ -704,6 +704,48 @@ try {
       }
     }
 
+    // ⑮i — node 직결 항목의 node.exe 가 사라졌으면(설치 때 구운 버전 박힌 경로가 지워짐) 지금 실행 형태로 교정한다.
+    //  모양이 정확히 우리 것(args = [<우리 lively.mjs>, sub])일 때만이고, env·timeout 같은 사람이 붙인 필드는 그대로다.
+    //  플랫폼 중립: 교정 결과는 이 러너의 규칙 꼴(윈도우=node 직결, 그 밖=심)이다 — stdioLaunchOk 가 둘 다 받는다.
+    {
+      const h = freshHome("v-mcp");
+      mkdirSync(join(h, ".lively", "lib"), { recursive: true });
+      writeFileSync(join(h, ".lively", "lib", "lively-mcp-gateway.mjs"), "// proxy stub\n");   // lively 도 stdio 기준(canProxy)
+      const DEAD = "C:\\lvly-gone\\runtime\\node-v0.0.0-win-x64\\node.exe";
+      const cli = join(h, ".lively", "lib", "lively.mjs");
+      const dead = (sub, extra) => ({ type: "stdio", command: DEAD, args: [cli, sub], env: { HTTPS_PROXY: "http://proxy.corp:8080" }, ...extra });
+      const cj = join(h, ".claude.json");
+      writeFileSync(cj, JSON.stringify({ mcpServers: { lively: dead("mcp", { timeout: 45000 }), "lively-local": dead("mcp-local", { disabled: false }) } }, null, 2) + "\n");
+      await runUpdater(h, {}, ["--mcp-only"]);
+      const s = JSON.parse(readFileSync(cj, "utf8")).mcpServers || {};
+      const fixed = stdioLaunchOk(s.lively, "mcp") && stdioLaunchOk(s["lively-local"], "mcp-local")
+        && s.lively.command !== DEAD && s["lively-local"].command !== DEAD;
+      const kept = s.lively?.env?.HTTPS_PROXY === "http://proxy.corp:8080" && s.lively?.timeout === 45000
+        && s["lively-local"]?.env?.HTTPS_PROXY === "http://proxy.corp:8080" && s["lively-local"]?.disabled === false;
+      (fixed && kept)
+        ? ok("⑮i 사라진 node.exe 를 가리키는 우리 항목 → 지금 실행 형태로 교정 + env·timeout·disabled 보존")
+        : bad("⑮i 죽은 node 교정", `fixed=${fixed} kept=${kept} servers=${JSON.stringify(s)}`);
+    }
+
+    // ⑮j — 새 교정 함수가 없는 옛 stdio-launch.mjs 와 짝이 되어도(부분 복사) 업데이터가 죽지 않는다 — 빠진 등록은 여전히 additive 로 들어가고,
+    //  교정할 수 없는 항목은 그대로 둔다. (죽으면 reconcile 이 통째로 실패해 빠진 등록도 못 되살린다.)
+    {
+      const h = freshHome("v-mcp");
+      installUpdaterFixture(h);
+      writeFileSync(join(h, ".lively", "hooks", "stdio-launch.mjs"),
+        "// correctStdioEntry 가 없던 판의 공개면\n"
+        + "export function livelyStdioEntry({ shim, sub }) { return { type: \"stdio\", command: shim, args: [sub], env: {} }; }\n"
+        + "export function isOurShimEntry() { return false; }\n");
+      const deadLocal = { type: "stdio", command: "C:\\lvly-gone\\node.exe", args: [join(h, ".lively", "lib", "lively.mjs"), "mcp-local"], env: {} };
+      const cj = join(h, ".claude.json");
+      writeFileSync(cj, JSON.stringify({ mcpServers: { "lively-local": deadLocal } }, null, 2) + "\n");
+      await pExecFile(process.execPath, [join(h, ".lively", "hooks", "self-update.mjs"), "--mcp-only"], { env: env(h), timeout: 60_000 });
+      const s = JSON.parse(readFileSync(cj, "utf8")).mcpServers || {};
+      (s.lively && JSON.stringify(s["lively-local"]) === JSON.stringify(deadLocal))
+        ? ok("⑮j 교정 함수 없는 옛 stdio-launch.mjs 와 짝 — 죽지 않고 빠진 lively 는 additive 등록, 나머지는 그대로")
+        : bad("⑮j 옛 모듈 짝", `servers=${JSON.stringify(s)}`);
+    }
+
     // ⑯ #2255 — **grok 만 배선된 머신**도 자동 업데이트가 그 하네스로 돈다.
     //  종전엔 installedHarnesses() 가 claude·codex·opencode·antigravity 넷만 봐서, grok 단독 머신은 목록이
     //  비었고 `--harness ""` 로 설치기가 돌았다 → 설치기의 기본값(claude)이 잡혀 **grok 배선은 영영 갱신되지 않았다**
