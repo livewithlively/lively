@@ -13,9 +13,10 @@ t("C1 claude — 새 세션 화면과 같은 opus · high", () => {
   assert.deepEqual(sessionFlagDefaults("claude"), { "--model": "opus", "--effort": "high" });
 });
 
-t("C2 codex — gpt-5.6-sol · medium, 그 모델이 그 강도를 받는다", () => {
+//  #5332 2차 — codex 화면 기본은 배포된 두 판(0.157.1·0.166.0) 모두의 맨 윗줄 gpt-6-sol(1차의 gpt-6.1-sol 은 0.157.1 에서 매 턴 400).
+t("C2 codex — gpt-6-sol · medium, 그 모델이 그 강도를 받는다", () => {
   const f = sessionFlagDefaults("codex");
-  assert.deepEqual(f, { "--model": "gpt-5.6-sol", "--effort": "medium" });
+  assert.deepEqual(f, { "--model": "gpt-6-sol", "--effort": "medium" });
   const codex = HARNESSES.find((h) => h.key === "codex")!;
   assert.ok(codex.effortsByModel?.[f["--model"]!]?.includes(f["--effort"]!), "모델이 받지 않는 강도를 고르면 createSession 이 400 이다");
 });

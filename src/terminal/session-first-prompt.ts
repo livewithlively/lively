@@ -85,7 +85,9 @@ export const FIRST_PROMPT_PEEK_GRACE_MS = 15_000;
 //  줄머리 앵커 + Yes/No 로 시작하는 것만 = 본문이 trust 를 언급하는 것만으로는 안 걸린다(TRUST_DIALOG 와 같은 교리).
 //  ⚠ 커서 글자는 하네스마다 다르다 — claude `❯` · codex `›`(U+203A, 실측 2026-09-24) · 일부 판은 `>`.
 //   codex 를 안 넣었더니 선택지 두 줄을 읽고도 «커서를 못 찾았다»(null)로 떨어져, 신뢰 대화상자에서 아무것도 안 눌렀다.
-const TRUST_OPTION = /^[ \t]*([❯›>])?[ \t]*(\d+[.)])?[ \t]*(Yes|No|Trust|Back)\b(.*)$/i;
+//  #5332 — codex 0.157.1·0.166.0 의 신뢰 창 두 번째 줄은 «2. Quit» 이다(실측 2026-11-06 — «Back to …» 이 아니다). 그 낱말을 몰라
+//   선택지를 한 줄만 읽고 null(아무것도 안 누름)로 떨어졌다. Quit 은 Trust·Back 처럼 커서·번호가 붙은 줄에서만 센다.
+const TRUST_OPTION = /^[ \t]*([❯›>])?[ \t]*(\d+[.)])?[ \t]*(Yes|No|Trust|Back|Quit)\b(.*)$/i;
 
 /**
  * 신뢰 대화상자에서 **«Yes» 까지 몇 칸 내려가야 하나** (순수) — 못 읽으면 `null`.
@@ -119,7 +121,7 @@ export function trustAcceptDowns(tail: string[]): number | null {
     //   Yes·No 는 종전 그대로 둔다(본문이 그 낱말로 시작하는 일은 드물고, 번호 없는 실측 화면이 있다 — V263).
     const marked = !!m[1] || !!m[2];
     const word = m[3];
-    if (/^(trust|back)$/i.test(word) && !marked) continue;
+    if (/^(trust|back|quit)$/i.test(word) && !marked) continue;
     opts.push({ cursor: !!m[1], yes: /^(yes|trust)$/i.test(word), text: line.trim() });
   }
   if (opts.length < 2) return null;                       // 선택지를 못 읽었다

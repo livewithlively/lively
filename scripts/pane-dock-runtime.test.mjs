@@ -136,6 +136,8 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
     {type:'editor',name:'뷰어',glyph:'eye',hint:'파일',multi:true,pickable:false},
   ];
   const st={tabs:[{key:'files',type:'files'},{key:'web',type:'web'},{key:'web#2',type:'web'}],act:'files',recent:[]};
+  //  #5319 — 기본 다섯이 콘솔 · 프로젝트 · 자료 · 지식 · 웹으로 바뀌었다(이 시험 판엔 콘솔이 없다). 아래 R 들은 옛 다섯(타임라인 포함)을 고정한 독에서 잰다 — 그 목록을 적어 두고 시작한다.
+  localStorage.setItem('lively_v2_dock_apps', JSON.stringify(['tasks','files','knowledge','web','timeline']));
   let dock=null; let n=2;
   const host={ pane, apps:()=>APPS, tabs:()=>st.tabs, act:()=>st.act, recent:()=>st.recent, title:(k)=>'T:'+k,
     show:(k)=>{calls.push(['show',k]); st.act=k; st.recent=[k,...st.recent.filter(x=>x!==k)]; dock.sync();},
@@ -486,14 +488,14 @@ window.requestAnimationFrame=(cb)=>setTimeout(()=>cb(performance.now()),16); win
   fApp.name=oldName; await setPrefs();
   // B1 — 프로젝트 없는 세션 화면(태스크·자료·지식을 못 고른다)에서 웹 «독에서 빼기» → 안 보이는 고정은 남는다
   try{
-    localStorage.removeItem(PINK);                                        // 정한 적 없음 = 기본 다섯
+    localStorage.removeItem(PINK);                                        // 정한 적 없음 = 기본 다섯(이 판엔 콘솔이 없어 넷)
     for(const a of APPS) if(['tasks','files','knowledge'].includes(a.type)) a.pickable=false;
     dock.sync(); await frame();
     const wB=it('web'); const wBr=rc(wB);
     wB.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:cx(wBr),clientY:cy(wBr)})); await frame();
     const unpin=row('독에서 빼기'); R.b1_case=!!unpin;
     if(unpin) unpin.click(); await frame(); await sleep(40);
-    R.b1_info=pinsNow(); R.b1_hidden_kept=pinsNow()==='["tasks","files","knowledge","timeline"]';
+    R.b1_info=pinsNow(); R.b1_hidden_kept=pinsNow()==='["tasks","files","knowledge"]';
   }catch(e){R.err_b1=String(e&&e.message||e);}
   ESC(); for(const a of APPS) if(['tasks','files','knowledge'].includes(a.type)) a.pickable=true;
   dock.sync(); await frame();

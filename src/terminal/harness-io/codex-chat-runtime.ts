@@ -104,7 +104,54 @@ export function onChatEvent(sessionId: string, fn: Listener): () => void {
 }
 
 function emit(sessionId: string, e: ChatEvent): void {
+  if (e.kind === "usage") keepUsage(sessionId, e);
   for (const fn of listeners.get(sessionId) ?? []) { try { fn(e); } catch { /* 한 구독자의 실패가 나머지를 막지 않는다 */ } }
+}
+
+//  ── 마지막 사용량 — 다시 붙는 화면에 준다 (#5398) ─────────────────────────────────────────────────
+//  화면은 숨으면 이 통로를 끊는다(web/session-codex-live.ts ★ — 평문 http 의 6연결 한도). 그 사이 온 사용량은 못 받았으니
+//   붙는 순간 마지막 값을 다시 준다(routes.ts codex-chat/events). 토큰 수와 한도 % 는 따로 오므로 **겹친다**(화면도 따로 쥔다).
+const usageKept = new Map<string, { totalTokens?: number; usedPercent?: number }>();
+const USAGE_KEPT_MAX = 500;
+function keepUsage(sessionId: string, e: { totalTokens?: number; usedPercent?: number }): void {
+  const next = { ...(usageKept.get(sessionId) ?? {}) };
+  if (Number.isFinite(e.totalTokens)) next.totalTokens = Number(e.totalTokens);
+  if (Number.isFinite(e.usedPercent)) next.usedPercent = Number(e.usedPercent);
+  usageKept.delete(sessionId);
+  usageKept.set(sessionId, next);
+  //  끝날 때 비우지만(dropSession · releaseCodexChat) 그 길을 안 탄 세션이 쌓이지 않게 가장 오래 안 바뀐 것부터 놓는다.
+  while (usageKept.size > USAGE_KEPT_MAX) {
+    const first = usageKept.keys().next();
+    if (first.done) break;
+    usageKept.delete(first.value);
+  }
+}
+/** 이 세션의 마지막 사용량(토큰 수 · 한도 %). 받은 적이 없으면 null. */
+export function codexChatUsage(sessionId: string): { totalTokens?: number; usedPercent?: number } | null {
+  const u = usageKept.get(sessionId);
+  return u && (u.totalTokens !== undefined || u.usedPercent !== undefined) ? { ...u } : null;
+}
+
+/**
+ * 화면이 이 세션의 codex 통로에 **붙는 순간** 줄 머리 (#5398) — 라우트(routes.ts codex-chat/events)가 그대로 보낸다.
+ *  hello(지금 턴이 도나 · 지금 걸린 승인 id 전부) → 걸린 승인 하나하나 → 마지막 사용량.
+ *  running 은 **지금 턴이 도나**다 — 런타임이 있나(alive)가 아니다. 섞으면 조용한 세션이 영영 '작업 중'이 된다.
+ *  approvals 는 끊긴 동안(숨은 화면 · 재접속) 닫힌 승인의 카드를 화면이 접는 근거다(approval-done 을 못 받았다).
+ */
+export function codexConnectHead(sessionId: string): Array<{ kind: string; [k: string]: unknown }> {
+  const approvals = pendingApprovals(sessionId);
+  const out: Array<{ kind: string; [k: string]: unknown }> = [
+    { kind: "hello", running: !!codexChatStatus(sessionId)?.running, approvals: approvals.map((a) => a.id) },
+  ];
+  for (const a of approvals) out.push({ kind: "approval", ...a });
+  const usage = codexChatUsage(sessionId);
+  if (usage) out.push({ kind: "usage", ...usage });
+  return out;
+}
+
+/** (테스트 seam) 런타임 없이 이 세션의 실시간 사건을 흘린다 — 운영 경로는 app-server 알림이 emit 을 부른다. */
+export function _emitCodexChatEventForTest(sessionId: string, e: ChatEvent): void {
+  emit(sessionId, e);
 }
 
 /** 아직 답을 기다리는 승인들(화면이 새로 붙었을 때 되살린다 — 새로고침에 승인이 사라지면 턴이 영영 선다). */
@@ -484,6 +531,7 @@ export async function interruptCodexChat(sessionId: string): Promise<boolean> {
  */
 export function releaseCodexChat(sessionId: string): { threadId: string } | null {
   closePendings(sessionId);           // 터미널로 넘기는 마당에 대화창에 승인이 서 있으면 안 된다
+  usageKept.delete(sessionId);        // #5398 — 놓은 런타임의 사용량을 다음에 붙는 화면에 되살리지 않는다
   const e = sessions.get(sessionId);
   if (!e) return null;
   sessions.delete(sessionId);
@@ -535,6 +583,7 @@ export function codexChatPhase(sessionId: string): "busy" | "waiting" | "idle" |
 /** 세션이 끝났다 — 런타임도 같이 내린다(고아 프로세스 방지). */
 export function dropSession(sessionId: string): void {
   closePendings(sessionId);                                   // 런타임이 없어지면 그 승인들도 갈 곳이 없다
+  usageKept.delete(sessionId);                                // #5398 — 끝난 세션의 사용량을 다음에 붙는 화면에 되살리지 않는다
   const e = sessions.get(sessionId);
   if (!e) return;
   sessions.delete(sessionId);

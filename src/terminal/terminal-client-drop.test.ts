@@ -103,6 +103,15 @@ async function makeCtx(): Promise<Harness> {
     if (method === "GET") return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) });
     return new Promise(() => { /* pending */ });
   });
+  // #5361 — 진행률을 보이려고 올리기(PUT)는 XHR 로 나간다. 어느 길로 나가든 같은 기록에 남기고, 끝내지 않는다(위와 같은 범위).
+  def("XMLHttpRequest", class {
+    method = ""; url = "";
+    upload = { onprogress: null };
+    open(m: string, u: string): void { this.method = m; this.url = u; }
+    setRequestHeader(): void { /* noop */ }
+    abort(): void { /* noop */ }
+    send(): void { fetched.push(`${this.method.toUpperCase()} ${this.url}`); }
+  });
 
   const mod: any = await import(`${MOD_URL}?n=${++seq}`);
   const zone = new FakeNode("div");

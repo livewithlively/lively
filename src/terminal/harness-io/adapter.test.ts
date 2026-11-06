@@ -27,7 +27,7 @@ t("[A3] 모든 어댑터가 모든 축을 답한다(null 도 답이다 — undef
     assert.ok("answer" in a && (a.answer === null || typeof a.answer === "function"), `${a.key}.answer`);
     //  #4135 — 화면 사실 축. 하나라도 빠지면 그 하네스의 웹 터미널이 **클로드 기준으로** 움직인다(조용한 반쪽).
     assert.equal(typeof a.term, "object", `${a.key}.term`);
-    for (const f of ["appMouse", "choiceNeedsEnter", "pastePlaceholder"] as const) assert.equal(typeof a.term[f], "boolean", `${a.key}.term.${f}`);
+    for (const f of ["appMouse", "choiceNeedsEnter", "pastePlaceholder", "copyBridge", "pasteBurst", "permModes"] as const) assert.equal(typeof a.term[f], "boolean", `${a.key}.term.${f}`);
     assert.ok(a.term.startDialogRe === null || a.term.startDialogRe instanceof RegExp, `${a.key}.term.startDialogRe`);
     assert.ok(Array.isArray(a.roots(["/home/x"], "yoon")), `${a.key}.roots 는 배열`);
   }

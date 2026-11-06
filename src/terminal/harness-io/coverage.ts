@@ -80,6 +80,8 @@ export const COVERAGE: readonly HarnessCoverage[] = [
       //   runtimeCmd 가 있으면 그 자리에서 슬래시로, 없으면 **같은 폴더의 새 세션으로 이어 연다**
       //   (핸드오프, POST …/handoff — 맥락을 넘긴다). 어느 쪽이든 사람은 드롭다운에서 고르고
       //   곧바로 이어 말한다. 「터미널에서만」이라고 적었던 것은 틀렸다 — 터미널도 in-place 로는 못 한다.
+      //  ★ 갱신 #5332(2026-11-04, codex-cli 0.166.0): 이제 **그 자리에서** 바뀐다 — `/model <모델> --reasoning=<강도>` 가 인자를 받는다
+      //   (catalog codex runtimeCmd). 핸드오프(새 세션)는 더 이상 codex 의 길이 아니다. 입력칸에 치던 글이 있으면 넣지 않고 알린다.
     },
   },
   {
