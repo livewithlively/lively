@@ -250,8 +250,11 @@ try {
     // (a) #1079 — lively 는 **stdio 프록시**로 등록한다(http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다).
     //  종전 3헤더(토큰·세션귀속#852·실행모드#1007+)는 사라진 게 아니라 **프록시가 상류 호출에 붙인다** —
     //  그 계약은 lively-mcp-gateway.test.mjs(E11 파일토큰 우선 · E15 하네스 stamp)가 못박는다.
+    //  Windows 는 심(lively.cmd) 대신 이 CLI 를 띄운 node.exe 로 lively.mjs 를 바로 띄운다 — 배치 실행이 막힌 PC 에서
+    //   심을 가리키는 MCP 가 함께 죽기 때문이다(livelyStdioLaunch). 테스트 러너의 node 가 곧 그 node.exe 다.
     const shimPath = join(H.home, ".lively", "bin", SHIM);
-    const want = `mcp add --transport stdio --scope user lively ${shimPath} mcp`;
+    const launch = WIN ? `${process.execPath} ${join(H.home, ".lively", "lib", "lively.mjs")}` : shimPath;
+    const want = `mcp add --transport stdio --scope user lively ${launch} mcp`;
     check("④ claude MCP 등록 argv 못박기(#1079 — lively = stdio 프록시)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
     check("④ 설정에 평문 토큰이 실리지 않는다(#1079 — 신원은 런타임 토큰파일)",

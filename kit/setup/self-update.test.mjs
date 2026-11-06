@@ -12,9 +12,21 @@ import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { sandboxEnv, WIN, writeTgz, closedPath, nodeOnlyDir } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
+// 우리가 심은 stdio MCP 항목의 두 꼴. 심(`bin/lively`, 윈도우는 `bin\\lively.cmd` — #1510) + [sub], 또는
+//  Windows 에서 node.exe 절대경로 + [<.lively/lib/lively.mjs>, sub](배치 실행이 막힌 PC 대응 — livelyStdioLaunch).
+//  구분자·확장자를 가정하지 않는다.
+function stdioLaunchOk(e, sub) {
+  if (!e || e.type !== "stdio" || !Array.isArray(e.args)) return false;
+  const cmd = String(e.command || "");
+  if (/[/\\]bin[/\\]lively(\.cmd)?$/.test(cmd)) return e.args.length === 1 && e.args[0] === sub;
+  return WIN && /[/\\]node\.exe$/i.test(cmd)
+    && e.args.length === 2 && /[/\\]\.lively[/\\]lib[/\\]lively\.mjs$/.test(String(e.args[0])) && e.args[1] === sub;
+}
+
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
 //  '조용한 무동작'이 되어 "무동작을 기대하는" 테스트들이 공허하게 통과한다(실제로 한 번 당했다).
+
 const pExecFile = promisify(execFile);
 
 const HERE = join(fileURLToPath(import.meta.url), "..");           // kit/setup
@@ -504,15 +516,12 @@ try {
     await runUpdater(home);
     const conf = JSON.parse(readFileSync(cj, "utf8"));
     const ll = conf.mcpServers && conf.mcpServers["lively-local"];
-    const llOk = !!(ll && ll.type === "stdio" && Array.isArray(ll.args) && ll.args[0] === "mcp-local"
-      && /[/\\]bin[/\\]lively(\.cmd)?$/.test(String(ll.command)));   // 윈도우 심은 `bin\\lively.cmd`(#1510)
+    const llOk = stdioLaunchOk(ll, "mcp-local");
     const userKept = !!(conf.mcpServers && conf.mcpServers.other && conf.projects && conf.projects["/some/path"]);
     // #1079 — additive 무손실의 **유일한 예외**: 우리가 심은 lively 항목을 http 직결 → stdio 프록시로 교정한다.
     //  (http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다.) 유저 항목·claude 상태는 여전히 불변이어야 한다.
     const lvEntry = (conf.mcpServers && conf.mcpServers.lively) || {};
-    const migrated = lvEntry.type === "stdio" && Array.isArray(lvEntry.args) && lvEntry.args[0] === "mcp"
-      // 윈도우 심은 `bin\\lively.cmd` 다 — 구분자·확장자를 가정하지 않는다(#1510).
-      && /[/\\]bin[/\\]lively(\.cmd)?$/.test(String(lvEntry.command));
+    const migrated = stdioLaunchOk(lvEntry, "mcp");
     // 부수 이득 — 설정 파일에서 평문 토큰이 사라진다(신원은 런타임에 ~/.lively/token 에서 읽는다).
     const tokenGone = !JSON.stringify(lvEntry).includes("test-token");
     (llOk && userKept && migrated && tokenGone)
@@ -560,7 +569,7 @@ try {
       const e4 = (JSON.parse(readFileSync(join(h4, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
       // 설치는 일어나지 않아야 한다(최신이므로) — 훅 파일이 안 깔린 것으로 확인.
       const noReinstall = !existsSync(join(h4, ".lively", "hooks", "session-preload.mjs"));
-      (e4.type === "stdio" && Array.isArray(e4.args) && e4.args[0] === "mcp" && noReinstall)
+      (stdioLaunchOk(e4, "mcp") && noReinstall)
         ? ok("⑮f 최신이어도 등록 정합 교정 — 재설치 없이 http→stdio 마이그레이션")
         : bad("⑮f 최신 경로 reconcile", `entry=${JSON.stringify(e4)} noReinstall=${noReinstall}`);
 
