@@ -9,6 +9,7 @@
 import { itemsPool, q } from "../db/client.js";
 import { parseCron, nextCronTime } from "./cron-expr.js";
 import { cronDue, runOnceDue } from "./cron-due.js";
+import { cronStaggerOffsetMs, cronStaggerSec } from "./cron-stagger.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 cron 벽시계 = 조직 시간대(서버 로컬 TZ 아님)
 import { CRON_ACTIONS, type CronJob } from "./registry.js";
 import { cronBreakerDecision } from "./cron-breaker.js";
@@ -59,13 +60,16 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
   return def.run(job.params ?? {}, job);
 }
 
-// 다음 실행 시각(표시용 next_run_at) — cron 은 다음 매치분, interval 은 now+interval.
+// 다음 실행 시각(표시용 next_run_at) — cron 은 다음 매치분 + 고정 지연, interval 은 now+interval.
 //  tz(#778) = 조직 시간대. cron_expr 은 그 벽시계로 해석된다(서버 로컬 TZ 아님 — cron-expr.ts 헤더 참조).
-function computeNextRun(job: CronJob, tz: string): string | null {
+//  cron 은 isDue 와 같은 식(시작 시각 기준 다음 매치 + 지연)으로 센다 — 끝난 시각으로 세면 긴 실행 뒤 표시가 실제와 갈린다.
+function computeNextRun(job: CronJob, tz: string, startedAt: Date): string | null {
   if (job.run_once) return null; // 1회성 — 다음 실행 없음
   if (job.cron_expr) {
-    try { const n = nextCronTime(parseCron(job.cron_expr), new Date(), tz); return n ? n.toISOString() : null; }
-    catch { return null; }
+    try {
+      const n = nextCronTime(parseCron(job.cron_expr), startedAt, tz);
+      return n ? new Date(n.getTime() + cronStaggerOffsetMs(job.id, job.cron_expr, cronStaggerSec())).toISOString() : null;
+    } catch { return null; }
   }
   return new Date(Date.now() + Math.max(60, Number(job.interval_sec) || 600) * 1000).toISOString();
 }
@@ -75,7 +79,8 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
   if (running.has(job.id)) return { status: "skipped", summary: { detail: "already running" } };
   running.add(job.id);
   try {
-    const startedIso = new Date().toISOString();
+    const started = new Date();
+    const startedIso = started.toISOString();
     let res: { status: string; summary: unknown };
     try { res = await runJob(job); }
     catch (e) { res = { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
@@ -85,7 +90,7 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
       logger.info({ job: job.id, action: job.action }, "증류 줄이 막혀 이번엔 돌지 않았다 — 다음 틱이 다시 본다");
       return { status: "skipped", summary: res.summary };
     }
-    const nextIso = computeNextRun(job, await orgTimezone());
+    const nextIso = computeNextRun(job, await orgTimezone(), started);
     // #1675 ④ — 연속 실패 서킷 브레이커. 판정은 순수 함수(cron-breaker)가, 기록은 여기가 한다.
     //  임계가 컬럼에 없으면(구 DB) 기본 5 로 본다 — 스키마 마이그레이션 전에도 보호가 걸리게.
     const brk = cronBreakerDecision({
@@ -118,7 +123,8 @@ function isDue(job: CronJob, now: number, tz: string): boolean {
   //  절대(벽시계): «마지막 실행 이후 첫 매치가 지났나»(#3994 T4 · cron-due.ts).
   //   종전엔 «지금이 매치 분인가» 였는데 그건 30초 틱을 전제한 판정이라, 매니지드의 5분 격자 틱
   //   (CP 가 HTTP 로 부른다 — web.ts:115)에서 `30 4 * * *` 같은 잡이 그 분을 영영 못 만났다(실측 10일).
-  if (job.cron_expr) return cronDue({ expr: job.cron_expr, lastRunAt: job.last_run_at, now, tz });
+  //   매치 뒤 잡 id 로 정한 고정 지연만큼 늦춘다 — 정각에 몰린 잡들이 한 틱에 같이 뜨지 않게(cron-stagger.ts).
+  if (job.cron_expr) return cronDue({ expr: job.cron_expr, lastRunAt: job.last_run_at, now, tz, offsetMs: cronStaggerOffsetMs(job.id, job.cron_expr, cronStaggerSec()) });
   // 상대(interval): last_run + interval 경과 시.
   const last = job.last_run_at ? new Date(job.last_run_at).getTime() : 0;
   return now - last >= Math.max(60, Number(job.interval_sec) || 600) * 1000;
@@ -180,6 +186,14 @@ let timer: NodeJS.Timeout | null = null;
 export function startScheduler(): void {
   if (timer) return;
   logger.info("scheduler started (in-process, org_cron)");
+  //  잘못 쓴 CRON_STAGGER_SEC 는 조용히 기본값으로 접힌다(cronStaggerSec) — 운영자가 끈 줄 알고 있지 않게 부팅 때 한 번 드러낸다.
+  const staggerRaw = process.env.CRON_STAGGER_SEC;
+  const staggerSec = cronStaggerSec();
+  if (staggerRaw != null && staggerRaw.trim() !== "" && Number(staggerRaw) !== staggerSec) {
+    logger.warn({ raw: staggerRaw, applied_sec: staggerSec }, "CRON_STAGGER_SEC 를 읽지 못해 다른 값으로 적용했다(0 이상 정수만 그대로 쓴다)");
+  } else {
+    logger.info({ applied_sec: staggerSec }, "시각형 크론 고정 지연 폭(CRON_STAGGER_SEC · 0 이면 끔)");
+  }
   timer = setInterval(() => { tickAllTenants().catch((e) => logger.warn({ err: e }, "scheduler tick failed")); }, TICK_MS);
   if (timer.unref) timer.unref(); // 스케줄러 타이머가 프로세스 정상 종료를 막지 않게.
   // 기존 설치 이행(#586) — notion 활성 커넥터의 일일 full 스윕 잡이 없으면 생성(커넥터 재저장 없이도 적용).
