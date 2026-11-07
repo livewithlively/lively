@@ -24,15 +24,17 @@ import { ensureWikiRepoCollector } from "../../org/wiki-repo.js";
 import { ensureFigmaCommentsDistiller } from "../../org/distill/figma-preset.js";
 import { ensureZoteroPapersDistiller } from "../../org/distill/zotero-preset.js";
 import { logger } from "../../log.js";
+import { scrubDeep, scrubText } from "../../org/ingest/content-scrub.js";
+import { redactString } from "../../org/ingest/redact.js";
 import { actorOf, restRead, restWork, str } from "./shared.js";
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
-async function loadBinding(id: number): Promise<{ id: number; presetKey: string; instanceKey: string }> {
-  const r = await itemsPool.query<{ preset_key: string; instance_key: string }>(
-    `SELECT preset_key, instance_key FROM org_collector WHERE id=$1`, [id]);
+async function loadBinding(id: number): Promise<{ id: number; presetKey: string; instanceKey: string; piiScrub: boolean }> {
+  const r = await itemsPool.query<{ preset_key: string; instance_key: string; pii_scrub: boolean | null }>(
+    `SELECT preset_key, instance_key, pii_scrub FROM org_collector WHERE id=$1`, [id]);
   const row = r.rows[0];
   if (!row) throw new HttpError(404, "수집기를 찾을 수 없습니다");
-  return { id, presetKey: row.preset_key, instanceKey: row.instance_key };
+  return { id, presetKey: row.preset_key, instanceKey: row.instance_key, piiScrub: row.pii_scrub === true };
 }
 /** 이미 돌던 수집 run 이 끝나기를 기다린다(5초 간격 · 30분 상한 — 넘으면 기다림을 놓고 다음으로). */
 async function waitRunEnd(runId: number): Promise<void> {
@@ -71,6 +73,8 @@ export const collectorsCapabilities: Capability[] = [
   restWork("org_collector_upsert", "수집기 저장",
     "수집기 인스턴스를 만들거나 고친다. id 를 주면 수정, 없으면 생성. secrets 는 값이 오면 갱신·빈값/미전송이면 유지(시크릿 저장엔 CONNECTOR_SECRET_KEY 필요). " +
     "enabled=true 로 저장하면 그 수집기 전용 자동 수집 잡(collector-<id>)이 등록된다. " +
+    "pii_scrub=true 면 이 수집기가 모은 자료·지식을 저장 전에 가린다(메일·전화·주민번호·카드번호·비밀번호·비밀값 → «[가림: 종류]»), " +
+    "이미 모은 것도 다음 수집 때 가린다. 클릭업 작업처럼 원본에 되쓰는 미러에는 걸리지 않는다. 미전송이면 지금 값을 지킨다. " +
     "⚠ 커서 네임스페이스(instance_key)는 생성 시에만 정해지고 이후 변경되지 않는다 — 바꾸면 그 수집기가 커서를 잃고 전체 재수집한다.",
     [{ method: "POST", paths: ["/api/ui/org/collectors"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -92,6 +96,10 @@ export const collectorsCapabilities: Capability[] = [
         sync_interval_sec: input.sync_interval_sec === undefined ? undefined : Number(input.sync_interval_sec),
         output_mode: input.output_mode === undefined ? undefined : str(input.output_mode, "output_mode", 20),
         output_config: (input.output_config ?? undefined) as Record<string, unknown> | undefined,
+        //  REST 본문은 zod 를 안 거친다 — "false" 같은 문자열을 거짓으로 읽어 가림이 조용히 꺼지지 않게, 참/거짓이 아니면 거절한다.
+        pii_scrub: input.pii_scrub === undefined || input.pii_scrub === null ? undefined
+          : typeof input.pii_scrub === "boolean" ? input.pii_scrub
+          : (() => { throw new HttpError(400, "pii_scrub 은 true 또는 false 여야 합니다"); })(),
         sort: input.sort === undefined ? undefined : Number(input.sort),
         note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : str(input.note, "note", 500)),
       }, actorOf(user), "web");
@@ -123,6 +131,7 @@ export const collectorsCapabilities: Capability[] = [
       sync_interval_sec: z.number().int().min(60).max(604_800).optional().describe("자동 수집 주기(초, 기본 600)"),
       output_mode: z.enum(["preset", "source", "knowledge", "both"]).optional().describe("수집 결과 산출 — preset=프리셋 기본 동작(현행). 나머지는 T3 에서 배선"),
       output_config: z.record(z.unknown()).optional(),
+      pii_scrub: z.boolean().optional().describe("연락처·비밀번호 가림 — true 면 저장 전에 가린다(이미 모은 것도 다음 수집 때). 미전송=유지"),
       sort: z.number().int().optional(),
       note: z.string().nullable().optional(),
     }),
@@ -262,6 +271,8 @@ export const collectorsCapabilities: Capability[] = [
     async (input: Record<string, unknown>) => {
       const b = await loadBinding(Number(input.id));
       resetConnectorConfigCache();
+      //  #5308 가림을 켠 수집기는 미리보기도 가린 모습으로 — 저장될 모습을 보고 켜고 끌 수 있게(관리자 화면에도 값이 안 뜬다).
+      const scrub = b.piiScrub ? (s: string): string => scrubText(redactString(s)) : (s: string): string => s;
       return await withCollector(b, async () => {
         const { connectorForPresetKey } = await import("../../connectors/generic/index.js");
         const settings = await resolveConnectorConfig(b.presetKey);
@@ -271,13 +282,15 @@ export const collectorsCapabilities: Capability[] = [
         try {
           // 미리보기는 **증분 옵션 없이** 최신부터 훑는다. 5건에서 끊으므로 대형 소스도 즉시 끝난다.
           for await (const item of connector.backfill()) {
+            const author = item.actor?.display_name ?? item.actor?.email ?? null;
             sample.push({
               external_id: item.provenance.external_id,
-              title: item.title ?? null,
-              body_preview: item.body ? String(item.body).slice(0, 200) : null,
+              title: item.title == null ? null : scrub(String(item.title)),
+              // 가린 뒤에 자른다 — 자른 끝에 걸친 값이 반쪽만 남아 가림을 피하지 않게.
+              body_preview: item.body ? scrub(String(item.body)).slice(0, 200) : null,
               occurred_at: item.occurred_at ?? null,
-              container_name: item.container_name ?? null,
-              author: item.actor?.display_name ?? item.actor?.email ?? null,
+              container_name: item.container_name == null ? null : scrub(String(item.container_name)),
+              author: author == null ? null : (b.piiScrub ? String(scrubDeep({ author_email: author }).author_email) : author),
               url: item.provenance.external_url ?? null,
             });
             if (sample.length >= 5) break;

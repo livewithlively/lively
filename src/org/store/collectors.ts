@@ -13,6 +13,7 @@ import { encryptSecret, secretsEnabled } from "../credentials/secret-box.js";
 import { collectorPresetCatalog, type ResolvedPreset } from "./collector-presets.js";
 import { audit } from "./audit.js";
 import { managedMode } from "../tenancy/state.js";
+import { HttpError } from "../../http-error.js";
 
 /** 관리탭용 수집기 뷰 — 시크릿 '값'은 절대 담기지 않는다(설정 여부만). */
 export interface CollectorView {
@@ -27,6 +28,8 @@ export interface CollectorView {
   sync_interval_sec: number;
   output_mode: string;
   output_config: Record<string, unknown>;
+  /** 연락처·비밀번호 가림(#5308) — 켜면 이 수집기가 모은 자료·지식을 저장 전에 가린다. */
+  pii_scrub: boolean;
   note: string | null;
   sort: number;
   updated_at: string | null;
@@ -81,7 +84,7 @@ export async function listCollectors(): Promise<CollectorView[]> {
   const presets = await presetMap();
   const r = await itemsPool.query(
     `SELECT id, key, preset_key, instance_key, label, enabled, config, secrets,
-            sync_interval_sec, output_mode, output_config, sort, note, updated_at
+            sync_interval_sec, output_mode, output_config, pii_scrub, sort, note, updated_at
        FROM org_collector ORDER BY sort, id`);
 
   // 자동 싱크 잡 — 수집기 켬 = 싱크 돎이 화면에서 검증되게 함께 준다(#586 계승).
@@ -138,6 +141,7 @@ export async function listCollectors(): Promise<CollectorView[]> {
       sync_interval_sec: Number(row.sync_interval_sec ?? 600),
       output_mode: String(row.output_mode ?? "preset"),
       output_config: (row.output_config as Record<string, unknown>) ?? {},
+      pii_scrub: row.pii_scrub === true,
       note: (row.note as string) ?? null, sort: Number(row.sort ?? 0),
       updated_at: row.updated_at ? String(row.updated_at) : null,
       preset_label: spec?.label ?? String(row.preset_key),
@@ -161,6 +165,8 @@ export interface CollectorUpsertInput {
   sync_interval_sec?: number;
   output_mode?: string;
   output_config?: Record<string, unknown>;
+  /** 미전송 = 지금 값 유지(다른 칸만 고치는 저장이 가림을 끄지 않게). */
+  pii_scrub?: boolean;
   sort?: number;
   note?: string | null;
 }
@@ -187,7 +193,7 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
   const cur = input.id
     ? (await itemsPool.query(
         `SELECT id, key, preset_key, instance_key, label, enabled, config, secrets, sync_interval_sec,
-                output_mode, output_config, sort, note FROM org_collector WHERE id=$1`, [input.id])).rows[0] as Record<string, unknown> | undefined
+                output_mode, output_config, pii_scrub, sort, note FROM org_collector WHERE id=$1`, [input.id])).rows[0] as Record<string, unknown> | undefined
     : undefined;
   if (input.id && !cur) throw new Error(`수집기를 찾을 수 없습니다: id=${input.id}`);
 
@@ -227,6 +233,10 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
   const interval = Math.min(604_800, Math.max(60, Number(input.sync_interval_sec ?? cur?.sync_interval_sec ?? 600) || 600));
   const outputMode = String(input.output_mode ?? cur?.output_mode ?? "preset");
   const outputConfig = input.output_config ?? ((cur?.output_config as Record<string, unknown>) ?? {});
+  const piiScrub = input.pii_scrub ?? (cur?.pii_scrub === true);
+  //  #5308 클릭업은 작업 설명을 원본에 되쓰는 양방향 미러라 가림을 걸지 않는다(v6/mirror/mirror-scrub 머리말) — 켜 두면 목록에
+  //   «가림» 표시만 뜨고 실제로는 아무것도 안 가려지는 거짓 안심이 된다. 그래서 켜는 것 자체를 받지 않는다.
+  if (piiScrub && presetKey === "clickup") throw new HttpError(400, "클릭업 수집기는 가림을 켤 수 없습니다 — 작업 설명을 클릭업에 되쓰는 양방향 미러라 가린 글이 원본을 덮을 수 있습니다");
   const sort = Number(input.sort ?? cur?.sort ?? 0) || 0;
 
   let id: number;
@@ -234,18 +244,18 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
     await itemsPool.query(
       `UPDATE org_collector SET key=$2, label=$3, enabled=$4, config=$5::jsonb, secrets=$6::jsonb,
               sync_interval_sec=$7, output_mode=$8, output_config=$9::jsonb, sort=$10, note=$11,
-              version=version+1, updated_at=now(), updated_by=$12
+              version=version+1, updated_at=now(), updated_by=$12, pii_scrub=$13
          WHERE id=$1`,
       [cur.id, key, label, enabled, JSON.stringify(config), JSON.stringify(secrets),
-       interval, outputMode, JSON.stringify(outputConfig), sort, note, actor ?? null]);
+       interval, outputMode, JSON.stringify(outputConfig), sort, note, actor ?? null, piiScrub]);
     id = Number(cur.id);
   } else {
     const ins = await itemsPool.query(
       `INSERT INTO org_collector(key, preset_key, instance_key, label, enabled, config, secrets,
-                                 sync_interval_sec, output_mode, output_config, sort, note, created_by, updated_by)
-         VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13,$13) RETURNING id`,
+                                 sync_interval_sec, output_mode, output_config, sort, note, created_by, updated_by, pii_scrub)
+         VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13,$13,$14) RETURNING id`,
       [key, presetKey, instanceKey, label, enabled, JSON.stringify(config), JSON.stringify(secrets),
-       interval, outputMode, JSON.stringify(outputConfig), sort, note, actor ?? null]);
+       interval, outputMode, JSON.stringify(outputConfig), sort, note, actor ?? null, piiScrub]);
     id = Number((ins.rows[0] as { id: string | number }).id);
   }
 
@@ -254,10 +264,10 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
 
   // 감사 — 시크릿 '값'은 스냅샷에 넣지 않는다(설정된 키 목록만).
   const auditBefore = cur
-    ? { key: cur.key, enabled: cur.enabled, config: cur.config, secretKeys: Object.keys((cur.secrets as object) ?? {}), note: cur.note }
+    ? { key: cur.key, enabled: cur.enabled, config: cur.config, secretKeys: Object.keys((cur.secrets as object) ?? {}), note: cur.note, pii_scrub: cur.pii_scrub === true }
     : null;
   await audit("org_collector", String(id), cur ? "update" : "insert", auditBefore,
-    { key, preset_key: presetKey, instance_key: instanceKey, enabled, config, secretKeys: Object.keys(secrets), note }, actor, source);
+    { key, preset_key: presetKey, instance_key: instanceKey, enabled, config, secretKeys: Object.keys(secrets), note, pii_scrub: piiScrub }, actor, source);
 
   const view = (await listCollectors()).find((c) => c.id === id);
   return view as CollectorView;

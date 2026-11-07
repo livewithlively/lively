@@ -93,6 +93,9 @@ export async function initV6GraphSource(pool: Pool): Promise<void> {
     })}
     -- #735: 커넥터 구조화 메타(채널명·작성자·스레드 등) 보존용. 기존 배포 대상 ALTER(멱등).
     ALTER TABLE source ADD COLUMN IF NOT EXISTS fields JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- #5308 수집기 표식(seen_by) — 위 CREATE 에 원래 있던 칸이지만 쓰는 곳이 없었다. 자료 미러가 지식 미러(#4059)처럼
+    --  «이 수집기가 이 행을 봤다» 를 남기고, 가림 소급 스윕이 그걸로 «내 몫» 을 가른다. 그 줄이 들어가기 전에 만든 DB 를 위한 멱등 보강.
+    ALTER TABLE source ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}'::jsonb;
     -- #735 후속: 스레드/계층 링크(자료 간 관계) — 답글→스레드루트·자식페이지→부모. 전 커넥터가 RawItem.parent_external_id 로 방출.
     --  external 좌표(system,instance)+parent_external_id 로 조인해 "스레드 답글들"·"페이지 자식들"을 결정적 탐색(resolution 타이밍 무관).
     ALTER TABLE source ADD COLUMN IF NOT EXISTS parent_external_id TEXT;

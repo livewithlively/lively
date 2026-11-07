@@ -395,6 +395,13 @@ export interface CollectorBinding {
   /** 지식 직행 시 적용할 규칙(대상 분류·기본 유형·이름 접두어). output_config 원문. */
   outputConfig?: Record<string, unknown>;
   /**
+   * 연락처·비밀번호 가림(#5308, org_collector.pii_scrub) — 켜면 미러가 저장 전에 가리고(v6/mirror/mirror-scrub),
+   *  run-sync 가 이미 모은 행을 소급해 가린다. 없거나 false 면 종전 그대로(가리지 않는다).
+   *  output_config 에 두지 않은 이유: 수집기 저장이 output_config 를 통째로 바꾼다(화면은 분류 하나만 실어 보낸다) —
+   *  분류를 고치는 순간 가림이 조용히 꺼지는 사고가 난다.
+   */
+  piiScrub?: boolean;
+  /**
    * 바인딩할 때 읽은 설정 판(org_collector.version, #4059). 설정이 바뀔 때마다 올라간다.
    *  노션 전체 점검 스윕이 «이 run 이 본 범위가 지금 설정의 범위인가» 를 이 값으로 가른다.
    */

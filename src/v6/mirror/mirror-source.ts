@@ -1,9 +1,9 @@
 // 자료 미러(slack/gmail/discord message 등 → source) — #1313 R20 으로 connector-mirror.ts 에서 verbatim 이관.
 import type pg from "pg";
-import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
-import { auditConnector, pgDeep, pgText } from "./mirror-common.js";
+import { auditConnector, claimSyncStateSql, pgDeep, pgText } from "./mirror-common.js";
+import { mirrorGuard, scrubAuditHistory } from "./mirror-scrub.js";
 import { stampSourceAudience, stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
@@ -29,35 +29,47 @@ export function sourceKindOf(system: string): string {
 // slack/gmail/discord message(및 미정제 raw) → source(자료) 멱등 upsert (#541). distill 이 여기서 지식을 증류(source→knowledge).
 //  external 좌표(source_external_uidx) ON CONFLICT. 본문 실변경 시에만 audit(노이즈 게이트 — knowledge 미러와 동일).
 //  🔴H1 redact — title/body/raw 평문 시크릿 마스킹. provenance=observed(외부 수집물). knowledge_search 에 자동 미포함(별 테이블).
-export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
+//  #5308 수집기가 가림을 켰으면 연락처·비밀번호도 가린다(mirror-scrub). claimKey 를 주면 지식 미러처럼 «이 수집기가 이 행을 봤다» 를
+//   sync_state.seen_by 에 남긴다 — 가림 소급 스윕이 «내 몫» 을 가르는 근거다(지식은 #4059 부터 남겨 왔다).
+export async function mirrorSourceV6(
+  client: pg.PoolClient, it: RawItem, system: string, externalId: string, claimKey?: string,
+): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   const kind = sourceKindOf(system);
+  const g = mirrorGuard(system);
   //  pgText·pgDeep — Postgres 가 못 받는 글자(NUL·외톨이 서로게이트)를 걷는다(#5040, mirror-common).
-  const title = it.title == null ? null : pgText(redactString(String(it.title)));
-  const body = pgText(redactString(String(it.body ?? "")));
-  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
+  const title = it.title == null ? null : pgText(g.text(String(it.title), true));
+  const body = pgText(g.text(String(it.body ?? ""), true));
+  const raw = it.raw == null ? null : pgDeep(g.raw(it.raw));
   const author = `connector:${system}`;
 
   // #735 구조화 메타 보존 — 예전엔 message→source 미러가 it.fields·container_ref·actor 를 통째로 버려
   //  (knowledge 미러는 fields 를 보존하는데 source 미러만 누락) 채널명·작성자·스레드 같은 지식화 핵심 맥락이
   //  유실됐다. 여기서 커넥터가 채운 구조화 값을 source.fields(JSONB)에 접어 저장한다 — slack 특화가 아니라
   //  전 커넥터(gmail·notion·discord 등) 공통. body/title(raw 원문)은 건드리지 않는다.
-  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
-  const fields: Record<string, unknown> = { ...baseFields, _item_type: it.type };
+  const baseFields = pgDeep(g.deep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
+  const fields: Record<string, unknown> = { ...baseFields, _item_type: it.type, ...g.mark };
   if (it.container_ref) fields.container_ref = it.container_ref;
-  if (it.container_name) fields.container_name = pgText(redactString(String(it.container_name)));
-  if (it.actor?.external_id) fields.author_external_id = it.actor.external_id;
-  if (it.actor?.display_name) fields.author_name = pgText(redactString(String(it.actor.display_name)));
-  if (it.actor?.email) fields.author_email = pgText(redactString(String(it.actor.email)));
+  if (it.container_name) fields.container_name = pgText(g.text(String(it.container_name)));
+  //  보낸 사람 id — 메일 수집은 메일 주소가 곧 id 다(email-as-external_id). 가림을 켜면 메일 꼴인 id 도 가린다(슬랙 U… 같은 id 는 그대로).
+  if (it.actor?.external_id) {
+    const aid = String(it.actor.external_id);
+    fields.author_external_id = g.on && aid.includes("@") ? g.deep({ author_email: aid }).author_email : aid;
+  }
+  if (it.actor?.display_name) fields.author_name = pgText(g.text(String(it.actor.display_name)));
+  //  보낸 사람 메일 — 메일함 수집이면 고객 메일이다. 가림을 켜면 이름(author_name)만 남는다.
+  if (it.actor?.email) fields.author_email = pgText(g.deep({ author_email: String(it.actor.email) }).author_email);
   if (it.actor?.is_bot != null) fields.author_is_bot = it.actor.is_bot;
 
   // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. no-op 재싱크(last_synced_at-only)는 audit 생략. ──
   const prev = await client.query(
-    `SELECT id, title, body_md FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
+    `SELECT id, title, body_md, fields->>'_pii_scrub' AS scrub_mark FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
     [system, instance, externalId],
   );
-  const prevRow = prev.rows[0] as { id: number; title: string | null; body_md: string } | undefined;
+  const prevRow = prev.rows[0] as { id: number; title: string | null; body_md: string; scrub_mark: string | null } | undefined;
   const isInsert = !prevRow;
+  //  #5308 가리지 않은 채 쌓인 행을 처음 가릴 때 — 그 행의 옛 이력도 가린다.
+  if (prevRow && g.prevUnscrubbed(prevRow.scrub_mark)) await scrubAuditHistory(client, "source", [String(prevRow.id)]);
   const contentChanged = isInsert
     || (prevRow.title ?? null) !== (title ?? null)
     || (prevRow.body_md ?? "") !== (body ?? "");
@@ -66,16 +78,20 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
     `INSERT INTO source(
         kind, title, body_md, raw, fields, provenance,
         external_system, external_instance, external_id, external_url, parent_external_id,
-        occurred_at, last_synced_at, author, updated_at, updated_by)
+        occurred_at, last_synced_at, author, updated_at, updated_by, sync_state)
       VALUES($1,$2,$3,$4::jsonb,$11::jsonb,'observed',
              $5,$6,$7,$8,$12,
-             $9, now(), $10, now(), $10)
+             $9, now(), $10, now(), $10,
+             CASE WHEN $14::text IS NULL THEN '{}'::jsonb ELSE ${claimSyncStateSql("NULL::jsonb", "$14")} END)
      ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         kind=EXCLUDED.kind, title=EXCLUDED.title, body_md=EXCLUDED.body_md, raw=EXCLUDED.raw,
         fields=EXCLUDED.fields, parent_external_id=EXCLUDED.parent_external_id,
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
         last_synced_at=now(),
+        -- #5308 수집기 표식 — 재싱크한 수집기를 seen_by 에 더한다(다른 수집기의 표식은 그대로).
+        sync_state=CASE WHEN $14::text IS NULL THEN source.sync_state
+                        ELSE ${claimSyncStateSql("source.sync_state", "$14")} END,
         -- ⚠ updated_at 은 **내용이 바뀐 시각**이다 — "마지막 동기화 시각"은 last_synced_at 이 맡는다.
         --  무조건 now() 로 밀면 일일 full 스윕이 전 자료의 updated_at 을 갱신하고, 이걸 재판정 신호로 쓰는
         --  증류 인박스가 **매일 전량을 다시 증류한다**(#1289). 제목·본문이 실제로 달라졌을 때만 전진시킨다.
@@ -85,7 +101,7 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
     [kind, title, body, raw == null ? null : JSON.stringify(raw),
      system, instance, externalId, it.provenance.external_url ?? null,
      it.occurred_at ?? null, author, JSON.stringify(fields), it.parent_external_id ?? null,
-     contentChanged],
+     contentChanged, claimKey ?? null],
   );
   const id = (r.rows[0] as { id: number }).id;
 
@@ -101,9 +117,10 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
   }
 
   if (contentChanged) {
-    const beforeSnap = isInsert ? null : { id, title: prevRow!.title, body_md: prevRow!.body_md };
+    const beforeSnap = isInsert ? null : { id, title: g.prev(prevRow!.title), body_md: g.prev(prevRow!.body_md) };
     const afterSnap = { id, kind, title, body_md: body, provenance: "observed", source: system, author };
     await auditConnector(client, "source", String(id), isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
   }
+  g.done();
   return true;
 }

@@ -280,7 +280,7 @@ export async function mirrorExternalToV6(
     else if (target === "knowledge" && system === "domain-wiki") ok = await mirrorKnowledgeByNameV6(client, it, system, externalId);
     else if (target === "knowledge") ok = await mirrorKnowledgeV6(client, it, system, externalId, opts?.claimKey);
     else if (target === "source") {
-      ok = await mirrorSourceV6(client, it, system, externalId);
+      ok = await mirrorSourceV6(client, it, system, externalId, opts?.claimKey);
       // 'both' — 원문을 자료로 남기면서 지식도 만든다(출처 추적 + 즉시 검색). 같은 트랜잭션 안이라
       //  둘 중 하나만 적재되는 반쪽 상태가 생기지 않는다. 지식 쪽 실패는 항목 전체를 롤백시킨다.
       if (alsoMirrorKnowledge(it.type, system, outputMode)) {
