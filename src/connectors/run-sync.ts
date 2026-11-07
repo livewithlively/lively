@@ -190,8 +190,11 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
     //  실패 전에 받은 것은 적재한다 — 커넥터가 «멀쩡한 부분은 다 주고 끝에 실패를 알리는» 경우(Zotero: 라이브러리 하나만 막힘)
     //   마지막 묶음(<200건)이 버려지면, 그 실패가 이어지는 동안 멀쩡한 쪽도 영영 덜 들어온다. 적재는 멱등이고 커서는 그대로 묶인다.
     await flush().catch(() => {});
-    logger.error({ err: (err as Error)?.message ?? String(err), system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
-    orphan?.note(JSON.stringify({ level: 50, err: (err as Error)?.message ?? String(err), system, msg: "generic 싱크 실패 — 커서 동결(다음 run 재수집)" }));
+    //  fetch 실패는 message 가 «fetch failed» 한 줄뿐이고 원인(어느 호스트·DNS·연결시간초과·리셋)은 cause 에만 있다.
+    //   cause 를 버리면 간헐 실패를 크론 알림으로 받고도 «무엇이 끊겼나» 를 가를 수 없다(2026-11-07 운영 사례: Drive 수집기 실패 로그가 «fetch failed» 한 줄뿐이었다).
+    const errText = describeErr(err);
+    logger.error({ err: errText, system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
+    orphan?.note(JSON.stringify({ level: 50, err: errText, system, msg: "generic 싱크 실패 — 커서 동결(다음 run 재수집)" }));
     return true;
   }
 
@@ -212,4 +215,19 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
   logger.info(summary, "generic 싱크 완료");
   orphan?.note(JSON.stringify({ level: 30, ...summary, msg: "generic 싱크 완료" })); // 부모를 잃었으면 pino 줄은 사라진다 — 요약은 여기로
   return mirrorFailures > 0;
+}
+
+/** 오류 문장 + 원인 사슬(cause) 한 단계 — undici 의 «fetch failed» 는 원인을 cause 에만 담는다. */
+function describeErr(err: unknown): string {
+  const e = err as (Error & { cause?: unknown }) | undefined;
+  const base = e?.message ?? String(err);
+  const c = e?.cause;
+  const fresh = (x: unknown): x is string => typeof x === "string" && x.length > 0 && !base.includes(x);
+  if (fresh(c)) return `${base} (cause: ${c})`;
+  if (!c || typeof c !== "object") return base;
+  const { code, message } = c as { code?: unknown; message?: unknown };
+  //  Node 네트워크 오류는 message 에 code 가 이미 든다(getaddrinfo ENOTFOUND host) — 겹치면 code 를 뺀다.
+  const msg = fresh(message) ? message : "";
+  const detail = [fresh(code) && !msg.includes(code) ? code : "", msg].filter(Boolean).join(" ");
+  return detail ? `${base} (cause: ${detail})` : base;
 }

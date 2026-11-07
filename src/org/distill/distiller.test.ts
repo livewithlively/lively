@@ -412,7 +412,7 @@ pass++; console.log("ok  N6 방어: 방치 판정도 빈 목록·비정상 id �
 //  실측(2026-07-31): 배치 1건이 2,600만~7,000만 토큰. 99%가 '이미 읽은 자료 재전송'이고 그중 68%는 결국 skip.
 //  비용이 자료수에 O(n²) 이라 입력을 32%로 줄이면 토큰 ~90% 감소. 채널마다 기준이 달라 레버로 조절한다.
 t("F1 아무 조건도 없으면 필터 끔 — 절이 아예 안 붙는다(기존 동작 보존)", () => {
-  assert.equal(prefilterSql(mk({ prefilter_level: 0, prefilter_rules: null }), new Params()), null);
+  assert.equal(prefilterSql(mk({ prefilter_level: 0, prefilter_rules: null }), new Params(), "th"), null);
   const { sql } = buildInboxQuery(mk({ prefilter_level: 0, prefilter_rules: null }), []);
   assert.ok(!sql.includes("HAVING"), "조건이 없으면 인박스 쿼리에 스코어 절이 없어야 한다");
 });
@@ -422,7 +422,7 @@ t("F1 아무 조건도 없으면 필터 끔 — 절이 아예 안 붙는다(기�
 //  레버 0 이 그걸 덮어써 필터가 통째로 꺼진다(= 사용자가 설정했는데 아무 일도 안 일어남).
 t("F12 레버가 0 이어도 rules 가 있으면 그게 정본이다(축별 수치가 이긴다)", () => {
   const p = new Params();
-  const sql = prefilterSql(mk({ prefilter_level: 0, prefilter_rules: { min_chars: 400, min_decisive: 1, match: "any", keywords: ["가나"] } }), p);
+  const sql = prefilterSql(mk({ prefilter_level: 0, prefilter_rules: { min_chars: 400, min_decisive: 1, match: "any", keywords: ["가나"] } }), p, "th");
   assert.ok(sql, "레버가 0 이어도 rules 로 필터가 만들어져야 한다");
   assert.match(sql as string, / OR /, "match:any 가 지켜져야 한다");
   assert.ok(p.values.includes(400), "지정한 축 값이 바인딩돼야 한다");
@@ -465,15 +465,15 @@ t("F6 키워드 커스텀 — 지정하면 기본 목록 대신 그것만 쓴다
 
 t("F7 키워드는 값이지 패턴이 아니다 — 정규식 메타문자가 이스케이프된다", () => {
   const p = new Params();
-  prefilterSql(mk({ prefilter_level: 50, prefilter_rules: { keywords: ["a.b", "c+d", "(e)"] } }), p);
+  prefilterSql(mk({ prefilter_level: 50, prefilter_rules: { keywords: ["a.b", "c+d", "(e)"] } }), p, "th");
   const re = p.values.find((v) => typeof v === "string" && String(v).includes("a")) as string;
   assert.ok(re.includes("a\\.b"), `점이 이스케이프돼야 한다: ${re}`);
   assert.ok(re.includes("c\\+d") && re.includes("\\(e\\)"), `+ 와 괄호도: ${re}`);
 });
 
 t("F8 match='any' → 조건이 OR 로 결합(기본은 AND)", () => {
-  const or = prefilterSql(mk({ prefilter_level: 50, prefilter_rules: { match: "any" } }), new Params()) || "";
-  const and = prefilterSql(mk({ prefilter_level: 50 }), new Params()) || "";
+  const or = prefilterSql(mk({ prefilter_level: 50, prefilter_rules: { match: "any" } }), new Params(), "th") || "";
+  const and = prefilterSql(mk({ prefilter_level: 50 }), new Params(), "th") || "";
   assert.ok(or.includes(" OR "), "any 면 OR");
   assert.ok(and.includes(" AND ") && !and.includes(" OR "), "기본은 AND");
 });
@@ -482,26 +482,48 @@ t("F9 레버>0 이면 인박스·잔량 양쪽에 똑같이 걸린다(한쪽만�
   const d = mk({ prefilter_level: 60 });
   //  구현 세부(컬럼 별칭)가 아니라 '스레드 집계로 거른다'는 구조로 확인한다 — 별칭은 사양이 아니다.
   for (const [name, qy] of [["인박스", buildInboxQuery(d, [])], ["잔량", buildBacklogQuery(d, [])]] as const) {
-    assert.match(qy.sql, /GROUP BY 1, 2[\s\S]*HAVING/, `${name}에 스레드 집계 필터가 걸려야 한다`);
+    assert.match(qy.sql, /JOIN source x[\s\S]*HAVING/, `${name}에 스레드 집계 필터가 걸려야 한다`);
   }
   assert.ok(!buildInboxQuery(mk({ prefilter_level: 0 }), []).sql.includes("HAVING"), "레버 0 이면 양쪽 모두 안 걸린다");
 });
 
-// ⚠ 성능 사양 — 이번에 실제로 터진 결함이다(2026-07-31): 처음엔 바깥 행을 참조하는 EXISTS 로 썼는데
-//  자료 한 건마다 source 전체를 다시 스캔해(O(n×m)) 310건짜리 작은 채널에서도 statement timeout 이 났다.
-//  서브쿼리가 바깥 별칭을 참조하지 않아야(비상관) Postgres 가 집계를 한 번만 하고 해시로 조인한다.
-t("F11 사전필터 서브쿼리는 비상관이어야 한다 — 안 그러면 자료마다 전체 스캔(실측 타임아웃)", () => {
-  const sql = prefilterSql(mk({ prefilter_level: 50 }), new Params()) || "";
-  const sub = sql.slice(sql.indexOf("SELECT COALESCE(x."));
-  assert.ok(!/\bs\./.test(sub),
-    `서브쿼리가 바깥 별칭(s.)을 참조하면 행마다 재실행된다:\n${sub.slice(0, 300)}`);
-  assert.match(sub, /FROM source x\s+WHERE x\.lifecycle='active'\s+GROUP BY/,
-    "스레드 집계는 조건 없이 한 번만 돌고 결과를 조인해야 한다");
+// ⚠ 성능 사양 — 네 번 터졌다. 2026-07-31 엔 바깥 행을 참조하는 EXISTS 가 스레드 키 인덱스 없이 자료마다 source 전체를
+//  다시 읽었고(O(n×m)), 2026-11-07 엔 그걸 피하려던 비상관 튜플 IN 이 레인 스코프 술어 탓에 후보 행 수를 과소추정한
+//  플래너에게 중첩루프로 풀려 prod 에서 statement_timeout 을 넘었다. 같은 날 그다음엔 자료 줄마다 건 상관 EXISTS 가
+//  같은 스레드 집계를 메시지 수만큼 되풀이해(스레드 크기의 제곱) 또 넘었고, 스레드 줄로 올린 상관 EXISTS 도 앱 역할의
+//  행 수준 보안 아래에서는 스레드마다 source 전체를 읽었다(distiller.ts prefilterSql 주석).
+//  지금 형태는 «스레드 목록 CTE 와 source 의 JOIN + GROUP BY 스레드 키 + HAVING» 이고, 호출부는 후보를 스레드로 묶은 **뒤**
+//  그 목록과 조인한다. source 를 한 번만 읽는지는 pg-test(prefilter-thread-index P3)가 앱 역할로 EXPLAIN ANALYZE 해 본다.
+t("F11 사전필터는 스레드 목록과 source 의 조인을 스레드 키로 묶은 HAVING 이다 — 스레드마다 도는 상관 서브쿼리가 아니다", () => {
+  const sql = prefilterSql(mk({ prefilter_level: 50 }), new Params(), "th") || "";
+  assert.match(sql, /^SELECT t\._ch, t\._tid FROM th t\s+JOIN source x ON /, `스레드 목록(th)과 source 의 조인이어야 한다:\n${sql.slice(0, 200)}`);
+  assert.match(sql, /x\.lifecycle='active'/, "활성 자료만 집계한다");
+  assert.match(sql, /COALESCE\(x\.fields->>'container_name',''\) = t\._ch/, "채널 키가 스레드 목록과 등식으로 맞물려야 한다");
+  assert.match(sql, /COALESCE\(x\.fields->>'thread_ts'[^()]*\) = t\._tid/, "스레드 키가 스레드 목록과 등식으로 맞물려야 한다");
+  assert.match(sql, /GROUP BY t\._ch, t\._tid\s+HAVING /, "스레드 키로 묶어 HAVING 으로 집계 조건을 건다");
+  //  앱 역할에는 source 에 행 수준 보안이 걸려, jsonb `->>`(leakproof 아님)가 든 키 비교로는 표현식 인덱스를 못 탄다.
+  //  그 상태에서 스레드마다 도는 상관 서브쿼리(EXISTS·IN)는 스레드 수만큼 source 전체를 다시 읽는다(2026-11-07, 21초).
+  assert.ok(!/\bEXISTS\b/.test(sql), "스레드마다 도는 상관 EXISTS 로 돌아가면 안 된다");
+  assert.ok(!/\)\s*IN\s*\(/.test(sql), "튜플 IN 으로 돌아가면 안 된다");
+});
+
+t("F13 인박스·잔량은 스레드로 묶은 MATERIALIZED CTE 를 사전필터 서브쿼리와 조인한다(스레드당 한 번)", () => {
+  const d = mk({ prefilter_level: 50 });
+  for (const [name, qy] of [["인박스", buildInboxQuery(d, [d])], ["잔량", buildBacklogQuery(d, [d])]] as const) {
+    const m = /JOIN \(SELECT t\._ch, t\._tid FROM (\w+) t\b[\s\S]*?\) ok ON ok\._ch = g\._ch AND ok\._tid = g\._tid/.exec(qy.sql);
+    assert.ok(m, `${name}: 묶은 줄(g)이 사전필터 서브쿼리와 두 키로 조인돼야 한다`);
+    const cte = new RegExp(`\\b${m![1]} AS MATERIALIZED \\([\\s\\S]*?GROUP BY`).exec(qy.sql);
+    assert.ok(cte && cte.index < m!.index, `${name}: 사전필터가 읽는 스레드 목록(${m![1]})은 앞서 스레드로 묶은 MATERIALIZED CTE 여야 한다`);
+    assert.ok(!/\bEXISTS\b/.test(m![0]), `${name}: 사전필터에 상관 EXISTS 가 남으면 앱 역할에서 스레드마다 source 를 다시 읽는다`);
+    assert.ok(!/=\s*COALESCE\(s\.fields->>'container_name',''\)\s*\n\s*AND COALESCE\(x\./.test(qy.sql), `${name}: 자료 줄(s)마다 집계하면 안 된다`);
+  }
+  const off = mk({ prefilter_level: 0, prefilter_rules: null });
+  assert.ok(!/MATERIALIZED \(\s*SELECT COALESCE/.test(buildBacklogQuery(off, [off]).sql), "사전필터가 꺼지면 잔량은 단순 count 다");
 });
 
 t("F10 스레드 집계는 배치가 아니라 채널 전체 범위다(배치 경계에서 잘리면 점수 왜곡)", () => {
-  const sql = prefilterSql(mk({ prefilter_level: 50 }), new Params()) || "";
-  assert.match(sql, /FROM source x/, "자료 테이블 전체를 다시 훑어 스레드를 집계해야 한다");
+  const sql = prefilterSql(mk({ prefilter_level: 50 }), new Params(), "th") || "";
+  assert.match(sql, /JOIN source x/, "자료 테이블 전체를 다시 훑어 스레드를 집계해야 한다");
   assert.match(sql, /thread_ts/, "스레드 키로 묶어야 한다");
   assert.match(sql, /container_name/, "채널과 함께 묶어야 한다(다른 채널의 같은 ts 가 섞이지 않게)");
   assert.ok(!/x\.id\s*=\s*ANY/.test(sql), "배치 id 목록으로 범위를 좁히면 안 된다");
@@ -1022,7 +1044,7 @@ t("TK1 인박스의 스레드 키는 부재를 흡수한다 — 값이 없으면
 t("TK2 스레드 키를 쓰는 쿼리는 전부 같은 폴백을 쓴다 — 한 곳만 빠지면 그 축만 조용히 다르게 센다", () => {
   const sqls = [
     buildInboxQuery(mk({ id: 1 }), []).sql,
-    prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "",
+    prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params(), "th") ?? "",
     buildGridSql({ min_msgs: 2 }, new Params(), ["가나"], []),
   ];
   for (const s of sqls) {
@@ -1032,11 +1054,14 @@ t("TK2 스레드 키를 쓰는 쿼리는 전부 같은 폴백을 쓴다 — 한 
   }
 });
 
-t("TK3 튜플로 대조하는 자리는 양쪽 표현식이 같아야 한다 — 한쪽만 폴백이면 매칭이 통째로 어긋난다", () => {
-  const sql = prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "";
-  const shapes = threadKeyExprs(sql).map((k) => k.replace(/\b[a-z]\./g, ""));   // alias 지우고 형태만 본다
-  assert.ok(shapes.length >= 2, "바깥 행과 집계 서브쿼리 양쪽에 키가 있다");
-  assert.equal(new Set(shapes).size, 1, `양쪽이 다르다: ${JSON.stringify(shapes)}`);
+t("TK3 스레드 키로 맞물리는 자리는 양쪽 표현식이 같아야 한다 — 한쪽만 폴백이면 매칭이 통째로 어긋난다", () => {
+  //  사전필터는 스레드로 묶은 줄의 키(_tid)와 조인하므로, 묶을 때 만든 키와 서브쿼리 키를 한 쿼리 안에서 함께 본다.
+  const d = mk({ prefilter_rules: { min_msgs: 2 } });
+  for (const sql of [buildInboxQuery(d, [d]).sql, buildBacklogQuery(d, [d]).sql]) {
+    const shapes = threadKeyExprs(sql).map((k) => k.replace(/\b[a-z]\./g, ""));   // alias 지우고 형태만 본다
+    assert.ok(shapes.length >= 2, "묶는 쪽과 사전필터 서브쿼리 양쪽에 키가 있다");
+    assert.equal(new Set(shapes).size, 1, `양쪽이 다르다: ${JSON.stringify(shapes)}`);
+  }
 });
 
 t("TK4 스레드 지식 조회는 폴백을 쓰지 않는다(의도된 예외) — JS 키 목록과 표현식이 같아야 매칭된다", () => {
