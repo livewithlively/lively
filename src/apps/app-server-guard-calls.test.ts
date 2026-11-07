@@ -119,11 +119,11 @@ async function rig(claim: Reply | Reply[] | null = null, env: Record<string, str
 }
 const claims = (api: { calls: ApiCall[] }): ApiCall[] => api.calls.filter((c) => c.path.endsWith("/claim"));
 
-test("D1 ★ 시작 확인 → 앱이 받는 머리글 = x-lively-member · x-lively-member-name(인코딩) · x-lively-variant · x-lively-identity(돌기 신원) — x-lively-job 없음 · 들어온 x-lively-* 는 지움 · 본문 · 길이 · 답 그대로(엣지 표 4)", async () => {
+test("D1 ★ 시작 확인 → 앱이 받는 머리글 = x-lively-member · x-lively-member-name(인코딩) · x-lively-variant · x-lively-identity(돌기 신원) — x-lively-job · x-lively-job-source 없음 · 들어온 x-lively-* 는 지움 · 본문 · 길이 · 답 그대로(엣지 표 4)", async () => {
   const r = await rig();
   try {
     const out = await callReq(r.g.port, "/api/tools/ask?lang=ko", { q: "휴가 규정", n: 1 }, CALL, {
-      "x-lively-member": "mallory", "x-lively-job": "99", "x-lively-variant": "draft", "x-lively-whatever": "1", "x-lively-guard": "timeout",
+      "x-lively-member": "mallory", "x-lively-job": "99", "x-lively-variant": "draft", "x-lively-whatever": "1", "x-lively-guard": "timeout", "x-lively-job-source": "app-ui",
     });
     assert.equal(out.status, 200);
     assert.equal(out.headers["x-lively-guard"], undefined, "앱의 답에는 문 표지가 없다(문이 직접 낸 답이 아니다)");
@@ -146,7 +146,7 @@ test("D1 ★ 시작 확인 → 앱이 받는 머리글 = x-lively-member · x-li
     assert.equal(decodeURIComponent(String(seen.headers["x-lively-member-name"])), "윤 상민");
     assert.equal(seen.headers["x-lively-variant"], "draft");
     const livelyHeaders = Object.keys(seen.headers).filter((k) => k.startsWith("x-lively-")).sort();
-    assert.deepEqual(livelyHeaders, ["x-lively-identity", "x-lively-member", "x-lively-member-name", "x-lively-variant"], "그 밖의 x-lively-* 없음(작업 번호 · 위조 머리글)");
+    assert.deepEqual(livelyHeaders, ["x-lively-identity", "x-lively-member", "x-lively-member-name", "x-lively-variant"], "그 밖의 x-lively-* 없음(작업 번호 · 시작한 자리 · 위조 머리글)");
   } finally { await r.done(); }
 });
 

@@ -140,7 +140,7 @@ http.createServer((q, s) => {
     const member = q.headers["x-lively-member"] ? decodeURIComponent(q.headers["x-lively-member"]) : null;
     const keyOk = !!process.env.LIVELY_GUARD_KEY && q.headers["x-lively-guard-key"] === process.env.LIVELY_GUARD_KEY;
     s.writeHead(200, { "content-type": "application/json" });
-    s.end(JSON.stringify({ route: q.url, member, job: q.headers["x-lively-job"] ?? null, keyOk, body: b ? JSON.parse(b) : null }));
+    s.end(JSON.stringify({ route: q.url, member, job: q.headers["x-lively-job"] ?? null, jobSource: q.headers["x-lively-job-source"] ?? null, keyOk, body: b ? JSON.parse(b) : null }));
   });
 }).listen(Number(process.env.PORT));`;
 const filesOf = ({ title = "서버 앱", server = SERVER } = {}) => [
@@ -220,8 +220,8 @@ try {
   const j1 = await svc.startAppJob({ app_id: "srv", route: "/api/jobs/work?x=1", body: { n: 7 } }, alice, { source: "mcp" }, deps);
   const done1 = await waitJob(j1.id);
   const res1 = done1?.result?.json;
-  chk("P4 백그라운드 작업 — 부름 1 · done · 앱은 시작한 사람(pgt-alice)으로 · 작업 번호 · 검사 층 열쇠 · 본문 그대로",
-    caught.length === 1 && done1?.status === "done" && res1?.member === "pgt-alice" && res1?.job === String(j1.id) && res1?.keyOk === true && res1?.body?.n === 7 && res1?.route === "/api/jobs/work?x=1",
+  chk("P4 백그라운드 작업 — 부름 1 · done · 앱은 시작한 사람(pgt-alice)으로 · 작업 번호 · 시작한 자리(mcp — 진짜 claim 경로) · 검사 층 열쇠 · 본문 그대로",
+    caught.length === 1 && done1?.status === "done" && res1?.member === "pgt-alice" && res1?.job === String(j1.id) && res1?.jobSource === "mcp" && res1?.keyOk === true && res1?.body?.n === 7 && res1?.route === "/api/jobs/work?x=1",
     JSON.stringify({ caught: caught.length, done1 }));
 
   // P5 같은 부르기 비밀 다시 → 검사 층 409(앱에 안 닿음)
