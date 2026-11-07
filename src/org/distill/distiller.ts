@@ -221,15 +221,23 @@ export function prefilterSql(d: DistillerRow, p: Params, alias = "s"): string | 
   if (th.min_decisive > 0) conds.push(`count(*) FILTER (WHERE x.body_md ~ ${p.add(kwRe)}) >= ${p.add(th.min_decisive)}`);
   if (!conds.length) return null;   // 레버 0 = 필터 끔
   const join = th.match === "any" ? " OR " : " AND ";
-  // ⚠ **비상관(uncorrelated) 서브쿼리여야 한다.** 처음엔 바깥 행(s)을 참조하는 EXISTS 로 썼는데, 그러면 자료 한 건마다
-  //  source 전체를 다시 스캔한다(O(n×m)) — 310건짜리 작은 채널에서도 statement timeout 이 났다(실측 2026-07-31).
-  //  s 를 참조하지 않는 형태면 Postgres 가 **스레드 집계를 한 번만** 하고 해시로 조인한다.
-  //  스레드 키 = (채널, threadIdSql) — 양쪽이 **같은 표현식**이어야 튜플 IN 이 성립한다(한쪽만 폴백을 주면 전량 탈락).
-  return `(COALESCE(${alias}.fields->>'container_name',''), ${threadIdSql(alias)}) IN (
-      SELECT COALESCE(x.fields->>'container_name',''), ${threadIdSql("x")}
-      FROM source x
+  // ⚠ **상관 EXISTS + HAVING(GROUP BY 없음)** 이어야 한다 — «s 와 같은 스레드 키의 활성 자료들 집계가 HAVING 을 통과하나».
+  //  같은 키의 활성 자료가 0건이면 count 가 0 이라 탈락한다(비상관 IN 이던 시절과 같은 판정).
+  //  왜 비상관 튜플 IN 을 버렸나: 그 형태는 해시조인을 전제로 했는데, 레인 스코프 술어(distillerExclusiveSql 의
+  //   NOT COALESCE 묶음)가 많으면 플래너가 바깥 후보 행 수를 크게 과소추정해 중첩루프를 고른다. 그러면 스레드 집계
+  //   결과 × 후보 행마다 JSONB 키 비교가 돈다(2026-11-07 운영 사례 — 상위 레인이 많은 레인 하나: 추정 6행·실제 7,124행,
+  //   조인 필터 1억 1,170만 회, 33.6초 → 앱 역할의 statement_timeout 초과로 distill-sources-headless 가 실패했다).
+  //  집계·HAVING 이 든 EXISTS 는 Postgres 가 조인으로 끌어올리지 않아 SubPlan 으로 남는다 — 조인 방식 오판에 안 휘둘린다.
+  //  예전(2026-07-31)의 상관 EXISTS 가 O(n×m) 으로 timeout 났던 건 스레드 키 인덱스가 없어서였다. 이제 행마다
+  //   source_thread_key_idx(src/v6/schema/graph-source.ts)로 그 스레드 행만 읽는다.
+  //  🔴 그 인덱스를 지우거나, 아래 채널 표현식·threadIdSql·lifecycle 조건을 바꾸면 인덱스 표현식과 어긋나 플래너가
+  //   못 쓰고 **자료 한 건마다 source 전체를 다시 읽는다**(=다시 timeout). 일치는 prefilter-thread-index.pg-test.mjs 가 EXPLAIN 으로 지킨다.
+  //  스레드 키 = (채널, threadIdSql) — 양쪽이 **같은 표현식**이어야 같은 스레드로 맞물린다(한쪽만 폴백을 주면 전량 탈락).
+  return `EXISTS (
+      SELECT 1 FROM source x
       WHERE x.lifecycle='active'
-      GROUP BY 1, 2
+        AND COALESCE(x.fields->>'container_name','') = COALESCE(${alias}.fields->>'container_name','')
+        AND ${threadIdSql("x")} = ${threadIdSql(alias)}
       HAVING ${conds.join(join)}
     )`;
 }

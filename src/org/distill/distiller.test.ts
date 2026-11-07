@@ -482,21 +482,30 @@ t("F9 레버>0 이면 인박스·잔량 양쪽에 똑같이 걸린다(한쪽만�
   const d = mk({ prefilter_level: 60 });
   //  구현 세부(컬럼 별칭)가 아니라 '스레드 집계로 거른다'는 구조로 확인한다 — 별칭은 사양이 아니다.
   for (const [name, qy] of [["인박스", buildInboxQuery(d, [])], ["잔량", buildBacklogQuery(d, [])]] as const) {
-    assert.match(qy.sql, /GROUP BY 1, 2[\s\S]*HAVING/, `${name}에 스레드 집계 필터가 걸려야 한다`);
+    assert.match(qy.sql, /EXISTS \(\s*SELECT 1 FROM source x[\s\S]*HAVING/, `${name}에 스레드 집계 필터가 걸려야 한다`);
   }
   assert.ok(!buildInboxQuery(mk({ prefilter_level: 0 }), []).sql.includes("HAVING"), "레버 0 이면 양쪽 모두 안 걸린다");
 });
 
-// ⚠ 성능 사양 — 이번에 실제로 터진 결함이다(2026-07-31): 처음엔 바깥 행을 참조하는 EXISTS 로 썼는데
-//  자료 한 건마다 source 전체를 다시 스캔해(O(n×m)) 310건짜리 작은 채널에서도 statement timeout 이 났다.
-//  서브쿼리가 바깥 별칭을 참조하지 않아야(비상관) Postgres 가 집계를 한 번만 하고 해시로 조인한다.
-t("F11 사전필터 서브쿼리는 비상관이어야 한다 — 안 그러면 자료마다 전체 스캔(실측 타임아웃)", () => {
-  const sql = prefilterSql(mk({ prefilter_level: 50 }), new Params()) || "";
-  const sub = sql.slice(sql.indexOf("SELECT COALESCE(x."));
-  assert.ok(!/\bs\./.test(sub),
-    `서브쿼리가 바깥 별칭(s.)을 참조하면 행마다 재실행된다:\n${sub.slice(0, 300)}`);
-  assert.match(sub, /FROM source x\s+WHERE x\.lifecycle='active'\s+GROUP BY/,
-    "스레드 집계는 조건 없이 한 번만 돌고 결과를 조인해야 한다");
+// ⚠ 성능 사양 — 두 번 터졌다. 2026-07-31 엔 바깥 행을 참조하는 EXISTS 가 스레드 키 인덱스 없이 자료마다 source 전체를
+//  다시 읽었고(O(n×m)), 2026-11-07 엔 그걸 피하려던 비상관 튜플 IN 이 레인 스코프 술어 탓에 후보 행 수를 과소추정한
+//  플래너에게 중첩루프로 풀려 prod 에서 statement_timeout 을 넘었다(distiller.ts prefilterSql 주석).
+//  지금 형태는 «스레드 키로 상관된 EXISTS + HAVING, GROUP BY 없음» — 조인으로 끌어올려지지 않는 SubPlan 이라 조인 방식
+//  선택에 안 휘둘리고, 행마다 source_thread_key_idx 로 그 스레드만 읽는다(인덱스 사용은 pg-test 가 EXPLAIN 으로 본다).
+t("F11 사전필터는 스레드 키로 상관된 EXISTS 다 — GROUP BY 없이 HAVING 으로 그 스레드만 집계한다", () => {
+  const sql = prefilterSql(mk({ prefilter_level: 50 }), new Params(), "s") || "";
+  assert.match(sql, /^EXISTS \(/, `튜플 IN 이 아니라 EXISTS 여야 한다:\n${sql.slice(0, 200)}`);
+  const sub = sql.slice(sql.indexOf("SELECT 1 FROM source x"));
+  assert.match(sub, /COALESCE\(x\.fields->>'container_name',''\) = COALESCE\(s\.fields->>'container_name',''\)/,
+    "채널 키가 바깥 행(s)과 상관돼야 한다");
+  assert.match(sub, /COALESCE\(x\.fields->>'thread_ts'[^()]*\) = COALESCE\(s\.fields->>'thread_ts'/,
+    "스레드 키가 바깥 행(s)과 상관돼야 한다");
+  assert.match(sub, /WHERE x\.lifecycle='active'/, "활성 자료만 집계한다(부분 인덱스 조건과 같다)");
+  assert.ok(!/GROUP BY/.test(sql), "GROUP BY 가 있으면 스레드 전체 집계로 돌아간다 — HAVING 만으로 한 스레드를 집계한다");
+  assert.match(sub, /\bHAVING\b/, "집계 조건은 HAVING 으로 건다");
+  const other = prefilterSql(mk({ prefilter_level: 50 }), new Params(), "c") || "";
+  assert.ok(other.includes("COALESCE(c.fields->>'container_name','')") && !/\bs\./.test(other),
+    "별칭 인자를 따라 바깥 참조가 바뀐다");
 });
 
 t("F10 스레드 집계는 배치가 아니라 채널 전체 범위다(배치 경계에서 잘리면 점수 왜곡)", () => {
@@ -1032,10 +1041,10 @@ t("TK2 스레드 키를 쓰는 쿼리는 전부 같은 폴백을 쓴다 — 한 
   }
 });
 
-t("TK3 튜플로 대조하는 자리는 양쪽 표현식이 같아야 한다 — 한쪽만 폴백이면 매칭이 통째로 어긋난다", () => {
+t("TK3 스레드 키로 상관하는 자리는 양쪽 표현식이 같아야 한다 — 한쪽만 폴백이면 매칭이 통째로 어긋난다", () => {
   const sql = prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "";
   const shapes = threadKeyExprs(sql).map((k) => k.replace(/\b[a-z]\./g, ""));   // alias 지우고 형태만 본다
-  assert.ok(shapes.length >= 2, "바깥 행과 집계 서브쿼리 양쪽에 키가 있다");
+  assert.ok(shapes.length >= 2, "바깥 행과 상관 서브쿼리 양쪽에 키가 있다");
   assert.equal(new Set(shapes).size, 1, `양쪽이 다르다: ${JSON.stringify(shapes)}`);
 });
 
