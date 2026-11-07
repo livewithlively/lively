@@ -22,6 +22,7 @@ import { initGroundTruthRegistries } from "./schema/registry.js";
 import { initMemberAuth } from "./schema/member-auth.js";
 import { initOAuthServer } from "./schema/oauth.js";
 import { initCanary } from "./schema/canary.js";
+import { initUiTranslateCache } from "./schema/ui-translate.js";
 import { initPromotion } from "./schema/promotion.js";
 import { initNodeSessionMap } from "./schema/node-session-map.js";
 import { initNodeState } from "./schema/node-state.js";
@@ -65,5 +66,6 @@ export async function initOrgSchema(): Promise<void> {
   await initNodeLinkLog(itemsPool);                // #1849: org_node_link_log(노드 연결/해제 이력 — 잠자기 패턴 진단의 근거) — 맨 끝(신규 조각 규약)
   await initSessionConvLog(itemsPool);             // #2233: org_session_conv(한 박스가 살면서 돌린 대화 전부 — 타임라인이 세션 전체를 본다) — 맨 끝(신규 조각 규약)
   await initMemberAiConnector(itemsPool);          // #4213 T6: member_ai_connector(+scan) — 구성원 AI 계정(Claude)에 연결된 앱 기록 — 맨 끝(신규 조각 규약)
+  await initUiTranslateCache(itemsPool);           // #5141: ui_translate_cache(화면 영어 보기 번역 기억 — 배포·재시작에도 남는다) — 맨 끝(신규 조각 규약)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

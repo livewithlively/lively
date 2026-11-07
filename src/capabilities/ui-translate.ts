@@ -6,8 +6,8 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 
-/** 사람마다 1분에 묶음 40번 — 화면 하나가 많아야 몇 묶음이라 넉넉하고, 고장 난 화면이 키를 태우지는 못한다. */
-const perMember = new RateWindow(40);
+/** 사람마다 1분에 묶음 120번 — 화면은 작은 묶음(20줄 · 1,200자)을 한꺼번에 보내 빨리 붙인다. 묶음이 작아 고장 난 화면도 키를 크게 태우지는 못한다. */
+const perMember = new RateWindow(120);
 
 const uiTranslate: Capability = {
   name: "ui_translate",

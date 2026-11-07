@@ -17,11 +17,14 @@ export const SCREEN_LANG_KEY = 'lv:screen-lang';
 const CACHE_KEY = 'lv:screen-lang-cache:en';
 /** 브라우저에 남기는 번역 수 — 넘으면 오래된 것부터 버린다. 4천 줄이면 화면 대부분을 덮고 저장소(몇백 KB)를 넘지 않는다. */
 const CACHE_MAX = 4000;
-/** 한 번에 서버에 보내는 묶음(서버 상한 120개 · 24,000자 안). */
-const BATCH_TEXTS = 60;
-const BATCH_CHARS = 9000;
-/** 이 문서가 1분에 보내는 묶음 수 — 서버 상한(사람당 40)보다 낮게. 셸과 액자가 따로 세니 둘이 합쳐도 넘지 않게 절반 남짓. */
-const BATCHES_PER_MIN = 16;
+/** 한 번에 서버에 보내는 묶음(서버 상한 120개 · 24,000자 안). 작게 쪼개 한꺼번에 보낸다 — 화면 전체가 가장 느린 묶음 하나만큼만 기다리게
+ *  (실측: 60개 묶음을 둘씩 차례로 보냈더니 문서 하나에 수십 초). */
+const BATCH_TEXTS = 20;
+const BATCH_CHARS = 1200;
+/** 동시에 보내는 묶음 수. */
+const CONCURRENCY = 6;
+/** 이 문서가 1분에 보내는 묶음 수 — 서버 상한(사람당 120)보다 낮게. 셸과 액자가 따로 세니 둘이 합쳐도 넘지 않게 절반. */
+const BATCHES_PER_MIN = 60;
 /** 훑기 간격 — 모르는 글은 이 간격으로 두 번 보여야 묻는다. */
 const SCAN_MS = 600;
 /** 실패한 글을 다시 묻기까지(처음 · 거듭될 때마다 두 배 · 상한). */
@@ -222,10 +225,10 @@ async function fetchAll(texts: string[]): Promise<void> {
   for (const b of take) { sentAt.push(now); for (const s of b) inflight.add(s); }
   busy++; emit();
   try {
-    //  둘씩 동시에 — 한 화면이 몇 묶음이라 둘이면 충분하다.
+    //  여럿을 동시에 — 묶음마다 받는 대로 화면에 붙인다(다 끝날 때까지 기다리지 않는다).
     let i = 0;
-    const worker = async (): Promise<void> => { while (i < take.length) { const b = take[i++]; await fetchBatch(b); } };
-    await Promise.all([worker(), worker()]);
+    const worker = async (): Promise<void> => { while (i < take.length) { const b = take[i++]; await fetchBatch(b); if (on) scheduleScan(0); } };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, take.length) }, worker));
   } finally {
     for (const b of take) for (const s of b) inflight.delete(s);
     busy--; emit();
