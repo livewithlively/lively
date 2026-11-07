@@ -105,14 +105,6 @@ export async function initV6GraphSource(pool: Pool): Promise<void> {
     --  구조화 메타(#735 source.fields)가 그대로 필터 축이라 표현식 인덱스로 받는다(자료가 만 단위로 쌓이는 축).
     CREATE INDEX IF NOT EXISTS source_channel_idx ON source((fields->>'container_name'));
     CREATE INDEX IF NOT EXISTS source_author_idx  ON source((fields->>'author_name'));
-    -- 증류 사전필터의 스레드 키(채널, 스레드 id) — prefilterSql 의 상관 EXISTS 가 자료 한 건마다 그 스레드 행만 읽게 한다.
-    --  표현식·WHERE 는 distiller.ts 의 prefilterSql·threadIdSql 이 만드는 것과 구조적으로 같아야 플래너가 쓴다.
-    --  스키마 계층이 org 계층을 import 하지 않으려고 리터럴로 적었다 — 어긋나면 자료마다 source 전체를 다시 읽어
-    --  statement_timeout 이 난다. 일치는 src/org/distill/prefilter-thread-index.pg-test.mjs 가 EXPLAIN 으로 지킨다.
-    CREATE INDEX IF NOT EXISTS source_thread_key_idx ON source(
-      (COALESCE(fields->>'container_name','')),
-      (COALESCE(fields->>'thread_ts', fields->>'ts', 'src:' || id::text)))
-      WHERE lifecycle='active';
   `);
 
   // ── ⑭-d) knowledge_source — 지식→자료 인용. relation=derived_from(증류)|cites(참조). recall 그래프가 tier 가로지르는 다리. ──

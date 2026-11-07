@@ -1,12 +1,10 @@
-// 증류 사전필터(prefilterSql)의 스레드 판정과, 그 판정이 source_thread_key_idx 를 탈 수 있는지 — 실제 Postgres 필요(기본 유닛 체인 밖).
+// 증류 사전필터(prefilterSql)의 스레드 판정과, 그 판정이 앱 역할(RLS)에서 source 를 스레드마다 다시 읽지 않는지 — 실제 Postgres 필요(기본 유닛 체인 밖).
 //  CI 의 pg-test 잡에서, 또는 로컬에서 수동 실행:
 //    npm run build && ITEMS_DATABASE_URL=... node src/org/distill/prefilter-thread-index.pg-test.mjs
 //
-//  왜 이 계층인가: 유닛(distiller.test.ts F·TK 절)은 SQL 문자열의 모양만 본다. 상관 EXISTS + HAVING 이 실제로 «같은 스레드의
-//   활성 자료 집계» 로 판정하는지, 그리고 그 서브쿼리가 인덱스를 탈 수 있는지는 실 DB 로만 보인다.
-//   인덱스는 스키마(src/v6/schema/graph-source.ts)에 리터럴로 적혀 있고 서브쿼리는 threadIdSql 로 조립되므로, 둘이 어긋나도
-//   타입체커·유닛은 초록이다 — 어긋나면 플래너가 인덱스를 못 쓰고 자료마다 source 전체를 다시 읽어 statement_timeout 이 난다
-//   (distiller.ts prefilterSql 주석의 2026-11-07 사고). P3 가 그 일치의 기계 가드다.
+//  왜 이 계층인가: 유닛(distiller.test.ts F·TK 절)은 SQL 문자열의 모양만 본다. 스레드 목록과 source 의 조인 + HAVING 이 실제로
+//   «같은 스레드의 활성 자료 집계» 로 판정하는지, 그리고 게이트웨이와 같은 조건(행 수준 보안이 걸린 앱 역할)에서 source 를
+//   스레드마다 다시 읽지 않는지는 실 DB 로만 보인다.
 //
 //  사양 엣지 표(행마다 단언):
 //   P1 match=all(메시지 ≥2 AND 키워드 ≥1) — 통과 스레드의 자료만 인박스·잔량에 잡힌다
@@ -14,7 +12,8 @@
 //      · 채널 없는 스레드도 스레드 키로 묶인다(G)
 //      · superseded 자료는 스레드 집계에 안 센다(H — 세면 2건이 돼 통과한다)
 //   P2 match=any — thread_ts·ts 가 모두 없는 자료는 자기 id 로 1건짜리 스레드다('src:' 폴백, E 통과·F 탈락)
-//   P3 계획 — seqscan 을 끄면 인박스·잔량 쿼리 계획에 source_thread_key_idx 가 나온다(표현식·부분조건 일치)
+//   P3 계획 — RLS 가 걸린 비소유자 역할로 인박스·잔량을 EXPLAIN ANALYZE 하면, 사전필터(source x)가 읽은 행의 합이
+//      source 행 수를 넘지 않는다(스레드마다 source 를 다시 읽지 않는다)
 import assert from "node:assert/strict";
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
@@ -101,32 +100,64 @@ const backlog = async (rules, withPrefilter = true) => {
   assert.equal(await backlog(ANY), want.length, "P2 잔량이 인박스와 같은 기준이어야 한다");
   ok("P2 match=any — thread_ts·ts 없는 자료는 자기 id 로 1건짜리 스레드");
 }
-// P3 — 작은 테이블이면 플래너가 seqscan 을 고르므로, seqscan 을 꺼서 인덱스를 «쓸 수 있는지»(표현식·부분조건 일치)만 본다.
-//  인덱스 이름이 계획에 나오는 것만으로는 부족하다 — 첫 열(채널)만 맞아도 이름은 나오고, 스레드 키는 필터로 밀려 채널 전체를
-//  행마다 다시 읽는다. 그래서 그 인덱스 노드의 Index Cond 에 **두 열이 다** 걸렸는지 본다(스레드 열은 'src:' 폴백까지).
-const indexConds = (node, out = []) => {
+// P3 — 사전필터가 source 를 스레드마다 다시 읽지 않는가(2026-11-07 운영 사례: 스레드 195개 × source 전체, 21초).
+//  ⚠ **반드시 RLS 가 걸린 비소유자 역할로 잰다 — 소유자·슈퍼유저로 돌리면 못 잡는다.** 슈퍼유저는 RLS 를 건너뛰고, 소유자는
+//   owner_all(true) 정책뿐이라 스레드 키 비교가 표현식 인덱스가 있으면 Index Cond 로 들어간다(이 PR 의 이전 커밋이 그렇게 숨었다). 그러면 스레드마다
+//   도는 상관 서브쿼리도 스레드 행만 읽어 이 단언을 통과한다. 앱 역할에는 tenant_isolation 이 걸리고, leakproof 가 아닌
+//   jsonb `->>` 비교는 보안 조건보다 먼저 평가될 수 없어 인덱스 조건이 못 되므로, 같은 쿼리가 스레드마다 source 전체를 읽는다.
+//  역할·정책은 prod(org/tenancy/activate.ts ensureTenantPolicies)와 같은 모양으로 이 트랜잭션 안에서만 만들고 ROLLBACK 한다 —
+//   CREATE ROLE·ALTER TABLE·CREATE POLICY 는 트랜잭션에 묶이므로 공유 시험 DB 에 아무것도 남지 않는다. ensureTenantPolicies 를
+//   그대로 부르지 않는 까닭: 공유 DB 의 모든 표에 FORCE RLS 를 영구로 남겨 뒤에 도는 시험의 전제를 바꾼다.
+//  enable_seqscan=off 는 인덱스 경로를 쓸 수 있으면 쓰게 해, 다시 읽기가 남는 이유를 RLS 하나로 좁힌다(작은 표에서 플래너가
+//   seqscan 을 골라 소유자 경로까지 다시 읽는 거짓 실패를 막는다).
+//  판정은 «x 스캔 노드들이 실제로 읽은 행(Actual Rows + 필터로 버린 행, × Actual Loops)의 합 ≤ source 전체 행 수» 다. 노드 모양이
+//   아니라 읽은 양을 본다 — 작은 데이터에서도 loops·행 수는 결정적이고, 상관 서브쿼리는 스레드 수만큼 곱해져 넘친다.
+const P3_ROLE = "pfidx_pg_test_app";
+const P3_TABLES = ["source", "knowledge_source", "org_distiller_seen"];   // 증류 쿼리가 읽는, prod 에서 tenant_isolation 이 걸린 표
+const STRICT = "current_setting('app.tenant_id')::uuid";                  // activate.ts STRICT_EXPR 와 같은 식
+const scansOfX = (node, out = []) => {
+  if (Array.isArray(node)) { for (const v of node) scansOfX(v, out); return out; }
   if (node && typeof node === "object") {
-    if (node["Index Name"] === "source_thread_key_idx") out.push(String(node["Index Cond"] ?? ""));
-    for (const v of Object.values(node)) if (v && typeof v === "object") indexConds(v, out);
+    if (node["Relation Name"] === "source" && node.Alias === "x") out.push(node);
+    if (node.Plans) scansOfX(node.Plans, out);
+    if (node.Plan) scansOfX(node.Plan, out);
   }
   return out;
 };
+const rowsRead = (n) => (Number(n["Actual Rows"] ?? 0) + Number(n["Rows Removed by Filter"] ?? 0)
+  + Number(n["Rows Removed by Index Recheck"] ?? 0)) * Number(n["Actual Loops"] ?? 1);
 {
+  const [{ total }] = await q(`SELECT count(*)::int AS total FROM source`);
+  const [{ tid }] = await q(`SELECT DISTINCT tenant_id::text AS tid FROM source WHERE external_system=$1`, [SYS]);
   const c = await itemsPool.connect();
   try {
+    await c.query("ANALYZE source");   // 통계 없는 플래너 선택에 기대지 않게(CI 환경 차이로 인한 거짓 실패 방지)
     for (const [name, qy] of [["인박스", buildInboxQuery(lane(ALL), [], 200, null)], ["잔량", buildBacklogQuery(lane(ALL), [])]]) {
-      await c.query("ANALYZE source");   // 통계 없는 플래너 선택에 기대지 않게(CI 환경 차이로 인한 거짓 실패 방지)
       await c.query("BEGIN");
-      await c.query("SET LOCAL enable_seqscan = off");
-      const plan = (await c.query(`EXPLAIN (FORMAT JSON) ${qy.sql}`, qy.values)).rows[0]["QUERY PLAN"];
-      await c.query("ROLLBACK");
-      const conds = indexConds(plan);
-      assert.ok(conds.some((k) => k.includes("container_name") && k.includes("thread_ts") && k.includes("src:")),
-        `P3 ${name} — source_thread_key_idx 를 두 열(채널·스레드 키)로 타는 노드가 없다. 스키마의 인덱스 표현식과 `
-        + `prefilterSql·threadIdSql 이 어긋났다(자료마다 source 를 다시 읽는다). 찾은 Index Cond: ${JSON.stringify(conds)}`);
+      try {
+        await c.query(`CREATE ROLE ${P3_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+        await c.query(`GRANT USAGE ON SCHEMA public TO ${P3_ROLE}`);
+        await c.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${P3_ROLE}`);
+        for (const t of P3_TABLES) {
+          await c.query(`ALTER TABLE ${t} ENABLE ROW LEVEL SECURITY`);
+          await c.query(`ALTER TABLE ${t} FORCE ROW LEVEL SECURITY`);
+          await c.query(`CREATE POLICY pfidx_tenant_isolation ON ${t} FOR ALL TO ${P3_ROLE} USING (tenant_id = ${STRICT})`);
+        }
+        await c.query(`SELECT set_config('app.tenant_id', $1, true)`, [tid]);
+        await c.query(`SET LOCAL ROLE ${P3_ROLE}`);
+        await c.query("SET LOCAL enable_seqscan = off");
+        const plan = (await c.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${qy.sql}`, qy.values)).rows[0]["QUERY PLAN"];
+        const xs = scansOfX(plan);
+        const read = xs.reduce((a, n) => a + rowsRead(n), 0);
+        const shape = xs.map((n) => ({ type: n["Node Type"], parent: n["Parent Relationship"], loops: n["Actual Loops"], rows: n["Actual Rows"], removed: n["Rows Removed by Filter"] ?? 0 }));
+        assert.ok(xs.length > 0, `P3 ${name} — 계획에 사전필터의 source x 스캔이 없다(별칭이 바뀌었나?): ${JSON.stringify(plan).slice(0, 400)}`);
+        assert.ok(read <= total,
+          `P3 ${name} — 앱 역할(RLS)에서 사전필터가 source 를 ${read}행 읽었다(전체 ${total}행) — 스레드마다 다시 읽는다. `
+          + `스레드마다 도는 상관 서브쿼리로 돌아갔는지 prefilterSql 을 보라. x 스캔: ${JSON.stringify(shape)}`);
+      } finally { await c.query("ROLLBACK"); }
     }
   } finally { c.release(); }
-  ok("P3 계획 — 사전필터 서브쿼리가 source_thread_key_idx 를 두 열 다 걸고 탈 수 있다");
+  ok("P3 계획 — RLS 앱 역할에서 사전필터가 source 를 스레드마다 다시 읽지 않는다");
 }
 
 // ── 정리 ──
