@@ -12,10 +12,15 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-import type { LivProfile } from "../../org/store/members.js";
+import type { LivAsk, LivProfile, LivSecretAsk } from "../../org/store/members.js";
 import { livFindings, livTopFindings, livMature, LIV_PROPOSALS_ON, type LivSnapshot } from "../../org/delivery/liv-findings.js";
-import { askTargetVerdict, askStillOpen } from "../../org/delivery/liv-secret.js";
+import {
+  askTargetVerdict, askStillOpen, askTargetChoice, vaultAskVerdict, vaultAskLabel, livSecretPutPlan,
+  vaultScopeVerdict, vaultAskDest, vaultKindName, type VaultSlot,
+} from "../../org/delivery/liv-secret.js";
+import { HOST_SCOPED_KINDS } from "../../org/credentials/member-secret-rules.js";
 import { livHomeMode } from "../../org/delivery/liv-home.js";
+import { logger } from "../../log.js";
 
 /** 화면이 한 번에 보여주는 카드 수. 전부 나열하면 아무것도 안 된다. */
 const TOP = 3;
@@ -29,6 +34,140 @@ async function livBoardUrl(): Promise<string | null> {
   const base = await gatewayUrl().catch(() => null);
   return base ? `${String(base).replace(/\/+$/, "")}/ui/#/liv?board=1` : null;
 }
+
+/** 사람에게 보일 짧은 글(리브가 준 label·why·hint) — 앞뒤 공백을 걷고 자른다. 비면 undefined. */
+const clip = (v: unknown, max: number): string | undefined => {
+  const t = String(v ?? "").trim().slice(0, max);
+  return t || undefined;
+};
+
+/** 본인 금고 자격 요청의 의존(시험 seam) — 실제 구현은 아래 realVaultAskDeps. */
+export interface VaultAskDeps {
+  secretsEnabled: () => Promise<boolean>;
+  /** 요청자 본인 금고 칸 목록(값 없음) — 호스트 kind 의 (a) «이미 가진 호스트». */
+  mine: (userId: string) => Promise<ReadonlyArray<Pick<VaultSlot, "kind" | "scope_key">>>;
+  /** 그 칸 하나(목록이 숨기는 칸 포함) — 이미 값이 있으면 카드가 «바꿉니다» 를 말한다. 없으면 null. */
+  slot: (userId: string, kind: string, scope: string) => Promise<{ has_secret: boolean } | null>;
+  /** 조직이 그 kind 로 등록한 칸의 scope(관리자 통합 자격 — owner gateway) — 호스트 kind 의 (b). */
+  orgScopes: (kind: string) => Promise<string[]>;
+  setAsk: (userId: string, ask: LivSecretAsk) => Promise<unknown>;
+}
+
+/**
+ * 리브가 요청자 **본인 금고** 칸을 요청한다 — 판정 → 저장 위치 문장 → 저장. 거절은 HttpError 로 던지고, 그때는 아무것도 저장하지 않는다.
+ *  판정 순서: 형식·관리자 전용·마스터키(DB 없이) → 호스트 kind 의 scope(이미 등록된 호스트만) → 이미 값이 있나(교체 표시).
+ */
+export async function livVaultAsk(userId: string, input: Record<string, unknown>, d: VaultAskDeps): Promise<LivSecretAsk> {
+  const v = vaultAskVerdict(input.vault_kind, input.vault_scope, await d.secretsEnabled());
+  if (!v.ok) {
+    if (v.reason === "admin-only") throw new HttpError(403, "그 자격은 본인이 넣을 수 없습니다 — 관리자가 통합 자격으로만 넣습니다");
+    if (v.reason === "no-master-key") throw new HttpError(409, "이 게이트웨이는 자격을 안전하게 보관할 수 없습니다(마스터키 미설정) — 운영자에게 알려주세요");
+    throw new HttpError(400, v.reason === "no-kind" ? "vault_kind 가 필요합니다"
+      : v.reason === "bad-kind" ? "vault_kind 형식 오류(소문자·숫자·_ 1~40자)" : "vault_scope 형식 오류(영숫자·._:- 120자 이내)");
+  }
+  //  scope 가 접속 호스트인 kind 만 칸 목록을 본다 — 아니면 scope 가 무엇이든 값이 가는 곳은 그 서비스 하나다.
+  //   조직 쪽 조회가 실패하면 «조직 호스트 없음» 으로 본다(받는 쪽을 좁히는 실패라 안전하다).
+  const host = HOST_SCOPED_KINDS.get(v.vault_kind);
+  const scoped = host
+    ? vaultScopeVerdict(v.vault_kind, v.vault_scope, await d.mine(userId), await d.orgScopes(v.vault_kind).catch(() => []))
+    : vaultScopeVerdict(v.vault_kind, v.vault_scope, []);
+  if (!scoped.ok) {
+    throw new HttpError(400,
+      `«${vaultKindName(v.vault_kind)}» 칸의 구분값(vault_scope)은 그 값이 실려 나갈 호스트라서, 리브는 내 금고나 조직에 이미 등록된 호스트로만 받습니다` +
+      (host?.emptyOk ? "(비워 두면 기본 칸으로 받습니다)" : "") +
+      ` — 처음 보는 호스트(${v.vault_scope || "빈 값"})는 사람이 ${host?.connect ?? "연결 화면"} 에서 직접 등록하게 안내하세요.`);
+  }
+  const scope = scoped.vault_scope;
+  const replaces = !!(await d.slot(userId, v.vault_kind, scope))?.has_secret;
+  const ask: LivSecretAsk = {
+    at: new Date().toISOString(), kind: "secret",
+    target: "vault", vault_kind: v.vault_kind, vault_scope: scope,
+    label: clip(input.label, 80) ?? vaultAskLabel(v.vault_kind, scope),
+    why: clip(input.why, 300),
+    hint: clip(input.hint, 120),
+    //  저장 위치는 서버가 만든다 — 입력에 dest 가 와도 읽지 않는다(리브가 고른 칸을 리브의 말로 설명하게 두면 사람이 검증할 길이 없다).
+    dest: vaultAskDest(v.vault_kind, scope, replaces),
+  };
+  await d.setAsk(userId, ask);
+  return ask;
+}
+
+const realVaultAskDeps: VaultAskDeps = {
+  secretsEnabled: async () => (await import("../../org/credentials/secret-box.js")).secretsEnabled(),
+  mine: async (userId) => {
+    const s = await import("../../org/credentials/member-secret-store.js");
+    return s.listMemberSecretsPublic(s.memberOwner(userId));
+  },
+  slot: async (userId, kind, scope) => {
+    const s = await import("../../org/credentials/member-secret-store.js");
+    return s.getMemberSecretPublic(s.memberOwner(userId), kind, scope);
+  },
+  orgScopes: async (kind) => {
+    const s = await import("../../org/credentials/member-secret-store.js");
+    return (await s.listMemberSecretsPublic(s.GATEWAY_OWNER)).filter((r) => r.kind === kind).map((r) => r.scope_key);
+  },
+  setAsk: async (userId, ask) => (await import("../../org/store.js")).setLivSecretAsk(userId, ask),
+};
+
+/** 화면이 보낸 값 저장의 의존(시험 seam) — 실제 구현은 아래 realPutDeps. ⚠ 값은 저장 함수 둘에만 건넨다. */
+export interface LivSecretPutDeps {
+  getAsk: (userId: string) => Promise<LivAsk | null | undefined>;
+  clearAsk: (userId: string) => Promise<unknown>;
+  /** 그 금고 칸의 지금 meta·label — 값만 바꾸는 자리라 그대로 다시 넘긴다(저장 경로는 meta 를 교체하므로 안 넘기면 지워진다). */
+  vaultSlot: (userId: string, kind: string, scope: string) => Promise<{ meta: Record<string, unknown>; label: string | null } | null>;
+  /** me_credential_set 과 같은 저장 경로(member-secret.ts saveOwnCredential). owner 는 언제나 첫 인자 본인. */
+  saveOwnCredential: (memberId: string, i: { kind: string; scope_key: string; secret: string; meta: Record<string, unknown>; label: string | null }) => Promise<unknown>;
+  saveCollectorSecret: (collectorId: number, field: string, value: string, actor: string) => Promise<unknown>;
+  log: (o: Record<string, unknown>, msg: string) => void;
+}
+
+/**
+ * 화면의 안전 입력칸이 보낸 값을 넣는다. ⚠ 대상은 **저장된 요청**에서만 — 입력에서는 value 하나만 읽는다(다른 수집기·다른 금고 칸으로
+ *  새는 것을 막는다). 요청은 저장이 끝난 **뒤에** 지운다 — 저장이 실패하면 칸이 남아 사람이 다시 넣을 수 있다.
+ */
+export async function livSecretPut(userId: string, input: Record<string, unknown>, d: LivSecretPutDeps):
+  Promise<{ ok: true; target: "vault"; vault_kind: string; vault_scope: string } | { ok: true; field: string }> {
+  //  대기 중인 게 자격 요청이 아니면(객관식·업로드) 값이 날아온 것 자체가 잘못된 호출이다.
+  const plan = livSecretPutPlan(await d.getAsk(userId), input);
+  if (!plan.ok) {
+    if (plan.reason === "no-ask") throw new HttpError(409, "지금 받기로 한 자격이 없습니다");
+    throw new HttpError(400, plan.reason === "empty" ? "값이 비어 있습니다" : "값이 너무 깁니다");
+  }
+  const value = String(input.value);
+  const target = plan.target;
+
+  if (target.target === "vault") {
+    // me_credential_set 과 **같은 저장 경로** — 값 검사·암호화 키 확인·저장 뒤 부작용이 한 벌이다. owner 는 언제나 요청자 본인.
+    const cur = await d.vaultSlot(userId, target.vault_kind, target.vault_scope);
+    await d.saveOwnCredential(userId, {
+      kind: target.vault_kind, scope_key: target.vault_scope, secret: value,
+      meta: cur?.meta ?? {}, label: cur?.label ?? null,
+    });
+    d.log({ member: userId, kind: target.vault_kind, scope_key: target.vault_scope, source: "liv" }, "리브 안전 입력칸으로 본인 금고 자격 저장");
+    await d.clearAsk(userId);
+    return { ok: true, target: "vault", vault_kind: target.vault_kind, vault_scope: target.vault_scope };  // 값은 절대 되돌려주지 않는다
+  }
+
+  await d.saveCollectorSecret(target.collector_id, target.field, value, userId);
+  await d.clearAsk(userId);
+  return { ok: true, field: target.field };  // 값은 절대 되돌려주지 않는다
+}
+
+const realPutDeps: LivSecretPutDeps = {
+  getAsk: async (userId) => (await (await import("../../org/store.js")).getLivProfile(userId)).secret_ask,
+  clearAsk: async (userId) => (await import("../../org/store.js")).setLivSecretAsk(userId, null),
+  vaultSlot: async (userId, kind, scope) => {
+    const s = await import("../../org/credentials/member-secret-store.js");
+    return s.getMemberSecretPublic(s.memberOwner(userId), kind, scope);
+  },
+  saveOwnCredential: async (memberId, i) => (await import("../member-secret.js")).saveOwnCredential(memberId, i),
+  saveCollectorSecret: async (collectorId, field, value, actor) => {
+    const { upsertCollector } = await import("../../org/store/collectors.js");
+    //  id 로 보낸다: key 로 보내면 중복키로 500 이 난다(#1631 실측).
+    return upsertCollector({ id: collectorId, secrets: { [field]: value } }, actor, "liv");
+  },
+  log: (o, msg) => logger.info(o, msg),
+};
 
 export const livCapabilities: Capability[] = [
   // ⚠ `mode`/`reason` 은 **더는 홈을 갈아치우는 데 쓰이지 않는다.** 리브가 홈을 덮던 설계를 걷어내고
@@ -92,8 +231,12 @@ export const livCapabilities: Capability[] = [
         // 객관식·업로드는 대상 검증이 필요 없다 — 시크릿만 "이미 채워졌나"를 확인한다.
         if (ask.kind && ask.kind !== "secret") return ask;
         try {
+          if ((ask as { target?: string }).target === "vault") {
+            const { listMemberSecretsPublic, memberOwner } = await import("../../org/credentials/member-secret-store.js");
+            return askStillOpen(ask, [], await listMemberSecretsPublic(memberOwner(userId))) ? ask : null;
+          }
           const { listCollectors } = await import("../../org/store/collectors.js");
-          return askStillOpen(ask as { collector_id: number; field: string }, await listCollectors()) ? ask : null;
+          return askStillOpen(ask, await listCollectors()) ? ask : null;
         } catch { return null; }
       })();
 
@@ -244,7 +387,9 @@ export const livCapabilities: Capability[] = [
     "리브가 사람에게 받아야 하는 자격 하나를 **요청**한다 — 리브 세션 대화창의 입력칸 바로 위(와 리브 화면)에 안전 입력칸이 뜬다. " +
     "⚠ 시크릿을 대화로 받지 마라. 사람에게 다른 탭·메뉴로 가라고 하지도 마라. 웹의 리브 세션이면 이 도구를 쓰면 그 자리에서 끝난다. " +
     "커서 같은 로컬 AI 처럼 그 입력칸이 안 보이는 자리라면 응답의 board_url 을 사람에게 주고 «이 링크에서 넣어 주세요» 라고 하라(값은 대화로 받지 않는다). " +
-    "값은 화면이 받아 곧바로 금고로 넣고, 너는 값을 보지 못한다(설정됐는지 여부만 확인된다).",
+    "값은 화면이 받아 곧바로 금고로 넣고, 너는 값을 보지 못한다(설정됐는지 여부만 확인된다). " +
+    "넣을 자리는 둘 중 **하나만** 준다 — 수집기 자격 칸이면 collector_id+field, 그 사람 본인의 개인 자격(me_credential_set 이 쓰는 금고 — 예: 슬랙 봇 토큰)이면 vault_kind(+vault_scope). " +
+    "본인 금고면 저장 위치(어느 칸·어느 호스트·이미 있던 값을 바꾸는지)를 서버가 문장으로 만들어 카드에 따로 보여 준다(응답의 ask.dest).",
     [{ method: "POST", paths: ["/api/ui/me/liv-secret-ask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
@@ -254,12 +399,24 @@ export const livCapabilities: Capability[] = [
       // 취소 — 더는 필요 없어졌으면 칸을 내린다(사람 화면에 죽은 입력칸을 남기지 않는다).
       if (input.cancel === true) return { ask: null, profile: await setLivSecretAsk(userId, null) };
 
+      const choice = askTargetChoice(input);
+      if (!choice.ok) {
+        throw new HttpError(400, choice.reason === "both"
+          ? "넣을 자리는 하나만 — collector_id+field(수집기) 또는 vault_kind(본인 금고) 중 하나를 주세요"
+          : "넣을 자리가 필요합니다 — collector_id+field(수집기) 또는 vault_kind(본인 금고)");
+      }
+
+      // **대상 검증** — 판정은 순수 모듈이 한다(liv-secret.ts). 여기서는 그 결과를 HTTP 로 옮길 뿐이다.
+      if (choice.target === "vault") {
+        const ask = await livVaultAsk(userId, input, realVaultAskDeps);
+        return { ask, board_url: await livBoardUrl() };
+      }
+
       const collectorId = Number(input.collector_id);
       const field = String(input.field ?? "").trim();
       if (!Number.isInteger(collectorId) || collectorId <= 0) throw new HttpError(400, "collector_id 가 필요합니다");
       if (!field) throw new HttpError(400, "field 가 필요합니다");
 
-      // **대상 검증** — 판정은 순수 모듈이 한다(liv-secret.ts). 여기서는 그 결과를 HTTP 로 옮길 뿐이다.
       const { listCollectors } = await import("../../org/store/collectors.js");
       const c = (await listCollectors()).find((x) => x.id === collectorId);
       const verdict = askTargetVerdict(c, field);
@@ -270,16 +427,12 @@ export const livCapabilities: Capability[] = [
       }
       const f = c!.fields.find((x) => x.key === field)!;
 
-      const str = (v: unknown, max: number): string | undefined => {
-        const t = String(v ?? "").trim().slice(0, max);
-        return t || undefined;
-      };
       const ask = {
         at: new Date().toISOString(),
         collector_id: collectorId, field,
-        label: str(input.label, 80) ?? f.label ?? field,
-        why: str(input.why, 300),
-        hint: str(input.hint, 120) ?? f.hint ?? undefined,
+        label: clip(input.label, 80) ?? f.label ?? field,
+        why: clip(input.why, 300),
+        hint: clip(input.hint, 120) ?? f.hint ?? undefined,
       };
       await setLivSecretAsk(userId, ask);
       return { ask, board_url: await livBoardUrl() };
@@ -289,34 +442,23 @@ export const livCapabilities: Capability[] = [
     }, true, {
       collector_id: z.number().int().positive().optional().describe("자격을 넣을 수집기 id"),
       field: z.string().optional().describe("그 수집기의 시크릿 필드 key(예: token)"),
-      label: z.string().optional().describe("칸 이름 — 사람이 읽는다. 없으면 프리셋 라벨."),
+      vault_kind: z.string().optional().describe("수집기 대신 그 사람 **본인 금고**(me_credential_set 과 같은 칸)에 넣을 때의 자격 종류(예: slack_bot_token). collector_id·field 와 함께 주지 않는다."),
+      vault_scope: z.string().optional().describe("본인 금고 칸의 구분값(같은 종류를 여러 개 쓸 때 — 예: GitLab 호스트). 기본 빈 문자열. " +
+        "⚠ 구분값이 그 값이 실려 나갈 호스트인 종류(gitlab_pat·lively_workspace)는 내 금고나 조직에 이미 등록된 호스트(gitlab_pat 은 비워 두면 기본 칸)로만 받는다 — 새 호스트는 400 이고, 사람이 연결 화면에서 직접 등록한다."),
+      label: z.string().optional().describe("칸 이름 — 사람이 읽는다. 없으면 프리셋 라벨(본인 금고면 자격 종류)."),
       why: z.string().optional().describe("왜 필요한지 한 줄. 이유를 모르면 사람은 겁이 나서 멈춘다."),
       hint: z.string().optional().describe("값이 어떻게 생겼는지(예: ntn_ 로 시작하는 긴 문자열)."),
       cancel: z.boolean().optional().describe("true 면 대기 중인 요청을 내린다."),
     }),
 
   restRead("me_liv_put_secret", "자격 저장(화면 전용)",
-    "리브 화면의 안전 입력칸이 받은 값을 금고에 넣는다. **넣을 자리는 서버에 저장된 요청에서만 온다** — " +
+    "리브 화면의 안전 입력칸이 받은 값을 금고(수집기 자격 칸 또는 요청자 본인의 개인 금고)에 넣는다. **넣을 자리는 서버에 저장된 요청에서만 온다** — " +
     "요청이 없으면 거부한다. 값은 응답에도, 로그에도, 대화에도 남지 않는다. (사람이 쓰는 자리다. 리브가 부를 일이 없다.)",
     [{ method: "POST", paths: ["/api/ui/me/liv-secret"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getLivProfile, setLivSecretAsk } = await import("../../org/store.js");
-      const ask = (await getLivProfile(userId)).secret_ask;
-      // 대기 중인 게 **자격 요청일 때만** 받는다 — 객관식·업로드가 떠 있는데 값이 날아오면 그건 잘못된 호출이다.
-      if (!ask || (ask.kind && ask.kind !== "secret")) throw new HttpError(409, "지금 받기로 한 자격이 없습니다");
-
-      const value = String(input.value ?? "");
-      if (!value.trim()) throw new HttpError(400, "값이 비어 있습니다");
-      if (value.length > 8192) throw new HttpError(400, "값이 너무 깁니다");
-
-      const { upsertCollector } = await import("../../org/store/collectors.js");
-      // ⚠ 대상은 **저장된 요청**에서만 — 브라우저가 보낸 것을 쓰지 않는다(다른 수집기로 새는 것을 막는다).
-      //  id 로 보낸다: key 로 보내면 중복키로 500 이 난다(#1631 실측).
-      await upsertCollector({ id: ask.collector_id, secrets: { [ask.field]: value } }, userId, "liv");
-      await setLivSecretAsk(userId, null);
-      return { ok: true, field: ask.field };  // 값은 절대 되돌려주지 않는다
+      return livSecretPut(userId, input, realPutDeps);
     }, false, {
       value: z.string().describe("사람이 입력한 자격 값. 서버가 즉시 암호화해 저장하고 버린다."),
     }),
