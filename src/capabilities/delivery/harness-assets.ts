@@ -10,9 +10,11 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { assertHookId, assertAssetId } from "../../org/asset-id.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
+import { decideHarnessAssetRisk, parseRiskAck, scanHarnessAssetRisks, type HarnessAssetRiskFinding } from "../../org/harness-asset-risk.js";
 import {
   listMembers, listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset, listAssetPrefs, setAssetPref,
-  clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind, type HookHarness, type AssetKind
+  clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, harnessAssetRiskPolicy, setHarnessAssetRiskBlock,
+  recordHarnessAssetRiskAck, type AssetPrefKind, type HookHarness, type AssetKind, type OrgHarnessAsset, type WriteCtx
 } from "../../org/store.js";
 import { workspacePersonIds } from "../../org/store/members.js";
 import { managedMode } from "../../org/tenancy/state.js";
@@ -33,6 +35,46 @@ function seedAssetSyncWarning(id: string | null | undefined): { seed_warning?: s
   return { seed_warning: `⚠ '${id}' 은 신규 고객 게이트웨이에 시딩되는 스킬입니다(#713). 고객이 받는 본문의 SoT 는 이 게이트웨이 DB 가 아니라 src/org/delivery/default-content.ts(capture 스냅샷)입니다 — 이 편집을 고객 배포에 반영하려면 canonical 게이트웨이에서 \`node --env-file=.env scripts/capture-default-content.mjs\` 로 default-content.ts 를 재생성·릴리스하세요(내부 [[링크]]·이슈번호·사내 명칭·타 고객사명은 빼고 고객 맥락으로 — CI 가드가 잡습니다). 미갱신 시 신규 고객은 옛 본문을 받습니다.` };
 }
 
+// ── 저장 시점 위험 패턴 검사(org/harness-asset-risk.ts) ──
+//  검사 대상 = 이번에 보낸 내용 칸. 다만 꺼져 있던 자산을 켜는 저장은 배포가 시작되는 순간이라, 보내지 않은 칸을
+//  켜지는 자산(enablingStored)의 저장값으로 채워 검사한다 — 멤버 초안 id 에 enabled:true 만 보내 승격 검사를 건너뛰는 길을 막는다.
+//  summary·label 은 검사하지 않는다: 관리 화면 표시용이고 구성원 디스크로 materialize 되지 않는다(kit/hooks/sync-harness-assets.mjs).
+//  앱 설치(apps/deploy.ts)도 같은 표에 쓰지만 여기서 검사하지 않는다 — 앱 번들은 설치 시점에 따로 검토되는 경로다.
+//  정책 칸은 검사 결과가 있을 때만 읽는다(깨끗한 저장엔 정책 조회가 없다).
+type RiskContent = { description?: string; body?: string; frontmatter?: Record<string, unknown> };
+type RiskGateResult = { findings: HarnessAssetRiskFinding[]; acked: boolean };
+
+function riskScanFields(c: RiskContent): Array<{ field: string; text: string | undefined }> {
+  // frontmatter 는 키마다 따로 본다 — 통째 JSON 한 줄로 보면 위치가 항상 «1행» 이라 어느 키인지 알 수 없다.
+  const fm = Object.entries(c.frontmatter ?? {}).map(([k, v]) =>
+    ({ field: `frontmatter.${k}`, text: typeof v === "string" ? v : JSON.stringify(v) }));
+  return [{ field: "description", text: c.description }, { field: "body", text: c.body }, ...fm];
+}
+
+/** 막으면 400 을 던진다(저장 전이라 행은 그대로). risk_ack 로 넘기면 저장 **전에** 감사를 남긴다 —
+ *  저장 뒤에 쓰면 감사 쓰기가 실패했을 때 «사유 없는 위험 저장» 이 남는다. 반대 순서의 실패는 «저장 안 된 건의 사유 행» 뿐이다. */
+async function gateHarnessAssetRisk(
+  id: string, sent: RiskContent, enablingStored: OrgHarnessAsset | null, riskAck: string | undefined, w: WriteCtx,
+): Promise<RiskGateResult> {
+  const content: RiskContent = enablingStored
+    ? { description: sent.description ?? enablingStored.description, body: sent.body ?? enablingStored.body,
+        frontmatter: sent.frontmatter ?? enablingStored.frontmatter }
+    : sent;
+  const findings = scanHarnessAssetRisks(riskScanFields(content));
+  if (findings.length === 0) return { findings, acked: false };
+  const policy = await harnessAssetRiskPolicy();
+  const decision = decideHarnessAssetRisk({ enforce: policy !== "warn", findings, riskAck });
+  if (decision.action === "block") {
+    throw new HttpError(400, decision.message, { body: { risk_findings: decision.findings, risk_ack_allowed: true, asset_id: id } });
+  }
+  if (decision.acked && riskAck) {
+    await recordHarnessAssetRiskAck(id, { reason: riskAck, findings: findings.map(({ rule, field, line }) => ({ rule, field, line })) }, w);
+  }
+  return { findings, acked: decision.acked };
+}
+
+const riskResponse = (gate: RiskGateResult) => (gate.findings.length ? { risk_findings: gate.findings, risk_acked: gate.acked } : {});
+
 export const harnessAssetsCapabilities: Capability[] = [
   // ════════ 하네스 자산 CRUD (스킬·서브에이전트·슬래시커맨드 — runtime 권한) ════════
   //  훅과 같은 runtime 자산군이나 멤버 디스크에 파일로 materialize(하네스가 스캔해야 발견). 회수=fail-OPEN(capability —
@@ -41,7 +83,7 @@ export const harnessAssetsCapabilities: Capability[] = [
     "조직 스킬·서브에이전트·슬래시커맨드 전체(본문 포함) — runtime 권한 전용. 멤버 materializer fetch 는 org_runner_assets(별도).",
     [{ method: "GET", paths: ["/api/ui/org/harness-assets"], parse: () => ({}) }],
     // #4970 — 잠긴 연결 스킬은 DB 행이 무엇이든 코드 본문으로 보인다(화면 = 실제 배포본). locked_asset_ids 로 프론트가 read-only·배지를 그린다.
-    async () => ({ assets: effectiveAssets(await listOrgHarnessAssets()), locked_asset_ids: lockedSkillIds(), meaning: MEANING["harness-asset"] })),
+    async () => ({ assets: effectiveAssets(await listOrgHarnessAssets()), locked_asset_ids: lockedSkillIds(), risk_policy: await harnessAssetRiskPolicy(), meaning: MEANING["harness-asset"] })),
   restRuntime("org_harness_asset_upsert", "스킬·서브에이전트·커맨드 추가·수정",
     "구성원 하네스에 배포되는 스킬/서브에이전트/커맨드를 저장한다(runtime). 본문은 멤버 디스크에 materialize 되며 스킬은 도구·셸 실행권한을 가질 수 있다(위험 통제=짝훅).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
@@ -69,15 +111,20 @@ export const harnessAssetsCapabilities: Capability[] = [
       const targetMembers = input.target_members === undefined ? undefined : parseTargetMembers(input.target_members);
       const pairedHookId = input.paired_hook_id === undefined ? undefined
         : ((input.paired_hook_id === null || input.paired_hook_id === "") ? null : assertHookId(input.paired_hook_id));
+      const riskAck = parseRiskAck(input.risk_ack);
+      const enabled = input.enabled === undefined ? undefined : Boolean(input.enabled);
+      const stored = enabled === true ? await getOrgHarnessAsset(id) : null;
+      const enablingStored = stored && !stored.enabled ? stored : null;
+      const gate = await gateHarnessAssetRisk(id, { description, body, frontmatter }, enablingStored, riskAck, wctx(user, ctx));
       const asset = await upsertOrgHarnessAsset({
         id, kind: kind as AssetKind | undefined,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
         harness: harness as HookHarness | undefined, description, summary, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
-        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+        enabled,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, wctx(user, ctx));
-      return { asset, ...seedAssetSyncWarning(id) };
+      return { asset, ...seedAssetSyncWarning(id), ...riskResponse(gate) };
     }, {
       id: z.string().describe("자산 id(슬러그) — 있으면 수정, 없으면 생성. 스킬이면 이 id 가 스킬 이름이 된다"),
       summary: z.string().optional().describe("화면에 보이는 쉬운 한 줄 설명(무슨 기능인지). 비우면 description 첫 문장으로 폴백"),
@@ -91,6 +138,7 @@ export const harnessAssetsCapabilities: Capability[] = [
       label: z.string().optional().describe("자산 라벨(표시명)"),
       enabled: z.boolean().optional().describe("활성 여부"),
       sort: z.number().optional().describe("정렬 순서"),
+      risk_ack: z.string().optional().describe("위험 패턴 차단을 넘길 사유(500자 이하). 차단이 켜진 조직에서 본문에 --privileged 같은 패턴이 있으면 이 사유가 있어야 저장되고, 사유는 감사 기록에 남는다. 경고 문장 안에서 옵션 이름만 언급한 경우 등에 쓴다"),
     }),
   restRuntime("org_harness_asset_remove", "스킬·서브에이전트·커맨드 제거",
     "스킬·서브에이전트·커맨드를 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
@@ -119,6 +167,9 @@ export const harnessAssetsCapabilities: Capability[] = [
       if (draft.enabled || !draft.created_by) throw new HttpError(400, "이 자산은 멤버 초안이 아닙니다 — 승격은 비활성(enabled=false)·제출자(created_by) 있는 초안만 대상입니다");
       if (newId === draftId) throw new HttpError(400, "new_id 는 초안 id 와 달라야 합니다 — 배포될 클린 id 를 정하세요");
       if (await getOrgHarnessAsset(newId)) throw new HttpError(409, `'${newId}' 자산이 이미 있습니다 — 다른 id 를 쓰세요`);
+      // 초안은 비활성이라 올릴 때 검사하지 않는다 — 배포가 시작되는 승격에서 본다(enabled:false 로 승격해도 같은 검사).
+      const riskAck = parseRiskAck(input.risk_ack);
+      const gate = await gateHarnessAssetRisk(newId, { description: draft.description, body: draft.body, frontmatter: draft.frontmatter }, null, riskAck, wctx(user, ctx));
       const asset = await upsertOrgHarnessAsset({
         id: newId, kind: draft.kind, label: draft.label ?? undefined,
         harness: draft.harness, description: draft.description, body: draft.body, frontmatter: draft.frontmatter,
@@ -127,12 +178,26 @@ export const harnessAssetsCapabilities: Capability[] = [
         enabled: input.enabled === undefined ? true : Boolean(input.enabled),
       }, wctx(user, ctx));
       await removeOrgHarnessAsset(draftId, wctx(user, ctx)); // 승격됐으니 초안 제거(중복 방지)
-      return { asset, adopted_from: draftId, submitted_by: draft.created_by, ...seedAssetSyncWarning(newId) };
+      return { asset, adopted_from: draftId, submitted_by: draft.created_by, ...seedAssetSyncWarning(newId), ...riskResponse(gate) };
     }, {
       draft_id: z.string().describe("승격할 멤버 초안 id(draft-…)"),
       new_id: z.string().describe("조직 자산으로 쓸 클린 id — 스킬이면 이 id 가 스킬 이름이 된다"),
       target_members: z.array(z.string()).nullable().optional().describe("대상 멤버 id 배열(null/빈=전원)"),
       enabled: z.boolean().optional().describe("활성 여부(기본 true — 바로 배포)"),
+      risk_ack: z.string().optional().describe("위험 패턴 차단을 넘길 사유(500자 이하) — org_harness_asset_upsert 의 risk_ack 와 같다"),
+    }),
+  restRuntime("org_harness_asset_risk_policy_set", "스킬·서브에이전트·커맨드 위험 패턴 차단 켜기·끄기",
+    "하네스 자산을 저장할 때 오탐이 거의 없는 위험 패턴(컨테이너 --privileged · seccomp 해제 · SYS_ADMIN/SYS_PTRACE/ALL capability 추가 · " +
+    "curl·wget 출력을 셸에 바로 파이프 · 양방향 제어 문자)을 막을지 정한다. block:false(기본)면 저장은 되고 응답의 risk_findings 로 경고만 준다. " +
+    "block:true 면 해당 저장(추가·수정·초안 승격·비활성 자산 켜기)이 400 으로 거절되고, risk_ack 에 사유를 실어야 저장된다(사유는 감사 기록). " +
+    "이미 저장된 자산은 다시 저장할 때까지 검사하지 않고, 앱 설치로 들어오는 자산도 검사하지 않는다. 현재 값은 org_harness_assets 의 risk_policy.",
+    [{ method: "POST", paths: ["/api/ui/org/harness-asset/risk-policy"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      if (typeof input.block !== "boolean") throw new HttpError(400, "block 은 true 또는 false 여야 합니다");
+      const changed = await setHarnessAssetRiskBlock(input.block, wctx(user, ctx));
+      return { ok: true, changed, risk_policy: await harnessAssetRiskPolicy() };
+    }, {
+      block: z.boolean().describe("true = 위험 패턴이 있으면 저장을 막는다(risk_ack 사유로만 통과) · false = 경고만(기본)"),
     }),
 
   // ── materializer fetch — 멤버 세션훅(session-preload)이 매 세션 호출. 인증된 멤버면 OK(scope null). ──

@@ -139,10 +139,11 @@ export type { ToolKind, OrgTool, OrgToolInput } from "./store/tools.js";
 export {
   assetContentHash, listOrgHarnessAssets, listEnabledAssets, getOrgHarnessAsset, countMemberDraftAssets,
   upsertOrgHarnessAsset, removeOrgHarnessAsset,
+  harnessAssetRiskPolicy, setHarnessAssetRiskBlock, recordHarnessAssetRiskAck,
   getAssetPref, listAssetPrefs, setAssetPref, clearAssetPref, clearAssetPrefs,
 } from "./store/harness-assets.js";
 export type {
-  AssetKind, OrgHarnessAsset, OrgHarnessAssetInput, AssetPrefKind, OrgAssetPref,
+  AssetKind, OrgHarnessAsset, OrgHarnessAssetInput, AssetPrefKind, OrgAssetPref, HarnessAssetRiskPolicy,
 } from "./store/harness-assets.js";
 
 // ── 프로젝트 타임라인(#1313 R18 ③) — v6 테이블만 조인하는 이질 구간이라 v6/project-activity-store.ts 로

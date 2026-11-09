@@ -262,4 +262,9 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_account JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+  // ── org_runtime_config 확장: 하네스 자산 저장 시 위험 패턴 차단(org/harness-asset-risk.ts). 기본 FALSE — 끈 동안엔 저장 응답에
+  //  경고(risk_findings)만 싣는다. 관리자 도구 org_harness_asset_risk_policy_set 이 이 칸만 쓴다(«한 칸 전용 입구» 규약).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS block_risky_harness_assets BOOLEAN NOT NULL DEFAULT FALSE;
+  `);
 }
