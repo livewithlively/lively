@@ -21,6 +21,8 @@ import { browserRelay, relayKey, HOST_ID_RE, BROWSER_PROTOCOL, APP_PRINCIPAL_REF
 const PING_MS = 25_000;
 
 const clip = (v: unknown, max: number): string => String(v ?? "").slice(0, max);
+/** 화면(web/v2/browser-host.ts)이 스트림·답·상태 요청마다 싣는 머리글 — 쿠키 세션 화면이 붙는 문(#5470). 값은 "1". */
+export const BROWSER_HOST_HEADER = "x-lively-browser-host";
 let revealSeq = 0;
 
 /**
@@ -37,12 +39,18 @@ export function registerBrowserRoutes(
 ): void {
   /**
    * 이 요청의 중계 열쇠. 앱 토큰·앱 서버 주체는 사람의 브라우저를 물 수 없다(그 사람의 로그인으로 남의 사이트를 부리는 통로가 된다).
-   *  ⚠ 토큰 머리글(Authorization)로 온 요청만 받는다 — 쿠키(SameSite=Lax)는 사람이 연 **다른 페이지의 최상위 이동**에도 실려서,
-   *   그 길로 «답하지 않는 화면» 을 붙이면 AI 명령이 그리로 가 시간 초과만 난다(#4993 격리 리뷰). 데스크톱 앱 화면은 늘 토큰으로 붙는다.
+   *  ⚠ 쿠키만 실린 요청은 받지 않는다 — 쿠키(SameSite=Lax)는 사람이 연 **다른 페이지의 최상위 이동**에도 실려서,
+   *   그 길로 «답하지 않는 화면» 을 붙이면 AI 명령이 그리로 가 시간 초과만 난다(#4993 격리 리뷰).
+   *  받는 것은 둘이다: ① 토큰 머리글(Authorization: Bearer) ② 화면 표시 머리글(BROWSER_HOST_HEADER).
+   *   ②는 #5430 계정 로그인(앱 창이 CP 입장권 → 세션 쿠키로 워크스페이스에 들어간다 · 토큰이 없다) 화면을 위한 것이다.
+   *   최상위 이동·링크·폼은 사용자 정의 머리글을 실을 수 없고, 다른 출처의 fetch 가 싣으면 사전 요청(CORS)을 거쳐야 하는데
+   *   이 경로는 허용하지 않는다 — 그래서 ②가 붙은 요청은 «우리 화면의 스크립트가 보낸 것» 이고, 위 격리가 막던 길은 그대로 막힌다(#5470).
    */
   const keyOf = (req: express.Request, res: express.Response): string | null => {
-    if (!/^Bearer\s+\S/i.test(String(req.headers.authorization || ""))) {
-      res.status(401).json({ error: "토큰 머리글(Authorization: Bearer)로만 연결할 수 있습니다" });
+    const bearer = /^Bearer\s+\S/i.test(String(req.headers.authorization || ""));
+    const hostHeader = String(req.headers[BROWSER_HOST_HEADER] || "") === "1";
+    if (!bearer && !hostHeader) {
+      res.status(401).json({ error: "토큰 머리글(Authorization: Bearer) 또는 화면 표시 머리글로만 연결할 수 있습니다" });
       return null;
     }
     const u = userOf(req);
