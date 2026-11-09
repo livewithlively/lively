@@ -166,11 +166,13 @@ function exportPane(): HTMLElement {
         const p = r.preview;
         const parts = [`지식 ${p.knowledge}건`, `분류 ${p.categories}개`];
         if (includeSources) parts.push(`자료 ${p.sources}건`);
+        //  크기는 압축 전 원문 합이다(파일은 압축돼 이보다 작다) — 1MB 넘을 때만 보여 준다.
+        if (p.body_bytes >= 1048576) parts.push(`압축 전 약 ${Math.round(p.body_bytes / 1048576)}MB`);
         //  replaceChildren 은 null 을 글자 «null» 로 그린다 — 빈 칸은 걸러서 넘긴다.
         previewBox.replaceChildren(...[
           el('p', { class: 'v2xfer-preview-n', text: `담기는 것: ${parts.join(' · ')}` }),
           p.folders_added ? el('p', { class: 'v2-wspop-hint', text: `고른 문서가 들어 있는 폴더 ${p.folders_added}개를 함께 담습니다(받는 쪽에서 위치가 유지됩니다).` }) : null,
-          ...p.notes.map((n) => el('p', { class: n.includes('공개로') ? 'v2xfer-note v2xfer-note--warn' : 'v2xfer-note', text: n })),
+          ...p.notes.map((n) => el('p', { class: n.includes('공개로') || n.includes('상한') ? 'v2xfer-note v2xfer-note--warn' : 'v2xfer-note', text: n })),
         ].filter(Boolean));
       } catch (e) {
         if (seq === pvSeq) previewBox.replaceChildren(el('p', { class: 'v2xfer-err', text: (e as Error).message }));
