@@ -17,7 +17,7 @@ import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from ".
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, macUpdateHandoffAction, MAC_UPDATE_HANDOFF_MS } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -1025,6 +1025,16 @@ t('U16 ★ 배선 — 인계 신호를 직접 듣고, 아직인 요청에 성공
   // W5 — 재확인 억제 기준은 '준비됨' 이 아니라 '받았음' 이다(인계를 기다리는 몇 분 사이 확인이 또 돌면 프록시가 겹친다)
   const ck = main.slice(main.indexOf('async function checkUpdates'), main.indexOf('async function checkUpdates') + 900);
   assert.match(ck, /if \(updateDownloaded\) return null;/, '재확인 억제 기준이 준비됨이다 — 인계 대기 중 확인이 또 돈다');
+});
+
+t('U18 맥 업데이트 교체 중 옛 앱 재실행을 막고, 성공·기한 만료 뒤에는 연다', () => {
+  const marker = { version: '0.1.411', startedAt: 1000 };
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 1000), 'exit');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 1000 + MAC_UPDATE_HANDOFF_MS - 1), 'exit');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.411', 1001), 'clear');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 1000 + MAC_UPDATE_HANDOFF_MS), 'clear');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 999), 'clear');
+  assert.equal(macUpdateHandoffAction(null, '0.1.410', 1000), 'clear');
 });
 
 // ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────
@@ -2319,7 +2329,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   t("H8 웹 창 배선 — 준비됐을 때만·/ui/·전용 preload·격리·주소/토큰 바뀌면 다시 싣기·실패는 마법사 카드로·닫아도 트레이", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const a = main.slice(main.indexOf("function showApp"), main.indexOf("function loadAppBounds"));
-    assert.match(a, /if \(!state\.ready\) return \{ ok: false/, "준비 안 됐는데 웹 창을 연다");
+    assert.match(a, /if \(!state\.ready && selectedGatewayUrl !== cloudUrl\(\)\) return \{ ok: false/, "계정 로그인 화면 이외의 미준비 웹 창을 연다");
     assert.match(a, /webUiUrl\(displayGateway\)/, "선택한 워크스페이스 주소를 webUiUrl 로 안 만든다");
     assert.match(a, /preload: WEB_PRELOAD/, "웹 창이 마법사 preload 를 쓴다(원격 페이지에 CLI 통로가 열린다)");
     assert.match(a, /contextIsolation: true, nodeIntegration: false, sandbox: true/, "웹 창 격리가 빠졌다");
