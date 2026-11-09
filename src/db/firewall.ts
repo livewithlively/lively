@@ -192,7 +192,7 @@ function refTableName(node: Record<string, unknown>): string | null {
 //  함수 이름은 수식 없는 것만 본다 — `s.timestampdiff(...)` 는 MySQL 에서 같은 이름의 저장 함수 호출이다.
 //  단위가 origin 노드(YEAR 키워드)로 오는 건 mysql 파서뿐이다 — pg 에는 TIMESTAMPDIFF 가 없어 그대로 막힌다.
 const MONTH_START_LITERAL = /^\d{4}-\d{2}-01$/;
-const MONTH_START_FORMAT = /^%Y-(%m|\d{2})-01$/;
+const MONTH_START_FORMAT = /^%Y-(%m|0[1-9]|1[0-2])-01$/;
 function fnName(node: Record<string, unknown>): string | null {
   if (node.type !== "function" || node.name === null || typeof node.name !== "object") return null;
   const { name: parts, schema } = node.name as { name?: unknown; schema?: unknown };
@@ -409,7 +409,8 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
       : [...policy.maskedCols].filter((k) => k.endsWith(`.${col}`) && tableNames.includes(k.slice(0, k.indexOf("."))));
     return keys.length > 0 && keys.every((k) => ageCols.has(k));
   };
-  const ageDerived = ageCols.size > 0 ? collectAgeDerivationRefs(stmt) : new Set<unknown>();
+  // pg 에는 TIMESTAMPDIFF 가 없고, 같은 이름 사용자 함수가 있으면 의미가 달라진다 — 허용 파생은 mysql 에서만.
+  const ageDerived = dialect === "mysql" && ageCols.size > 0 ? collectAgeDerivationRefs(stmt) : new Set<unknown>();
   const allowedAgeRef = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean =>
     ageDerived.has(ref) && isAgeCol(ref, cn, scope);
   const AGE_HINT = " — 생년월일(age) 컬럼은 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <기준일>) 만나이로만 쓸 수 있고, 기준일은 'YYYY-MM-01' 또는 DATE_FORMAT(<날짜>, '%Y-%m-01') 처럼 월 첫날이어야 합니다";

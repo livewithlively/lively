@@ -34,6 +34,7 @@ export function maskValue(v: unknown, style: MaskStyle): unknown {
 //  드러나는 건 출생 연·월까지다. 게이트1 이 허용하는 SQL 파생(firewall.ts ageDerivationRef)과 같은 산식이어야 한다
 //  (둘이 다르면 그 차이가 또 하나의 비트가 된다).
 //  Date(드라이버가 DATE 를 로컬 자정 Date 로 준다) · 'YYYY-MM-DD[ 시각]' · 'YYYYMMDD' 를 받고, 그 외·없는 날짜·미래는 null.
+//  기준월은 게이트웨이 프로세스 로컬 시각이고, Date 값은 드라이버가 로컬 자정 Date 를 준다는 전제다 — TIMESTAMPTZ 생년월일은 하루 밀릴 수 있다.
 export function ageAtMonthStart(v: unknown, now: Date): number | null {
   let y: number, m: number, d: number;
   if (v instanceof Date) {

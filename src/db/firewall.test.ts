@@ -395,6 +395,19 @@ const BIRTH_YM = "DATE_FORMAT(u.birth_date, '%Y-%m-01')";
 okMy("age-1: 과거 기준일 컬럼을 월 첫날로 내린 만나이",
   `SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE_FORMAT(c.cutoff, '%Y-%m-01')) AS age FROM users u JOIN contracts c ON c.user_id = u.id`,
   agePolicy(), (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("age-2b: 쌍따옴표 날짜 리터럴도 같은 값이라 허용(의도)",
+  'SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, "%Y-%m-01"), "2024-03-01") AS age FROM users', agePolicy());
+rejMy("age-x16: 월 자리가 00 인 형식 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-00-01'), '2024-03-01') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x17: 월 자리가 13 인 형식 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), DATE_FORMAT(now(), '%Y-13-01')) FROM users", AGE_HINT, agePolicy());
+for (const [n, sql] of [
+  ["허용 꼴 그대로", "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users"],
+  ["pg 식 age()", "SELECT date_part('year', age('2024-03-01', birth_date)) FROM users"],
+  ["조건", "SELECT id FROM users WHERE birth_date < '1990-03-01'"],
+] as const) rejectsP(`age-pg-${n}: pg 에서는 age 컬럼의 어떤 파생도 불허`, sql, agePolicy(), /최상위 SELECT 투영|Unparseable/);
+okP("age-pg-투영: pg 에서도 원본 직접 투영은 통과(게이트2 가 만나이로 마스킹)", "SELECT birth_date FROM users", agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 1));
 okMy("age-2: 월 첫날 날짜 리터럴 기준 + 미수식 컬럼",
   "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') AS age FROM users", agePolicy());
 okMy("age-3: 소문자 함수·단위 + 연 첫날 형식",

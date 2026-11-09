@@ -74,6 +74,12 @@ t("행 마스킹 적용 + 원본 불변", () => {
   assert.deepEqual(out, [[1, "***", "a***@example.com", "keep"]]);
   assert.deepEqual(rows, [[1, "123-45-6789", "alice@example.com", "keep"]]); // 원본 불변
 });
+t("행 마스킹 — age 타깃은 원본 대신 정수 나이", () => {
+  const out = applyRowMasking([[1, "1990-03-15"]], [{ index: 1, style: "age" }]);
+  assert.equal(out[0][0], 1);
+  assert.equal(typeof out[0][1], "number");
+  assert.notEqual(out[0][1], "1990-03-15");
+});
 t("대상 없으면 원본 반환", () => { const rows = [[1, 2]]; assert.equal(applyRowMasking(rows, []), rows); });
 
 console.log(`\n${pass} checks passed`);
