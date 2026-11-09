@@ -17,7 +17,6 @@ import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { randomBytes, createHash } from "node:crypto";
 import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview, bootstrapManualHint } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
@@ -29,14 +28,14 @@ import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDri
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, createOpenLedger, surfacePopupTitle, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, macUpdateHandoffAction, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
 import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, sessionHash, personLink, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
-import { workspaceEnterRequest, workspaceExchange } from "./account-workspace.mjs";
+import { workspaceEnterRequest, workspaceExchange, accountHomeNavigation } from "./account-workspace.mjs";
 import { execFileSync } from "node:child_process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -44,13 +43,14 @@ const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
 
 const BOUNDS_FILE = join(LIVELY_DIR, "desktop-window.json");
 const APP_BOUNDS_FILE = join(LIVELY_DIR, "desktop-app-window.json");   // 웹 UI 창은 마법사와 크기·자리가 다르다 — 따로 기억
+const MAC_UPDATE_HANDOFF_FILE = join(LIVELY_DIR, "desktop-update-handoff.json");
 const WEB_PRELOAD = join(HERE, "..", "preload", "web.cjs");
 
 let tray = null, win = null, quitting = false;
 let appWin = null;                  // 웹 UI 창(게이트웨이 /ui/) — web-shell.mjs. 마법사 창(win)과 preload·채널이 다르다
 let appLoaded = { url: null, token: null };   // 웹 창에 마지막으로 실은 주소·토큰 — 달라졌으면 다시 싣는다(재로그인 뒤 옛 토큰으로 401 나는 걸 막는다)
 let selectedGatewayUrl = null;      // 앱 화면의 워크스페이스. CLI·노드의 바인딩과 별개다.
-let accountLinking = null;          // 계정 연결 중 중복 승인 창 방지
+let pendingWorkspace = null;        // 앱 안 계정 로그인 뒤 이어서 열 워크스페이스
 let rejectedToken = null;           // 게이트웨이가 401 로 거부한 토큰(문자열) — 파일의 토큰이 바뀌면(재로그인) 저절로 풀린다
 let webError = null;                // 웹 창을 못 실었을 때의 사유(사람용 한 줄) — 마법사의 '라이블리 열기' 카드가 보여준다
 let startedHidden = false;          // 로그인 때 자동으로(숨겨) 떴나 — 그러면 갖춰져 있어도 창을 안 띄운다
@@ -425,15 +425,25 @@ async function applyUpdate() {
       const which = appWinVisible() ? "app" : (win && win.isVisible()) ? "setup" : null;
       if (which) writeFileSync(join(LIVELY_DIR, "desktop-reopen"), which);
     } catch { /* 마커 실패는 비치명 */ }
+    if (process.platform === "darwin") {
+      try {
+        mkdirSync(LIVELY_DIR, { recursive: true });
+        writeFileSync(MAC_UPDATE_HANDOFF_FILE, JSON.stringify({ version: updateReady, startedAt: Date.now() }));
+      } catch { /* 쓰지 못해도 설치기는 시도한다 */ }
+    }
     quitting = true;                                   // 창 close 핸들러가 숨기기 대신 닫게
     send(IPC.LOG, { stream: "raw", line: `업데이트 적용 — 앱을 다시 시작합니다 (${updateReady})…` });
     u.quitAndInstall(true, true);                      // Windows: 설치기 /S --force-run · Linux AppImage: 교체 후 재실행
-    // 안전망 — 여기까지 왔는데도 앱이 안 닫히면 `quitting` 을 되돌린다. 켜 둔 채로 두면 그 뒤 사람이 창을 닫을 때
-    //  트레이로 숨는 대신 창이 **진짜 닫혀** 자동 적용 예약(창 hide 에 달려 있다)까지 함께 사라진다(#2203).
-    const guard = setTimeout(() => { quitting = false; }, 20_000);
+    // macOS 에서 앱이 5초 뒤에도 살아 있으면 강제 종료해 ShipIt 이 기존 앱을 교체할 수 있게 한다.
+    // 다른 OS 는 종전처럼 quit 플래그를 되돌려 창 닫기 규약을 지킨다.
+    const guard = setTimeout(() => {
+      if (process.platform === "darwin") app.exit(0);
+      else quitting = false;
+    }, process.platform === "darwin" ? 5_000 : 20_000);
     if (guard.unref) guard.unref();
     return { ok: true };
   } catch (e) {
+    if (process.platform === "darwin") rmSync(MAC_UPDATE_HANDOFF_FILE, { force: true });
     quitting = false;
     const line = `업데이트 적용 실패: ${String(e?.message || e).slice(0, 200)}`;
     send(IPC.LOG, { stream: "raw", line }); updateNote = line; void refreshState();
@@ -684,60 +694,17 @@ async function accountCookie(cloud) {
   return null;
 }
 
-async function linkDesktopAccount(cloud) {
-  const choice = await dialog.showMessageBox(appWin && !appWin.isDestroyed() ? appWin : undefined, {
-    type: "info", buttons: ["계정 연결하기", "취소"], defaultId: 0, cancelId: 1,
-    message: "라이블리 계정을 앱에 연결합니다.",
-    detail: "처음 한 번 브라우저에서 계정 연결을 승인하면, 이후에는 워크스페이스를 앱 안에서 바꿀 수 있습니다.",
-  });
-  if (choice.response !== 0) throw new Error("계정 연결을 취소했습니다.");
-  const verifier = randomBytes(32).toString("base64url");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const started = await fetch(`${cloud}/cli/device/start`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code_challenge: challenge, label: "Lively Desktop", purpose: "desktop_account" }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!started.ok) throw new Error("계정 연결을 시작하지 못했습니다.");
-  const link = await started.json();
-  const approval = new URL(String(link.verification_uri_complete || ""));
-  if (approval.origin !== webOrigin(cloud) || approval.pathname !== "/link") throw new Error("승인 주소가 올바르지 않습니다.");
-  await shell.openExternal(approval.href);
-  const deadline = Date.now() + Math.min(Number(link.expires_in) || 900, 900) * 1000;
-  let interval = Math.max(Number(link.interval) || 5, 5);
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, interval * 1000));
-    let response;
-    try {
-      response = await fetch(`${cloud}/cli/device/poll`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device_code: link.device_code, code_verifier: verifier }),
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch { continue; }
-    if (response.status === 202) continue;
-    const result = await response.json().catch(() => ({}));
-    if (response.status === 429) { interval = Math.max(Number(result.interval) || interval + 5, interval + 5); continue; }
-    if (response.status !== 200 || typeof result.account_session !== "string") throw new Error("계정 연결이 거부되었거나 만료됐습니다.");
-    await session.defaultSession.cookies.set({
-      url: cloud, name: "lvly_sid", value: result.account_session, httpOnly: true,
-      secure: new URL(cloud).protocol === "https:", sameSite: "lax", expirationDate: Date.now() / 1000 + 30 * 24 * 3600,
-    });
-    return result.account_session;
-  }
-  throw new Error("계정 연결 시간이 만료됐습니다. 다시 시도해 주세요.");
-}
-
-async function ensureDesktopAccount(cloud) {
-  const existing = await accountCookie(cloud);
-  if (existing) return existing;
-  if (!accountLinking) accountLinking = linkDesktopAccount(cloud).finally(() => { accountLinking = null; });
-  return accountLinking;
-}
-
 async function enterWorkspaceInApp(workspaceId, hash = null) {
   const cloud = cloudUrl();
-  const sid = await ensureDesktopAccount(cloud);
+  const sid = await accountCookie(cloud);
+  if (!sid) {
+    pendingWorkspace = { id: workspaceId, hash };
+    selectedGatewayUrl = cloud;
+    const opened = showApp();
+    if (!opened.ok) throw new Error(opened.error || "계정 로그인 화면을 열지 못했습니다.");
+    return;
+  }
+  pendingWorkspace = null;
   for (let attempt = 0; attempt < 31; attempt++) {
     const path = `${cloud}/api/workspaces/${encodeURIComponent(workspaceId)}/enter${hash ? `?to=${encodeURIComponent(hash)}` : ""}`;
     const res = await fetch(path, {
@@ -932,17 +899,13 @@ async function pollPersonFeed(gw, headers, gen) {
 /** 사람이 '창 열기' 를 눌렀을 때 — 갖춰졌으면 라이블리 화면, 아니면 마법사(할 일이 있다). */
 function showMain() {
   if (state.ready) return showApp().ok ? appWin : showWindow();
-  void ensureDesktopAccount(cloudUrl()).then(async () => {
-    selectedGatewayUrl = cloudUrl();
-    await refreshState();
-    showApp();
-  }).catch(() => showWindow());
-  return null;
+  selectedGatewayUrl = cloudUrl();
+  return showApp().ok ? appWin : showWindow();
 }
 function showApp() {
-  if (!state.ready) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
+  if (!state.ready && selectedGatewayUrl !== cloudUrl()) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
   const displayGateway = selectedGatewayUrl || state.gatewayUrl;
-  const url = selectedGatewayUrl === cloudUrl() ? `${cloudUrl()}/home` : webUiUrl(displayGateway);
+  const url = selectedGatewayUrl === cloudUrl() ? `${cloudUrl()}${state.accountLoggedIn ? "/home" : "/login"}` : webUiUrl(displayGateway);
   if (!url) return { ok: false, error: "게이트웨이 주소가 없습니다." };
   const token = selectedGatewayUrl ? null : readTrim(join(LIVELY_DIR, "token"));
   if (token) watchTokenRejection(state.gatewayUrl);
@@ -997,7 +960,15 @@ function showApp() {
     });
     // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
     //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).
-    appWin.webContents.on("did-navigate", (_e, navUrl) => void offerWorkspaceRebind(navUrl));
+    appWin.webContents.on("did-navigate", (_e, navUrl) => {
+      void offerWorkspaceRebind(navUrl);
+      if (!pendingWorkspace || !accountHomeNavigation(navUrl, webOrigin(cloudUrl()))) return;
+      const next = pendingWorkspace;
+      pendingWorkspace = null;
+      void enterWorkspaceInApp(next.id, next.hash).catch((err) => {
+        void dialog.showMessageBox({ type: "error", message: "워크스페이스를 열지 못했습니다.", detail: String(err?.message || err) });
+      });
+    });
     appWin.webContents.on("did-navigate-in-page", (_e, navUrl, isMainFrame) => {
       if (isMainFrame) void offerWorkspaceRebind(navUrl);
     });
@@ -1391,12 +1362,14 @@ app.on("web-contents-created", (_e, wc) => {
       },
     };
   });
-  wc.on("will-navigate", (e, url) => {
+  const accountWorkspaceNavigation = (e, url) => {
     // 마법사(file://)는 어디로도 안 간다. 웹 창은 같은 출처 안에서만 움직인다 — 바깥 링크는 브라우저로.
     const enter = workspaceEnterRequest(url, webOrigin(cloudUrl()));
     if (enter && !wc.getURL().startsWith("file:")) {
       e.preventDefault();
-      void enterWorkspaceInApp(enter.id, enter.hash).catch((err) => {
+      const target = pendingWorkspace || enter;
+      pendingWorkspace = null;
+      void enterWorkspaceInApp(target.id, target.hash).catch((err) => {
         void dialog.showMessageBox({ type: "error", message: "워크스페이스를 열지 못했습니다.", detail: String(err?.message || err) });
       });
       return;
@@ -1405,7 +1378,10 @@ app.on("web-contents-created", (_e, wc) => {
     if (t === "child" && !wc.getURL().startsWith("file:")) return;
     e.preventDefault();
     if (t === "external") shell.openExternal(url);
-  });
+  };
+  wc.on("will-navigate", accountWorkspaceNavigation);
+  // 계정 로그인 POST 뒤 /ws/:id/enter 로 오는 서버 redirect 도 같은 판정이 필요하다.
+  wc.on("will-redirect", accountWorkspaceNavigation);
 });
 
 // ── CLI 구동 ────────────────────────────────────────────────────────────────
@@ -1727,8 +1703,18 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
 // 가려진 창·다른 데스크톱 공간의 창도 숨김으로 치지 않는다 — 사람이 다른 공간에 있는 동안 AI 가 웹 칸에서 연 페이지가
 //  그려지고 찍히게(browser-surface OCCLUDED_WINDOW_SWITCH 머리말). 스위치는 앱이 준비되기 **전에** 걸어야 먹는다.
 app.commandLine.appendSwitch(OCCLUDED_WINDOW_SWITCH);
+function macUpdateStillInstalling() {
+  if (process.platform !== "darwin" || !existsSync(MAC_UPDATE_HANDOFF_FILE)) return false;
+  let action = "clear";
+  try { action = macUpdateHandoffAction(JSON.parse(readFileSync(MAC_UPDATE_HANDOFF_FILE, "utf8")), app.getVersion()); }
+  catch { /* 손상된 표시 파일은 설치 중이라는 근거가 아니다 */ }
+  if (action === "exit") return true;
+  rmSync(MAC_UPDATE_HANDOFF_FILE, { force: true });
+  return false;
+}
 // 두 번째 인스턴스는 창만 띄우고 죽는다 — 트레이 아이콘이 둘, CLI 가 동시에 둘 도는 걸 막는다.
-if (!app.requestSingleInstanceLock()) app.quit();
+if (macUpdateStillInstalling()) app.exit(0);
+else if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => showMain());
   app.whenReady().then(async () => {
