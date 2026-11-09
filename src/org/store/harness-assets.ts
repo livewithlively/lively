@@ -155,6 +155,38 @@ export async function removeOrgHarnessAsset(id: string, ctx: WriteCtx = {}): Pro
   await audit("org_harness_asset", id, "delete", before, null, ctx.actor, ctx.source, ctx);
 }
 
+// ── 위험 패턴 차단 정책 한 칸 — org_runtime_config.block_risky_harness_assets ──
+//  member-ai-connectors 정책과 같은 «한 칸 전용 입구» 다(getRuntimeConfig·org_runtime_update 에 섞지 않는다).
+
+/** unknown = 못 읽었다. 집행하는 자리는 unknown 을 «켜짐» 으로 읽는다(보안 기본값 fail-closed). */
+export type HarnessAssetRiskPolicy = "block" | "warn" | "unknown";
+
+export async function harnessAssetRiskPolicy(): Promise<HarnessAssetRiskPolicy> {
+  try {
+    const r = await itemsPool.query(`SELECT block_risky_harness_assets FROM org_runtime_config WHERE id=1`);
+    return r.rows[0]?.block_risky_harness_assets === true ? "block" : "warn";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** 돌려주는 값 = 바뀌었나. 지금 값을 못 읽으면 던진다(못 읽음을 «같은 값» 으로 접지 않는다). */
+export async function setHarnessAssetRiskBlock(block: boolean, ctx: WriteCtx = {}): Promise<boolean> {
+  const r = await itemsPool.query(`SELECT block_risky_harness_assets FROM org_runtime_config WHERE id=1`);
+  const before = r.rows[0]?.block_risky_harness_assets === true;
+  if (before === block) return false;
+  await itemsPool.query(`UPDATE org_runtime_config SET block_risky_harness_assets=$1 WHERE id=1`, [block]);
+  await audit("org_runtime_config", "1", "block_risky_harness_assets", before, block, ctx.actor, ctx.source, ctx);
+  return true;
+}
+
+/** 차단을 risk_ack 로 넘긴 저장 — 누가 어떤 규칙을 어떤 사유로 넘겼나. 저장 감사(insert/update)와 별도 행이라 op 로 골라 볼 수 있다. */
+export async function recordHarnessAssetRiskAck(
+  id: string, ack: { reason: string; findings: Array<{ rule: string; field: string; line: number }> }, ctx: WriteCtx = {},
+): Promise<void> {
+  await audit("org_harness_asset", id, "risk_ack", null, ack, ctx.actor, ctx.source, ctx);
+}
+
 // ════════ per-member 개인 오버라이드 — org_asset_pref (#699) ════════
 //  관리자 정책(enabled+target_members) 위에 얹는 멤버별 on/off. 유효성 병합은 listEnabledHooks/listEnabledAssets 참조.
 //  target_kind='harness_asset'|'org_hook'. 행 없음=관리자 기본값 사용, state=true=강제 on(opt-in), false=강제 off(opt-out).

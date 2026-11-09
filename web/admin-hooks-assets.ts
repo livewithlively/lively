@@ -8,6 +8,23 @@ import { field } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { targetMembersField } from './admin-widgets.js';
 
+// 위험 패턴 차단(서버 org/harness-asset-risk.ts) — 서버가 risk_ack 로 넘길 수 있다고 알려 오면 사유를 받아 한 번 다시 보낸다.
+//  차단이 꺼진 조직에선 저장은 되고 risk_findings 가 경고로 온다 → 저장 토스트에 건수를 붙인다.
+async function postAssetWithRiskAck(path: string, payload: Record<string, unknown>): Promise<string> {
+  let res: { risk_findings?: unknown[]; risk_acked?: boolean } | undefined;
+  try {
+    res = await api(path, { method: 'POST', body: JSON.stringify(payload) });
+  } catch (e) {
+    const err = e as { message?: string; body?: { risk_ack_allowed?: boolean } };
+    if (!err?.body?.risk_ack_allowed) throw e;
+    const reason = (prompt((err.message ?? '') + '\n\n문제없는 이유를 적으면 저장합니다(사유는 감사 기록에 남습니다):') || '').trim();
+    if (!reason) throw e;
+    res = await api(path, { method: 'POST', body: JSON.stringify({ ...payload, risk_ack: reason }) });
+  }
+  const n = Array.isArray(res?.risk_findings) ? res.risk_findings.length : 0;
+  return n && !res?.risk_acked ? ` · 위험 패턴 경고 ${n}건(본문 확인)` : '';
+}
+
 // ── 커스텀 훅 — runtime 권한 ──
 function customHookEditor(detail, data) {
   const hooks = data.orgHooks || [];
@@ -332,8 +349,8 @@ function assetForm(root, a, data, detail, isNew) {
       const payload = { id: idIn.value.trim(), kind: kindSel.value, label: labelIn.value.trim() || null, harness: harnessSel.value,
         description: descIn.value, summary: sumIn.value, body: bodyTa.value, frontmatter: fm,
         target_members: tm.targetMembers(), paired_hook_id: pairedIn.value.trim() || null, enabled: tm.enabled() };
-      await api('/api/ui/org/harness-asset', { method: 'POST', body: JSON.stringify(payload) });
-      await loadAdmin(true); state.admin.assetSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); rerenderPanel(detail, 'harness-assets', state.admin.data);
+      const riskNote = await postAssetWithRiskAck('/api/ui/org/harness-asset', payload);
+      await loadAdmin(true); state.admin.assetSel = payload.id; toast('저장됨 — 구성원 다음 세션부터' + riskNote); rerenderPanel(detail, 'harness-assets', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
   const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
@@ -345,8 +362,8 @@ function assetForm(root, a, data, detail, isNew) {
     if (!newId) return;
     if (!confirm(`'${a.created_by}' 님의 초안을 '${newId}' 로 승격해 배포합니다(초안은 제거). 계속할까요?`)) return;
     try {
-      await api('/api/ui/org/harness-asset/adopt', { method: 'POST', body: JSON.stringify({ draft_id: a.id, new_id: newId, enabled: true }) });
-      await loadAdmin(true); state.admin.assetSel = newId; toast('승격됨 — 구성원 다음 세션부터'); rerenderPanel(detail, 'harness-assets', state.admin.data);
+      const riskNote = await postAssetWithRiskAck('/api/ui/org/harness-asset/adopt', { draft_id: a.id, new_id: newId, enabled: true });
+      await loadAdmin(true); state.admin.assetSel = newId; toast('승격됨 — 구성원 다음 세션부터' + riskNote); rerenderPanel(detail, 'harness-assets', state.admin.data);
     } catch (e) { toast(e.message, true); }
   } }));
   if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {

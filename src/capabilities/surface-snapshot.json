@@ -1884,7 +1884,7 @@
   "rest": [
    "POST /api/ui/org/harness-asset"
   ],
-  "input_hash": "3b14d9e5183ab650"
+  "input_hash": "1e92e1fd4276d336"
  },
  {
   "name": "org_harness_asset_remove",
@@ -1904,7 +1904,17 @@
   "rest": [
    "POST /api/ui/org/harness-asset/adopt"
   ],
-  "input_hash": "b5850843d5e5421c"
+  "input_hash": "223662e18fcaff76"
+ },
+ {
+  "name": "org_harness_asset_risk_policy_set",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/harness-asset/risk-policy"
+  ],
+  "input_hash": "357a5571a0a39912"
  },
  {
   "name": "org_runner_assets",

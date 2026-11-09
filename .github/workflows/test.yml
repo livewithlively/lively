@@ -751,6 +751,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/member-ai-connectors.pg-test.mjs
+      # 하네스 자산 저장 시점 위험 패턴 차단 — 목으로는 못 보는 것: 정책 칸을 실제로 읽어 막는가, 막힌 저장이 행을 안 건드리나,
+      #    risk_ack 가 감사 행으로 남나, 꺼진 자산을 enabled:true 만 보내 켜는 저장이 저장된 본문으로 검사되나(read-back).
+      - name: 하네스 자산 위험 패턴 차단 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/delivery/harness-asset-risk.pg-test.mjs
       # ⑤-r 수집 실행 기록 · 수집 세션 크기(#4213 T11) — 목으로는 못 보는 것: **같은 판의 끝이 처음 것으로 남나**(게이트웨이 추정만
       #    러너 끝이 덮는다 — ON CONFLICT … WHERE), 크기를 안 건드린 저장이 그 칸을 비운 채 두나(긴 INSERT 의 매개변수 자리 하나).
       - name: 수집 실행 기록 PG 통합 테스트
