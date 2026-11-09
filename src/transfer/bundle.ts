@@ -310,13 +310,24 @@ function readme(m: Omit<BundleManifest, "files">): string {
 export function writeBundleZip(b: Omit<Bundle, "manifest"> & { manifest: Omit<BundleManifest, "files" | "counts"> }, at = new Date()): { zip: Buffer; manifest: BundleManifest } {
   const entries: ZipEntryInput[] = [];
   const used = new Set<string>();
+  //  경로는 **대소문자 없이도** 겹치지 않게 한다 — 이름이 대소문자만 다른 지식이 실재하고(2026-06-11-PM툴… / …-pm툴…, 2026-11-09
+  //   stage 실측), macOS·Windows 기본 파일 시스템은 대소문자를 가리지 않아 압축을 풀면 한쪽이 덮어써진다. 라이블리 가져오기는
+  //   메모리에서 읽으므로 상관없지만, 사람이 풀어 볼 때 한 건이 사라져 보인다. 진짜 이름은 앞머리의 ref 다 — 경로는 담는 자리일 뿐.
+  const uniquePath = (path: string): string => {
+    if (!used.has(path.toLowerCase())) return path;
+    const dot = path.lastIndexOf(".");
+    for (let i = 2; ; i++) {
+      const cand = `${path.slice(0, dot)}~${i}${path.slice(dot)}`;
+      if (!used.has(cand.toLowerCase())) return cand;
+    }
+  };
   const add = (path: string, data: Buffer): void => {
-    if (used.has(path)) throw new BundleFormatError(`같은 파일 이름이 두 번 나왔습니다: ${path}`);
-    used.add(path);
+    if (used.has(path.toLowerCase())) throw new BundleFormatError(`같은 파일 이름이 두 번 나왔습니다: ${path}`);
+    used.add(path.toLowerCase());
     entries.push({ path, data });
   };
   add("categories.json", Buffer.from(JSON.stringify(b.categories, null, 2) + "\n", "utf8"));
-  for (const k of b.knowledge) add(knowledgePath(k.ref), Buffer.from(knowledgeToMarkdown(k), "utf8"));
+  for (const k of b.knowledge) add(uniquePath(knowledgePath(k.ref)), Buffer.from(knowledgeToMarkdown(k), "utf8"));
   for (const s of b.sources) add(sourcePath(s.ref), Buffer.from(JSON.stringify(s, null, 2) + "\n", "utf8"));
   const counts = { knowledge: b.knowledge.length, categories: b.categories.length, sources: b.sources.length };
   const base = { ...b.manifest, counts };

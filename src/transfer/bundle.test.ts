@@ -15,6 +15,7 @@
 //   C11 같은 원래 이름이 두 번                                  → 뒤의 것만 문제 목록
 //   C12 내용 지문 — 필드 키 순서만 다름 / 본문 한 글자 다름        → 같다 / 다르다
 //   C13 목록에 없는 여분 파일                                   → 읽지 않는다
+//   C14 대소문자만 다른 두 이름                                 → 파일 경로가 대소문자 없이도 겹치지 않고, 둘 다 읽힌다(stage 실측)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -171,4 +172,13 @@ test("C13 목록에 없는 여분 파일은 읽지 않는다", async () => {
   const extra = replaceEntry(zip, "knowledge/sneaky.md", Buffer.from(knowledgeToMarkdown(k({ ref: "sneaky" }))));
   const { bundle } = await readBundle(extra);
   assert.deepEqual(bundle.knowledge.map((x) => x.ref), ["doc-a"]);
+});
+
+test("C14 대소문자만 다른 두 이름은 파일 경로가 대소문자 없이도 겹치지 않고 둘 다 읽힌다", async () => {
+  const { zip } = writeBundleZip({ manifest: manifestBase(), knowledge: [k({ ref: "2026-06-11-PM툴" }), k({ ref: "2026-06-11-pm툴" })], categories: [], sources: [] });
+  const paths = [...readZip(zip).keys()].filter((p) => p.startsWith("knowledge/"));
+  assert.equal(paths.length, 2);
+  assert.equal(new Set(paths.map((p) => p.toLowerCase())).size, 2, JSON.stringify(paths));
+  const { bundle } = await readBundle(zip);
+  assert.deepEqual(bundle.knowledge.map((x) => x.ref).sort(), ["2026-06-11-PM툴", "2026-06-11-pm툴"]);
 });
