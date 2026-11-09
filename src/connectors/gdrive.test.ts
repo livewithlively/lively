@@ -1,7 +1,7 @@
 // #541 gdrive 커넥터 테스트 — DB/실네트워크 불요(백필 블록은 fetch 를 스텁한다).
 //   실행: npm run build && node dist/connectors/gdrive.test.js
 //   목적: 쿼리 인젝션 가드(since/폴더 보간) + [BINARY] 메타-스텁 포맷(통합 distill 프롬프트·slack 과의 계약)
-//         + 백필 진행 로그 배선(러너 정체 감지 오판 방지) 회귀 잠금.
+//         + 본문 추출 시간 상한 + 백필 진행 로그 배선(러너 정체 감지 오판 방지) 회귀 잠금.
 //   (OOXML 추출 골든은 ./ooxml.test.ts 로 분리 — 공용 유틸.)
 import assert from "node:assert/strict";
 import { buildFilesQuery, isRfc3339, buildBinaryStub, gdriveConnector } from "./gdrive.js";
@@ -52,6 +52,65 @@ t("buildBinaryStub: size/owner 부재 시 해당 필드 생략·url 합성(딥�
   assert.ok(stub.includes("url=https://drive.google.com/file/d/ZZZ")); // webViewLink 부재 → 합성
 });
 
+// ── 본문 추출 시간 상한 — export 가 응답 없이 매달려도 그 파일은 메타만 남기고 백필은 끝난다. ──
+//  상한이 없으면 러너의 무출력 정체 감지가 run 을 죽이고, 커서가 그 파일 앞에 묶여 매 run 이 같은 자리에서 죽는다.
+{
+  const envKeys = ["GDRIVE_CLIENT_ID", "GDRIVE_CLIENT_SECRET", "GDRIVE_REFRESH_TOKEN", "GDRIVE_BODY_TIMEOUT_MS"] as const;
+  const origEnv = envKeys.map((k) => process.env[k]);
+  process.env.GDRIVE_CLIENT_ID = "test-client";
+  process.env.GDRIVE_CLIENT_SECRET = "test-secret";
+  process.env.GDRIVE_REFRESH_TOKEN = "test-refresh";
+  process.env.GDRIVE_BODY_TIMEOUT_MS = "50";
+  const origFetch = globalThis.fetch;
+  const origWarn = console.warn;
+  const warned: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith("https://oauth2.googleapis.com/token")) {
+      return new Response(JSON.stringify({ access_token: "at", expires_in: 3600 }), { status: 200 });
+    }
+    if (url.includes("/files?")) {
+      const files = [
+        { id: "hang", name: "big-sheet", mimeType: "application/vnd.google-apps.spreadsheet", modifiedTime: "2026-11-05T09:30:00Z" },
+        { id: "ok", name: "note.txt", mimeType: "text/plain", modifiedTime: "2026-11-05T09:20:00Z" },
+      ];
+      return new Response(JSON.stringify({ files }), { status: 200 });
+    }
+    if (url.includes("/files/hang/export")) {
+      // 응답하지 않는다 — abort 신호가 와야만 끝난다.
+      return new Promise<Response>((_, reject) => {
+        const sig = init?.signal;
+        if (!sig) return;
+        if (sig.aborted) return reject(sig.reason);
+        sig.addEventListener("abort", () => reject(sig.reason), { once: true });
+      });
+    }
+    return new Response("본문", { status: 200, headers: { "content-type": "text/plain" } });
+  }) as typeof fetch;
+  console.warn = (...a: unknown[]) => { warned.push(a.map(String).join(" ")); };
+  const got: { id: string; body?: string }[] = [];
+  try {
+    const run = (async () => {
+      for await (const it of gdriveConnector.backfill()) got.push({ id: it.provenance.external_id, body: it.body });
+    })();
+    let timer: NodeJS.Timeout | undefined;
+    const guard = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("백필이 5초 안에 끝나지 않는다 — 매달린 export 에 시간 상한이 없다")), 5_000);
+    });
+    try { await Promise.race([run, guard]); } finally { clearTimeout(timer); }
+  } finally {
+    globalThis.fetch = origFetch;
+    console.warn = origWarn;
+    envKeys.forEach((k, i) => { if (origEnv[i] === undefined) delete process.env[k]; else process.env[k] = origEnv[i]; });
+  }
+  assert.deepEqual(got.map((g) => g.id), ["hang", "ok"], "매달린 파일도 메타는 남기고, 뒤 파일 처리도 이어져야 한다");
+  assert.equal(got[0].body, undefined, "시간 초과 파일은 본문을 비운다");
+  assert.equal(got[1].body, "본문");
+  assert.ok(warned.some((w) => w.includes("시간 초과") && w.includes("hang")), `시간 초과 경고가 없다: ${JSON.stringify(warned)}`);
+  pass++; console.log("ok  본문 추출 시간 상한 — 매달린 export 는 메타만 남기고 백필이 끝난다(정체 감지 반복 사망 방지)");
+}
+
+
 // ── 진행 로그 — 러너는 무출력 15분이면 죽인다. 백필이 파일을 처리하는 동안 stdout 에 진행을 남겨야 한다. ──
 {
   const envKeys = ["GDRIVE_CLIENT_ID", "GDRIVE_CLIENT_SECRET", "GDRIVE_REFRESH_TOKEN"] as const;
@@ -94,4 +153,4 @@ t("buildBinaryStub: size/owner 부재 시 해당 필드 생략·url 합성(딥�
   pass++; console.log("ok  백필 진행 로그 — 파일을 훑는 동안 stdout 에 진행을 남긴다(러너 정체 오판 방지)");
 }
 
-console.log(`\n${pass} passed (gdrive 쿼리 인젝션 가드 + [BINARY] 스텁 계약 + 진행 로그)`);
+console.log(`\n${pass} passed (gdrive 쿼리 인젝션 가드 + [BINARY] 스텁 계약 + 본문 시간 상한 + 진행 로그)`);
