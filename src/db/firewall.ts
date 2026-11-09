@@ -185,10 +185,13 @@ function refTableName(node: Record<string, unknown>): string | null {
 //  별칭은 빈 집합이다(그 컬럼은 안쪽 SELECT 의 출력이고, 안쪽의 원본 참조는 그 자리에서 따로 판정된다).
 type AliasBindings = Map<string, Set<string>>;
 interface ScopedRef { ref: Record<string, unknown>; scope: AliasBindings }
-interface ScopedRefScan { refs: ScopedRef[]; usingCols: string[]; naturalJoin: boolean; rootScope: AliasBindings | null }
+interface ScopedRefScan { refs: ScopedRef[]; usingCols: string[]; naturalJoin: boolean; columnAliasList: boolean; rootScope: AliasBindings | null }
 
-function bindFrom(from: unknown, into: AliasBindings): void {
-  if (!Array.isArray(from)) return;
+// 반환값 = 실제 테이블에 FROM 컬럼 별칭 목록(`t AS a(x, y)`)이 붙어 있는가. pg 파서는 이걸 별칭 문자열 "a(x, y)" 로
+//  주므로 별칭도 컬럼 이름 바뀜도 해석할 수 없다. 파생 테이블·VALUES 의 `v(a, b)` 는 안쪽 SELECT 가 따로 판정돼 해당 없다.
+function bindFrom(from: unknown, into: AliasBindings): boolean {
+  if (!Array.isArray(from)) return false;
+  let columnAliasList = false;
   const bind = (name: string, real: string | null): void => {
     const key = name.toLowerCase();
     const set = into.get(key) ?? new Set<string>();
@@ -202,11 +205,13 @@ function bindFrom(from: unknown, into: AliasBindings): void {
     if (typeof fo.table === "string") {
       const rt = fo.table.toLowerCase();
       bind(rt, rt);
-      if (alias) bind(alias, rt);
+      if (alias?.includes("(")) columnAliasList = true;
+      else if (alias) bind(alias, rt);
     } else if (alias && fo.expr !== null && typeof fo.expr === "object" && "ast" in fo.expr) {
       bind(alias, null);
     }
   }
+  return columnAliasList;
 }
 
 // AST 하위 전 column_ref 를 **그 참조에서 보이는 별칭 바인딩**과 함께 수집(CTE·서브쿼리·표현식·set-op 전수, 노드 아이덴티티 보존).
@@ -217,6 +222,7 @@ function collectScopedRefs(root: unknown): ScopedRefScan {
   const refs: ScopedRef[] = [];
   const usingCols: string[] = [];
   let naturalJoin = false;
+  let columnAliasList = false;
   let rootScope: AliasBindings | null = null;
   const walk = (node: unknown, scope: AliasBindings): void => {
     if (node === null || typeof node !== "object") return;
@@ -226,7 +232,7 @@ function collectScopedRefs(root: unknown): ScopedRefScan {
     let inner = scope;
     if (n.type === "select" && Array.isArray(n.from)) {
       inner = new Map([...scope].map(([k, v]) => [k, new Set(v)]));
-      bindFrom(n.from, inner);
+      if (bindFrom(n.from, inner)) columnAliasList = true;
       if (n === root) rootScope = inner;
       for (const f of n.from) {
         // pg 파서는 `t NATURAL JOIN u` 의 NATURAL 을 t 의 별칭으로 읽고 조인키를 남기지 않는다 — AST 가 원문과 다르다.
@@ -243,7 +249,7 @@ function collectScopedRefs(root: unknown): ScopedRefScan {
     for (const v of Object.values(n)) if (v !== null && typeof v === "object") walk(v, inner);
   };
   walk(root, new Map());
-  return { refs, usingCols, naturalJoin, rootScope };
+  return { refs, usingCols, naturalJoin, columnAliasList, rootScope };
 }
 
 // 최상위 ORDER BY / GROUP BY 의 위치 번호(`ORDER BY 2`) — 투영의 몇 번째 컬럼을 가리키는지(1-based).
@@ -288,20 +294,6 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   }
   if (relevantNames.size === 0) return EMPTY_PLAN;
 
-  // 최상위 from 별칭맵 + 마스킹 테이블 판정
-  const aliasMap = new Map<string, string>(); // lower(alias|table) -> lower(realTable)
-  const topFromTables: string[] = [];
-  if (Array.isArray(stmt.from)) {
-    for (const f of stmt.from) {
-      const fo = f as { table?: unknown; as?: unknown };
-      if (typeof fo.table === "string") {
-        const rt = fo.table.toLowerCase();
-        topFromTables.push(rt);
-        aliasMap.set(rt, rt);
-        if (typeof fo.as === "string" && fo.as) aliasMap.set(fo.as.toLowerCase(), rt);
-      }
-    }
-  }
   const tableHasMask = (t: string): boolean => {
     for (const key of policy.maskedCols) if (key.startsWith(t + ".")) return true;
     return false;
@@ -317,6 +309,7 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   };
   const scan = collectScopedRefs(stmt);
   if (scan.naturalJoin) throw new Error("Blocked: 마스킹 컬럼이 있는 소스에서는 NATURAL JOIN 을 쓸 수 없습니다 — 조인 조건을 ON 으로 명시하세요");
+  if (scan.columnAliasList) throw new Error("Blocked: 마스킹 컬럼이 있는 소스에서는 FROM 컬럼 별칭 목록(t AS a(x, y))을 쓸 수 없습니다 — SELECT 목록에서 별칭을 주세요");
   // pg 는 미수식 테이블 이름·별칭을 그 행 전체 값으로 읽는다(`SELECT a FROM t a` · to_json(a)). 출처가 없어 게이트2 가 못 가리므로,
   //  마스킹 테이블에 바인딩된 이름이 미수식 컬럼처럼 쓰이면 어디서든 거부한다(동명 실컬럼이면 과잉 차단 — fail-closed).
   const isWholeRow = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean => {
@@ -329,6 +322,7 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   const scopeOf = new Map(scan.refs.map((s) => [s.ref, s.scope] as const));
   const topScope: AliasBindings = new Map();
   bindFrom(stmt.from, topScope);
+  const topTables = new Set([...topScope.values()].flatMap((v) => [...v]));
   const blockedMsg = (cn: string): string =>
     `Blocked: 마스킹 컬럼 '${cn}' 은 최상위 SELECT 투영에 그대로만 쓸 수 있습니다(표현식·WHERE·JOIN·ORDER·GROUP·서브쿼리 불가) — 개인정보 파생/필터 차단`;
 
@@ -353,7 +347,7 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
       const cn = refColName(ref);
       if (cn && cn !== "*" && isWholeRow(ref, cn, scope)) throw new Error(wholeRowMsg(cn));
       if (cn && cn !== "*" && isSensitive(ref, cn, scope)) throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 집합연산(UNION 등)에 사용할 수 없습니다 — 단일 SELECT 로 직접 조회하세요`);
-      if (cn === "*" && topFromTables.some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
+      if (cn === "*" && [...topTables].some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
     }
     return EMPTY_PLAN;
   }
@@ -363,8 +357,10 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   if (Array.isArray(stmt.columns)) {
     for (const item of stmt.columns) {
       const it = item as { expr?: Record<string, unknown>; as?: unknown };
-      const cn = it.expr && it.expr.type === "column_ref" ? refColName(it.expr) : null;
-      if (!cn || cn === "*" || !isSensitive(it.expr!, cn, topScope)) continue;
+      const e = it.expr;
+      if (!e || e.type !== "column_ref") continue;
+      const cn = refColName(e);
+      if (!cn || cn === "*" || !isSensitive(e, cn, topScope)) continue;
       const as = typeof it.as === "string" ? it.as : (it.as as { value?: unknown } | null)?.value;
       if (typeof as === "string" && as) maskedOutputAliases.add(as.toLowerCase());
     }
@@ -393,17 +389,19 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   let hasTopStarOverMaskedTable = false;
   for (const st of allowedStar) {
     const tr = refTableName(st as Record<string, unknown>);
-    const scope = tr === null ? topFromTables : [aliasMap.get(tr.toLowerCase()) ?? tr.toLowerCase()];
-    if (scope.some(tableHasMask)) { hasTopStarOverMaskedTable = true; break; }
+    const covered = tr === null ? topTables : (topScope.get(tr.toLowerCase()) ?? new Set([tr.toLowerCase()]));
+    if ([...covered].some(tableHasMask)) { hasTopStarOverMaskedTable = true; break; }
   }
 
-  // 위치 번호 정렬·묶기는 그 번호의 투영 컬럼을 참조하는 것과 같다. 마스킹 테이블 * 가 있으면 번호→컬럼을 알 수 없어 거부.
+  // 위치 번호 정렬·묶기는 그 번호의 투영 컬럼을 참조하는 것과 같다. 투영에 * 가 있으면(어느 테이블이든) 몇 칸으로
+  //  펼쳐질지 몰라 번호→컬럼을 알 수 없으므로 거부한다.
   const cols = Array.isArray(stmt.columns) ? stmt.columns : [];
   for (const pos of positionalRefs(stmt)) {
-    if (hasTopStarOverMaskedTable) throw new Error(`Blocked: 마스킹 테이블 '*' 조회에서는 ORDER BY·GROUP BY 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
+    if (allowedStar.size > 0) throw new Error(`Blocked: '*' 가 있는 조회에서는 ORDER BY·GROUP BY 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
     const e = (cols[pos - 1] as { expr?: Record<string, unknown> } | undefined)?.expr;
-    const cn = e && e.type === "column_ref" ? refColName(e) : null;
-    if (cn && cn !== "*" && isSensitive(e!, cn, topScope)) throw new Error(blockedMsg(cn));
+    if (!e || e.type !== "column_ref") continue;
+    const cn = refColName(e);
+    if (cn && cn !== "*" && isSensitive(e, cn, topScope)) throw new Error(blockedMsg(cn));
   }
   return { minMaskedOutputs, hasTopStarOverMaskedTable };
 }

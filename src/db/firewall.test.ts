@@ -334,6 +334,24 @@ rejectsP("scope-natural: NATURAL JOIN 거부", "SELECT t.account_no FROM account
 okP("scope-alias-sub: 서브쿼리 안 동명 참조는 출력 별칭이 아니다",
   "SELECT account_no AS n, (SELECT max(n) FROM other) AS m FROM accounts", acct);
 
+// `*` 는 몇 개 컬럼으로 펼쳐질지 모른다 — 위치 번호가 어느 컬럼을 가리키는지 알 수 없어 거부.
+bothDialects("scope-pos-star-1: 비마스킹 테이블 * 뒤의 위치 번호 정렬",
+  "SELECT o.*, a.account_no, a.id FROM orders o, accounts a ORDER BY 3", acct, /위치 번호/);
+bothDialects("scope-pos-star-2: 조인 + 비마스킹 테이블 * 뒤의 위치 번호 정렬",
+  "SELECT o.*, a.account_no FROM orders o JOIN accounts a ON a.id = o.account_id ORDER BY 3", acct, /위치 번호/);
+// pg 파서는 FROM 컬럼 별칭 목록(`t AS a(x, y)`)을 별칭 문자열 "a(x, y)" 로 준다 — 컬럼 이름이 바뀌어 판정할 수 없다.
+rejectsP("scope-colalias-1: FROM 컬럼 별칭 목록 + 파생", "SELECT substring(a.y, 1, 3) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
+rejectsP("scope-colalias-2: FROM 컬럼 별칭 목록 + 조건", "SELECT x FROM accounts AS a(x, y) WHERE y LIKE '1%'", acct, /컬럼 별칭 목록/);
+rejectsP("scope-colalias-3: FROM 컬럼 별칭 목록 + 행 전체", "SELECT to_json(a) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
+// 가드 — 윈도 함수·LATERAL·DISTINCT ON·FILTER 안의 마스킹 컬럼, 같은 별칭을 다른 테이블에 겹쳐 쓴 경계(과잉 차단 쪽)
+bothDialects("scope-guard-window: 윈도 함수 정렬", "SELECT rank() OVER (ORDER BY account_no) AS r FROM accounts");
+rejectsP("scope-guard-lateral: LATERAL 안 참조",
+  "SELECT o.id FROM orders o, LATERAL (SELECT a.account_no FROM accounts a WHERE a.id = o.account_id) t", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-distinct-on: DISTINCT ON", "SELECT DISTINCT ON (account_no) id FROM accounts", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-filter: 집계 FILTER 조건", "SELECT count(*) FILTER (WHERE account_no LIKE '1%') FROM accounts", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-overlap: 같은 별칭을 다른 테이블에 겹쳐 쓰면 동명 비마스킹 컬럼도 차단(넓은 해석의 대가)",
+  "SELECT a.id FROM accounts a WHERE a.id IN (SELECT a.order_id FROM orders a WHERE a.account_no = 'x')", acct, /최상위 SELECT 투영/);
+
 // 마스킹 없는 컬럼은 범위와 무관하게 계속 허용된다(과잉 차단 회귀 방지)
 okP("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼",
   "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct,
