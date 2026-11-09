@@ -4405,6 +4405,26 @@
   "input_hash": "73a5d4440f4b8e1e"
  },
  {
+  "name": "nas_find",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/nas/find"
+  ],
+  "input_hash": "7d15cc3b3471e7f4"
+ },
+ {
+  "name": "nas_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/nas/list"
+  ],
+  "input_hash": "b485e26075cf4591"
+ },
+ {
   "name": "me_oauth_connect",
   "scope": null,
   "mcp": true,
