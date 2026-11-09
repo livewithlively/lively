@@ -7,7 +7,7 @@ import type { LivelyUser } from "../context.js";
 import { itemsPool, q } from "../db/client.js";
 import { knowledgeVisWhere } from "../v6/knowledge-common.js";
 import { previewExport, parseSelection } from "../transfer/export.js";
-import { applyImport, undoImport, refreshPlan, listActiveCategories } from "../transfer/apply.js";
+import { applyImport, undoImport, refreshPlan, listActiveCategories, transferHousekeeping } from "../transfer/apply.js";
 import { listBatches } from "../transfer/store.js";
 import { UNSORTED, type Decisions, type KnowledgeAction, type CategoryDecision } from "../transfer/plan.js";
 import { mapTransferErrors } from "../transfer/http-errors.js";
@@ -169,7 +169,9 @@ export const transferCapabilities: Capability[] = [
     mutates: false,
     input: {},
     expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/transfer/imports"], parse: () => ({}) }] },
-    async handler() {
+    async handler(_input: Record<string, unknown>, _user: LivelyUser, ctx?: CapabilityCtx) {
+      //  정리(만료·멈춘 배치 수습)는 상태를 바꾸므로 읽기전용 세션에서는 건너뛴다 — 보기만 한다.
+      if (!ctx?.readOnly) await transferHousekeeping();
       return { imports: (await listBatches(50)).map((b) => batchView(b)) };
     },
   },
@@ -181,8 +183,9 @@ export const transferCapabilities: Capability[] = [
     mutates: false,
     input: { id: z.number().int().positive() },
     expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/transfer/imports/:id"], parse: (req) => ({ id: idParam(req) }) }] },
-    async handler(input: { id: number }) {
+    async handler(input: { id: number }, _user: LivelyUser, ctx?: CapabilityCtx) {
       if (!Number.isInteger(input.id) || input.id <= 0) throw new HttpError(400, "가져오기 번호가 필요합니다");
+      if (!ctx?.readOnly) await transferHousekeeping();
       const { batch } = await mapTransferErrors(() => refreshPlan(input.id));
       return { batch: batchView(batch, { withPlan: true }), target_categories: await listActiveCategories() };
     },

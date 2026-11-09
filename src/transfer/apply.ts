@@ -23,7 +23,7 @@ import {
   type Plan, type Decisions, type TargetState, type TargetKnowledge, type KnowledgeAction, type ResolvedItem,
 } from "./plan.js";
 import {
-  createBatch, getBatch, getBatchPayload, transitionBatch, expireStalePlans, getWorkspaceUid,
+  createBatch, getBatch, getBatchPayload, transitionBatch, expireStalePlans, recoverStuckBatches, getWorkspaceUid, saveBatchProgress,
   listOrigins, upsertOrigin, deleteOrigin, type BatchRow, type OriginRow,
 } from "./store.js";
 import { BUNDLE_MAX_BYTES } from "./export.js";
@@ -31,6 +31,8 @@ import { BUNDLE_MAX_BYTES } from "./export.js";
 const VALID_INJECTION = new Set(["always", "recalled"]);
 const VALID_CONFIDENCE = new Set(["ai", "rule", "human"]);
 const ORIGIN_URL_FIELD = "원본 주소";
+/** 적용 중간 결과를 몇 건마다 저장하나 — 프로세스가 죽어도 되돌리기가 «여기까지 한 것» 을 치울 수 있게. */
+const PROGRESS_EVERY = 20;
 
 // ── 받는 쪽 상태 ─────────────────────────────────────────────────────────────────────
 
@@ -96,8 +98,15 @@ export class TransferInputError extends Error {
   constructor(message: string, readonly status = 400, readonly code?: string) { super(message); }
 }
 
-export async function stageImport(file: Buffer, opts: { password?: string | null; fileName?: string | null; ctx: WriteCtx }): Promise<{ batch: BatchRow; plan: Plan }> {
+/** 배치 정리 — 하루 지난 미리보기의 파일 바이트를 비우고, 멈춘 적용·되돌리기를 «일부만 들임» 으로 내린다.
+ *  따로 도는 스윕 없이 옮기기 화면·API 가 열릴 때마다 돈다(배치는 사람이 가져오기를 할 때만 생긴다). */
+export async function transferHousekeeping(): Promise<void> {
   await expireStalePlans().catch(() => 0);
+  await recoverStuckBatches().catch(() => 0);
+}
+
+export async function stageImport(file: Buffer, opts: { password?: string | null; fileName?: string | null; ctx: WriteCtx }): Promise<{ batch: BatchRow; plan: Plan }> {
+  await transferHousekeeping();
   if (!file.length) throw new TransferInputError("빈 파일입니다");
   if (file.length > BUNDLE_MAX_BYTES) throw new TransferInputError("파일이 100MB 를 넘습니다 — 보내는 쪽에서 분류를 나눠 다시 내보내 주세요", 413);
   const { bundle, problems, sealed, zip } = await readBundle(file, opts.password ?? null);
@@ -136,6 +145,8 @@ export interface ApplyKnowledgeResult {
   before?: KnowledgeSnapshot | null;
   /** 가져온 기록의 그 전 값(되돌리기용 — 없었으면 null) */
   prev_origin?: OriginRow | null;
+  /** 문서는 들어갔지만 뒤 단계(필드·가져온 기록)가 실패했다 — notes 에 이유 */
+  warning?: boolean;
 }
 
 export interface ApplyResult {
@@ -145,6 +156,8 @@ export interface ApplyResult {
   sources_linked: number;
   links: { created: number; dropped: number };
   counts: { created: number; updated: number; skipped: number; failed: number };
+  sources_failed?: number;
+  notes?: string[];
   undo?: UndoReport;
 }
 
@@ -213,6 +226,7 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
     // ⓑ 지식 — 상위 폴더부터. 저장 뒤처리(임베딩 표시·[[링크]] 엣지)는 전부 들인 다음에 돈다(가리키는 문서가 먼저 서 있어야 엣지가 선다).
     const posts: Array<() => Promise<unknown>> = [];
     const written = new Map<string, string>(); // ref → 받는 쪽 이름(이번에 쓴 것)
+    let sinceSave = 0;
     for (const it of byDepth(resolved.items, byRef)) {
       const k = byRef.get(it.ref)!;
       if (it.final === "skip" || !it.target_name) {
@@ -221,29 +235,31 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
         continue;
       }
       const notes: string[] = [];
+      let name = it.target_name;
+      const parentLocal = k.parent ? (resolved.nameMap.get(k.parent) ?? null) : null;
+      if (k.parent && !parentLocal) notes.push("상위 폴더가 들어오지 않아 맨 위에 둡니다.");
+      const input = {
+        title: k.title ?? undefined,
+        body_md: rewriteWikiLinks(k.body_md, resolved.nameMap),
+        type: k.type ?? "reference",
+        category: it.target_category,
+        provenance: "authored",
+        summary: k.summary,
+        searchable: k.searchable,
+        is_folder: k.is_folder,
+        parent_name: parentLocal && (written.has(k.parent!) || target.names.has(parentLocal)) ? parentLocal : null,
+        sort: k.sort,
+        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? undefined) : undefined,
+      };
+      const wantFields: Record<string, unknown> = { ...k.fields };
+      if (k.provenance === "observed" && k.external_url) wantFields[ORIGIN_URL_FIELD] = k.external_url;
+      const prevOrigin = target.originsKnowledge.get(it.ref);
+      const created = it.final === "create" || it.final === "rename";
+      let before: KnowledgeSnapshot | null = null;
+
+      // ① 쓰기 — 여기서 실패하면 받는 쪽은 그대로다(아무것도 안 썼다). 실패로 적고 다음 항목으로.
       try {
-        let name = it.target_name;
-        const parentLocal = k.parent ? (resolved.nameMap.get(k.parent) ?? null) : null;
-        if (k.parent && !parentLocal) notes.push("상위 폴더가 들어오지 않아 맨 위에 둡니다.");
-        const input = {
-          title: k.title ?? undefined,
-          body_md: rewriteWikiLinks(k.body_md, resolved.nameMap),
-          type: k.type ?? "reference",
-          category: it.target_category,
-          provenance: "authored",
-          summary: k.summary,
-          searchable: k.searchable,
-          is_folder: k.is_folder,
-          parent_name: parentLocal && (written.has(k.parent!) || target.names.has(parentLocal)) ? parentLocal : null,
-          sort: k.sort,
-          supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? undefined) : undefined,
-        };
-        const wantFields: Record<string, unknown> = { ...k.fields };
-        if (k.provenance === "observed" && k.external_url) wantFields[ORIGIN_URL_FIELD] = k.external_url;
-        const prevOrigin = target.originsKnowledge.get(it.ref);
-        let created = false;
-        let before: KnowledgeSnapshot | null = null;
-        if (it.final === "create" || it.final === "rename") {
+        if (created) {
           const extra = {
             lifecycle: k.lifecycle,
             injection: VALID_INJECTION.has(k.injection) ? k.injection : "recalled",
@@ -256,40 +272,53 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
           } catch (e) {
             if (!(e instanceof KnowledgeExistsError)) throw e;
             // 미리보기 뒤 누가 같은 이름을 만들었다 — 비어 있는 새 이름으로 한 번 더(덮어쓰지 않는다).
-            const taken = new Set((await q(itemsPool, `SELECT name FROM knowledge WHERE name LIKE $1`, [`${name.slice(0, 40)}%`])).map((r) => String(r.name)));
+            const like = `${name.slice(0, 40).replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+            const taken = new Set((await q(itemsPool, `SELECT name FROM knowledge WHERE name LIKE $1`, [like])).map((r) => String(r.name)));
             name = freeName(name, taken, new Set(written.values()));
             notes.push(`같은 이름이 그사이 생겨 '${name}' 으로 들였습니다.`);
             const saved = await upsertKnowledge({ name, ...input, ...extra }, ctx, { insertOnly: true, visibility: "open", deferPost: true });
             if (saved.post) posts.push(saved.post);
           }
-          created = true;
-          if (Object.keys(wantFields).length) await setFieldsExactly(name, wantFields, {}, ctx);
         } else {
           before = await snapshot(name);
           if (!before) throw new Error(`덮어쓸 지식 '${name}' 이 사라졌습니다`);
           if (before.provenance === "observed") throw new Error(`'${name}' 은 외부 미러라 덮어쓸 수 없습니다`);
           const saved = await upsertKnowledge({ name, ...input }, ctx, { deferPost: true });
           if (saved.post) posts.push(saved.post);
-          await setFieldsExactly(name, wantFields, before.fields, ctx);
         }
-        written.set(it.ref, name);
-        resolved.nameMap.set(it.ref, name);
-        const after = await readTargetKnowledge([name]);
-        const row = after.get(name);
+      } catch (e) {
+        result.knowledge.push({ ref: it.ref, action: it.final, name: it.target_name, ok: false, error: (e as Error).message, notes: notes.length ? notes : undefined });
+        result.counts.failed++;
+        continue;
+      }
+
+      // ② 썼다 — 결과를 **지금** 남긴다(만든 것인지 · 덮어쓰기 전 판). 뒤 단계가 실패해도 되돌리기가 이 기록으로 치운다.
+      //  (리뷰 지적 2026-11-09: 종전엔 필드·기록 단계의 실패가 이 항목을 «실패» 로만 남겨, 만든 문서는 되돌리기에서 빠지고
+      //   덮어쓴 문서는 전 판을 잃었다.)
+      written.set(it.ref, name);
+      resolved.nameMap.set(it.ref, name);
+      if (k.visibility !== "open") notes.push("대상자 제한을 풀고 공개로 들였습니다.");
+      const entry: ApplyKnowledgeResult = {
+        ref: it.ref, action: it.final, name, ok: true, created, notes, before,
+        prev_origin: prevOrigin ? { origin_uid: originUid, kind: "knowledge", origin_ref: it.ref, local_ref: prevOrigin.local_ref, origin_hash: prevOrigin.origin_hash, local_hash: prevOrigin.local_hash, batch_id: null } : null,
+      };
+      result.knowledge.push(entry);
+      if (created) result.counts.created++; else result.counts.updated++;
+
+      // ③ 뒤 단계 — 실패해도 문서는 들어가 있다. 경고로 남긴다.
+      try {
+        if (created) { if (Object.keys(wantFields).length) await setFieldsExactly(name, wantFields, {}, ctx); }
+        else await setFieldsExactly(name, wantFields, before?.fields ?? {}, ctx);
+      } catch (e) { entry.warning = true; notes.push(`필드를 옮기지 못했습니다: ${(e as Error).message}`); }
+      try {
+        const row = (await readTargetKnowledge([name])).get(name);
         await upsertOrigin({
           origin_uid: originUid, kind: "knowledge", origin_ref: it.ref, local_ref: name,
           origin_hash: bundleContentHash(k), local_hash: row ? targetContentHash(row) : null, batch_id: batchId,
         });
-        if (k.visibility !== "open") notes.push("대상자 제한을 풀고 공개로 들였습니다.");
-        result.knowledge.push({
-          ref: it.ref, action: it.final, name, ok: true, created, notes: notes.length ? notes : undefined, before,
-          prev_origin: prevOrigin ? { origin_uid: originUid, kind: "knowledge", origin_ref: it.ref, local_ref: prevOrigin.local_ref, origin_hash: prevOrigin.origin_hash, local_hash: prevOrigin.local_hash, batch_id: null } : null,
-        });
-        if (created) result.counts.created++; else result.counts.updated++;
-      } catch (e) {
-        result.knowledge.push({ ref: it.ref, action: it.final, name: it.target_name, ok: false, error: (e as Error).message, notes: notes.length ? notes : undefined });
-        result.counts.failed++;
-      }
+      } catch (e) { entry.warning = true; notes.push(`가져온 기록을 남기지 못했습니다(다시 가져오면 처음 보는 문서로 봅니다): ${(e as Error).message}`); }
+      if (!notes.length) delete entry.notes;
+      if (++sinceSave >= PROGRESS_EVERY) { sinceSave = 0; await saveBatchProgress(batchId, result).catch(() => {}); }
     }
 
     // ⓒ 본문 밖 연결 — 양 끝이 다 받는 쪽에 있을 때만(묶음 밖 이름은 받는 쪽의 다른 문서일 수 있어 잇지 않는다).
@@ -307,28 +336,35 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
       const neededRefs = new Set<string>();
       for (const ref of written.keys()) for (const s of byRef.get(ref)?.sources ?? []) neededRefs.add(s.ref);
       const sourceMap = new Map<string, number>();
+      const byExternal = new Map(target.sourcesByExternal);
       for (const s of bundle.sources) {
         if (!neededRefs.has(s.ref)) continue;
-        const lin = target.originsSource.get(s.ref);
-        const ext = sourceExternalKey(s.external_system, s.external_instance, s.external_id);
-        let id: number | undefined;
-        if (lin && target.sourceIds.has(Number(lin.local_ref))) id = Number(lin.local_ref);
-        else if (ext && target.sourcesByExternal.has(ext)) id = target.sourcesByExternal.get(ext);
-        if (id === undefined) {
-          const row = await upsertSource({
-            kind: s.kind, title: s.title, body_md: s.body_md, provenance: s.provenance === "authored" ? "authored" : "observed",
-            external_system: s.external_system, external_instance: s.external_instance, external_id: s.external_id,
-            external_url: s.external_url, occurred_at: s.occurred_at, author: s.author,
-          }, ctx);
-          id = Number((row as { id: number }).id);
-          if (Object.keys(s.fields).length || s.parent_external_id) {
-            await itemsPool.query(`UPDATE source SET fields = $2::jsonb, parent_external_id = $3 WHERE id = $1`,
-              [id, JSON.stringify(s.fields ?? {}), s.parent_external_id]);
+        try {
+          const lin = target.originsSource.get(s.ref);
+          const ext = sourceExternalKey(s.external_system, s.external_instance, s.external_id);
+          let id: number | undefined;
+          if (lin && target.sourceIds.has(Number(lin.local_ref))) id = Number(lin.local_ref);
+          else if (ext && byExternal.has(ext)) id = byExternal.get(ext);
+          if (id === undefined) {
+            const row = await upsertSource({
+              kind: s.kind, title: s.title, body_md: s.body_md, provenance: s.provenance === "authored" ? "authored" : "observed",
+              external_system: s.external_system, external_instance: s.external_instance, external_id: s.external_id,
+              external_url: s.external_url, occurred_at: s.occurred_at, author: s.author,
+            }, ctx);
+            id = Number((row as { id: number }).id);
+            result.sources_created.push(id);
+            if (ext) byExternal.set(ext, id); // 묶음 안에 같은 원본이 또 있으면 두 번째는 연결만
+            if (Object.keys(s.fields).length || s.parent_external_id) {
+              await itemsPool.query(`UPDATE source SET fields = $2::jsonb, parent_external_id = $3 WHERE id = $1`,
+                [id, JSON.stringify(s.fields ?? {}), s.parent_external_id]);
+            }
           }
-          result.sources_created.push(id);
+          sourceMap.set(s.ref, id);
+          await upsertOrigin({ origin_uid: originUid, kind: "source", origin_ref: s.ref, local_ref: String(id), origin_hash: null, local_hash: null, batch_id: batchId });
+        } catch (e) {
+          result.sources_failed = (result.sources_failed ?? 0) + 1;
+          result.notes = [...(result.notes ?? []), `자료 ${s.title ?? s.ref} 를 들이지 못했습니다: ${(e as Error).message}`];
         }
-        sourceMap.set(s.ref, id);
-        await upsertOrigin({ origin_uid: originUid, kind: "source", origin_ref: s.ref, local_ref: String(id), origin_hash: null, local_hash: null, batch_id: batchId });
       }
       for (const [ref, name] of written) {
         for (const s of byRef.get(ref)?.sources ?? []) {
@@ -349,7 +385,7 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
     return { batch: batch!, result };
   } catch (e) {
     const touched = result.knowledge.some((r) => r.ok && r.action !== "skip") || result.categories_created.length > 0 || result.sources_created.length > 0;
-    await transitionBatch(batchId, ["applying"], touched ? "partial" : "failed", { result, error: (e as Error).message, applied_by: ctx.actor ?? null }).catch(() => {});
+    await transitionBatch(batchId, ["applying"], touched ? "partial" : "failed", { result, error: (e as Error).message, applied_by: ctx.actor ?? null, clearPayload: true }).catch(() => {});
     throw e;
   }
 }
@@ -384,6 +420,13 @@ export async function undoImport(batchId: number, ctx: WriteCtx): Promise<{ batc
           if (exists) { await deleteKnowledge(r.name, ctx); report.deleted++; }
         } else if (r.before) {
           const b = r.before;
+          const still = await one(itemsPool, `SELECT 1 FROM knowledge WHERE name = $1`, [b.name]);
+          if (!still) {
+            // 가져온 뒤 사람이 지웠다 — 되돌리기가 그 문서를 되살리면 지운 결정을 거스른다.
+            report.kept.push({ name: b.name, reason: "가져온 뒤 지워진 문서라 되살리지 않았습니다" });
+            if (r.prev_origin) await upsertOrigin(r.prev_origin); else if (originUid) await deleteOrigin(originUid, "knowledge", r.ref);
+            continue;
+          }
           await upsertKnowledge({
             name: b.name, title: b.title ?? undefined, body_md: b.body_md, type: b.type ?? undefined, category: b.category ?? undefined,
             provenance: b.provenance, summary: b.summary, is_folder: b.is_folder, parent_name: b.parent_name,
@@ -391,6 +434,8 @@ export async function undoImport(batchId: number, ctx: WriteCtx): Promise<{ batc
           }, ctx);
           const cur = await snapshot(b.name);
           await setFieldsExactly(b.name, b.fields, cur?.fields ?? {}, ctx);
+          // 원래 분류가 없던 문서 — 저장(upsert)은 분류를 «안 바꿈» 으로 읽으니, 들일 때 붙인 분류를 직접 뗀다.
+          if (!b.category) await itemsPool.query(`DELETE FROM knowledge_category WHERE name = $1`, [b.name]);
           report.restored++;
         }
         if (r.prev_origin) await upsertOrigin(r.prev_origin);

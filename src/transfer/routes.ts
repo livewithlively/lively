@@ -18,6 +18,7 @@ import { stageImport, listActiveCategories } from "./apply.js";
 import { assertUsablePassword, SealPasswordError } from "./seal.js";
 import { mapTransferErrors } from "./http-errors.js";
 import { batchView } from "./view.js";
+import { splitPasswordFrame, PasswordFrameError } from "./frame.js";
 
 export const TRANSFER_EXPORT_PATH = "/api/ui/transfer/export";
 export const TRANSFER_UPLOAD_PATH = "/api/ui/transfer/upload";
@@ -47,8 +48,9 @@ export function registerTransferRoutes(app: express.Express, verifier: BearerVer
     next();
   };
 
-  // 내보내기 — 본문 JSON(고른 것 + 선택 비밀번호). 고른 지식 이름 목록이 길 수 있어 이 경로만 상한을 넉넉히 둔다.
-  app.post(TRANSFER_EXPORT_PATH, express.json({ limit: "4mb" }), authResolve, requireAdmin, wrap(async (req, res) => {
+  // 내보내기 — 본문 JSON(고른 것 + 선택 비밀번호). 본문 파싱(4MB)은 index.ts 가 전역 1MB 보다 먼저 이 경로에 건다
+  //  (여기서 express.json 을 다시 걸면 전역이 이미 읽은 뒤라 아무 일도 안 한다 — 리뷰 지적 2026-11-09).
+  app.post(TRANSFER_EXPORT_PATH, authResolve, requireAdmin, wrap(async (req, res) => {
     const user = userOf(req);
     const b = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
     const sel = parseSelection(b);
@@ -73,7 +75,8 @@ export function registerTransferRoutes(app: express.Express, verifier: BearerVer
     res.end(out.file);
   }));
 
-  // 올리기 — 본문이 파일 바이트 그대로(Content-Type: application/octet-stream). 비밀번호·파일 이름은 머리글(URI 인코딩).
+  // 올리기 — 본문이 파일 바이트(Content-Type: application/octet-stream). 비밀번호는 본문 앞 틀(frame.ts — 머리글은 기록에 남을 수 있다),
+  //  파일 이름만 머리글(URI 인코딩).
   //  전역 express.json() 은 JSON 형식이 아닌 본문을 건드리지 않으므로 이 경로의 raw 파서가 받는다.
   app.post(TRANSFER_UPLOAD_PATH, authResolve, requireAdmin,
     express.raw({ type: () => true, limit: BUNDLE_MAX_BYTES }),
@@ -82,10 +85,12 @@ export function registerTransferRoutes(app: express.Express, verifier: BearerVer
       if (!Buffer.isBuffer(req.body) || !req.body.length) {
         throw new HttpError(400, "파일을 본문으로 보내 주세요(Content-Type: application/octet-stream)");
       }
-      const password = decodeHeader(req.headers["x-lively-bundle-password"], 256);
+      let framed: { password: string | null; file: Buffer };
+      try { framed = splitPasswordFrame(req.body as Buffer); }
+      catch (e) { if (e instanceof PasswordFrameError) throw new HttpError(400, e.message, { body: { code: "bad_file" } }); throw e; }
       const fileName = decodeHeader(req.headers["x-lively-bundle-name"], 300);
       const { batch, plan } = await mapTransferErrors(() =>
-        stageImport(req.body as Buffer, { password, fileName, ctx: { actor: user.userId, source: "web" } }));
+        stageImport(framed.file, { password: framed.password, fileName, ctx: { actor: user.userId, source: "web" } }));
       res.setHeader("Cache-Control", "no-store");
       res.json({ batch: batchView(batch), plan, target_categories: await listActiveCategories() });
     }));

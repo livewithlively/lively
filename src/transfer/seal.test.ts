@@ -11,6 +11,7 @@
 //   B7  잠긴 파일인지 판별                      → zip 아니오 · 잠긴 묶음 예
 //   B8  빈 비밀번호로 열기                      → 비밀번호 오류
 //   B9  같은 한글 비밀번호를 NFD 로 입력          → 열린다
+//   B10 머리가 JSON null                       → 형식 오류(500 이 아니라 400 으로 갈 오류)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -80,4 +81,9 @@ test("B9 같은 한글 비밀번호를 다른 정규형(NFD)으로 넣어도 열
   const sealed = await sealBundle(Buffer.from("hello"), nfc);
   assert.notEqual(nfc.normalize("NFD"), nfc);
   assert.equal((await openSealedBundle(sealed, nfc.normalize("NFD"))).toString(), "hello");
+});
+
+test("B10 머리가 JSON null 이면 형식 오류다(TypeError 가 아니다)", async () => {
+  const forged = Buffer.concat([Buffer.from("LIVELY-SEALED-BUNDLE\n", "ascii"), Buffer.from("null\n", "utf8"), Buffer.alloc(32)]);
+  await assert.rejects(openSealedBundle(forged, PW), SealFormatError);
 });

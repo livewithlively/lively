@@ -63,6 +63,8 @@ export async function openSealedBundle(buf: Buffer, password: string): Promise<B
   let header: SealHeader;
   try { header = JSON.parse(buf.subarray(MAGIC.length, nl).toString("utf8")) as SealHeader; }
   catch { throw new SealFormatError("잠긴 묶음의 머리를 읽지 못했습니다"); }
+  //  `null`·숫자도 JSON 이다 — 객체가 아니면 아래 칸 읽기가 TypeError(500)로 죽는다(리뷰 지적 2026-11-09).
+  if (!header || typeof header !== "object" || Array.isArray(header)) throw new SealFormatError("잠긴 묶음의 머리가 망가졌습니다");
   if (header.v !== 1 || header.alg !== "aes-256-gcm" || header.kdf !== "scrypt") {
     throw new SealFormatError("모르는 잠금 방식입니다 — 이 파일은 더 새 라이블리에서 만들어졌을 수 있습니다");
   }

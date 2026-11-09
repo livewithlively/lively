@@ -63,6 +63,13 @@ async function failure(res: Response): Promise<Error & { code?: string }> {
   return e;
 }
 
+/** UTF-8 바이트의 base64 — btoa 는 한 바이트 글자만 받는다(한글 비밀번호). */
+function utf8Base64(s: string): string {
+  let bin = '';
+  for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 let openBack: HTMLElement | null = null;
 
 /** 창을 연다. tab = 처음 보일 탭. */
@@ -184,24 +191,29 @@ function exportPane(): HTMLElement {
     if (on) catAll.add(key); else catAll.delete(key);
     paintList(); paintSearch(); refreshPreview();
   };
+  //  하나씩 고른 문서는 하나씩 고른 채로 둔다 — 분류의 문서를 전부 골랐다고 «통째» 로 바꾸면, 나중에 «보관한 지식도 함께» 를
+  //   켰을 때 고르지 않은 보관 문서까지 따라 들어간다(리뷰 지적 2026-11-09).
   const toggleDoc = async (d: Doc, on: boolean): Promise<void> => {
     const key = d.category;
-    if (catAll.has(key)) {
-      // 통째로 고른 분류에서 하나를 빼면 → 나머지를 하나씩 고른 것으로 바꾼다.
-      const all = await loadDocs(key);
-      catAll.delete(key);
-      picked.set(key, new Set(all.map((x) => x.name).filter((n) => n !== d.name || on)));
-    } else {
-      const s = picked.get(key) ?? new Set<string>();
-      if (on) s.add(d.name); else s.delete(d.name);
-      if (s.size) picked.set(key, s); else picked.delete(key);
-      // 분류의 문서를 전부 하나씩 골랐으면 → 통째로 고른 것과 같다(이후 새로 생기는 문서까지 담는 쪽).
-      const all = docsOf.get(key);
-      if (all && all.length && s.size === all.length) { catAll.add(key); picked.delete(key); }
+    try {
+      if (catAll.has(key)) {
+        // 통째로 고른 분류에서 하나를 빼면 → 나머지를 하나씩 고른 것으로 바꾼다.
+        const all = await loadDocs(key);
+        catAll.delete(key);
+        picked.set(key, new Set(all.map((x) => x.name).filter((n) => n !== d.name || on)));
+      } else {
+        const s = picked.get(key) ?? new Set<string>();
+        if (on) s.add(d.name); else s.delete(d.name);
+        if (s.size) picked.set(key, s); else picked.delete(key);
+      }
+    } catch (e) {
+      toast(`문서 목록을 불러오지 못했습니다 — ${(e as Error).message}`);
     }
     paintList(); paintSearch(); refreshPreview();
   };
-  const isPicked = (d: Doc): boolean => catAll.has(d.category) || !!picked.get(d.category)?.has(d.name);
+  //  분류를 통째로 골라도 보관 문서는 «보관한 지식도 함께» 를 켰을 때만 담긴다(서버 resolveSelection 과 같은 규칙).
+  const isPicked = (d: Doc): boolean =>
+    (catAll.has(d.category) && (!d.archived || includeArchived)) || !!picked.get(d.category)?.has(d.name);
 
   const docRow = (d: Doc): HTMLElement => {
     const cb = el('input', { type: 'checkbox', 'aria-label': d.title || d.name }) as HTMLInputElement;
@@ -371,14 +383,12 @@ function startView(onPlan: (b: Batch, p: Plan, t: Array<{ key: string; name: str
     pick.disabled = true;
     status.textContent = `«${file.name}» 을 읽는 중입니다…`;
     try {
+      //  비밀번호는 머리글이 아니라 본문 앞 틀로 싣는다(src/transfer/frame.ts — 머리글은 프록시 기록에 남을 수 있다).
+      const body: Blob = password ? new Blob([`LIVELY-PW1\n${utf8Base64(password)}\n`, file]) : file;
       const res = await fetch(apiUrl('/api/ui/transfer/upload'), {
         method: 'POST',
-        headers: authHeaders({
-          'Content-Type': 'application/octet-stream',
-          'X-Lively-Bundle-Name': encodeURIComponent(file.name),
-          ...(password ? { 'X-Lively-Bundle-Password': encodeURIComponent(password) } : {}),
-        }),
-        body: file,
+        headers: authHeaders({ 'Content-Type': 'application/octet-stream', 'X-Lively-Bundle-Name': encodeURIComponent(file.name) }),
+        body,
       });
       if (!res.ok) throw await failure(res);
       const r = await res.json() as { batch: Batch; plan: Plan; target_categories: Array<{ key: string; name: string | null }> };
@@ -470,8 +480,9 @@ function planView(batch: Batch, plan: Plan, targets: Array<{ key: string; name: 
   // 분류 맞추기
   const catRows = plan.categories.map((c) => {
     const sel = el('select', { class: 'v2xfer-sel', 'aria-label': `${c.name || c.ref} 분류를 어디로 맞출지` }) as HTMLSelectElement;
-    const newKey = c.suggestion.action === 'create' ? c.suggestion.key : c.ref;
-    sel.append(el('option', { value: '__create__', text: `새 분류로 만들기 (${newKey})` }));
+    //  제안이 «만들기» 면 그 key 를 보여 준다. 제안이 «맞추기»(같은 key·이름이 있다)인데 사람이 만들기를 고르면 서버가 비어 있는
+    //   새 key(-2 …)로 **새로** 만든다 — 그래서 그때는 key 를 장담하지 않는다.
+    sel.append(el('option', { value: '__create__', text: c.suggestion.action === 'create' ? `새 분류로 만들기 (${c.suggestion.key})` : '새 분류로 따로 만들기' }));
     for (const t of targets) sel.append(el('option', { value: t.key, text: `여기의 «${t.name || t.key}» 에 넣기` }));
     sel.value = c.suggestion.action === 'map' ? c.suggestion.to : '__create__';
     catChoice.set(c.ref, sel);
