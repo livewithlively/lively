@@ -335,7 +335,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  사람이 지은 이름인가(lib/sess-name.ts human) — 여기서 방금 고쳤으면 목록이 따라오기 전에도 참이다.
   let titleHuman = target.raw?.labelSource === 'human';
   let renaming = false;
-  const canRename = (): boolean => !!opts.onRename && target.owned && target.live && !target.raw?.restorable;
+  // 이름은 실행 상태와 무관한 세션 기록이다. 중단된 세션도 서버가 저장된 이름을 고친다.
+  const canRename = (): boolean => !!opts.onRename && target.owned;
   const paneTitle = (): string => String(target.raw?.title || '').trim();
   // 이름을 안 주고 만든 세션은 이름이 **id 그대로**다(sessions.ts: label = cleanLabel(input.label) || id).
   //  그건 이름이 아니므로 화면에 쓰지 않는다 — 사이드바(side.ts isIdLabel)와 같은 판정.
@@ -351,10 +352,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     human: titleHuman,
   }, String(target.projectName || '').trim());
   const penIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }));
-  const penBtn = (): HTMLElement => el('button', {
-    class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
-    title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요', onclick: () => startRename(),
-  }, penIc());
   //  이름 뒤의 번호 — 이 세션이 맡은 태스크 번호다(세션 = 태스크, #4084). 프로젝트 문패의 `#번호` 와 같은 꼴로 적는다
   //   (원준 2026-10-10: «세션 제목 뒤에도 프로젝트처럼 #nnnn 해서 세션 번호 같이 적어 달라»). 태스크가 없는 세션(프로젝트 밖)은 안 적는다.
   function paintTitle(): void {
@@ -385,10 +382,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
     if (job) {
-      const b = el('b', { class: 'sc-title', title: canRename() ? tip + ' — 두 번 누르면 세션 이름을 바꿉니다' : tip, text: job });
-      if (!canRename()) { titleHost.replaceChildren(b); return; }
-      b.addEventListener('dblclick', () => startRename());
-      titleHost.replaceChildren(b, penBtn());
+      if (!canRename()) { titleHost.replaceChildren(el('b', { class: 'sc-title', title: tip, text: job })); return; }
+      // 앱의 좁은 창에서는 연필이 숨기도 한다. 제목 자체를 한 번 눌러 열 수 있게 한다.
+      titleHost.replaceChildren(el('button', { class: 'sc-title sc-title-btn', type: 'button',
+        title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
+        el('span', { class: 'sc-title-t', text: job }), penIc()));
       return;
     }
     const t = f.main;   // 하네스 이름 또는 «이름 없는 세션» — 사이드바와 같은 글
