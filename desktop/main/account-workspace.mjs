@@ -21,3 +21,10 @@ export function workspaceExchange(raw, cloudOrigin) {
       !/^[a-z0-9][a-z0-9-]{0,62}$/.test(u.hostname.slice(0, -(cloud.hostname.length + 1))))) return null;
   return { exchangeUrl: u.href, gatewayUrl: u.origin, uiUrl: `${u.origin}/ui/` };
 }
+
+export function accountHomeNavigation(raw, cloudOrigin) {
+  try {
+    const u = new URL(String(raw || ""));
+    return u.origin === cloudOrigin && !u.username && !u.password && u.pathname === "/home";
+  } catch { return false; }
+}

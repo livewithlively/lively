@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { workspaceEnterRequest, workspaceExchange } from "./account-workspace.mjs";
+import { workspaceEnterRequest, workspaceExchange, accountHomeNavigation } from "./account-workspace.mjs";
 
 const cp = "https://app.lvly.io";
 const id = "244ae282-255c-4cdb-843c-26c250e366a8";
@@ -34,4 +34,13 @@ test("계정 서버가 만든 테넌트 세션 교환 주소만 앱 창에 싣�
   assert.deepEqual(workspaceExchange("http://127.0.0.1:9001/api/ui/session/exchange?code=x", "http://127.0.0.1:9000"), {
     exchangeUrl: "http://127.0.0.1:9001/api/ui/session/exchange?code=x", gatewayUrl: "http://127.0.0.1:9001", uiUrl: "http://127.0.0.1:9001/ui/",
   });
+});
+
+test("계정 로그인 완료는 계정 홈으로 이동했을 때만 인정한다", () => {
+  assert.equal(accountHomeNavigation(`${cp}/home`, cp), true);
+  assert.equal(accountHomeNavigation(`${cp}/home?tab=workspaces`, cp), true);
+  for (const bad of [`${cp}/homepage`, `${cp}/login`, `https://evil.example/home`,
+    `https://user:pass@app.lvly.io/home`, "not a url"]) {
+    assert.equal(accountHomeNavigation(bad, cp), false, bad);
+  }
 });
