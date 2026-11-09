@@ -67,8 +67,8 @@ const SIB_SCAN_MS = 3000;            // 형제 폴더 걷기에 쓸 시간 상�
 const SIB_MAX_FOLDERS = 8;           // 한 번에 네트워크를 태울 형제 폴더 상한 — 나머지는 다음 턴
 const SIB_MIN_LEFT_MS = 3000;        // 남은 예산이 이보다 적으면 형제를 아예 안 본다(같은 Stop 의 다음 훅 몫을 남긴다)
 const SIB_RECHECK_MS = 30 * 60_000;  // 끝까지 처리한 형제도 이만큼 지나면 다시 본다(서버 쪽 변화로 판정이 바뀌었을 수 있다)
-const SIB_DENIED_MS = 60 * 60_000;   // 서버가 그 프로젝트를 거절(403·404·410)하면 이만큼 쉰다 — 지운 프로젝트가 자리를 차지하지 않게
-const SIB_FAILED_MS = 10 * 60_000;   // 일시 오류가 난 형제는 이 시간 동안 줄의 맨 뒤로 보낸다
+const SIB_DENIED_MS = 60 * 60_000;   // 서버가 그 프로젝트를 모른다(404·410 — 지운 프로젝트)면 이만큼 쉰다 — 자리를 차지하지 않게
+const SIB_FAILED_MS = 10 * 60_000;   // 403(권한 · 게이트웨이 쪽 일시 인증 문제일 수도 있다)은 이만큼만 쉰다 · 일시 오류 형제는 이만큼 줄의 맨 뒤
 const SIB_SLOW_SCAN_MS = 1500;       // 지난 형제 걷기가 이보다 오래 걸린 노드(stat 이 느린 윈도우 등)는
 const SIB_SLOW_GAP_MS = 60_000;      //  이 간격 안에서는 다시 걷지 않는다(턴마다 사람을 기다리게 하지 않게)
 
@@ -302,7 +302,8 @@ async function localFiles(base) {
 //  lastPull = 걷기 **전에** 읽은 마커 워터마크(판정 근거의 시점을 종전과 같게 둔다 — 함수로 빼기 전에도 걷기 앞에서 읽었다).
 //  allowDelete=false(다른 프로젝트 폴더)면 ⑦ 삭제 판정을 통째로 건너뛰고, 보고는 한 일·충돌이 있을 때만 쓴다.
 //  돌려주는 값: 매니페스트를 못 받으면 { ok:false, status: HTTP 상태 | 0(연결 실패 · 시간 초과) } — 종전의 조기 return 과
-//   같은 뜻(상태를 안 남긴다). 받았으면 { ok:true, clean: 완주했나(선검사 상태의 pushed_clean), uploaded: 올린 경로(정본 키) }.
+//   같은 뜻(상태를 안 남긴다). 받았으면 { ok:true, clean: 완주했나(선검사 상태의 pushed_clean), pushed, failed,
+//   putStatus: 마지막 PUT 실패 상태, uploaded: 올린 경로(정본 키) }.
 async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete }) {
   const { jfetch, left } = io;
   // 5) 서버 매니페스트 — '남이 그 사이 고쳤나'를 판정할 유일한 근거.
@@ -391,7 +392,7 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
   //    상한(MAX_PUSH)·데드라인에 걸려 못 한 건 **개수를 남긴다** — 조용히 잘리면 "다 올라갔다"로 읽힌다.
   const todo = push.length + del.length;
   const ledgerSet = {};   // 올리기 성공분의 새 기준선 — 아래 ⑨ 에서 원장에 반영
-  let pushed = 0, deleted = 0, failed = 0;
+  let pushed = 0, deleted = 0, failed = 0, putStatus = null;   // putStatus = 마지막 PUT 실패의 HTTP 상태(0 = 연결 실패) — ⑥ 이 쉼을 정한다
   for (const f of push.slice(0, MAX_PUSH)) {
     if (left() <= 0) break;
     try {
@@ -399,7 +400,7 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
       const r = await jfetch(`/api/ui/v6/projects/${projectId}/file?path=${encodeURIComponent(nk(f.path))}`, {
         method: "PUT", headers: { "content-type": "application/octet-stream" }, body,
       });
-      if (!r.ok) { failed++; continue; }
+      if (!r.ok) { failed++; putStatus = r.status; continue; }
       pushed++;
       // 🔴 올린 뒤 **로컬 mtime 을 서버 결과값에 맞추고 기준선으로 적는다** — pull 이 다운로드 후 utimes 로 하는 것과
       //  대칭이다. 불변식: *성공적으로 싱크된 파일은 로컬 mtime == 서버 mtime == 기준선 mtime*. 어긋난 것만이 변경이다.
@@ -416,7 +417,7 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
         //  다음 pull 이 종전 휴리스틱으로 받아가며 기준선을 다시 세운다.
         ledgerDropAfterPush.push(nk(f.path));
       }
-    } catch { failed++; }
+    } catch { failed++; putStatus = 0; }
   }
   for (const d of del.slice(0, MAX_DELETE)) {
     if (left() <= 0) break;
@@ -459,7 +460,7 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
     } catch { /* 기록 실패는 무해 */ }
   }
 
-  return { ok: true, clean: failed === 0 && todo - pushed - deleted === 0, uploaded: new Set([...Object.keys(ledgerSet), ...ledgerDropAfterPush]) };
+  return { ok: true, clean: failed === 0 && todo - pushed - deleted === 0, pushed, failed, putStatus, uploaded: new Set([...Object.keys(ledgerSet), ...ledgerDropAfterPush]) };
 }
 
 // ── ⑥ 같은 노드의 다른 프로젝트 폴더(형제 슬롯) 올리기 — Stop 판만 · 올리기만 ──
@@ -482,10 +483,13 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
 //   · 걷기는 로컬 stat 뿐이다. 남은 예산이 SIB_MIN_LEFT_MS 보다 적으면 아예 안 걷고, 걷기가 느린 노드는 간격을 둔다.
 //   · 네트워크는 «원장 기준선과 다른 로컬 파일» 이 있는 형제만 탄다. 지난번에 끝까지 처리한 형제는 그 파일들이 그대로이고
 //     SIB_RECHECK_MS 안이면 건너뛴다(노드 공용 상태, tmp) — 충돌만 남은 폴더를 턴마다 다시 묻지 않는다.
-//   · 서버가 거절한(403·404·410 — 지운 프로젝트 · 권한 없음) 형제는 SIB_DENIED_MS 동안 쉰다. 일시 오류(그 밖의 상태 ·
-//     연결 실패)가 나면 이번 Stop 은 거기서 멈추고, 그 형제는 SIB_FAILED_MS 동안 줄의 맨 뒤로 간다 — 안 되는 폴더가
-//     8자리를 늘 차지해 정작 올릴 폴더에 영영 못 닿는 일을 막는다(리뷰 지적).
-//   · 같은 형제를 두 세션이 동시에 올리지 않게 폴더마다 자물쇠(tmp, wx)를 건다. 잡혀 있으면 이번엔 건너뛴다.
+//   · 매니페스트가 거절되거나, 받았는데 올리기가 **하나도** 안 됐으면 그 상태로 쉼을 정한다: 404·410(지운 프로젝트)은
+//     SIB_DENIED_MS, 403(권한 없음 — 게이트웨이 전체의 일시 인증 문제일 수도 있어 짧게)은 SIB_FAILED_MS 동안 쉰다. 그 밖의
+//     상태 · 연결 실패면 이번 Stop 은 거기서 멈추고 그 형제는 SIB_FAILED_MS 동안 줄의 맨 뒤로 간다 — 안 되는 폴더가 8자리를
+//     늘 차지해 정작 올릴 폴더에 영영 못 닿는 일을 막는다(리뷰 지적). 일부라도 올라갔으면 다음 Stop 이 바로 이어 간다.
+//   · 같은 형제를 두 세션이 동시에 올리지 않게 폴더마다 자물쇠(tmp, wx)를 건다. 잡혀 있으면 이번엔 건너뛴다. 죽은 자물쇠를
+//     걷는 순간에는 두 세션이 함께 잡을 틈이 아주 좁게 남는다 — 그때 생기는 일은 같은 파일의 중복 PUT 뿐이다.
+//     이 자물쇠는 형제 경로끼리만 맞춘다(그 프로젝트 세션의 제 폴더 올리기는 종전대로 따로 돈다 — 겹쳐도 원장은 다음 받기가 바로잡는다).
 function sibKey(p) {
   let real = p; try { real = fs.realpathSync(p); } catch { /* 없으면 그대로 */ }
   return crypto.createHash("sha1").update(nk(real)).digest("hex").slice(0, 16);
@@ -577,13 +581,16 @@ async function pushSiblings(io, ownDir, ownId) {
     try {
       const res = await pushFolder(io, { projectId: w.projectId, projDir: w.projDir, local: w.local, lastPull: w.lastPull, allowDelete: false })
         .catch(() => ({ ok: false, status: 0 }));
-      if (!res.ok) {
+      // 실패 상태 — 매니페스트를 못 받았거나, 받았는데 올리기가 하나도 안 됐다(전부 거절). 일부라도 올라갔으면 null(이어 간다).
+      const status = !res.ok ? res.status : (!res.clean && res.pushed === 0 && res.failed > 0 ? res.putStatus : null);
+      if (status !== null) {
         if (io.left() <= 0) break;                                   // 예산 소진 — 그 폴더 탓이 아니다
-        if (res.status === 403 || res.status === 404 || res.status === 410) {
-          writeJson(sibStatePath(w.projDir), { denied_until: Date.now() + SIB_DENIED_MS, status: res.status, at: Date.now() });
+        const rest = status === 404 || status === 410 ? SIB_DENIED_MS : status === 403 ? SIB_FAILED_MS : 0;
+        if (rest) {
+          writeJson(sibStatePath(w.projDir), { denied_until: Date.now() + rest, status, at: Date.now() });
           continue;
         }
-        writeJson(sibStatePath(w.projDir), { fail_at: Date.now(), status: res.status, at: Date.now() });
+        writeJson(sibStatePath(w.projDir), { fail_at: Date.now(), status, at: Date.now() });
         break;                                                       // 게이트웨이 · 인증 · 일시 오류 — 이번 Stop 은 여기서 멈춘다
       }
       // 다 못 올렸으면(실패 · 시간 부족) 상태를 안 남긴다 — 다음 Stop 이 바로 다시 본다(쉬어 가면 그동안 링크가 또 빈다).

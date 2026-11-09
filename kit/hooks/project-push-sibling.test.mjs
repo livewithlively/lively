@@ -24,7 +24,8 @@ const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 // ── 가짜 게이트웨이 — 프로젝트별 서버 상태 + 받은 요청 기록 ──
 let SERVER = {};            // projectId → { path → { body, mtime } }
 let TRUNC = new Set();      // 매니페스트가 잘렸다고 답할 프로젝트
-let FAIL_PUT = new Set();   // PUT 을 500 으로 거절할 프로젝트
+let FAIL_PUT = new Map();   // PUT 을 이 상태로 거절할 프로젝트(500 = 일시 오류 · 403 = 쓰기 권한 없음)
+let FAIL_PATH = new Set();  // 이 «프로젝트:경로» 의 PUT 만 500 으로 거절(일부만 실패)
 let MANIFEST_STATUS = new Map();   // 매니페스트를 이 상태로 거절할 프로젝트(404 = 지운 프로젝트 · 500 = 일시 오류)
 let DELAY = new Map();      // 매니페스트 응답을 이만큼 늦출 프로젝트(동시 실행 시험)
 let NO_MTIME = false;       // PUT 응답에 mtime 을 안 싣는 옛 게이트웨이
@@ -56,7 +57,8 @@ const server = http.createServer((req, res) => {
     }
     const p = u.searchParams.get("path");
     if (req.method === "PUT") {
-      if (FAIL_PUT.has(pid)) { res.writeHead(500); return res.end("{}"); }
+      if (FAIL_PUT.has(pid)) { res.writeHead(FAIL_PUT.get(pid)); return res.end("{}"); }
+      if (FAIL_PATH.has(`${pid}:${p}`)) { res.writeHead(500); return res.end("{}"); }
       files[p] = { body: Buffer.concat(chunks).toString(), mtime: Date.now() };
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify(NO_MTIME ? { ok: true } : { ok: true, mtime: files[p].mtime, size: Buffer.byteLength(files[p].body) }));
@@ -72,8 +74,8 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-push-sib-"));
 let caseNo = 0;
 // 케이스마다 새 루트 <c>: 공유 루트 <c>/workspace/project/<번호> · 홈 · tmp(형제 상태)도 케이스마다 따로 둔다.
 async function freshCase() {
-  epoch++; reqs = []; SERVER = {}; TRUNC = new Set(); FAIL_PUT = new Set(); SESSION_CTX = null;
-  MANIFEST_STATUS = new Map(); DELAY = new Map(); NO_MTIME = false;
+  epoch++; reqs = []; SERVER = {}; TRUNC = new Set(); FAIL_PUT = new Map(); SESSION_CTX = null;
+  FAIL_PATH = new Set(); MANIFEST_STATUS = new Map(); DELAY = new Map(); NO_MTIME = false;
   const c = path.join(root, `c${++caseNo}`);
   for (const d of [path.join(c, "workspace", "project"), path.join(c, "home"), path.join(c, "tmp")]) await fsp.mkdir(d, { recursive: true });
   return c;
@@ -261,7 +263,7 @@ try {
   // ── E18 올리기에 실패한 형제는 다음 Stop 이 바로 다시 본다 ──
   {
     const c = await freshCase();
-    FAIL_PUT.add(SIB);
+    FAIL_PUT.set(SIB, 500);
     const own = await mkDir(slot(c, OWN), both(OWN));
     await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }), { "새.md": "새 문서" });
     await runHook(c, own, "Stop");
@@ -483,6 +485,55 @@ try {
     await runHook(c, own, "Stop");
     assert.deepEqual(putsOf(SIB), ["새.md"], "1분이 지났는데 다시 걷지 않았다");
     ok("R8 지난 걷기 5초(느린 노드) → 1분 안엔 형제 요청 0 · 1분 뒤엔 올림");
+  }
+
+  // ── R9 (재검토) 매니페스트는 되는데 올리기가 전부 거절(403)되는 형제 8곳도 자리를 차지하지 못한다 ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    for (let i = 1; i <= 8; i++) {                                            // 601~608: 읽기만 되는 프로젝트 · 더 최근에 씀
+      const d = await mkDir(slot(c, 600 + i), both(600 + i, { last_pull: Date.now() }));
+      await newDoc(d, "남은.md", `x${i}`, 10_000 - i * 100);
+      FAIL_PUT.set(600 + i, 403);
+    }
+    const good = await mkDir(slot(c, 609), both(609, { last_pull: Date.now() }));
+    await newDoc(good, "올릴것.md", "올라가야 할 문서", 600_000);
+    await runHook(c, own, "Stop");
+    assert.equal(reqs.filter((r) => r.pid >= 601 && r.pid <= 608 && r.method === "PUT").length, 8, "배선: 8곳 모두 PUT 을 시도했어야 한다");
+    reqs = [];
+    await runHook(c, own, "Stop");
+    assert.equal(reqs.filter((r) => r.pid >= 601 && r.pid <= 608).length, 0, "올리기를 전부 거절한 형제를 쉬지 않고 또 시도했다");
+    assert.deepEqual(putsOf(609), ["올릴것.md"], "올리기를 거절하는 형제들에 막혀 정작 올릴 형제에 못 닿았다");
+    ok("R9 매니페스트는 되고 PUT 이 전부 403 인 형제 8곳 → 쉬게 하고, 9번째 형제는 두 번째 Stop 에 올림");
+  }
+
+  // ── R10 쉬는 길이 — 404 는 1시간, 403(게이트웨이 전체의 일시 인증 문제일 수도 있다)은 10분 ──
+  for (const [status, minMin, maxMin] of [[404, 59, 61], [403, 9, 11]]) {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    await mkDir(slot(c, SIB), both(SIB), { "남은.md": "x" });
+    MANIFEST_STATUS.set(SIB, status);
+    await runHook(c, own, "Stop");
+    const [st] = sibFiles(c, /^push-sib-[0-9a-f]+\.state$/);
+    assert.ok(st, "배선: 형제 상태 파일이 있어야 한다");
+    const v = JSON.parse(fs.readFileSync(st, "utf8"));
+    const restMin = (v.denied_until - Date.now()) / 60_000;
+    assert.ok(restMin > minMin && restMin < maxMin, `${status} 의 쉼이 ${minMin}~${maxMin}분이 아니다: ${restMin.toFixed(1)}분`);
+  }
+  ok("R10 매니페스트 404 → 1시간 쉼 · 403 → 10분 쉼");
+
+  // ── R11 일부만 올라가고 일부는 실패 → 다음 Stop 이 실패한 파일을 이어서 올린다(끝낸 것으로 치지 않는다) ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }), { "된다.md": "ok", "실패.md": "fail" });
+    FAIL_PATH.add(`${SIB}:실패.md`);
+    await runHook(c, own, "Stop");
+    assert.deepEqual(Object.keys(SERVER[SIB]), ["된다.md"], "배선: 한 파일만 올라갔어야 한다");
+    FAIL_PATH.clear(); reqs = [];
+    await runHook(c, own, "Stop");
+    assert.deepEqual(putsOf(SIB), ["실패.md"], "일부만 실패한 형제를 «끝냄» 으로 적어 실패한 파일을 다시 안 올렸다");
+    ok("R11 두 파일 중 하나만 실패 → 다음 Stop 에 실패한 파일만 이어서 올림");
   }
 
   console.log(`\nproject-push-sibling: ${pass} passed`);
