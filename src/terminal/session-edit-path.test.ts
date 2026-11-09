@@ -44,11 +44,14 @@ test("R7 초대 고침은 중앙 tmux 가 없어도 기록으로 새지 않는�
   assert.equal(p({ centralGone: true, labelOnly: false }), "central");
 });
 
-const row = (o: Record<string, unknown> = {}) => ({ owner: "wonjoon", superseded_by: null, ...o }) as { owner: string; superseded_by?: string | null };
+const row = (o: Record<string, unknown> = {}) => ({ owner: "wonjoon", invites: [], superseded_by: null, ...o }) as { owner: string; invites: string[]; superseded_by?: string | null };
 test("G1 주인 · 이어지지 않은 행 · 이름 있음 = 막지 않는다", () => {
   assert.equal(storedLabelRefusal(row(), "wonjoon", '"회의록" 앱 제작', false), null);
 });
-test("G2 남의 세션은 403 — 초대받은 사람도 이름은 못 바꾼다", () => {
+test("G2 초대받은 사람은 중단된 세션의 이름을 바꿀 수 있다", () => {
+  assert.equal(storedLabelRefusal(row({ invites: ["sangmin"] }), "sangmin", "새 이름", false), null);
+});
+test("G2b 초대받지 않은 사람은 403", () => {
   assert.equal(storedLabelRefusal(row(), "sangmin", "x", false)?.status, 403);
   assert.equal(storedLabelRefusal(row({ owner: "" }), "", "x", false)?.status, 403, "빈 신원은 빈 주인과 같아도 주인이 아니다");
 });

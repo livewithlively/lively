@@ -527,6 +527,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     canFork: vopts.canFork,
     onMove: vopts.onMove,
     canMove: (t) => canMoveSess(t),
+    canRename: (t) => canMoveSess(t),
     moveLabel: vopts.moveLabel,
     bigHead: vopts.bigHead,
   });

@@ -674,12 +674,12 @@ export async function bootV2(): Promise<void> {
     //   그런 창은 좌측 목록에도 안 선다(sideInstances ③ 의 같은 판정) — 안 보이는 화면이 닫기 뒤에 불쑥 뜨면 안 된다.
     canLand: (tab) => tabTargetAlive(tab.route),
     // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
-    //  내 세션이고 살아 있고 복원 대기가 아닐 때(session-chat canRename).
+    //  이름은 중단된 세션의 기록에서도 바꿀 수 있다(session-chat canRename).
     canRename: (tab) => {
       const k = routeKey(tab.route);
       if (!k.startsWith('s:')) return false;
       const s2 = findSess(k.slice(2));
-      return !!s2 && s2.owned && s2.live && !s2.raw?.restorable;
+      return !!s2 && canMoveSess(s2) && (s2.live || !!s2.raw?.restorable);
     },
     onRename: async (tab, name) => {
       const id = routeKey(tab.route).slice(2);
