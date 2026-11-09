@@ -397,7 +397,7 @@ test("R1~R3 신원 없음 401 · 앱 토큰/앱 서버 403 · 형식 불량 400 
   } finally { await s.close(); }
 });
 
-test("R9 토큰 머리글(Authorization) 없이 온 요청은 신원이 있어도 401 — 쿠키만으로는 화면을 못 붙인다", async () => {
+test("R9 토큰 머리글도 화면 표시 머리글도 없이 온 요청은 신원이 있어도 401 — 쿠키만으로는 화면을 못 붙인다", async () => {
   //  쿠키(SameSite=Lax)는 사람이 연 다른 페이지의 최상위 이동에도 실린다 — 그 길로 «답하지 않는 화면» 을 붙여 AI 명령을 삼키게 할 수 있다.
   //   데스크톱 앱 화면은 늘 토큰 머리글로 붙는다(browser-host headers()).
   const relay = new BrowserRelay();
@@ -409,6 +409,28 @@ test("R9 토큰 머리글(Authorization) 없이 온 요청은 신원이 있어�
     assert.equal((await post(s.base, "/api/ui/browser/host/reveal", { session: "box-s-12345678", tab: 1 }, false)).status, 401);
     assert.equal(relay.hostCount(), 0);
   } finally { await s.close(); }
+});
+
+test("R9b 토큰 없이도 화면 표시 머리글이 있으면 쿠키 세션 화면이 붙는다 — 계정 로그인(#5430) 앱 창 (#5470)", async () => {
+  //  앱 창이 CP 입장권 → 세션 쿠키로 들어오면 localStorage 토큰이 없다. 표시 머리글은 최상위 이동이 실을 수 없으므로
+  //   R9 가 막는 «답하지 않는 화면» 길은 그대로 막히고, 우리 화면 스크립트만 붙는다.
+  const relay = new BrowserRelay();
+  const s = await server(() => ({ userId: "alice" }), relay);
+  const H = { "x-lively-browser-host": "1" };
+  const ctl = new AbortController();
+  try {
+    const res = await fetch(`${s.base}/api/ui/browser/host/stream?host=host-cook1`, { headers: H, signal: ctl.signal });
+    assert.equal(res.status, 200);
+    await until(() => relay.hostCount() === 1);
+    const st = await fetch(`${s.base}/api/ui/browser/host/state`, { method: "POST", headers: { "content-type": "application/json", ...H }, body: JSON.stringify({ host: "host-cook1", focused: true }) });
+    assert.equal(st.status, 200);
+    assert.equal((await st.json()).ok, true);
+    const rp = await fetch(`${s.base}/api/ui/browser/host/reply`, { method: "POST", headers: { "content-type": "application/json", ...H }, body: JSON.stringify({ host: "host-cook1", id: "x" }) });
+    assert.equal(rp.status, 200);
+    //  표시 머리글 값이 "1" 이 아니면 머리글이 없는 것과 같다.
+    assert.equal((await fetch(`${s.base}/api/ui/browser/host/stream?host=host-cook2`, { headers: { "x-lively-browser-host": "yes" } })).status, 401);
+    assert.equal(relay.hostCount(), 1);
+  } finally { ctl.abort(); await s.close(); }
 });
 
 test("R8 같은 화면 id 를 다른 사람이 스트림으로 열면 오류 프레임 후 닫히고 원래 화면은 남는다", async () => {

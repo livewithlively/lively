@@ -57,8 +57,12 @@ export function startBrowserHost(): void {
 
 // ── 연결 ────────────────────────────────────────────────────────────────────
 
+/** 게이트웨이가 쿠키 세션 화면을 받는 표시(src/browser/routes.ts BROWSER_HOST_HEADER) — 스트림·답·상태·표시 요청에 늘 싣는다(#5470).
+ *  계정 로그인(#5430)으로 들어온 앱 창은 토큰 없이 쿠키 세션뿐이라, 이게 없으면 게이트웨이에 화면이 영영 붙지 않는다. */
+const HOST_HEADER = { 'x-lively-browser-host': '1' } as const;
+
 function headers(): Record<string, string> {
-  const h: Record<string, string> = {};
+  const h: Record<string, string> = { ...HOST_HEADER };
   try { const t = localStorage.getItem(TOKEN_KEY); if (t) h.Authorization = 'Bearer ' + t; } catch { /* noop */ }
   const ws = currentWorkspace();
   if (ws && ws !== 'primary') h['x-lively-workspace'] = ws;
@@ -68,7 +72,8 @@ function headers(): Record<string, string> {
 async function connect(): Promise<void> {
   if (dead || ctl) return;
   const h = headers();
-  if (!h.Authorization) { scheduleRetry(); return; }   // 아직 로그인 전 — 곧 다시 본다
+  //  토큰이 없어도 붙어 본다 — 계정 로그인(#5430) 화면은 쿠키 세션으로만 들어와 있다. 로그인 전이면 401 이 오고 아래에서 다시 본다.
+  const bearer = !!h.Authorization;
   const mine = new AbortController();
   ctl = mine;
   let openedAt = 0;
@@ -79,7 +84,9 @@ async function connect(): Promise<void> {
     const res = await fetch(apiUrl('/api/ui/browser/host/stream' + q), {
       headers: { ...h, Accept: 'text/event-stream' }, signal: mine.signal,
     });
-    if (res.status === 401) { dead = true; return; }   // 죽은 토큰 — 로그인 게이트는 api() 가 띄운다. 다시 붙어도 같은 답이다.
+    //  토큰으로 401 = 죽은 토큰 — 로그인 게이트는 api() 가 띄운다. 다시 붙어도 같은 답이다.
+    //  토큰 없이 401 = 아직 로그인 전(쿠키 세션 없음) — 백오프로 다시 본다(로그인하면 붙는다).
+    if (res.status === 401) { if (bearer) dead = true; return; }
     if (!res.ok || !res.body) return;                   // 구 게이트웨이(404) · 재시작 중 — 백오프로 다시 두드린다
     openedAt = Date.now();
     scheduleState(true);
@@ -122,7 +129,7 @@ function scheduleState(active = false): void {
     if (!ctl) return;
     const sessions = [...new Set(allTabs().map((t) => sessionOfKey(t.key)))];
     void api('/api/ui/browser/host/state', {
-      method: 'POST',
+      method: 'POST', headers: HOST_HEADER,
       body: JSON.stringify({ host: hostId, focused: document.hasFocus() && document.visibilityState === 'visible', active_at: lastActive, sessions }),
     }).catch(() => { /* 다음 보고에서 맞는다 */ });
   }, 400);
@@ -130,10 +137,10 @@ function scheduleState(active = false): void {
 
 async function reply(id: string, ok: boolean, payload: unknown): Promise<void> {
   const body = ok ? { host: hostId, id, ok: true, result: payload } : { host: hostId, id, ok: false, error: String(payload || '실패') };
-  try { await api('/api/ui/browser/host/reply', { method: 'POST', body: JSON.stringify(body) }); }
+  try { await api('/api/ui/browser/host/reply', { method: 'POST', headers: HOST_HEADER, body: JSON.stringify(body) }); }
   catch (e) {
     // 결과가 너무 크거나(413) 잠깐 끊겼다 — 실패로라도 한 번 더 알린다(AI 가 시간 초과까지 기다리지 않게).
-    if (ok) { try { await api('/api/ui/browser/host/reply', { method: 'POST', body: JSON.stringify({ host: hostId, id, ok: false, error: '결과를 돌려보내지 못했습니다: ' + ((e as Error)?.message || e) }) }); } catch { /* 포기 */ } }
+    if (ok) { try { await api('/api/ui/browser/host/reply', { method: 'POST', headers: HOST_HEADER, body: JSON.stringify({ host: hostId, id, ok: false, error: '결과를 돌려보내지 못했습니다: ' + ((e as Error)?.message || e) }) }); } catch { /* 포기 */ } }
   }
 }
 
@@ -244,7 +251,7 @@ function reveal(t: BTab): void {
   const tab = tabNoOfKey(t.key);
   if (session === SESSIONLESS || !session || !tab) return;
   void api('/api/ui/browser/host/reveal', {
-    method: 'POST', body: JSON.stringify({ session, tab }),
+    method: 'POST', headers: HOST_HEADER, body: JSON.stringify({ session, tab }),
   }).catch(() => { /* 표시 힌트가 끊겨도 실제 브라우저 명령은 계속한다 */ });
 }
 
