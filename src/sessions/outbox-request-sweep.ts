@@ -213,6 +213,12 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 세션 · 붙은 앱 · 맞춘 기록 전부 그 워크스페이스 것이고(RLS), 브로커 중계도 tenantSlug() 로 그 워크스페이스에 간다.
   { key: "app-folders", intervalMs: SWEEP_MIN_INTERVAL_MS,
     run: () => import("../apps/session-app-folders.js").then((m) => m.sweepAppFolders()) },
+  // 워크스페이스 간 옮기기 배치 정리(#5458) — 적용하지 않고 둔 미리보기의 파일 바이트(잠긴 파일이면 풀린 사본)를 하루 뒤 비우고,
+  //  멈춘 적용·되돌리기를 «일부만 들임» 으로 내린다. 옮기기 화면·API 를 열 때도 돌지만 아무도 다시 안 열면 올린 파일이 DB 에 남는다.
+  //  ⚠ 테넌트 스코프 — 배치 행이 그 워크스페이스 것이다(RLS). DB 행만 바꾼다(파괴적 동작 없음 — 들인 지식은 건드리지 않는다).
+  //  housekeeping 표시 — 셀프호스트 · registry 에서도 boot/housekeeping 이 같은 정의 · 같은 주기로 워크스페이스마다 돌린다(#5082).
+  { key: "transfer-housekeeping", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../transfer/apply.js").then((m) => m.transferHousekeeping()) },
 ];
 
 //  ⚠ 인메모리다. 게이트웨이가 재기동하면 비는데, **그게 맞다**: 재기동이야말로 배달 루프를 죽여

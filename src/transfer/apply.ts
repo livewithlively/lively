@@ -99,7 +99,8 @@ export class TransferInputError extends Error {
 }
 
 /** 배치 정리 — 하루 지난 미리보기의 파일 바이트를 비우고, 멈춘 적용·되돌리기를 «일부만 들임» 으로 내린다.
- *  옮기기 화면·API 가 열릴 때마다 돌고, 아무도 다시 열지 않아도 boot/housekeeping 이 워크스페이스마다 1시간 주기로 부른다. */
+ *  옮기기 화면·API 가 열릴 때마다 돌고, 아무도 다시 열지 않아도 요청 정비표(sessions/outbox-request-sweep.ts «transfer-housekeeping»,
+ *  10분)가 워크스페이스마다 부른다 — 매니지드는 요청에 얹어, 셀프호스트는 boot/housekeeping 이 같은 정의로. */
 export async function transferHousekeeping(): Promise<void> {
   await expireStalePlans().catch(() => 0);
   await recoverStuckBatches().catch(() => 0);
