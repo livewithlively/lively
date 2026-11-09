@@ -5,6 +5,9 @@
 //   E1  대상자 제한 지식 n>0      → «받는 쪽에서는 공개로 들어갑니다» 안내(수 포함)
 //   E2  모든 수가 0              → 안내 없음
 //   E3  대상자 제한 자료 n>0      → 자료도 «받는 쪽에서는 공개로 들어갑니다» 안내
+//   E4  압축 전 > 100MB           → 크기(약 NMB)와 «넘을 수 있습니다» — «가깝습니다» 가 아니다
+//   E5  90MB < 압축 전 ≤ 100MB    → «가깝습니다»(정확히 100MB 경계 포함)
+//   E6  압축 전 = 정확히 90MB      → 크기 안내 없음(경계)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exportNotes } from "./export.js";
@@ -27,4 +30,26 @@ test("E3 대상자를 제한한 자료가 있으면 자료도 공개로 들어�
   assert.equal(notes.length, 1);
   assert.match(notes[0], /자료 2건/);
   assert.match(notes[0], /공개로 들어갑니다/);
+});
+
+const MB = 1048576;
+
+test("E4 압축 전 크기가 상한을 넘으면 크기와 «넘을 수 있습니다» 를 알린다(«가깝습니다» 가 아니다)", () => {
+  const notes = exportNotes({ ...zero, body_bytes: Math.round(214.7 * MB) });
+  assert.equal(notes.length, 1, JSON.stringify(notes));
+  assert.match(notes[0], /약 215MB/);
+  assert.match(notes[0], /넘을 수 있습니다/);
+  assert.doesNotMatch(notes[0], /가깝습니다/);
+});
+
+test("E5 90MB 초과 100MB 이하(정확히 100MB 포함)는 «가깝습니다»", () => {
+  for (const bytes of [95 * MB, 100 * MB]) {
+    const notes = exportNotes({ ...zero, body_bytes: bytes });
+    assert.equal(notes.length, 1, `${bytes}: ${JSON.stringify(notes)}`);
+    assert.match(notes[0], /가깝습니다/);
+  }
+});
+
+test("E6 정확히 90MB 는 크기 안내가 없다(경계)", () => {
+  assert.deepEqual(exportNotes({ ...zero, body_bytes: 90 * MB }), []);
 });

@@ -225,7 +225,14 @@ export function exportNotes(p: Pick<ExportPreview, "restricted" | "restricted_so
   if (p.observed) n.push(`외부 앱에서 그대로 옮겨 온 지식 ${p.observed}건은 받는 쪽에서 일반 지식으로 들어갑니다(원래 주소는 남습니다).`);
   if (p.uncategorized) n.push(`분류가 없는 지식 ${p.uncategorized}건은 받는 쪽에서 «${UNSORTED.name}»에 들어갑니다(가져올 때 바꿀 수 있습니다).`);
   if (p.missing.length) n.push(`고른 문서 중 ${p.missing.length}건은 찾지 못해 빠졌습니다.`);
-  if (p.body_bytes > BUNDLE_MAX_BYTES * 0.9) n.push("파일이 받는 쪽 올리기 상한(100MB)에 가깝습니다 — 넘으면 분류를 나눠 내보내 주세요.");
+  //  body_bytes 는 **압축 전** 크기다(본문·자료 원문 합). 파일은 압축되므로 실제로는 이보다 작다 — stage 실측(2026-11-09):
+  //   압축 전 214.7MB → 파일 122.8MB. 그래서 상한을 넘었을 때는 «넘을 수 있다» 고만 말하고 크기를 함께 보여 준다
+  //   (종전엔 214.7MB 에서도 «가깝습니다» 라고 해 실제 크기를 짐작할 수 없었다).
+  if (p.body_bytes > BUNDLE_MAX_BYTES) {
+    n.push(`압축 전 크기가 약 ${Math.round(p.body_bytes / 1048576)}MB 입니다 — 압축해도 받는 쪽 올리기 상한(100MB)을 넘을 수 있습니다. 넘으면 자료를 빼거나 분류를 나눠 내보내 주세요.`);
+  } else if (p.body_bytes > BUNDLE_MAX_BYTES * 0.9) {
+    n.push("파일이 받는 쪽 올리기 상한(100MB)에 가깝습니다 — 넘으면 분류를 나눠 내보내 주세요.");
+  }
   return n;
 }
 
