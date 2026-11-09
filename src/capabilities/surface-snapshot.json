@@ -1254,7 +1254,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "a9b97ff4a5afeb00"
+  "input_hash": "956e70dc90f98370"
  },
  {
   "name": "org_distiller_remove",
@@ -1265,6 +1265,16 @@
    "POST /api/ui/org/distillers/remove"
   ],
   "input_hash": "8280322bfa676096"
+ },
+ {
+  "name": "org_distiller_requeue",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/requeue"
+  ],
+  "input_hash": "6788931395cccc4b"
  },
  {
   "name": "org_distiller_preview",

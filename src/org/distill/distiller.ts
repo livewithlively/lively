@@ -539,6 +539,120 @@ export async function clearDistillerSeen(distillerId: number): Promise<number> {
   return r.rowCount ?? 0;
 }
 
+// 고른 배치의 판정 기록만 되돌린다 — 레인 전체를 비우는 clearDistillerSeen 대신.
+//  task-store 는 실패(!ok)로 끝난 배치의 기록을 스스로 지운다. 그런데 헤드리스 판이 일을 못 하고도 exit 0 으로 끝나면
+//  (도구 없음·인증 실패 등) 배치는 «done» 이고, 그 배치가 가져간 자료는 아무도 안 본 채 인박스에서 영구히 빠진다
+//  (2026-10-19 실측 — lively MCP 가 안 붙은 판 수십 개). 그 배치만 골라 되돌리는 길이다.
+//  지식이 이미 연결된 자료(knowledge_source)는 건드리지 않는다 — 실제로 증류된 것을 «다시 볼 것» 으로 세지 않게.
+//  방치 배치(org_stranded_seen)도 같은 task_id 로 함께 되돌린다(task-store 의 실패 되돌리기와 같은 짝).
+export interface RequeueSelection {
+  taskIds?: number[] | null;
+  requester?: string | null;
+  since?: string | null;
+  until?: string | null;
+  distillerKey?: string | null;
+}
+export interface RequeueResult {
+  dry_run: boolean;
+  tasks: number;
+  requeued: number;
+  kept_with_knowledge: number;
+  by_task: Array<{ task_id: number; requeued: number }>;
+}
+export const REQUEUE_MAX_TASKS = 1000;
+
+/** 대상 배치를 고르는 술어(순수 — 테스트 seam). 배치 id 목록이나 «의뢰자 + 시작 시각» 이 없으면 고르지 않는다(null) —
+ *  아무 조건 없이 부르면 판정 기록 전체가 지워진다(= reset_seen 을 레인 구분 없이 한 것과 같다). */
+export function buildRequeueTaskWhere(sel: RequeueSelection, p: Params): string | null {
+  const ids = (sel.taskIds ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const requester = (sel.requester ?? "").trim();
+  const since = (sel.since ?? "").trim();
+  if (!ids.length && !(requester && since)) return null;
+  const until = (sel.until ?? "").trim();
+  for (const [label, v] of [["since", since], ["until", until]] as const) {
+    if (v && Number.isNaN(Date.parse(v))) throw new RangeError(`${label} 가 ISO 8601 시각이 아니다: ${v}`);
+  }
+  //  실패·취소로 끝난 배치는 task-store 가 이미 되돌렸고, 끝나지 않은 배치는 지금 그 자료를 읽고 있다 — «성공으로 끝난» 배치만.
+  const c: string[] = ["t.status = 'done'"];
+  if (ids.length) c.push(`t.id = ANY(${p.add(ids)}::bigint[])`);
+  if (requester) c.push(`t.requester = ${p.add(requester)}`);
+  if (since) c.push(`t.created_at >= ${p.add(since)}::timestamptz`);
+  if (until) c.push(`t.created_at < ${p.add(until)}::timestamptz`);
+  const key = (sel.distillerKey ?? "").trim();
+  //  레인 배치의 requester_session 은 `cron:<잡>#<레인 key>` 다(auto-runs 와 같은 규약).
+  //  ⚠ LIKE 로 비교하지 마라 — 레인 key 에 `_` 가 허용돼(slug) 다른 레인의 배치까지 지운다(auth-failure-response.ts #1675 와 같은 함정).
+  if (key) c.push(`split_part(t.requester_session, '#', 2) = ${p.add(key)}`);
+  return c.join(" AND ");
+}
+
+/** org_distiller_requeue 입력(REST 본문·MCP 인자)을 고르기 조건으로 바꾼다. 틀린 값은 RangeError(호출부가 400).
+ *  REST 는 zod 를 거치지 않는다 — 여기서 엄격히 보지 않으면 틀린 값이 «없는 값» 으로 떨어져 대상이 넓어진다:
+ *   · task_ids 에 숫자가 아닌 원소(`["12a"]`)만 있으면 id 고르기가 빠지고 requester+since 기간 전체가 대상이 된다.
+ *   · until 이 문자열이 아니면 무시돼 since 이후 전부가 대상이 된다.
+ *  그래서 «준 값은 맞는 모양이어야 한다» 로 막는다. dry_run 도 boolean 만 받는다(문자열 "false" 를 실행으로 읽지 않는다). */
+export function requeueInputFromRest(input: Record<string, unknown>): { sel: RequeueSelection; dryRun: boolean } {
+  let taskIds: number[] | null = null;
+  if (input.task_ids !== undefined && input.task_ids !== null) {
+    const raw = input.task_ids;
+    if (!Array.isArray(raw) || raw.length === 0) throw new RangeError("task_ids 는 배치 id(양의 정수)를 하나 이상 담은 배열이어야 한다");
+    const bad = raw.filter((v) => typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0);
+    if (bad.length) throw new RangeError(`task_ids 에 양의 정수가 아닌 값이 있다: ${JSON.stringify(bad.slice(0, 5))}`);
+    taskIds = raw as number[];
+  }
+  const text = (k: "requester" | "since" | "until" | "distiller"): string | null => {
+    const v = input[k];
+    if (v === undefined || v === null) return null;
+    if (typeof v !== "string") throw new RangeError(`${k} 는 문자열이어야 한다`);
+    return v.trim() || null;
+  };
+  if (input.dry_run !== undefined && typeof input.dry_run !== "boolean") throw new RangeError("dry_run 은 true 또는 false 여야 한다");
+  return {
+    sel: { taskIds, requester: text("requester"), since: text("since"), until: text("until"), distillerKey: text("distiller") },
+    dryRun: input.dry_run !== false,
+  };
+}
+
+/** 고르기 조건이 틀리면 RangeError(호출부가 400 으로 바꾼다). DB 오류는 그대로 올라간다. */
+export async function requeueDistillerSeen(sel: RequeueSelection, dryRun: boolean): Promise<RequeueResult> {
+  const p = new Params();
+  const where = buildRequeueTaskWhere(sel, p);
+  if (!where) throw new RangeError("task_ids 또는 requester+since 가 필요하다");
+  const tasks = await itemsPool.query(`SELECT t.id FROM org_task t WHERE ${where} ORDER BY t.id LIMIT ${REQUEUE_MAX_TASKS + 1}`, p.values);
+  const taskIds = tasks.rows.map((r: { id: unknown }) => Number(r.id));
+  if (taskIds.length > REQUEUE_MAX_TASKS) throw new RangeError(`대상 배치가 ${REQUEUE_MAX_TASKS}개를 넘는다 — 기간을 좁혀라`);
+  const empty: RequeueResult = { dry_run: dryRun, tasks: 0, requeued: 0, kept_with_knowledge: 0, by_task: [] };
+  if (!taskIds.length) return empty;
+  const hasKnowledge = `EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = x.source_id)`;
+  const noKnowledge = `NOT ${hasKnowledge}`;
+  const kept = await itemsPool.query(
+    `SELECT count(DISTINCT source_id)::int AS n FROM (
+       SELECT source_id FROM org_distiller_seen WHERE task_id = ANY($1::bigint[])
+       UNION ALL SELECT source_id FROM org_stranded_seen WHERE task_id = ANY($1::bigint[])) x
+     WHERE ${hasKnowledge}`, [taskIds]);
+  const keptN = Number(kept.rows[0]?.n ?? 0);
+  let rows: Array<{ task_id: unknown; n: unknown }>;
+  if (dryRun) {
+    rows = (await itemsPool.query(
+      `SELECT task_id, count(*)::int AS n FROM (
+         SELECT source_id, task_id FROM org_distiller_seen WHERE task_id = ANY($1::bigint[])
+         UNION ALL SELECT source_id, task_id FROM org_stranded_seen WHERE task_id = ANY($1::bigint[])) x
+       WHERE ${noKnowledge} GROUP BY task_id`, [taskIds])).rows;
+  } else {
+    const a = await itemsPool.query(
+      `DELETE FROM org_distiller_seen x WHERE x.task_id = ANY($1::bigint[]) AND ${noKnowledge} RETURNING x.task_id`, [taskIds]);
+    const b = await itemsPool.query(
+      `DELETE FROM org_stranded_seen x WHERE x.task_id = ANY($1::bigint[]) AND ${noKnowledge} RETURNING x.task_id`, [taskIds]);
+    //  판정 기록을 지우면 잔량이 되살아난다 — clearDistillerSeen 과 같이 커버리지 캐시의 옛 숫자를 버린다(#5147).
+    //   안 하면 «requeued: N» 을 받고도 org_distiller_list 의 잔량이 캐시가 풀릴 때까지 옛 숫자로 남아 되돌림이 안 먹은 것처럼 보인다.
+    if ((a.rowCount ?? 0) + (b.rowCount ?? 0) > 0) bumpCoverageVersion();
+    const count = new Map<number, number>();
+    for (const r of [...a.rows, ...b.rows]) count.set(Number(r.task_id), (count.get(Number(r.task_id)) ?? 0) + 1);
+    rows = [...count].map(([task_id, n]) => ({ task_id, n }));
+  }
+  const byTask = rows.map((r) => ({ task_id: Number(r.task_id), requeued: Number(r.n) })).sort((x, y) => x.task_id - y.task_id);
+  return { dry_run: dryRun, tasks: taskIds.length, requeued: byTask.reduce((s, r) => s + r.requeued, 0), kept_with_knowledge: keptN, by_task: byTask };
+}
+
 // 이 증류기의 남은 백로그(배타 배정 기준). 진척은 이 수치가 줄어드는 것으로 관측한다
 //  — '누가 이 지식을 만들었나'는 LLM 이 knowledge_save 를 직접 부르는 구조라 서버가 알 수 없어(자기보고는 신뢰 못함)
 //    산출 귀속 대신 **잔량 감소**를 진실원천으로 삼는다.
