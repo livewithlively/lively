@@ -322,7 +322,12 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   const scopeOf = new Map(scan.refs.map((s) => [s.ref, s.scope] as const));
   const topScope: AliasBindings = new Map();
   bindFrom(stmt.from, topScope);
-  const topTables = new Set([...topScope.values()].flatMap((v) => [...v]));
+  // * 가 덮는 실제 테이블 — 수식이면 그 이름의 바인딩, 미수식이면 그 SELECT 에서 보이는 바인딩 전부.
+  const starCovers = (ref: Record<string, unknown>, scope: AliasBindings): string[] => {
+    const tr = refTableName(ref);
+    if (tr) return [...(scope.get(tr.toLowerCase()) ?? new Set([tr.toLowerCase()]))];
+    return [...new Set([...scope.values()].flatMap((v) => [...v]))];
+  };
   const blockedMsg = (cn: string): string =>
     `Blocked: 마스킹 컬럼 '${cn}' 은 최상위 SELECT 투영에 그대로만 쓸 수 있습니다(표현식·WHERE·JOIN·ORDER·GROUP·서브쿼리 불가) — 개인정보 파생/필터 차단`;
 
@@ -347,7 +352,7 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
       const cn = refColName(ref);
       if (cn && cn !== "*" && isWholeRow(ref, cn, scope)) throw new Error(wholeRowMsg(cn));
       if (cn && cn !== "*" && isSensitive(ref, cn, scope)) throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 집합연산(UNION 등)에 사용할 수 없습니다 — 단일 SELECT 로 직접 조회하세요`);
-      if (cn === "*" && [...topTables].some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
+      if (cn === "*" && starCovers(ref, scope).some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
     }
     return EMPTY_PLAN;
   }
@@ -388,16 +393,15 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   }
   let hasTopStarOverMaskedTable = false;
   for (const st of allowedStar) {
-    const tr = refTableName(st as Record<string, unknown>);
-    const covered = tr === null ? topTables : (topScope.get(tr.toLowerCase()) ?? new Set([tr.toLowerCase()]));
-    if ([...covered].some(tableHasMask)) { hasTopStarOverMaskedTable = true; break; }
+    if (starCovers(st as Record<string, unknown>, topScope).some(tableHasMask)) { hasTopStarOverMaskedTable = true; break; }
   }
 
-  // 위치 번호 정렬·묶기는 그 번호의 투영 컬럼을 참조하는 것과 같다. 투영에 * 가 있으면(어느 테이블이든) 몇 칸으로
-  //  펼쳐질지 몰라 번호→컬럼을 알 수 없으므로 거부한다.
+  // 위치 번호 정렬·묶기는 그 번호의 투영 컬럼을 참조하는 것과 같다. * 가 있으면 몇 칸으로 펼쳐질지 몰라 번호→컬럼을
+  //  알 수 없다. 그래도 * 가 마스킹 테이블을 덮지 않고 명시 컬럼에도 마스킹 컬럼이 없으면 어느 번호도 민감 컬럼에
+  //  닿지 않으므로 통과시키고, 둘 중 하나라도 있으면 거부한다.
   const cols = Array.isArray(stmt.columns) ? stmt.columns : [];
   for (const pos of positionalRefs(stmt)) {
-    if (allowedStar.size > 0) throw new Error(`Blocked: '*' 가 있는 조회에서는 ORDER BY·GROUP BY 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
+    if (hasTopStarOverMaskedTable || (allowedStar.size > 0 && minMaskedOutputs > 0)) throw new Error(`Blocked: '*' 가 있는 조회에서는 ORDER BY·GROUP BY 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
     const e = (cols[pos - 1] as { expr?: Record<string, unknown> } | undefined)?.expr;
     if (!e || e.type !== "column_ref") continue;
     const cn = refColName(e);

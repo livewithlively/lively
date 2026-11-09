@@ -339,6 +339,11 @@ bothDialects("scope-pos-star-1: 비마스킹 테이블 * 뒤의 위치 번호 �
   "SELECT o.*, a.account_no, a.id FROM orders o, accounts a ORDER BY 3", acct, /위치 번호/);
 bothDialects("scope-pos-star-2: 조인 + 비마스킹 테이블 * 뒤의 위치 번호 정렬",
   "SELECT o.*, a.account_no FROM orders o JOIN accounts a ON a.id = o.account_id ORDER BY 3", acct, /위치 번호/);
+okP("scope-pos-star-ok-1: 비마스킹 CTE * 뒤 위치 번호는 통과", "WITH c AS (SELECT a.id FROM accounts a) SELECT * FROM c ORDER BY 1", acct);
+okMy("scope-pos-star-ok-2: 비마스킹 파생 테이블 * 뒤 위치 번호는 통과 (mysql)", "SELECT t.* FROM (SELECT a.id FROM accounts a) t ORDER BY 1", acct);
+// UNION 의 두 번째 분기 * 도 그 분기의 테이블로 판정한다.
+bothDialects("scope-union-star-1: 두 번째 분기의 마스킹 테이블 *", "SELECT * FROM orders UNION ALL SELECT * FROM accounts", acct, /집합연산/);
+bothDialects("scope-union-star-2: 두 번째 분기의 별칭 수식 *", "SELECT o.* FROM orders o UNION ALL SELECT a.* FROM accounts a", acct, /집합연산/);
 // pg 파서는 FROM 컬럼 별칭 목록(`t AS a(x, y)`)을 별칭 문자열 "a(x, y)" 로 준다 — 컬럼 이름이 바뀌어 판정할 수 없다.
 rejectsP("scope-colalias-1: FROM 컬럼 별칭 목록 + 파생", "SELECT substring(a.y, 1, 3) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
 rejectsP("scope-colalias-2: FROM 컬럼 별칭 목록 + 조건", "SELECT x FROM accounts AS a(x, y) WHERE y LIKE '1%'", acct, /컬럼 별칭 목록/);
