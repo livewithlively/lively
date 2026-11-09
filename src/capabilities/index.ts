@@ -89,6 +89,7 @@ import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
 import { browserCapabilities } from "./browser.js";
+import { transferCapabilities } from "./transfer.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "../mcp/mcp-surface.js";
@@ -188,6 +189,7 @@ const all: Capability[] = [
   ...uiTranslateCapabilities, // #5141 화면 영어 보기 — ui_translate(REST 만 · POST /api/ui/translate · 로그인한 사람 · 워크스페이스 API 키 단발).
   ...appJobCapabilities, // #4486 앱 백그라운드 작업 — app_job_start(앱 서버 라우트를 함수에 비동기로 · 15분) · app_job_get · app_jobs · app_job_cancel(scope null · 앱 동의 — web.server 가 함의). MCP+REST(/api/ui/app-jobs*).
   ...agentJobCapabilities, // #4490 작업 컨테이너 — agent_job_run/get/list/cancel(scope=context, 보낸 사람 본인 구독 · 앱 화면은 다리로) · agent_job_limits(보기)/_set(admin). MCP+REST(/api/ui/agent-jobs*).
+  ...transferCapabilities, // #5458 워크스페이스 간 옮기기 — transfer_export_catalog(·_knowledge)·transfer_export_preview·transfer_imports·transfer_import_get·transfer_import_apply(MCP+REST) · transfer_import_undo(REST 만 · 사람만). 전부 admin. 파일이 오가는 두 경로(export·upload)는 src/transfer/routes.ts.
   ...browserCapabilities, // #4993 AI 와 사람이 같이 쓰는 브라우저 — browser_status/tabs/navigate/screenshot/act/read/fill/text/eval/console/handoff(scope=null). 게이트웨이가 데스크톱 앱 화면의 <webview> 로 중계(src/browser/relay.ts). MCP+REST(/api/ui/browser/*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
