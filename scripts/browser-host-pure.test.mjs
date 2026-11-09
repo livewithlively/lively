@@ -395,7 +395,7 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
   findReveal(sf, null);
   eq(reveals, ["withTab:revealOnce", "revealOnce:reveal", "opTabs:reveal", "opTabs:revealOnce", "opHandoff:reveal"],
     "T3 읽기·조작(withTab), 탭 생성·선택, 사람에게 넘기기만 웹 칸을 표시한다");
-  ok(/api\('\/api\/ui\/browser\/host\/reveal'/.test(HOST) && /if \(t\.mode !== 'docked'\) requestReveal\(t\)/.test(HOST),
+  ok(/hostPost\('\/api\/ui\/browser\/host\/reveal'/.test(HOST) && /if \(t\.mode !== 'docked'\) requestReveal\(t\)/.test(HOST),
     "T4 표시는 같은 창의 로컬 사건과 다른 창의 서버 사건을 함께 쓴다");
 }
 
