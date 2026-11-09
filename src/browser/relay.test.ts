@@ -1,9 +1,10 @@
+import { readFileSync } from "node:fs";
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { BrowserRelay, BrowserRelayError, MAX_HOSTS_PER_KEY, MAX_PENDING_PER_KEY, NO_HOST_MESSAGE, relayKey, type BrowserCmd } from "./relay.js";
-import { registerBrowserRoutes } from "./routes.js";
+import { registerBrowserRoutes, hostCredentialPresent } from "./routes.js";
 import { browserMcpContent } from "../capabilities/browser.js";
 import type { LivelyUser } from "../context.js";
 import { subscribeNotify, type NotifyEvent } from "../v6/notify-bus.js";
@@ -431,6 +432,21 @@ test("R9b 토큰 없이도 화면 표시 머리글이 있으면 쿠키 세션 �
     assert.equal((await fetch(`${s.base}/api/ui/browser/host/stream?host=host-cook2`, { headers: { "x-lively-browser-host": "yes" } })).status, 401);
     assert.equal(relay.hostCount(), 1);
   } finally { ctl.abort(); await s.close(); }
+});
+
+test("R9c 답 경로 앞단(index.ts)과 keyOf 가 같은 판정 — 표시 머리글만 실린 쿠키 세션 화면의 답도 통과 (#5470 2차)", () => {
+  //  앞단이 토큰 전용으로 남아 답만 401 → 화면의 401 처리가 앱 전체를 로그인 게이트로 보냈다(명령은 실행되고 답이 막혔다).
+  assert.equal(hostCredentialPresent({ authorization: "Bearer t" }), true);
+  assert.equal(hostCredentialPresent({ "x-lively-browser-host": "1" }), true);
+  assert.equal(hostCredentialPresent({ "x-lively-browser-host": "1", cookie: "lvly_sid=x" }), true);
+  assert.equal(hostCredentialPresent({ cookie: "lvly_sid=x" }), false);
+  assert.equal(hostCredentialPresent({ "x-lively-browser-host": "yes" }), false);
+  assert.equal(hostCredentialPresent({}), false);
+  //  index.ts 가 실제로 이 함수를 앞단에 쓰는지 — 따로 놀던 두 자리를 다시 갈라놓지 못하게.
+  const src = readFileSync(new URL("../../src/index.ts", import.meta.url), "utf8");
+  const at = src.indexOf('app.use("/api/ui/browser/host/reply"');
+  assert.ok(at > 0, "index.ts 에 답 경로 앞단이 있어야 한다");
+  assert.match(src.slice(at, at + 600), /hostCredentialPresent\(req\.headers\)/);
 });
 
 test("R8 같은 화면 id 를 다른 사람이 스트림으로 열면 오류 프레임 후 닫히고 원래 화면은 남는다", async () => {

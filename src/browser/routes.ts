@@ -23,6 +23,15 @@ const PING_MS = 25_000;
 const clip = (v: unknown, max: number): string => String(v ?? "").slice(0, max);
 /** 화면(web/v2/browser-host.ts)이 스트림·답·상태 요청마다 싣는 머리글 — 쿠키 세션 화면이 붙는 문(#5470). 값은 "1". */
 export const BROWSER_HOST_HEADER = "x-lively-browser-host";
+
+/**
+ * 화면 쪽 요청이 실어야 할 자격 표시가 있는가 — 토큰 머리글, 또는 화면 표시 머리글(쿠키 세션 화면, #5470).
+ *  keyOf 와 index.ts 의 답 경로 앞단(본문 4MB 파싱 전 거름)이 **같은 이 함수**를 쓴다 — 두 자리가 따로 놀아
+ *  답만 토큰 전용으로 남았던 것이 #5470 2차 사고다(명령은 받고 답이 401 → 앱 화면 전체가 로그인 게이트로 튕김).
+ */
+export function hostCredentialPresent(headers: Record<string, unknown>): boolean {
+  return /^Bearer\s+\S/i.test(String(headers.authorization || "")) || String(headers[BROWSER_HOST_HEADER] || "") === "1";
+}
 let revealSeq = 0;
 
 /**
@@ -47,9 +56,7 @@ export function registerBrowserRoutes(
    *   이 경로는 허용하지 않는다 — 그래서 ②가 붙은 요청은 «우리 화면의 스크립트가 보낸 것» 이고, 위 격리가 막던 길은 그대로 막힌다(#5470).
    */
   const keyOf = (req: express.Request, res: express.Response): string | null => {
-    const bearer = /^Bearer\s+\S/i.test(String(req.headers.authorization || ""));
-    const hostHeader = String(req.headers[BROWSER_HOST_HEADER] || "") === "1";
-    if (!bearer && !hostHeader) {
+    if (!hostCredentialPresent(req.headers)) {
       res.status(401).json({ error: "토큰 머리글(Authorization: Bearer) 또는 화면 표시 머리글로만 연결할 수 있습니다" });
       return null;
     }

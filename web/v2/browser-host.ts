@@ -7,7 +7,7 @@
 //   알림 스트림(live-sync)처럼 숨으면 끊는 규칙을 여기 쓰면 창을 닫는 순간 AI 의 브라우저가 사라진다.
 //   실측: 숨은 창·최소화한 창에서도 webview 의 스크린샷·클릭·입력이 된다(2026-10-25, Electron 43.8.3).
 //  ⚠ 끼워 넣은 판(?embed=1)·팝아웃(?solo=1)·브라우저에서 연 웹 UI 에서는 켜지 않는다(main.ts 가 거른다).
-import { TOKEN_KEY, api, apiUrl, toast } from '../core.js';
+import { TOKEN_KEY, apiUrl, toast } from '../core.js';
 import { currentWorkspace } from '../lib/net.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
 import { normWebUrl } from './web-url.js';
@@ -69,6 +69,19 @@ function headers(): Record<string, string> {
   return h;
 }
 
+/**
+ * 화면 → 게이트웨이 POST(상태·답·표시). api() 를 쓰지 않는다 — api() 는 401 이면 토큰을 지우고 **앱 전체를 로그인 게이트로** 보낸다.
+ *  이 표면은 화면 뒤에서 도는 부속이라, 여기서의 거절이 사람을 로그아웃시키면 안 된다(#5470 2차 사고: 답 경로 401 → 앱 화면이 로그인 창으로 튕겼다).
+ *  401 은 다른 실패처럼 던지기만 한다 — 진짜 세션 만료는 사람 화면의 다음 api() 가 알아서 게이트를 띄운다.
+ */
+async function hostPost(path: string, body: unknown): Promise<any> {
+  const res = await fetch(apiUrl(path), { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let data: any = null;
+  try { data = await res.json(); } catch { /* 빈 바디 */ }
+  if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+  return data;
+}
+
 async function connect(): Promise<void> {
   if (dead || ctl) return;
   const h = headers();
@@ -128,19 +141,16 @@ function scheduleState(active = false): void {
     stateTimer = 0;
     if (!ctl) return;
     const sessions = [...new Set(allTabs().map((t) => sessionOfKey(t.key)))];
-    void api('/api/ui/browser/host/state', {
-      method: 'POST', headers: HOST_HEADER,
-      body: JSON.stringify({ host: hostId, focused: document.hasFocus() && document.visibilityState === 'visible', active_at: lastActive, sessions }),
-    }).catch(() => { /* 다음 보고에서 맞는다 */ });
+    void hostPost('/api/ui/browser/host/state', { host: hostId, focused: document.hasFocus() && document.visibilityState === 'visible', active_at: lastActive, sessions }).catch(() => { /* 다음 보고에서 맞는다 */ });
   }, 400);
 }
 
 async function reply(id: string, ok: boolean, payload: unknown): Promise<void> {
   const body = ok ? { host: hostId, id, ok: true, result: payload } : { host: hostId, id, ok: false, error: String(payload || '실패') };
-  try { await api('/api/ui/browser/host/reply', { method: 'POST', headers: HOST_HEADER, body: JSON.stringify(body) }); }
+  try { await hostPost('/api/ui/browser/host/reply', body); }
   catch (e) {
     // 결과가 너무 크거나(413) 잠깐 끊겼다 — 실패로라도 한 번 더 알린다(AI 가 시간 초과까지 기다리지 않게).
-    if (ok) { try { await api('/api/ui/browser/host/reply', { method: 'POST', headers: HOST_HEADER, body: JSON.stringify({ host: hostId, id, ok: false, error: '결과를 돌려보내지 못했습니다: ' + ((e as Error)?.message || e) }) }); } catch { /* 포기 */ } }
+    if (ok) { try { await hostPost('/api/ui/browser/host/reply', { host: hostId, id, ok: false, error: '결과를 돌려보내지 못했습니다: ' + ((e as Error)?.message || e) }); } catch { /* 포기 */ } }
   }
 }
 
@@ -250,9 +260,7 @@ function reveal(t: BTab): void {
   const session = sessionOfKey(t.key);
   const tab = tabNoOfKey(t.key);
   if (session === SESSIONLESS || !session || !tab) return;
-  void api('/api/ui/browser/host/reveal', {
-    method: 'POST', headers: HOST_HEADER, body: JSON.stringify({ session, tab }),
-  }).catch(() => { /* 표시 힌트가 끊겨도 실제 브라우저 명령은 계속한다 */ });
+  void hostPost('/api/ui/browser/host/reveal', { session, tab }).catch(() => { /* 표시 힌트가 끊겨도 실제 브라우저 명령은 계속한다 */ });
 }
 
 function summary(t: BTab): Record<string, unknown> {
