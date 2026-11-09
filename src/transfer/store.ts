@@ -44,7 +44,9 @@ export async function initTransfer(pool: Pool): Promise<void> {
       applied_by TEXT,
       applied_at TIMESTAMPTZ,
       undone_by TEXT,
-      undone_at TIMESTAMPTZ);
+      undone_at TIMESTAMPTZ,
+      state_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    ALTER TABLE org_transfer_batch ADD COLUMN IF NOT EXISTS state_at TIMESTAMPTZ NOT NULL DEFAULT now();
     ${ensureCheck("org_transfer_batch", {
       org_transfer_batch_state_chk: "state IN ('planned','applying','applied','partial','failed','undoing','undone','expired')",
     })}
@@ -147,7 +149,7 @@ export async function transitionBatch(id: number, expect: BatchState[], next: Ba
   plan?: unknown; decisions?: unknown; result?: unknown; error?: string | null;
   applied_by?: string | null; undone_by?: string | null; clearPayload?: boolean;
 } = {}): Promise<BatchRow | undefined> {
-  const sets: string[] = ["state=$3"];
+  const sets: string[] = ["state=$3", "state_at=now()"];
   const params: unknown[] = [id, expect, next];
   const add = (sql: string, v: unknown): void => { params.push(v); sets.push(sql.replace("?", `$${params.length}`)); };
   if (patch.plan !== undefined) add("plan=?::jsonb", JSON.stringify(patch.plan));
@@ -160,6 +162,24 @@ export async function transitionBatch(id: number, expect: BatchState[], next: Ba
   const row = await one(itemsPool,
     `UPDATE org_transfer_batch SET ${sets.join(", ")} WHERE id=$1 AND state = ANY($2::text[]) RETURNING ${BATCH_COLS}`, params);
   return normBatch(row as Record<string, unknown> | undefined);
+}
+
+/** 적용 중간 결과 저장 — 적용·되돌리기가 도는 동안만(그 사이 프로세스가 죽어도 «여기까지 한 것» 이 남아 되돌리기가 치운다). */
+export async function saveBatchProgress(id: number, result: unknown): Promise<void> {
+  await itemsPool.query(
+    `UPDATE org_transfer_batch SET result=$2::jsonb, state_at=now() WHERE id=$1 AND state IN ('applying','undoing')`,
+    [id, JSON.stringify(result)]);
+}
+
+/** 멈춘 배치 수습 — 적용·되돌리기가 상한 시간 넘게 진행 표시만 남았으면(프로세스가 죽었거나 요청이 끊겼다)
+ *  «일부만 들임» 으로 내린다. 그래야 저장된 중간 결과로 되돌리기를 할 수 있다(진행 중 상태는 아무 조작도 못 받는다).
+ *  진행 중이면 PROGRESS_EVERY 건마다 state_at 이 갱신되므로 정상 진행은 걸리지 않는다. */
+export async function recoverStuckBatches(minutes = 30): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_transfer_batch SET state='partial', payload=NULL,
+            error=COALESCE(error || ' · ', '') || '중간에 멈췄습니다 — 저장된 결과까지만 들어갔습니다. 되돌리기로 치울 수 있습니다.'
+      WHERE state IN ('applying','undoing') AND state_at < now() - ($1::int * interval '1 minute')`, [minutes]);
+  return r.rowCount ?? 0;
 }
 
 /** 적용하지 않고 둔 미리보기는 하루 뒤 파일 바이트를 비운다(올린 파일이 DB 에 쌓이지 않게). */

@@ -45,6 +45,8 @@ export interface ExportPreview {
   sources: number;
   /** 대상자를 제한한 지식 — 받는 쪽에서 공개로 들어간다 */
   restricted: number;
+  /** 대상자를 제한한 자료(연결된 자료를 담을 때) — 지식과 같은 규칙으로 받는 쪽에서 공개로 들어간다 */
+  restricted_sources: number;
   /** 위키 핀 — 받는 쪽에서 핀 없이 들어간다 */
   pinned: number;
   /** 외부 미러 — 받는 쪽에서 일반 지식으로 들어간다 */
@@ -184,14 +186,17 @@ export async function previewExport(sel: ExportSelection, viewer: Viewer): Promi
        FROM sel`, [names]))[0] : null;
   let sources = 0;
   let sourceBytes = 0;
+  let restrictedSources = 0;
   if (sel.include_sources && names.length) {
     const params: unknown[] = [names];
     const vis = await sourceVisWhere(viewer, params);
     const r = (await q(itemsPool,
-      `SELECT count(DISTINCT s.id)::int AS n, COALESCE(sum(octet_length(s.body_md)), 0)::bigint AS bytes
+      `SELECT count(DISTINCT s.id)::int AS n, COALESCE(sum(octet_length(s.body_md)), 0)::bigint AS bytes,
+              count(DISTINCT s.id) FILTER (WHERE s.visibility <> 'open')::int AS restricted
          FROM source s WHERE s.id IN (SELECT ks.source_id FROM knowledge_source ks WHERE ks.name = ANY($1::text[])) AND ${vis}`, params))[0];
     sources = Number(r?.n ?? 0);
     sourceBytes = Number(r?.bytes ?? 0);
+    restrictedSources = Number(r?.restricted ?? 0);
   }
   const p: ExportPreview = {
     knowledge: Number(stats?.n ?? 0),
@@ -199,6 +204,7 @@ export async function previewExport(sel: ExportSelection, viewer: Viewer): Promi
     categories: Number(stats?.cats ?? 0) + (Number(stats?.uncategorized ?? 0) > 0 ? 1 : 0),
     sources,
     restricted: Number(stats?.restricted ?? 0),
+    restricted_sources: restrictedSources,
     pinned: Number(stats?.pinned ?? 0),
     observed: Number(stats?.observed ?? 0),
     uncategorized: Number(stats?.uncategorized ?? 0),
@@ -211,9 +217,10 @@ export async function previewExport(sel: ExportSelection, viewer: Viewer): Promi
 }
 
 /** 내보낼 때 보여 줄 안내 문장 — 화면과 API 가 같은 문장을 쓴다. */
-export function exportNotes(p: Pick<ExportPreview, "restricted" | "pinned" | "observed" | "uncategorized" | "missing" | "body_bytes">): string[] {
+export function exportNotes(p: Pick<ExportPreview, "restricted" | "restricted_sources" | "pinned" | "observed" | "uncategorized" | "missing" | "body_bytes">): string[] {
   const n: string[] = [];
   if (p.restricted) n.push(`대상자를 제한한 지식 ${p.restricted}건이 들어 있습니다 — 받는 쪽에서는 공개로 들어갑니다.`);
+  if (p.restricted_sources) n.push(`대상자를 제한한 자료 ${p.restricted_sources}건이 들어 있습니다 — 받는 쪽에서는 공개로 들어갑니다.`);
   if (p.pinned) n.push(`위키 핀으로 둔 지식 ${p.pinned}건은 받는 쪽에서 핀 없이 들어갑니다.`);
   if (p.observed) n.push(`외부 앱에서 그대로 옮겨 온 지식 ${p.observed}건은 받는 쪽에서 일반 지식으로 들어갑니다(원래 주소는 남습니다).`);
   if (p.uncategorized) n.push(`분류가 없는 지식 ${p.uncategorized}건은 받는 쪽에서 «${UNSORTED.name}»에 들어갑니다(가져올 때 바꿀 수 있습니다).`);
@@ -341,7 +348,7 @@ export async function exportBundle(sel: ExportSelection, opts: { actor: string; 
   await audit("org_transfer", null, "export", null, {
     counts: out.manifest.counts, all: !!sel.all, categories: uniq(sel.categories), picked: uniq(sel.knowledge).length,
     include_sources: !!sel.include_sources, include_archived: !!sel.include_archived, sealed: out.sealed,
-    restricted: out.preview.restricted, bytes: out.file.length,
+    restricted: out.preview.restricted, restricted_sources: out.preview.restricted_sources, bytes: out.file.length,
   }, opts.actor, opts.source);
   return out;
 }

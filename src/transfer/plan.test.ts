@@ -19,11 +19,12 @@
 //   D14 대상자 제한·위키 핀·외부 미러             → 전체 안내 + 항목 안내
 //   D15 결정 — 허용 / 허용 밖 / 없음              → 반영 / 기본값 / 기본값
 //   D16 없는 분류로 맞추라는 결정                 → 거절
-//   D17 새로 만들 분류 key 가 활성/비활성으로 있음  → 그대로 쓴다 / -2
+//   D17 사람이 «새로 만들기» 를 골랐는데 같은 key 가 활성/비활성으로 있음 → 둘 다 새 key(-2)로 새로 만든다(리뷰 반영)
 //   D18 이름 대응                               → 새 이름 / 여기 이름 / 없음
 //   D19 [[링크]] 고쳐 쓰기                       → 바뀐 것만, 라벨·앵커 보존, 코드 안 그대로, 슬러그 링크도
 //   D20 자료 — 전에 가져옴·같은 외부 원본·새것      → 이미 있음 2 · 새것 1
 //   D21 지식 0건 묶음                           → 합계 0
+//   D22 묶음에 대상자 제한 자료                    → «공개로» 안내
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bundleContentHash, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle, type BundleKnowledge, type BundleSource } from "./bundle.js";
@@ -241,14 +242,14 @@ test("D16 받는 쪽에 없는 분류로 맞추라는 결정은 거절한다", (
   assert.throws(() => resolveDecisions(p, { categories: { eng: { action: "map", to: "nope" } } }, t, b.categories), PlanError);
 });
 
-test("D17 새로 만들 분류 key 가 활성으로 있으면 그대로 쓰고, 비활성으로 있으면 -2 로 만든다", () => {
+test("D17 사람이 «새로 만들기» 를 고르면 같은 key 가 있어도 기존 분류에 넣지 않고 새 key 로 만든다", () => {
   const b = bundleOf([k("a", { category: "x" }), k("b", { category: "y" })], { categories: [] });
   const t = target({ categories: [{ key: "eng", name: "엔지니어링", state: "active" }, { key: "old", name: "옛", state: "deprecated" }] });
   const p = planImport(b, t);
   const r = resolveDecisions(p, { categories: { x: { action: "create", key: "eng" }, y: { action: "create", key: "old" } } }, t, b.categories);
-  assert.equal(r.categoryMap.get("x"), "eng");
+  assert.equal(r.categoryMap.get("x"), "eng-2", "활성 eng 가 있어도 새로 만든다");
   assert.equal(r.categoryMap.get("y"), "old-2");
-  assert.deepEqual(r.createCategories.map((c) => c.key), ["old-2"]);
+  assert.deepEqual(r.createCategories.map((c) => c.key).sort(), ["eng-2", "old-2"]);
   assert.equal(r.items.find((i) => i.ref === "b")?.target_category, "old-2");
 });
 
@@ -302,4 +303,11 @@ test("D21 지식이 0건인 묶음도 계획은 서고 합계가 0 이다", () =
   assert.equal(p.summary.total, 0);
   assert.deepEqual(p.knowledge, []);
   assert.deepEqual(p.categories, []);
+});
+
+test("D22 묶음에 대상자를 제한했던 자료가 있으면 공개로 들어간다고 알린다", () => {
+  const src = { ref: "1", kind: "slack", title: null, body_md: "", fields: {}, provenance: "observed", visibility: "members",
+    external_system: null, external_instance: null, external_id: null, external_url: null, parent_external_id: null, occurred_at: null, author: null };
+  const p = planImport(bundleOf([k("a")], { sources: [src] }), target());
+  assert.ok(p.notes.some((n) => n.includes("자료") && n.includes("공개로")), JSON.stringify(p.notes));
 });

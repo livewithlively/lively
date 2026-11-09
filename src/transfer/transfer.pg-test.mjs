@@ -15,6 +15,10 @@
 //   I10 되돌리기 — 만든 문서 지움(휴지통 기록) · 만든 빈 분류 지움 · 기존 같은 이름 문서는 그대로
 //   I11 잠긴 파일 — 비밀번호 없이 password_required · 맞는 비밀번호면 미리보기     I12 두 번 적용 → 409
 //   I13 감사 — export · import_plan · import_apply · import_undo 가 org_transfer 로 남는다
+//   I14 덮어쓰기 → 되돌리기 = 원래 본문
+//   I15 문서를 쓴 뒤 뒤 단계(가져온 기록)가 실패 → 결과에 «만듦·경고», 되돌리기가 치우고 덮어쓴 문서는 전 판으로(리뷰 반영)
+//   I16 대상자 제한 자료 → 내보내기 안내, 받는 쪽에서 공개로(리뷰 반영)
+//   I17 «들이는 중» 으로 오래 멈춘 배치 → 정리하면 «일부만 들임», 되돌리기를 받는다(리뷰 반영)
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -24,7 +28,7 @@ const { linkKnowledge } = await import(`${DIST}/v6/knowledge-links.js`);
 const { createCategory, getCategoryByKey, deleteCategory } = await import(`${DIST}/v6/category-store.js`);
 const { upsertSource } = await import(`${DIST}/v6/source-store.js`);
 const { exportBundle } = await import(`${DIST}/transfer/export.js`);
-const { stageImport, applyImport, undoImport } = await import(`${DIST}/transfer/apply.js`);
+const { stageImport, applyImport, undoImport, transferHousekeeping } = await import(`${DIST}/transfer/apply.js`);
 const { getWorkspaceUid } = await import(`${DIST}/transfer/store.js`);
 const { PlanError } = await import(`${DIST}/transfer/plan.js`);
 const { BundlePasswordRequiredError } = await import(`${DIST}/transfer/bundle.js`);
@@ -42,6 +46,8 @@ const bodyOf = async (name) => (await q1(`SELECT body_md FROM knowledge WHERE na
 const setUid = (uid) => itemsPool.query(`UPDATE org_transfer_identity SET workspace_uid=$1 WHERE id=1`, [uid]);
 
 async function cleanup() {
+  await itemsPool.query(`DROP TRIGGER IF EXISTS ${T}_boom ON org_transfer_origin`).catch(() => {});
+  await itemsPool.query(`DROP FUNCTION IF EXISTS ${T}_boom_fn()`).catch(() => {});
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE '${T}-%'`);
   await itemsPool.query(`DELETE FROM category WHERE key LIKE '${T}-%'`);
   await itemsPool.query(`DELETE FROM source WHERE external_system = '${T}'`);
@@ -67,12 +73,20 @@ try {
   await linkKnowledge(`${T}-a`, `${T}-b`, "refines", ctx);
   const src = await upsertSource({ kind: "slack", title: "스레드", body_md: "원문", external_system: T, external_instance: "W1", external_id: "ts-1" }, ctx);
   await itemsPool.query(`INSERT INTO knowledge_source(name, source_id, relation) VALUES($1,$2,'cites')`, [`${T}-a`, src.id]);
+  const src2 = await upsertSource({ kind: "slack", title: "비공개 스레드", body_md: "제한 원문", external_system: T, external_instance: "W1", external_id: "ts-2" }, ctx);
+  await itemsPool.query(`UPDATE source SET visibility='members' WHERE id=$1`, [src2.id]);
+  await itemsPool.query(`INSERT INTO knowledge_source(name, source_id, relation) VALUES($1,$2,'cites')`, [`${T}-a`, src2.id]);
+  await createCategory({ key: `${T}-x`, name: "XFER 실패 주입" }, ctx);
+  await save(`${T}-boom`, { category: `${T}-x` });
+  await save(`${T}-ov`, { category: `${T}-x`, body_md: "보낸 쪽 ov 본문" });
 
   // ── I1 내보내기 ────────────────────────────────────────────────────────
   const out = await exportBundle({ categories: [`${T}-eng`, `${T}-ops`], include_sources: true }, { actor: ctx.actor, source: "web" });
   chk("I1 분류 둘 → 지식 6건(폴더 포함)", out.manifest.counts.knowledge === 6, JSON.stringify(out.manifest.counts));
-  chk("I1 자료 1건이 함께 담긴다", out.manifest.counts.sources === 1, JSON.stringify(out.manifest.counts));
-  chk("I1 대상자 제한 1건이 안내에 나온다", out.preview.restricted === 1 && out.preview.notes.some((n) => n.includes("공개로")), JSON.stringify(out.preview));
+  chk("I1 자료 2건이 함께 담긴다", out.manifest.counts.sources === 2, JSON.stringify(out.manifest.counts));
+  chk("I1 대상자 제한 1건이 안내에 나온다", out.preview.restricted === 1 && out.preview.notes.some((n) => n.includes("지식") && n.includes("공개로")), JSON.stringify(out.preview));
+  chk("I16 대상자 제한 자료 1건도 내보내기 안내에 나온다", out.preview.restricted_sources === 1 && out.preview.notes.some((n) => n.includes("자료") && n.includes("공개로")), JSON.stringify(out.preview));
+  const outX = await exportBundle({ categories: [`${T}-x`] }, { actor: ctx.actor, source: "web" });
 
   // ── I2 같은 워크스페이스로 → 거절 ──────────────────────────────────────────
   {
@@ -87,6 +101,7 @@ try {
   await save(`${T}-b`, { body_md: "받는 쪽에 원래 있던 다른 문서" });
   const opsCat = await getCategoryByKey(`${T}-ops`);
   await deleteCategory(opsCat.id, ctx);
+  await itemsPool.query(`DELETE FROM source WHERE external_system=$1 AND external_id='ts-2'`, [T]);
 
   // ── I3 미리보기 ────────────────────────────────────────────────────────
   const { batch, plan } = await stageImport(out.file, { fileName: `${T}-1.zip`, ctx });
@@ -96,7 +111,8 @@ try {
   const cs = Object.fromEntries(plan.categories.map((c) => [c.ref, c.suggestion]));
   chk("I3 같은 key 분류는 맞춤", cs[`${T}-eng`]?.action === "map" && cs[`${T}-eng`]?.to === `${T}-eng`, JSON.stringify(cs));
   chk("I3 없는 분류는 만들기", cs[`${T}-ops`]?.action === "create" && cs[`${T}-ops`]?.key === `${T}-ops`, JSON.stringify(cs));
-  chk("I3 같은 외부 원본 자료는 이미 있음", plan.sources.count === 1 && plan.sources.existing === 1, JSON.stringify(plan.sources));
+  chk("I3 같은 외부 원본 자료는 이미 있음 · 없는 자료는 새것", plan.sources.count === 2 && plan.sources.existing === 1 && plan.sources.fresh === 1, JSON.stringify(plan.sources));
+  chk("I16 가져오기 미리보기에도 제한 자료 안내", plan.notes.some((n) => n.includes("자료") && n.includes("공개로")), JSON.stringify(plan.notes));
 
   // ── I4~I8 기본값으로 적용 ───────────────────────────────────────────────
   const applied = await applyImport(batch.id, {}, ctx);
@@ -110,7 +126,8 @@ try {
   chk("I5 본문 밖 연결(refines)이 새 이름 쪽으로", !!(await q1(`SELECT 1 AS x FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation='refines'`, [`${T}-a`, `${T}-b-2`])));
   chk("I6 폴더 아래 문서는 폴더 아래로", (await q1(`SELECT parent_name FROM knowledge WHERE name=$1`, [`${T}-child`]))?.parent_name === `${T}-folder`);
   chk("I7 대상자 제한 지식은 공개로", (await q1(`SELECT visibility FROM knowledge WHERE name=$1`, [`${T}-r`]))?.visibility === "open");
-  chk("I8 자료는 새로 만들지 않았다", Number((await q1(`SELECT count(*) AS n FROM source WHERE external_system=$1`, [T])).n) === 1);
+  chk("I8 같은 원본이 있던 자료는 새로 만들지 않았다(없던 1건만 새로)", Number((await q1(`SELECT count(*) AS n FROM source WHERE external_system=$1`, [T])).n) === 2 && applied.result.sources_created.length === 1, JSON.stringify(applied.result.sources_created));
+  chk("I16 제한 자료는 받는 쪽에서 공개로 들어왔다", (await q1(`SELECT visibility FROM source WHERE external_system=$1 AND external_id='ts-2'`, [T]))?.visibility === "open");
   chk("I8 이미 있던 자료에 연결만 했다", !!(await q1(`SELECT 1 AS x FROM knowledge_source WHERE name=$1 AND source_id=$2`, [`${T}-a`, src.id])));
   chk("I4 만든 분류에 들어갔다", (await q1(`SELECT c.key FROM knowledge_category kc JOIN category c ON c.id=kc.category_id WHERE kc.name=$1`, [`${T}-ops1`]))?.key === `${T}-ops`);
 
@@ -150,6 +167,42 @@ try {
     chk("I14 덮어쓰기로 고르면 받는 쪽 문서 본문이 묶음 본문이 된다", (await bodyOf(`${T}-b`)) === `본문 ${T}-b` && ap2.result.counts.updated === 1, `${await bodyOf(`${T}-b`)} ${JSON.stringify(ap2.result.counts)}`);
     const un2 = await undoImport(st2.batch.id, ctx);
     chk("I14 되돌리면 덮어쓴 문서가 가져오기 전 본문으로 돌아온다", (await bodyOf(`${T}-b`)) === "받는 쪽에 원래 있던 다른 문서" && un2.report.restored === 1, `${await bodyOf(`${T}-b`)} ${JSON.stringify(un2.report)}`);
+  }
+
+  // ── I15 쓴 뒤 실패 → 결과가 남고 되돌리기가 치운다 ─────────────────────────
+  {
+    await deleteKnowledge(`${T}-boom`, ctx);                                  // 받는 쪽엔 없다 → 새로 만들기
+    await save(`${T}-ov`, { category: `${T}-x`, body_md: "받는 쪽 ov 본문" });  // 같은 이름 다른 문서 → 덮어쓰기로 고른다
+    await itemsPool.query(`CREATE OR REPLACE FUNCTION ${T}_boom_fn() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.kind = 'knowledge' AND NEW.origin_ref IN ('${T}-boom', '${T}-ov') THEN RAISE EXCEPTION '${T} 주입 실패'; END IF; RETURN NEW; END $$`);
+    await itemsPool.query(`CREATE TRIGGER ${T}_boom BEFORE INSERT OR UPDATE ON org_transfer_origin FOR EACH ROW EXECUTE FUNCTION ${T}_boom_fn()`);
+    const stX = await stageImport(outX.file, { fileName: `${T}-x.zip`, ctx });
+    const apX = await applyImport(stX.batch.id, { knowledge: { [`${T}-ov`]: "overwrite" } }, ctx);
+    await itemsPool.query(`DROP TRIGGER IF EXISTS ${T}_boom ON org_transfer_origin`);
+    const boom = apX.result.knowledge.find((r) => r.ref === `${T}-boom`);
+    const ov = apX.result.knowledge.find((r) => r.ref === `${T}-ov`);
+    chk("I15 쓴 뒤 기록이 실패해도 «만듦·경고» 로 남는다", boom?.ok === true && boom?.created === true && boom?.warning === true && (await exists(`${T}-boom`)), JSON.stringify(boom));
+    chk("I15 덮어쓴 문서는 전 판이 결과에 남는다", ov?.ok === true && ov?.created === false && ov?.warning === true && ov?.before?.body_md === "받는 쪽 ov 본문", JSON.stringify(ov && { ...ov, before: ov.before && { body_md: ov.before.body_md } }));
+    chk("I15 실패 수가 아니라 만듦·갱신으로 센다", apX.result.counts.created === 1 && apX.result.counts.updated === 1 && apX.result.counts.failed === 0, JSON.stringify(apX.result.counts));
+    const unX = await undoImport(stX.batch.id, ctx);
+    chk("I15 되돌리기가 그 문서를 치운다", !(await exists(`${T}-boom`)) && unX.report.deleted === 1, JSON.stringify(unX.report));
+    chk("I15 되돌리기가 덮어쓴 문서를 전 판으로 돌린다", (await bodyOf(`${T}-ov`)) === "받는 쪽 ov 본문" && unX.report.restored === 1, await bodyOf(`${T}-ov`));
+  }
+
+  // ── I17 멈춘 배치 정리 ────────────────────────────────────────────────
+  {
+    const stS = await stageImport(outX.file, { fileName: `${T}-stuck.zip`, ctx });
+    await itemsPool.query(`UPDATE org_transfer_batch SET state='applying', state_at = now() - interval '2 hours' WHERE id=$1`, [stS.batch.id]);
+    await transferHousekeeping();
+    const row = await q1(`SELECT state, payload IS NULL AS gone, error FROM org_transfer_batch WHERE id=$1`, [stS.batch.id]);
+    chk("I17 오래 멈춘 «들이는 중» 은 «일부만 들임» 으로 내려간다", row?.state === "partial" && row?.gone === true && /멈췄습니다/.test(row?.error ?? ""), JSON.stringify(row));
+    const unS = await undoImport(stS.batch.id, ctx);
+    chk("I17 내려간 배치는 되돌리기를 받는다", unS.batch.state === "undone", JSON.stringify(unS.batch.state));
+    const fresh = await stageImport(outX.file, { fileName: `${T}-fresh.zip`, ctx });
+    await itemsPool.query(`UPDATE org_transfer_batch SET state='applying', state_at = now() WHERE id=$1`, [fresh.batch.id]);
+    await transferHousekeeping();
+    chk("I17 방금 시작한 «들이는 중» 은 건드리지 않는다", (await q1(`SELECT state FROM org_transfer_batch WHERE id=$1`, [fresh.batch.id]))?.state === "applying");
+    await itemsPool.query(`UPDATE org_transfer_batch SET state='failed' WHERE id=$1`, [fresh.batch.id]);
   }
 
   // ── I11 잠긴 파일 ──────────────────────────────────────────────────────

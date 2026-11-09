@@ -15,6 +15,7 @@
 //
 // 정해 둔 기본값(2026-11-09):
 //  · 대상자를 제한한 지식 → 받는 쪽에서 **공개**로 들인다(상민님 결정 — 내보낼 때 안내만 한다).
+//    연결된 자료도 같은 규칙이다(리뷰 지적 2026-11-09: 자료는 안내 없이 공개가 되고 있었다 — 내보내기·가져오기 미리보기 둘 다 알린다).
 //  · 외부 미러(observed) → 일반 지식(authored)으로 들이고 원래 주소를 필드에 남긴다(보완 3).
 //  · 위키 핀(is_wiki) → 핀 없이 들인다 — 핀은 받는 쪽의 모든 세션에 주입되는 큐레이션이라 조용히 늘리지 않는다.
 //  · 이름이 바뀌어 들어가는 지식을 가리키는 [[링크]] 는 같은 묶음 안에서 새 이름으로 고쳐 쓴다(보완 4).
@@ -300,6 +301,8 @@ export function planImport(bundle: Bundle, target: TargetState, problems: Bundle
   const notes: string[] = [];
   const restricted = bundle.knowledge.filter((k) => k.visibility !== "open").length;
   if (restricted) notes.push(`대상자를 제한했던 지식 ${restricted}건은 공개로 들어갑니다.`);
+  const restrictedSources = bundle.sources.filter((x) => x.visibility !== "open").length;
+  if (restrictedSources) notes.push(`대상자를 제한했던 자료 ${restrictedSources}건도 함께 들이면 공개로 들어갑니다.`);
   const pinned = bundle.knowledge.filter((k) => k.is_wiki).length;
   if (pinned) notes.push(`위키 핀이었던 지식 ${pinned}건은 핀 없이 들어갑니다.`);
   const observed = bundle.knowledge.filter((k) => k.provenance === "observed").length;
@@ -371,8 +374,10 @@ export function resolveDecisions(plan: Plan, decisions: Decisions, target: Pick<
     const wantedKey = slugify(choice.key ?? c.ref).slice(0, 64);
     // 이번에 이미 만들기로 한 key 면 함께 쓴다(묶음 분류 둘을 새 분류 하나로 합치는 결정).
     if (createdKeys.has(wantedKey)) { categoryMap.set(c.ref, wantedKey); continue; }
-    // 받는 쪽에 살아 있는 같은 key 가 있으면 새로 만들지 않고 그대로 쓴다.
-    if (activeKeys.has(wantedKey)) { categoryMap.set(c.ref, wantedKey); continue; }
+    // 사람이 «새 분류로 만들기» 를 고른 것이면 같은 key 가 살아 있어도 **새로** 만든다(비어 있는 key 로) — 그 분류에 넣고 싶었으면
+    //  «여기의 … 에 넣기» 를 골랐을 것이다(리뷰 지적 2026-11-09: 종전엔 같은 key 가 있으면 조용히 기존 분류로 넣었다).
+    //  제안으로 온 «만들기» 는 애초에 같은 key 가 없을 때만 나오므로 이 갈래는 사람의 결정에서만 걸린다.
+    if (activeKeys.has(wantedKey) && d?.action !== "create") { categoryMap.set(c.ref, wantedKey); continue; }
     let key = wantedKey;
     for (let i = 2; allKeys.has(key) || createdKeys.has(key); i++) key = `${wantedKey}-${i}`;
     const src = byKey.get(c.ref);
