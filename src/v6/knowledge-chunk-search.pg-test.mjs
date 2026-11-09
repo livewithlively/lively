@@ -301,15 +301,23 @@ try {
   fresh();
   const recallCap = recallCapabilities.find((x) => x.name === "knowledge_recall");
   const dana = { userId: "dana", scopes: ["memory"] };
-  const before = Number((await q(`SELECT count(*)::int AS n FROM knowledge_search_log`))[0].n);
+  //  기록은 응답을 막지 않는다(void logKnowledgeSearch — 기다리지 않는다). 고정 40ms 를 기다렸다 읽으면 CI 처럼 느린 자리에서
+  //   INSERT 가 아직 안 들어와 빈 결과(`[]`)를 본다 — 줄 수가 오를 때까지 기다린다(상한 5초).
+  const logCount = async () => Number((await q(`SELECT count(*)::int AS n FROM knowledge_search_log`))[0].n);
+  const logReaches = async (n) => { for (let i = 0; i < 200; i++) { if (await logCount() >= n) return true; await sleep(25); } return false; };
+  const before = await logCount();
   const out = await recallCap.handler({ text: "질의8 비밀스러운 프롬프트 글을 길게 적어 둔다" }, dana, { source: "web", viewer: null, session: "box-s15" });
-  await sleep(40);
+  chk("S15 (준비) 세션 호출의 기록이 들어온다", await logReaches(before + 1), `count=${await logCount()} before=${before}`);
   const logged = await q(`SELECT tool, route, q, names, n FROM knowledge_search_log ORDER BY id DESC LIMIT 1`);
   chk("S15 입구가 답한다 · 칸은 entries 다", out.entries.map((e) => e.name).join() === `${T}-r2` && out.entries[0].line === 5, JSON.stringify(out));
   chk("S15 세션 호출을 남긴다 · 글은 안 남긴다", logged[0]?.tool === "recall" && logged[0]?.route === "chunk" && logged[0]?.q === null && logged[0]?.names?.join() === `${T}-r2`, JSON.stringify(logged));
   await recallCap.handler({ text: "질의8 비밀스러운 프롬프트 글을 길게 적어 둔다" }, dana, { source: "web", viewer: null });
-  await sleep(40);
-  chk("S15 세션이 아니면 안 남긴다", Number((await q(`SELECT count(*)::int AS n FROM knowledge_search_log`))[0].n) === before + 1);
+  //  «안 남긴다» 는 기다림만으로는 못 잰다(늦게 들어올 수도 있다) — 뒤이어 세션 호출 하나(표지)를 더 하고 그 기록이 들어온 뒤
+  //   세션 없는 줄이 하나도 없는지 본다. 세션 아닌 호출의 기록이 생겼다면 먼저 나간 그 INSERT 도 함께 들어와 있다.
+  await recallCap.handler({ text: "질의8 비밀스러운 프롬프트 글을 길게 적어 둔다" }, dana, { source: "web", viewer: null, session: "box-s15-mark" });
+  chk("S15 (준비) 표지 호출의 기록이 들어온다", await logReaches(before + 2), `count=${await logCount()} before=${before}`);
+  const sessions = (await q(`SELECT session_id FROM knowledge_search_log ORDER BY id DESC LIMIT 3`)).map((r) => r.session_id);
+  chk("S15 세션이 아니면 안 남긴다", (await logCount()) === before + 2 && sessions.slice(0, 2).join() === "box-s15-mark,box-s15", JSON.stringify({ count: await logCount(), before, sessions }));
   await q(`UPDATE org_runtime_config SET embedding_config=$1::jsonb WHERE id=1`, [JSON.stringify({ provider: "off", explicit: true })]);
   fresh();
   const offOut = await recallCap.handler({ text: "질의8 소환 문장을 충분히 길게 적어 둔다" }, dana, { source: "web", viewer: null });

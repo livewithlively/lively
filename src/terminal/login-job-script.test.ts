@@ -410,25 +410,39 @@ await t("K23 일시 오류(500) 는 끝내지 않는다 — 다음 박동을 이
 });
 
 await t("★ K23 게이트웨이 불통이 상한을 넘으면 끝낸다 — 결과를 넘길 곳 없는 판은 남기지 않는다", async () => {
+  //  CLI 가 화면을 찍은 **뒤에** 게이트웨이가 끊긴다. 처음부터 닫힌 포트였을 땐 부하가 큰 자리(병렬 전체 실행)에서 CLI 가 뜨기도 전에
+  //   상한(700ms)이 차 판이 끝났고, «CLI 를 거뒀나» 를 볼 pid 가 없어 fakeLog[0] 이 비어 TypeError 로 떨어졌다.
+  //   화면(WXYZ)을 실은 박동부터 실패시키고(503) 곧바로 포트를 닫는다 — 그 뒤 박동은 닫힌 포트에 부딪힌다.
   const g = await gateway();
-  const url = g.url;
-  await g.close();   // 닫힌 포트
-  const r = await runJob({ purpose: "login", harness: "codex", mode: "hang", gw: url, timing: { gatewayDeadMs: 700, softMaxMs: 60_000 } });
-  assert.equal(r.code, 0);
-  assert.ok(r.ms >= 700 && r.ms < 8_000, `${r.ms}ms`);
-  assert.match(r.stdout, /gateway-unreachable/);
-  assert.ok(await gone(r.fakeLog[0]!.pid));
-  assert.equal(fs.existsSync(r.home), false);
+  let closing: Promise<void> | null = null;
+  g.onTick = (q) => {
+    if (!String(q.body.screen).includes("WXYZ")) return { status: 200, body: { ok: true } };
+    closing ??= new Promise<void>((res) => setImmediate(() => { void g.close().then(res); }));
+    return { status: 503, body: {} };
+  };
+  try {
+    const r = await runJob({ purpose: "login", harness: "codex", mode: "hang", gw: g.url, timing: { gatewayDeadMs: 700, softMaxMs: 60_000 } });
+    assert.equal(r.code, 0);
+    assert.ok(closing, "배선 — CLI 화면을 받은 뒤 게이트웨이를 끊었다");
+    assert.ok(r.ms >= 700 && r.ms < 8_000, `${r.ms}ms`);
+    assert.match(r.stdout, /gateway-unreachable/);
+    assert.ok(r.fakeLog[0]?.pid, "배선 — CLI 가 떴다");
+    assert.ok(await gone(r.fakeLog[0]!.pid));
+    assert.equal(fs.existsSync(r.home), false);
+  } finally { await (closing ?? g.close()); }
 });
 
 await t("★ K23 판 자체 상한 — 끝 알림(timeout) 후 끝낸다", async () => {
   const g = await gateway();
   try {
-    const r = await runJob({ purpose: "login", harness: "codex", mode: "hang", gw: g.url, timing: { softMaxMs: 800 } });
+    //  상한은 판이 뜬 순간부터 잰다 — CLI 가 화면을 찍기 전에 차면 «CLI 를 거뒀나»·«화면 속 JWT 를 가렸나» 를 볼 재료가 없다.
+    //   800ms 였을 땐 병렬 전체 실행의 부하에서 CLI 가 늦게 떠 fakeLog[0] 이 비었다 — CLI 기동보다 넉넉한 2.5초로 둔다.
+    const r = await runJob({ purpose: "login", harness: "codex", mode: "hang", gw: g.url, timing: { softMaxMs: 2_500 } });
     assert.equal(r.code, 0);
-    assert.ok(r.ms >= 800 && r.ms < 8_000, `${r.ms}ms`);
+    assert.ok(r.ms >= 2_500 && r.ms < 10_000, `${r.ms}ms`);
     assert.equal(kinds(g).at(-1), "end");
     assert.equal(g.reqs.at(-1)!.body.reason, "timeout");
+    assert.ok(r.fakeLog[0]?.pid, "배선 — CLI 가 떴다");
     assert.ok(await gone(r.fakeLog[0]!.pid));
     const ticks = g.reqs.filter((q) => q.kind.endsWith("/tick"));
     assert.ok(ticks.length >= 1);

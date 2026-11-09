@@ -312,8 +312,12 @@ try {
     const home = freshHome("v-old");
     // '새 키트를 이미 받은 멤버' — 업데이터 파일이 있어야 훅이 띄울 수 있다(없으면 수동 업데이트가 경로).
     installUpdaterFixture(home);
+    //  PATH 를 밀폐한다(②·⑩ 과 같은 이유 — #4927). 이 픽스처의 첫 업데이트는 claude 만 설치하는데, 이 머신 PATH 에 진짜
+    //   하네스(codex·opencode·antigravity·grok)가 있으면 s2 세션의 5분 «새 하네스» 확인이 막 깔린 업데이터를 다시 띄워 재설치하고,
+    //   그 설치가 안내 파일을 다시 써 s3 가 안내를 또 본다(⑨b 헛실패 — 그 CLI 가 없는 CI 러너에선 초록이라 맥에서만 흔들렸다).
+    const sealed = { PATH: closedPath(NODE_ONLY) };
     const t0 = Date.now();
-    const { stdout } = await runPreload(home);
+    const { stdout } = await runPreload(home, sealed);
     const hookMs = Date.now() - t0;
     const injected = String(stdout || "").includes("테스트 컨텍스트"); // 훅 본연의 일(맥락 주입)은 그대로 했나
     const done = await waitFor(() => readIf(lv(home, "kit-version")) === "v-ddd");
@@ -325,8 +329,8 @@ try {
     else bad("⑨ 훅 트리거", `done=${done} injected=${injected} notice=${!!notice} hookMs=${hookMs}`);
 
     // ⑨b 안내는 **다음 세션에 딱 한 번** — 두 번째 세션엔 안 뜬다.
-    const s2 = String((await runPreload(home)).stdout || "");
-    const s3 = String((await runPreload(home)).stdout || "");
+    const s2 = String((await runPreload(home, sealed)).stdout || "");
+    const s3 = String((await runPreload(home, sealed)).stdout || "");
     (s2.includes("자동으로 업데이트됐습니다") && !s3.includes("자동으로 업데이트됐습니다"))
       ? ok("⑨b 업데이트 안내 — 다음 세션에 1회만") : bad("⑨b 안내 1회", `s2=${s2.includes("업데이트됐습니다")} s3=${s3.includes("업데이트됐습니다")}`);
   }
