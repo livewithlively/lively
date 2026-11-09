@@ -25,6 +25,9 @@ const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 let SERVER = {};            // projectId → { path → { body, mtime } }
 let TRUNC = new Set();      // 매니페스트가 잘렸다고 답할 프로젝트
 let FAIL_PUT = new Set();   // PUT 을 500 으로 거절할 프로젝트
+let MANIFEST_STATUS = new Map();   // 매니페스트를 이 상태로 거절할 프로젝트(404 = 지운 프로젝트 · 500 = 일시 오류)
+let DELAY = new Map();      // 매니페스트 응답을 이만큼 늦출 프로젝트(동시 실행 시험)
+let NO_MTIME = false;       // PUT 응답에 mtime 을 안 싣는 옛 게이트웨이
 let SESSION_CTX = null;     // project-context 응답(세션 판) — null 이면 404
 let reqs = [];              // { pid, method, kind, path }
 let epoch = 0;
@@ -33,7 +36,7 @@ const server = http.createServer((req, res) => {
   const chunks = [];
   const at = epoch;
   req.on("data", (c) => chunks.push(c));
-  req.on("end", () => {
+  req.on("end", () => setTimeout(() => {
     if (at !== epoch) { res.writeHead(503); return res.end("{}"); }   // 앞 케이스가 남긴 늦은 요청
     if (/^\/api\/ui\/execution-sessions\/[^/]+\/project-context$/.test(u.pathname)) {
       if (!SESSION_CTX) { res.writeHead(404); return res.end("{}"); }
@@ -46,6 +49,7 @@ const server = http.createServer((req, res) => {
     const files = SERVER[pid] || (SERVER[pid] = {});
     reqs.push({ pid, method: req.method, kind: m[2], path: u.searchParams.get("path") });
     if (m[2] === "shared/manifest") {
+      if (MANIFEST_STATUS.has(pid)) { res.writeHead(MANIFEST_STATUS.get(pid)); return res.end("{}"); }
       const list = Object.entries(files).map(([p, v]) => ({ path: p, mtime: v.mtime, size: Buffer.byteLength(v.body) }));
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ files: list, newest: Math.max(0, ...list.map((f) => f.mtime)), count: list.length, truncated: TRUNC.has(pid) }));
@@ -55,11 +59,11 @@ const server = http.createServer((req, res) => {
       if (FAIL_PUT.has(pid)) { res.writeHead(500); return res.end("{}"); }
       files[p] = { body: Buffer.concat(chunks).toString(), mtime: Date.now() };
       res.writeHead(200, { "content-type": "application/json" });
-      return res.end(JSON.stringify({ ok: true, mtime: files[p].mtime, size: Buffer.byteLength(files[p].body) }));
+      return res.end(JSON.stringify(NO_MTIME ? { ok: true } : { ok: true, mtime: files[p].mtime, size: Buffer.byteLength(files[p].body) }));
     }
     if (req.method === "DELETE") { delete files[p]; res.writeHead(200); return res.end("{}"); }
     res.writeHead(404); res.end();
-  });
+  }, (() => { const mm = u.pathname.match(/^\/api\/ui\/v6\/projects\/(\d+)\/shared\/manifest$/); return mm ? (DELAY.get(Number(mm[1])) || 0) : 0; })()));
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
@@ -69,6 +73,7 @@ let caseNo = 0;
 // 케이스마다 새 루트 <c>: 공유 루트 <c>/workspace/project/<번호> · 홈 · tmp(형제 상태)도 케이스마다 따로 둔다.
 async function freshCase() {
   epoch++; reqs = []; SERVER = {}; TRUNC = new Set(); FAIL_PUT = new Set(); SESSION_CTX = null;
+  MANIFEST_STATUS = new Map(); DELAY = new Map(); NO_MTIME = false;
   const c = path.join(root, `c${++caseNo}`);
   for (const d of [path.join(c, "workspace", "project"), path.join(c, "home"), path.join(c, "tmp")]) await fsp.mkdir(d, { recursive: true });
   return c;
@@ -113,6 +118,15 @@ const putsOf = (pid) => of(pid, "PUT").map((r) => r.path).sort();
 const upOf = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, ".lively", "sync-up.json"), "utf8")); } catch { return null; } };
 const ledOf = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, ".lively", "sync-ledger.json"), "utf8")).files; } catch { return null; } };
 const both = (id, extra = {}) => ({ project_id: id, sync: "both", ...extra });
+// 노드 공용 형제 상태(tmp) — 시각을 옮겨 «시간이 지난 뒤» 를 흉내 낼 때만 쓴다(형제 하나인 케이스에서).
+const sibFiles = (c, re) => { const d = path.join(c, "tmp", "lively-hooks"); try { return fs.readdirSync(d).filter((f) => re.test(f)).map((f) => path.join(d, f)); } catch { return []; } };
+const editJson = (f, patch) => fs.writeFileSync(f, JSON.stringify({ ...JSON.parse(fs.readFileSync(f, "utf8")), ...patch }));
+async function newDoc(dir, rel, body, ageMs) {
+  const abs = path.join(dir, rel);
+  await fsp.mkdir(path.dirname(abs), { recursive: true });
+  await fsp.writeFile(abs, body);
+  if (ageMs != null) { const t = new Date(Date.now() - ageMs); await fsp.utimes(abs, t, t); }
+}
 
 try {
   // ── E1 Stop — 형제의 새 문서를 그 프로젝트로 올리고 기준선을 맞춘다 ──
@@ -340,6 +354,135 @@ try {
     await runHook(c, own, "Stop");
     assert.deepEqual(reqs.filter((r) => r.method === "PUT").map((r) => r.pid), [301], "남은 1곳은 다음 Stop 에 올라가야 한다");
     ok("E25 원장과 다른 형제 9곳 → 첫 Stop 에 최근 8곳 · 다음 Stop 에 가장 오래된 1곳");
+  }
+
+  // ── R1 (리뷰 차단 건) 서버가 거절하는 형제 8곳이 자리를 차지해도, 9번째 형제는 늦어도 두 번째 Stop 에 올라간다 ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    for (let i = 1; i <= 8; i++) {                                            // 401~408: 지운 프로젝트(매니페스트 404) · 더 최근에 씀
+      const d = await mkDir(slot(c, 400 + i), both(400 + i));
+      await newDoc(d, "남은.md", `x${i}`, 10_000 - i * 100);
+      MANIFEST_STATUS.set(400 + i, 404);
+    }
+    const good = await mkDir(slot(c, 409), both(409, { last_pull: Date.now() }));
+    await newDoc(good, "올릴것.md", "올라가야 할 문서", 600_000);            // 가장 오래됐다 → 첫 Stop 에선 8자리 밖
+    await runHook(c, own, "Stop");
+    assert.equal(reqs.filter((r) => r.pid >= 401 && r.pid <= 408).length, 8, "배선: 거절하는 8곳을 한 번씩 물었어야 한다");
+    reqs = [];
+    await runHook(c, own, "Stop");
+    assert.equal(reqs.filter((r) => r.pid >= 401 && r.pid <= 408).length, 0, "거절한 프로젝트를 쉬지 않고 또 물었다");
+    assert.deepEqual(putsOf(409), ["올릴것.md"], "거절하는 형제들에 막혀 정작 올릴 형제에 못 닿았다");
+    ok("R1 거절(404) 형제 8곳 → 쉬게 하고, 9번째 형제는 두 번째 Stop 에 올림");
+  }
+
+  // ── R2 일시 오류(500) — 그 Stop 은 멈추고, 그 형제는 다음 Stop 에 맨 뒤로 ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    const a = await mkDir(slot(c, 501), both(501, { last_pull: Date.now() }));
+    const b = await mkDir(slot(c, 502), both(502, { last_pull: Date.now() }));
+    await newDoc(a, "a.md", "a", 1_000);                                      // a 가 더 최근
+    await newDoc(b, "b.md", "b", 60_000);
+    MANIFEST_STATUS.set(501, 500);
+    await runHook(c, own, "Stop");
+    assert.equal(of(501, "GET").length, 1, "배선: 먼저 a 를 물었어야 한다");
+    assert.equal(of(502).length, 0, "일시 오류 뒤에도 같은 Stop 에서 계속 물었다");
+    reqs = [];
+    await runHook(c, own, "Stop");
+    assert.deepEqual(putsOf(502), ["b.md"], "오류 난 형제를 뒤로 미루지 않아 b 가 안 올라갔다");
+    assert.ok(reqs.findIndex((r) => r.pid === 502) < reqs.findIndex((r) => r.pid === 501), "오류 난 형제가 맨 뒤로 가야 한다");
+    MANIFEST_STATUS.delete(501); reqs = [];
+    await runHook(c, own, "Stop");
+    assert.deepEqual(putsOf(501), ["a.md"], "오류가 풀린 뒤 a 를 다시 시도하지 않았다");
+    ok("R2 일시 오류(500) → 그 Stop 은 멈춤 · 다음 Stop 에 그 형제는 맨 뒤 · 풀리면 올림");
+  }
+
+  // ── R3 두 세션이 같은 형제를 동시에 올리지 않는다 ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }), { "동시.md": "한 번만 올라가야 한다" });
+    DELAY.set(SIB, 700);                                                       // 두 훅의 매니페스트 요청이 겹치게
+    await Promise.all([runHook(c, own, "Stop"), runHook(c, own, "Stop")]);
+    assert.deepEqual(of(SIB, "PUT").map((r) => r.path), ["동시.md"], "두 세션이 같은 형제를 동시에 올렸다(중복 PUT)");
+    ok("R3 동시에 끝난 두 세션 → 같은 형제 파일 PUT 1번");
+  }
+
+  // ── R4 끝까지 처리한 형제도 SIB_RECHECK_MS(30분)가 지나면 다시 본다 ──
+  {
+    const c = await freshCase();
+    SERVER[SIB] = { "공유문서.md": { body: "남이 고친 서버본", mtime: 3_000_000 } };
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    const sib = await mkDir(slot(c, SIB), both(SIB, { last_pull: 2_000_000 }), { "공유문서.md": "옛 판" }, { "공유문서.md": { mtime: 1_000_000, size: 7 } });
+    await fsp.writeFile(path.join(sib, "공유문서.md"), "내가 고친 판(더 김)");
+    await runHook(c, own, "Stop");
+    reqs = [];
+    await runHook(c, own, "Stop");
+    assert.equal(of(SIB).length, 0, "배선: 30분 안에는 다시 묻지 않아야 한다");
+    const [st] = sibFiles(c, /^push-sib-[0-9a-f]+\.state$/);
+    assert.ok(st, "배선: 형제 상태 파일이 있어야 한다");
+    editJson(st, { at: Date.now() - 31 * 60_000 });
+    await runHook(c, own, "Stop");
+    assert.equal(of(SIB, "GET").length, 1, "30분이 지났는데 다시 보지 않았다");
+    ok("R4 충돌만 남은 형제 → 30분 안엔 요청 0 · 30분 뒤엔 다시 물음");
+  }
+
+  // ── R5 남은 예산이 3초 미만이면 형제를 안 본다(같은 Stop 의 다음 훅 몫) ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }), { "새.md": "x" });
+    await runHook(c, own, "Stop", { LIVELY_HOOK_TIMEOUT_MS: "3000" });       // 자력 종료 70% = 2.1초 → 남은 예산 < 3초
+    assert.equal(of(SIB).length, 0, "예산이 모자란데 형제를 봤다");
+    await runHook(c, own, "Stop", { LIVELY_HOOK_TIMEOUT_MS: "15000" });
+    assert.deepEqual(putsOf(SIB), ["새.md"], "배선: 예산이 넉넉하면 올려야 한다");
+    ok("R5 훅 상한 3초(남은 예산 < 3초) → 형제 요청 0 · 15초면 올림");
+  }
+
+  // ── R6 서버가 지목한 세션 폴더가 디스크에 없어도 형제는 올린다 ──
+  {
+    const c = await freshCase();
+    await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }), { "새.md": "새 문서" });
+    SESSION_CTX = { found: true, project_id: OWN, sync: "both", folder: `project/${OWN}`, folder_abs_path: null, session_dir: slot(c, OWN), revision: 1, applied_revision: 1, binding_epoch: 1 };
+    assert.equal(fs.existsSync(slot(c, OWN)), false);
+    await runHook(c, path.join(c, "home"), "Stop", { LIVELY_SESSION_ID: "box-test-sib-missing" });
+    assert.deepEqual(putsOf(SIB), ["새.md"]);
+    assert.equal(fs.existsSync(slot(c, OWN)), false, "없는 세션 폴더를 만들면 안 된다");
+    ok("R6 세션 폴더가 디스크에 없음 → 그 폴더는 안 만들고 형제는 올림");
+  }
+
+  // ── R7 옛 게이트웨이(PUT 응답에 mtime 없음) — 같은 파일을 다시 올리지 않고 조용해진다 ──
+  {
+    const c = await freshCase();
+    NO_MTIME = true;
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }), { "새.md": "새 문서" });
+    await runHook(c, own, "Stop");
+    await runHook(c, own, "Stop");
+    reqs = [];
+    await runHook(c, own, "Stop");
+    assert.equal(Object.keys(SERVER[SIB]).length, 1);
+    assert.equal(of(SIB).length, 0, "옛 게이트웨이에서 세 번째 Stop 에도 계속 물었다");
+    ok("R7 옛 게이트웨이(mtime 미반환) → 한 번 올리고, 세 번째 Stop 부터 요청 0");
+  }
+
+  // ── R8 걷기가 느린 노드 — 지난 걷기가 1.5초를 넘었으면 1분 안에는 다시 안 걷는다 ──
+  {
+    const c = await freshCase();
+    const own = await mkDir(slot(c, OWN), both(OWN));
+    const sib = await mkDir(slot(c, SIB), both(SIB, { last_pull: Date.now() }));
+    await runHook(c, own, "Stop");                                            // 걷기 기록을 남긴다
+    const [scan] = sibFiles(c, /^push-sib-scan-[0-9a-f]+\.json$/);
+    assert.ok(scan, "배선: 걷기 기록이 있어야 한다");
+    editJson(scan, { ms: 5000, at: Date.now() });
+    await newDoc(sib, "새.md", "새 문서");
+    await runHook(c, own, "Stop");
+    assert.equal(of(SIB).length, 0, "느린 노드인데 1분 안에 또 걸었다");
+    editJson(scan, { ms: 5000, at: Date.now() - 61_000 });
+    await runHook(c, own, "Stop");
+    assert.deepEqual(putsOf(SIB), ["새.md"], "1분이 지났는데 다시 걷지 않았다");
+    ok("R8 지난 걷기 5초(느린 노드) → 1분 안엔 형제 요청 0 · 1분 뒤엔 올림");
   }
 
   console.log(`\nproject-push-sibling: ${pass} passed`);

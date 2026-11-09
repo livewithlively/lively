@@ -63,8 +63,14 @@ const MAX_WALK = 5000;    // 로컬 walk 상한 = 서버 manifestFiles 의 MANIF
 //   하므로 싸다 — 끝까지 본다. 비싼 건 업로드뿐이라 거기만 200 으로 막는다.
 const MAX_BYTES = 25 * 1024 * 1024;
 // ⑥ 다른 프로젝트 폴더(형제 슬롯) — Stop 판만. 아래 pushSiblings 머리 주석 참조.
-const SIB_SCAN_MS = 3000;          // 형제 폴더 걷기에 쓸 시간 상한(남은 예산의 절반과 작은 쪽). 맥 한 대 169폴더 실측 0.5초
-const SIB_MAX_FOLDERS = 8;         // 한 번에 네트워크를 태울 형제 폴더 상한 — 나머지는 다음 턴
+const SIB_SCAN_MS = 3000;            // 형제 폴더 걷기에 쓸 시간 상한(남은 예산의 절반과 작은 쪽). 맥 한 대 169폴더 실측 0.5초
+const SIB_MAX_FOLDERS = 8;           // 한 번에 네트워크를 태울 형제 폴더 상한 — 나머지는 다음 턴
+const SIB_MIN_LEFT_MS = 3000;        // 남은 예산이 이보다 적으면 형제를 아예 안 본다(같은 Stop 의 다음 훅 몫을 남긴다)
+const SIB_RECHECK_MS = 30 * 60_000;  // 끝까지 처리한 형제도 이만큼 지나면 다시 본다(서버 쪽 변화로 판정이 바뀌었을 수 있다)
+const SIB_DENIED_MS = 60 * 60_000;   // 서버가 그 프로젝트를 거절(403·404·410)하면 이만큼 쉰다 — 지운 프로젝트가 자리를 차지하지 않게
+const SIB_FAILED_MS = 10 * 60_000;   // 일시 오류가 난 형제는 이 시간 동안 줄의 맨 뒤로 보낸다
+const SIB_SLOW_SCAN_MS = 1500;       // 지난 형제 걷기가 이보다 오래 걸린 노드(stat 이 느린 윈도우 등)는
+const SIB_SLOW_GAP_MS = 60_000;      //  이 간격 안에서는 다시 걷지 않는다(턴마다 사람을 기다리게 하지 않게)
 
 // ── 프로젝트 폴더·동기화 모드 해석(#3787) — **서버가 권위, 마커는 캐시**. ──
 //  종전엔 로컬 마커(.lively/project.json)가 권위였고, 마커에 sync 가 없으면 경로 모양 추측
@@ -295,14 +301,14 @@ async function localFiles(base) {
 //  io = { jfetch, left } — 호출자의 시간 예산을 그대로 쓴다. local = 이미 걸은 결과.
 //  lastPull = 걷기 **전에** 읽은 마커 워터마크(판정 근거의 시점을 종전과 같게 둔다 — 함수로 빼기 전에도 걷기 앞에서 읽었다).
 //  allowDelete=false(다른 프로젝트 폴더)면 ⑦ 삭제 판정을 통째로 건너뛰고, 보고는 한 일·충돌이 있을 때만 쓴다.
-//  돌려주는 값: 매니페스트를 못 받으면 null(종전의 조기 return 과 같은 뜻 — 상태를 안 남긴다), 아니면
-//   { clean: 완주했나(선검사 상태의 pushed_clean), uploaded: 올린 경로(정본 키) }.
+//  돌려주는 값: 매니페스트를 못 받으면 { ok:false, status: HTTP 상태 | 0(연결 실패 · 시간 초과) } — 종전의 조기 return 과
+//   같은 뜻(상태를 안 남긴다). 받았으면 { ok:true, clean: 완주했나(선검사 상태의 pushed_clean), uploaded: 올린 경로(정본 키) }.
 async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete }) {
   const { jfetch, left } = io;
   // 5) 서버 매니페스트 — '남이 그 사이 고쳤나'를 판정할 유일한 근거.
   let manifest;
-  try { const r = await jfetch(`/api/ui/v6/projects/${projectId}/shared/manifest`); if (!r.ok) return null; manifest = await r.json(); }
-  catch { return null; }
+  try { const r = await jfetch(`/api/ui/v6/projects/${projectId}/shared/manifest`); if (!r.ok) return { ok: false, status: r.status }; manifest = await r.json(); }
+  catch { return { ok: false, status: 0 }; }   // 0 = 연결 실패 · 시간 초과 · 예산 소진
   const server = new Map((Array.isArray(manifest.files) ? manifest.files : []).map((f) => [nk(f.path), f]));
 
   const led = readLedger(projDir);
@@ -453,7 +459,7 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
     } catch { /* 기록 실패는 무해 */ }
   }
 
-  return { clean: failed === 0 && todo - pushed - deleted === 0, uploaded: new Set([...Object.keys(ledgerSet), ...ledgerDropAfterPush]) };
+  return { ok: true, clean: failed === 0 && todo - pushed - deleted === 0, uploaded: new Set([...Object.keys(ledgerSet), ...ledgerDropAfterPush]) };
 }
 
 // ── ⑥ 같은 노드의 다른 프로젝트 폴더(형제 슬롯) 올리기 — Stop 판만 · 올리기만 ──
@@ -464,22 +470,46 @@ async function pushFolder(io, { projectId, projDir, local, lastPull, allowDelete
 //   · 같은 부모로 묶는 까닭 — 공유 루트는 워크스페이스마다 다를 수 있고 프로젝트 번호는 워크스페이스끼리 겹친다
 //     (src/project/project-storage.ts 이관 절). 이 세션의 폴더(서버가 지목)가 곧 «이 워크스페이스의 루트» 의 증거다.
 //     세션 폴더가 슬롯 꼴(<…>/project/<번호>)이 아니면(사람이 init 한 폴더 · 소속 없음) 형제를 보지 않는다.
-//   · 마커의 sync 는 서버 답의 사본이다(askServer → writeMarker). 마커 없음 · pull · 세션 마커 · 번호가 다른 폴더 ·
-//     심볼릭 링크는 건너뛴다(«모르면 안 건드린다»).
+//     ⚠ 전제: 두 워크스페이스가 한 부모 폴더를 함께 쓰지 않는다. 함께 쓰면 번호가 겹쳐 이 세션 폴더의 동기화부터
+//      이미 섞인다(마커에 워크스페이스 표시가 없어 여기서 더 가를 수단도 없다).
+//   · 마커의 sync 는 서버 답의 사본이다(askServer → writeMarker) — 형제에 대해서는 서버에 다시 묻지 않는다(묻는 길이
+//     세션 단위뿐이다). 슬롯의 서버 기본값도 both 다(resolveNodeFolder). 그 사이 서버에서 바뀌었으면 낡은 사본으로 올릴 수
+//     있지만, 판정 규칙(아래)이 남의 판을 덮지 않고 아무것도 지우지 않는다. 서버가 그 프로젝트를 거절하면 잠시 쉰다.
+//   · 마커 없음 · pull · 세션 마커 · 번호가 다른 마커 · 숫자 아닌 이름 · 심볼릭 링크는 건너뛴다(«모르면 안 건드린다»).
 //  하는 일: pushFolder 와 **같은 판정**(서버 매니페스트 · 원장 · last_pull)으로 새 문서 · 로컬 수정만 올린다.
 //   **삭제 전파는 하지 않는다** — 되돌릴 수 없는 일은 그 프로젝트 세션의 몫으로 남긴다(늦게 지워질 뿐 잃는 것은 없다).
-//  비용: 걷기는 로컬 stat 뿐이다. 네트워크는 «원장 기준선과 다른 로컬 파일» 이 있는 폴더만 타고, 지난번에 **끝까지 처리한**
-//   폴더의 그 파일들이 그대로면 노드 공용 상태(tmp)로 건너뛴다 — 충돌만 남은 폴더를 턴마다 다시 묻지 않는다.
-//   실패 · 시간 부족으로 다 못 올린 폴더는 상태를 안 남겨 다음 Stop 이 바로 다시 본다(쉬어 가면 그동안 링크가 또 빈다).
-function sibStatePath(projDir) {
-  let real = projDir; try { real = fs.realpathSync(projDir); } catch { /* 없으면 그대로 */ }
-  const h = crypto.createHash("sha1").update(nk(real)).digest("hex").slice(0, 16);
-  return path.join(os.tmpdir(), "lively-hooks", `push-sib-${h}.state`);
+//  비용 · 자리 다툼:
+//   · 걷기는 로컬 stat 뿐이다. 남은 예산이 SIB_MIN_LEFT_MS 보다 적으면 아예 안 걷고, 걷기가 느린 노드는 간격을 둔다.
+//   · 네트워크는 «원장 기준선과 다른 로컬 파일» 이 있는 형제만 탄다. 지난번에 끝까지 처리한 형제는 그 파일들이 그대로이고
+//     SIB_RECHECK_MS 안이면 건너뛴다(노드 공용 상태, tmp) — 충돌만 남은 폴더를 턴마다 다시 묻지 않는다.
+//   · 서버가 거절한(403·404·410 — 지운 프로젝트 · 권한 없음) 형제는 SIB_DENIED_MS 동안 쉰다. 일시 오류(그 밖의 상태 ·
+//     연결 실패)가 나면 이번 Stop 은 거기서 멈추고, 그 형제는 SIB_FAILED_MS 동안 줄의 맨 뒤로 간다 — 안 되는 폴더가
+//     8자리를 늘 차지해 정작 올릴 폴더에 영영 못 닿는 일을 막는다(리뷰 지적).
+//   · 같은 형제를 두 세션이 동시에 올리지 않게 폴더마다 자물쇠(tmp, wx)를 건다. 잡혀 있으면 이번엔 건너뛴다.
+function sibKey(p) {
+  let real = p; try { real = fs.realpathSync(p); } catch { /* 없으면 그대로 */ }
+  return crypto.createHash("sha1").update(nk(real)).digest("hex").slice(0, 16);
 }
-function readSibState(projDir) { try { return JSON.parse(fs.readFileSync(sibStatePath(projDir), "utf8")); } catch { return null; } }
-function writeSibState(projDir, st) {
-  try { const f = sibStatePath(projDir); fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 }); fs.writeFileSync(f, JSON.stringify(st)); } catch { /* 무해 — 다음 턴에 한 번 더 볼 뿐 */ }
+const sibDir = () => path.join(os.tmpdir(), "lively-hooks");
+const sibStatePath = (projDir) => path.join(sibDir(), `push-sib-${sibKey(projDir)}.state`);
+function readJson(f) { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } }
+function writeJson(f, v) {
+  try { fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 }); fs.writeFileSync(f, JSON.stringify(v)); } catch { /* 무해 — 다음 턴에 한 번 더 볼 뿐 */ }
 }
+/** 폴더 자물쇠 — 잡으면 그 경로, 남이 잡고 있으면 null. 훅이 죽을 시각(HOOK_TIMEOUT_MS)보다 오래된 자물쇠는 죽은 것으로 본다. */
+function takeSibLock(projDir) {
+  const f = sibStatePath(projDir) + ".lock";
+  try { fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 }); } catch { /* 아래 쓰기가 실패하면 null */ }
+  for (let i = 0; i < 2; i++) {
+    try { fs.writeFileSync(f, String(process.pid), { flag: "wx" }); return f; }
+    catch (e) {
+      if (!e || e.code !== "EEXIST") return null;
+      try { if (Date.now() - fs.statSync(f).mtimeMs < HOOK_TIMEOUT_MS) return null; fs.unlinkSync(f); } catch { return null; }
+    }
+  }
+  return null;
+}
+function releaseSibLock(f) { try { fs.unlinkSync(f); } catch { /* 이미 없음 */ } }
 /** 원장 기준선(받은 · 올린 그대로, 또는 묘비 그대로)과 다른 로컬 문서 — 올리기 판정이 할 일이 생길 수 있는 것만. */
 function unsyncedOf(local, led, skip = null) {
   const out = [];
@@ -500,9 +530,13 @@ function stampOf(list) {
   return h.digest("hex");
 }
 async function pushSiblings(io, ownDir, ownId) {
+  if (io.left() < SIB_MIN_LEFT_MS) return;
   if (!ownDir || !ownId || path.basename(ownDir) !== String(ownId)) return;
   const rootDir = path.dirname(ownDir);
   if (path.basename(rootDir) !== "project") return;
+  const scanPath = path.join(sibDir(), `push-sib-scan-${sibKey(rootDir)}.json`);
+  const lastScan = readJson(scanPath);
+  if (lastScan && Number(lastScan.ms) > SIB_SLOW_SCAN_MS && Date.now() - Number(lastScan.at || 0) < SIB_SLOW_GAP_MS) return;
   let entries;
   try { entries = await fsp.readdir(rootDir, { withFileTypes: true }); } catch { return; }
   const cands = [];
@@ -518,27 +552,45 @@ async function pushSiblings(io, ownDir, ownId) {
   }
   // 걷기 — 최근에 손댄 폴더부터(폴더 자체의 시각은 그 바로 밑에 파일이 생기거나 지워질 때 바뀐다). 시간이 모자라면 나머지는 다음 턴.
   cands.sort((a, b) => b.at - a.at);
-  const scanUntil = Date.now() + Math.min(SIB_SCAN_MS, Math.max(0, Math.floor(io.left() / 2)));
+  const t0 = Date.now();
+  const scanUntil = t0 + Math.min(SIB_SCAN_MS, Math.max(0, Math.floor(io.left() / 2)));
   const work = [];
   for (const c of cands) {
     if (Date.now() >= scanUntil) break;
+    const st = readJson(sibStatePath(c.projDir));
+    if (st && Number(st.denied_until) > Date.now()) continue;        // 서버가 거절한 프로젝트 — 쉬는 중
     const local = await localFiles(c.projDir);
     const led = readLedger(c.projDir);
     const uns = unsyncedOf(local, led);
     if (!uns.length) continue;                                       // 원장 그대로 — 올릴 것이 없다(네트워크 0)
-    const stamp = stampOf(uns);
-    const st = readSibState(c.projDir);
-    if (st && st.stamp === stamp) continue;                          // 지난번에 끝까지 처리한 그대로
-    work.push({ ...c, local, led, uns, newest: uns.reduce((a, f) => (f.mtime > a ? f.mtime : a), 0) });
+    if (st && st.stamp && st.stamp === stampOf(uns) && Date.now() - Number(st.at || 0) < SIB_RECHECK_MS) continue;   // 지난번에 끝까지 처리한 그대로
+    const failedRecently = !!st && Date.now() - Number(st.fail_at || 0) < SIB_FAILED_MS;
+    work.push({ ...c, local, led, failedRecently, newest: uns.reduce((a, f) => (f.mtime > a ? f.mtime : a), 0) });
   }
-  // 올리기 — 방금 쓴 파일이 있는 폴더부터.
-  work.sort((a, b) => b.newest - a.newest);
+  writeJson(scanPath, { at: Date.now(), ms: Date.now() - t0 });
+  // 올리기 — 방금 쓴 파일이 있는 폴더부터. 일시 오류가 났던 폴더는 맨 뒤.
+  work.sort((a, b) => (a.failedRecently - b.failedRecently) || (b.newest - a.newest));
   for (const w of work.slice(0, SIB_MAX_FOLDERS)) {
     if (io.left() <= 0) break;
-    const res = await pushFolder(io, { projectId: w.projectId, projDir: w.projDir, local: w.local, lastPull: w.lastPull, allowDelete: false }).catch(() => null);
-    if (!res || !res.clean) continue;                                // 매니페스트 실패 · 다 못 올림 — 상태를 안 남긴다(다음 Stop 이 다시 본다)
-    // 남은 «원장과 다른 파일»(충돌 · 서버와 같은데 기준선만 없는 것)의 도장을 적는다 — 그대로인 동안은 다시 묻지 않는다.
-    writeSibState(w.projDir, { stamp: stampOf(unsyncedOf(w.local, w.led, res.uploaded)), at: Date.now() });
+    const lock = takeSibLock(w.projDir);
+    if (!lock) continue;                                             // 다른 세션이 이 폴더를 올리는 중
+    try {
+      const res = await pushFolder(io, { projectId: w.projectId, projDir: w.projDir, local: w.local, lastPull: w.lastPull, allowDelete: false })
+        .catch(() => ({ ok: false, status: 0 }));
+      if (!res.ok) {
+        if (io.left() <= 0) break;                                   // 예산 소진 — 그 폴더 탓이 아니다
+        if (res.status === 403 || res.status === 404 || res.status === 410) {
+          writeJson(sibStatePath(w.projDir), { denied_until: Date.now() + SIB_DENIED_MS, status: res.status, at: Date.now() });
+          continue;
+        }
+        writeJson(sibStatePath(w.projDir), { fail_at: Date.now(), status: res.status, at: Date.now() });
+        break;                                                       // 게이트웨이 · 인증 · 일시 오류 — 이번 Stop 은 여기서 멈춘다
+      }
+      // 다 못 올렸으면(실패 · 시간 부족) 상태를 안 남긴다 — 다음 Stop 이 바로 다시 본다(쉬어 가면 그동안 링크가 또 빈다).
+      if (!res.clean) continue;
+      // 남은 «원장과 다른 파일»(충돌 · 서버와 같은데 기준선만 없는 것)의 도장을 적는다 — 그대로인 동안은 다시 묻지 않는다.
+      writeJson(sibStatePath(w.projDir), { stamp: stampOf(unsyncedOf(w.local, w.led, res.uploaded)), at: Date.now() });
+    } finally { releaseSibLock(lock); }
   }
 }
 
@@ -634,7 +686,7 @@ async function pushSiblings(io, ownDir, ownId) {
 
     // 5)~10) — 다른 프로젝트 폴더(⑥)와 같은 판정이라 pushFolder 로 뺐다.
     const res = await pushFolder(io, { projectId, projDir, local, lastPull, allowDelete: true });
-    if (!res) return { projectId, projDir };   // 매니페스트를 못 받았다 — 종전처럼 상태를 안 남긴다(다음 판이 다시 본다)
+    if (!res.ok) return { projectId, projDir };   // 매니페스트를 못 받았다 — 종전처럼 상태를 안 남긴다(다음 판이 다시 본다)
 
     // 11) 선검사 상태 저장(#3787) — **완주했을 때만** pushed_clean 을 세운다. 남은 게 있는데 clean 으로 적으면
     //    다음 PostToolUse·Stop 이 "로컬 무변경" 으로 오판해 밀린 업로드를 영영 안 한다(워터마크 규율과 같은 자).
