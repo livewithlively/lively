@@ -336,7 +336,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let titleHuman = target.raw?.labelSource === 'human';
   let renaming = false;
   // 이름은 실행 상태와 무관한 세션 기록이다. 중단된 세션도 서버가 저장된 이름을 고친다.
-  const canRename = (): boolean => !!opts.onRename && target.owned;
+  const canRename = (): boolean => !!opts.onRename && target.owned && (target.live || !!target.raw?.restorable);
   const paneTitle = (): string => String(target.raw?.title || '').trim();
   // 이름을 안 주고 만든 세션은 이름이 **id 그대로**다(sessions.ts: label = cleanLabel(input.label) || id).
   //  그건 이름이 아니므로 화면에 쓰지 않는다 — 사이드바(side.ts isIdLabel)와 같은 판정.
