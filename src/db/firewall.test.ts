@@ -273,4 +273,92 @@ rejects("op 3-16: 한계 — 단항 |/ (제곱근) 는 여전히 거부", "selec
 // mysql dialect 는 중화 대상이 아니다 — 원래 파싱되던 건 그대로 되고(아래), 원래 안 되던 <=> 는 그대로 거부(vec 2-13).
 okMy("op 3-17: mysql dialect 무변경 — 원래 되던 비트연산 & 는 그대로 통과", "select a & b from t");
 
+// ══════════ 마스킹 규칙은 CTE·서브쿼리·UNION 분기 안의 별칭에도 같다 ══════════
+//  별칭은 그 별칭을 정의한 쿼리 범위(와 그 바깥)에서 해석된다 — 최상위 FROM 만 보면 안쪽 별칭이 비어 보인다.
+const acct = withMask("accounts.account_no");
+const bothDialects = (name: string, sql: string, pol: SourcePolicy = acct, re: RegExp = /최상위 SELECT 투영/): void => {
+  rejectsP(`${name} (pg)`, sql, pol, re);
+  rejMy(`${name} (mysql)`, sql, re, pol);
+};
+bothDialects("scope-1: CTE 안 별칭 + CASE·CAST 파생",
+  "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d");
+rejMy("scope-1b: CTE 안 별칭 + REGEXP·CAST SIGNED (mysql)",
+  "WITH d AS (SELECT CASE WHEN a.account_no REGEXP '^[0-9]+$' THEN CAST(a.account_no AS SIGNED) END AS x FROM accounts a) SELECT x FROM d",
+  /최상위 SELECT 투영/, acct);
+bothDialects("scope-2: CTE 가 별칭 수식 컬럼을 그대로 내보내도 차단",
+  "WITH c AS (SELECT a.account_no FROM accounts a) SELECT account_no FROM c");
+bothDialects("scope-3: FROM 서브쿼리(파생 테이블) 안 별칭",
+  "SELECT x FROM (SELECT substring(a.account_no, 1, 3) AS x FROM accounts a) t");
+bothDialects("scope-4: 스칼라 서브쿼리 안 별칭 집계",
+  "SELECT o.id, (SELECT max(a.account_no) FROM accounts a WHERE a.id = o.account_id) AS m FROM orders o");
+bothDialects("scope-5: EXISTS 서브쿼리 안 별칭 조건",
+  "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = o.account_id AND a.account_no LIKE '1%')");
+bothDialects("scope-6: IN 서브쿼리 안 별칭 조건",
+  "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')");
+bothDialects("scope-7: 서브쿼리 안 조인키",
+  "SELECT x.id FROM (SELECT o.id FROM orders o JOIN accounts a ON a.account_no = o.ref) x");
+bothDialects("scope-8: UNION 두 번째 분기의 별칭",
+  "SELECT id FROM orders UNION SELECT a.account_no FROM accounts a", acct, /집합연산|최상위 SELECT 투영/);
+bothDialects("scope-9: 이어지는 CTE(앞 CTE 를 뒤 CTE 가 가공)",
+  "WITH c1 AS (SELECT a.account_no AS v FROM accounts a), c2 AS (SELECT v FROM c1) SELECT v FROM c2");
+rejectsP("scope-10: 중첩 CTE (pg)",
+  "WITH c1 AS (WITH c2 AS (SELECT a.account_no AS v FROM accounts a) SELECT v FROM c2) SELECT v FROM c1", acct, /최상위 SELECT 투영/);
+rejMy("scope-10: 중첩 CTE (mysql)",
+  "WITH c1 AS (WITH c2 AS (SELECT a.account_no AS v FROM accounts a) SELECT v FROM c2) SELECT v FROM c1", /최상위 SELECT 투영/, acct);
+bothDialects("scope-11: 재귀 CTE 앵커의 별칭",
+  "WITH RECURSIVE r AS (SELECT a.account_no AS v, 1 AS n FROM accounts a UNION ALL SELECT v, n + 1 FROM r WHERE n < 3) SELECT v FROM r",
+  acct, /집합연산|최상위 SELECT 투영/);
+bothDialects("scope-12: 섀도잉 — 바깥 a=무마스킹 테이블, 안쪽 a=마스킹 테이블",
+  "SELECT a.id FROM orders a WHERE a.id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')");
+bothDialects("scope-13: 바깥 별칭을 안쪽에서 상관 참조",
+  "SELECT o.id FROM accounts a JOIN orders o ON o.account_id = a.id WHERE EXISTS (SELECT 1 FROM orders o2 WHERE o2.ref = a.account_no)");
+bothDialects("scope-14: JOIN USING 조인키", "SELECT a.id FROM accounts a JOIN orders o USING (account_no)");
+bothDialects("scope-15: 최상위 투영 별칭으로 정렬", "SELECT account_no AS n FROM accounts ORDER BY n");
+rejMy("scope-16: 최상위 투영 별칭으로 HAVING 필터 (mysql)",
+  "SELECT account_no AS n FROM accounts HAVING n LIKE '1%'", /최상위 SELECT 투영/, acct);
+bothDialects("scope-17: 위치 번호로 마스킹 컬럼 정렬", "SELECT id, account_no FROM accounts ORDER BY 2");
+bothDialects("scope-18: 위치 번호로 마스킹 컬럼 묶기", "SELECT account_no, count(*) AS c FROM accounts GROUP BY 1");
+bothDialects("scope-19: 마스킹 테이블 * 와 위치 번호 정렬", "SELECT * FROM accounts ORDER BY 2", acct, /위치 번호|최상위 SELECT 투영/);
+
+// pg 는 미수식 테이블 이름·별칭을 행 전체 값으로 읽는다 — 출처가 없어 결과 마스킹이 못 가린다.
+for (const [n, sql] of [
+  ["별칭 투영", "SELECT a FROM accounts a"],
+  ["테이블 이름 투영", "SELECT accounts FROM accounts"],
+  ["to_json", "SELECT to_json(a) FROM accounts a"],
+  ["텍스트 캐스트 조건", "SELECT id FROM accounts a WHERE a::text LIKE '%12%'"],
+  ["서브쿼리 안", "SELECT id FROM accounts a WHERE (SELECT a) IS NOT NULL"],
+] as const) rejectsP(`scope-row-${n}: 행 전체 참조 거부`, sql, acct, /행 전체 참조/);
+okMy("scope-row-mysql: mysql 은 행 전체 참조 문법이 없어 테이블명과 같은 컬럼은 그대로", "SELECT status FROM status", withMask("status.secret"));
+// pg 파서는 NATURAL JOIN 의 조인키를 AST 에 남기지 않는다(NATURAL 을 별칭으로 읽음) — 마스킹 소스에선 거부.
+rejectsP("scope-natural: NATURAL JOIN 거부", "SELECT t.account_no FROM accounts NATURAL JOIN (SELECT '1' AS account_no) t", acct, /NATURAL JOIN/);
+okP("scope-alias-sub: 서브쿼리 안 동명 참조는 출력 별칭이 아니다",
+  "SELECT account_no AS n, (SELECT max(n) FROM other) AS m FROM accounts", acct);
+
+// 마스킹 없는 컬럼은 범위와 무관하게 계속 허용된다(과잉 차단 회귀 방지)
+okP("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼",
+  "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼 (mysql)",
+  "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct);
+okP("scope-ok-2: 서브쿼리·EXISTS 의 무마스킹 컬럼",
+  "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = o.account_id AND a.status = 'x')", acct);
+okP("scope-ok-3: UNION 분기의 무마스킹 컬럼", "SELECT a.id FROM accounts a UNION SELECT o.id FROM orders o", acct);
+okP("scope-ok-4: 무마스킹 테이블의 동명 컬럼은 서브쿼리 안에서도 통과",
+  "SELECT a.id FROM orders a WHERE a.id IN (SELECT b.order_id FROM orders b WHERE b.account_no = 'x')", acct);
+okP("scope-ok-5: 최상위 투영은 서브쿼리가 있어도 그대로 허용 + minMasked",
+  "SELECT a.account_no FROM accounts a WHERE a.id IN (SELECT o.account_id FROM orders o WHERE o.status = 'x')", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("scope-ok-6: 무마스킹 컬럼 위치 번호 정렬", "SELECT id, account_no FROM accounts ORDER BY 1", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("scope-ok-7: 무마스킹 컬럼 JOIN USING", "SELECT a.id FROM accounts a JOIN orders o USING (id)", acct);
+okP("scope-ok-8: 파생 테이블 별칭 수식 투영(무마스킹)", "SELECT t.k FROM (SELECT a.id AS k FROM accounts a) t", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+
+// 언마스크 grant 보유자 — getSourcePolicy 가 그 컬럼을 마스킹 집합에서 빼서 넘긴다(tools/db.ts). 같은 쿼리가 통과해야 한다.
+const granted = withMask("users.phone"); // accounts.account_no 는 grant 로 빠짐, 다른 테이블 마스킹만 남은 정책
+okP("scope-grant-1: grant 보유자는 CTE 안 파생도 통과",
+  "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d", granted);
+okMy("scope-grant-2: grant 보유자는 서브쿼리 안 조건도 통과 (mysql)",
+  "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')", granted);
+
 console.log(`\n${pass} checks passed`);
