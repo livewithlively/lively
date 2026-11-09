@@ -679,7 +679,7 @@ export async function bootV2(): Promise<void> {
       const k = routeKey(tab.route);
       if (!k.startsWith('s:')) return false;
       const s2 = findSess(k.slice(2));
-      return !!s2 && s2.owned;
+      return !!s2 && s2.owned && (s2.live || !!s2.raw?.restorable);
     },
     onRename: async (tab, name) => {
       const id = routeKey(tab.route).slice(2);
