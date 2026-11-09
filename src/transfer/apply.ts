@@ -150,7 +150,7 @@ export interface ApplyResult {
 
 async function snapshot(name: string): Promise<KnowledgeSnapshot | null> {
   const r = await one(itemsPool,
-    `SELECT k.name, k.title, k.body_md, k.type, k.summary, k.is_folder, k.parent_name, k.sort, k.searchable, k.supersedes, k.provenance, k.fields,
+    `SELECT k.name, k.title, k.body_md, k.type, k.summary, k.is_folder, k.parent_name, k.sort, true AS searchable, k.supersedes, k.provenance, k.fields,
        (SELECT c.key FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
          WHERE kc.name = k.name AND kc.state <> 'rejected' ORDER BY (kc.state = 'confirmed') DESC, kc.category_id LIMIT 1) AS category
      FROM knowledge k WHERE k.name = $1`, [name]) as Record<string, unknown> | undefined;
@@ -386,7 +386,7 @@ export async function undoImport(batchId: number, ctx: WriteCtx): Promise<{ batc
           const b = r.before;
           await upsertKnowledge({
             name: b.name, title: b.title ?? undefined, body_md: b.body_md, type: b.type ?? undefined, category: b.category ?? undefined,
-            provenance: b.provenance, summary: b.summary, searchable: b.searchable, is_folder: b.is_folder, parent_name: b.parent_name,
+            provenance: b.provenance, summary: b.summary, is_folder: b.is_folder, parent_name: b.parent_name,
             sort: b.sort, supersedes: b.supersedes ?? undefined,
           }, ctx);
           const cur = await snapshot(b.name);

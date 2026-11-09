@@ -154,7 +154,7 @@ async function fetchKnowledge(names: string[]): Promise<KRow[]> {
   if (!names.length) return [];
   return q(itemsPool,
     `SELECT k.name, k.title, k.body_md, k.type, k.lifecycle, k.provenance, k.injection, k.confidence, k.summary,
-            k.is_wiki, k.searchable, k.is_folder, k.parent_name, k.sort, k.visibility, k.supersedes, k.fields,
+            k.is_wiki, true AS searchable, k.is_folder, k.parent_name, k.sort, k.visibility, k.supersedes, k.fields,
             k.external_system, k.external_url, k.updated_at, k.version,
             (SELECT c.key FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
               WHERE kc.name = k.name AND kc.state <> 'rejected'
