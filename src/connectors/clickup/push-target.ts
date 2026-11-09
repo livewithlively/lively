@@ -55,6 +55,14 @@ export function isParentNotInList(e: unknown): boolean {
   return e instanceof Error && /^ClickUp 400 /.test(e.message) && /ITEM_137/.test(e.message);
 }
 
+/** clickupFetch 가 던진 오류가 «subtask 아래에 subtask 를 만들 수 없다»(400 ITEM_002)인가. 상태코드 자리와 ECODE 를 함께 본다.
+ *  워크스페이스(또는 스페이스)에 중첩 subtask 가 꺼져 있으면 라이블리 subtask(=ClickUp 중첩 subtask)의 create 가 받는다.
+ *  그 항목은 설정이 바뀌기 전엔 몇 번을 보내도 같은 답을 받는다 — 거절로 세면 한 번에 여러 건이 들어올 때 일괄 거절로
+ *  올라가 연속 실패 끝에 push-clickup 크론이 자동 정지한다. */
+export function isNestedSubtaskForbidden(e: unknown): boolean {
+  return e instanceof Error && /^ClickUp 400 /.test(e.message) && /\bITEM_002\b/.test(e.message);
+}
+
 export type ParentListLookup = { kind: "list"; listId: string } | { kind: "gone" };
 
 /**

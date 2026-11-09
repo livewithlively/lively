@@ -11,7 +11,7 @@ import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
 import { getMember } from "../org/store/members.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { statusesForList, decidePushStatus } from "./clickup/push-status.js";
-import { createListFor, needsAncestorChain, statusListFor, createUnderParent, isParentNotInList } from "./clickup/push-target.js";
+import { createListFor, needsAncestorChain, statusListFor, createUnderParent, isParentNotInList, isNestedSubtaskForbidden } from "./clickup/push-target.js";
 import type { ClickUpStatus, ClickUpList, ClickUpSpace } from "./clickup/types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { logger } from "../log.js";
@@ -63,8 +63,8 @@ function mkBody(p: ProjRow, status: string | undefined): Record<string, unknown>
 //  아예 안 실었거나 빼고 재시도한 경우 ClickUp 태스크는 열린 채인데 «닫았다»는 코멘트만 붙으면 침묵보다 나쁘다.
 async function createSafe(listId: string, body: Record<string, unknown>) {
   try { return { task: await createTask(listId, body), statusApplied: body.status != null }; }
-  //  ITEM_137(부모 리스트 불일치)은 status 와 무관하다 — status 를 빼고 다시 보내도 같은 400 이 나므로 바로 던진다(createUnderParent 가 처리).
-  catch (e) { if (isParentNotInList(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
+  //  ITEM_137(부모 리스트 불일치)·ITEM_002(중첩 subtask 금지)는 status 와 무관하다 — status 를 빼고 다시 보내도 같은 400 이 나므로 바로 던진다.
+  catch (e) { if (isParentNotInList(e) || isNestedSubtaskForbidden(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "create status 빼고 재시도"); return { task: await createTask(listId, b), statusApplied: false }; } throw e; }
 }
 async function updateSafe(taskId: string, body: Record<string, unknown>) {
   try { await updateTask(taskId, body); return { statusApplied: body.status != null }; }
@@ -445,6 +445,14 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       //  치유 재시도의 상태셋 로드 일시 실패는 정상 경로(statusLoadFailed: markErr + deferred)와 같이 미룬다 — 실행 실패가
       //   아니다(bodyForList 주석). 분류보다 먼저 빠져야 시스템성 failed 로 세지 않는다.
       if (e instanceof StatusLoadDeferred) { deferred++; continue; }
+      //  중첩 subtask 금지는 그 항목의 구조가 저쪽 설정에 안 맞는 것이다 — 재시도로 풀리지 않고, 거절로 세면 여러 건이 한 번에
+      //   들어올 때 일괄 거절(설정 문제)로 올라가 크론이 선다(isNestedSubtaskForbidden 머리말). 분류보다 먼저 닫는다.
+      //   항목은 라이블리에만 남고, 저쪽 설정이 바뀐 뒤 다시 편집하면 큐에 다시 들어와 그때 만들어진다.
+      if (isNestedSubtaskForbidden(e)) {
+        await markDone(ob.id); skipped++;
+        logger.warn({ outbox: ob.id, entity: ob.entity_id }, "ClickUp 이 중첩 subtask 를 받지 않아 이 항목의 반출을 닫았다(라이블리에만 남는다 — 저쪽에서 중첩 subtask 를 켠 뒤 다시 편집하면 만들어진다)");
+        continue;
+      }
       const kind = classifyPushFailure(e);
       if (kind === "systemic") { failed++; logger.warn({ err: e, outbox: ob.id, entity: ob.entity_id }, "outbox 푸시 실패(다음 틱 재시도)"); continue; }
       rejected++; rejectedIds.push(ob.id);
