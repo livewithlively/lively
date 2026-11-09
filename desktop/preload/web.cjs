@@ -28,7 +28,10 @@ const TITLEBAR_H = 36;                 // web-shell.TITLEBAR_HEIGHT 와 같은 �
 const boot = ipcRenderer.sendSync("lively-web:boot") || {};
 
 try {
-  if (boot.origin && window.location.origin === boot.origin && boot.token) {
+  if (boot.origin && window.location.origin === boot.origin && boot.accountMode) {
+    // 계정 입장으로 만든 웹 세션을 쓴다. 예전에 이 출처에 주입한 CLI 토큰이 남으면 다른 계정으로 보일 수 있다.
+    window.localStorage.removeItem(TOKEN_KEY);
+  } else if (boot.origin && window.location.origin === boot.origin && boot.token) {
     // 있으면 덮는다 — 다시 로그인해 토큰이 바뀌었을 때 옛 토큰이 남아 401 → 게이트로 튕기는 걸 막는다.
     if (window.localStorage.getItem(TOKEN_KEY) !== boot.token) window.localStorage.setItem(TOKEN_KEY, boot.token);
   }
