@@ -187,7 +187,7 @@ async function renderColumnMasks(cell, panel, source, table) {
   let ov;
   try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source) + '&table=' + encodeURIComponent(table)); }
   catch (e) { cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 로드 실패: ' + e.message })); return; }
-  const STYLES = [['', '(마스킹 없음)'], ['full', 'full — 전체 ***'], ['partial', 'partial — 앞1·뒤1'], ['email', 'email — 로컬부 가림'], ['hash', 'hash — sha256'], ['null', 'null — 널']];
+  const STYLES = [['', '(마스킹 없음)'], ['full', 'full — 전체 ***'], ['partial', 'partial — 앞1·뒤1'], ['email', 'email — 로컬부 가림'], ['hash', 'hash — sha256'], ['null', 'null — 널'], ['age', 'age — 만나이(생년월일, 월 첫날 기준)']];
   const ct = el('table', { class: 'fields-table', style: 'margin:6px 0 0 12px' });
   for (const c of (ov.columns || [])) {
     const box = el('select', {});

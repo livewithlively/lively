@@ -1,7 +1,7 @@
 // 컬럼 마스킹 단위 체크(#186) — 스타일 변환 + 출처기반 대상선정 + 행 적용(순수).
 // 실행: npm run build && node dist/db/mask.test.js
 import assert from "node:assert/strict";
-import { maskValue, planMaskTargets, applyRowMasking } from "./mask.js";
+import { maskValue, planMaskTargets, applyRowMasking, ageAtMonthStart } from "./mask.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -22,6 +22,27 @@ t("hash → sha256: 접두 + 64hex, 결정론적", () => {
   assert.notEqual(maskValue("other", "hash"), h1);
 });
 t("숫자 입력 full → ***", () => assert.equal(maskValue(12345, "full"), "***"));
+
+// ── age — 생년월일 → 출생월·기준월을 각각 1일로 묶은 만나이(정수). 같은 달 출생자는 일과 무관하게 같은 값이어야 한다. ──
+const MAR20 = new Date(2024, 2, 20);
+t("age: 기준월이 출생월이면 그 달 1일에 나이가 오른다", () => assert.equal(ageAtMonthStart("1990-03-15", MAR20), 34));
+t("age: 기준월 이전 출생월은 지남", () => assert.equal(ageAtMonthStart("1990-02-28", MAR20), 34));
+t("age: 기준월 이후 출생월은 아직", () => assert.equal(ageAtMonthStart("1990-04-01", MAR20), 33));
+t("age: 같은 달 출생자는 일(1일·말일)과 무관하게 같은 값", () => {
+  for (const b of ["1990-03-01", "1990-03-02", "1990-03-31"]) assert.equal(ageAtMonthStart(b, MAR20), 34, b);
+});
+t("age: YYYYMMDD 문자열", () => assert.equal(ageAtMonthStart("19900415", MAR20), 33));
+t("age: 시각이 붙은 문자열", () => assert.equal(ageAtMonthStart("1990-04-15 10:00:00", MAR20), 33));
+t("age: Date 객체(드라이버가 DATE 를 Date 로 줄 때)", () => assert.equal(ageAtMonthStart(new Date(1990, 3, 15), MAR20), 33));
+t("age: 파싱 불가·없는 날짜·미래 생일은 null", () => {
+  for (const bad of ["abc", "", "1990-13-01", "1990-02-30", "2024-04-01", new Date(Number.NaN)]) assert.equal(ageAtMonthStart(bad, MAR20), null, String(bad));
+});
+t("age: maskValue 는 정수 나이를 돌려주고 원문을 내보내지 않는다", () => {
+  const v = maskValue("1990-03-15", "age");
+  assert.equal(typeof v, "number");
+  assert.equal(maskValue("garbage", "age"), null);
+  assert.equal(maskValue(null, "age"), null);
+});
 
 // ── planMaskTargets — 출처(srcKey) 매칭만 대상, 무출처(null)·미매칭 제외 ──
 //  srcKey: pg `${tableID}:${columnID}` / mysql `${orgTable}.${orgName}`(lower) — 엔진 중립(#715).

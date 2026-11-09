@@ -4,7 +4,8 @@
 //   그 경우는 db/policy.ts 의 refreshPolicy 가 fail-closed 로 거부한다(assertEnterpriseForCompliance).
 import { ee } from "../enterprise/registry.js";
 
-export type MaskStyle = "full" | "partial" | "email" | "hash" | "null";
+// age = 생년월일 원본 대신 만나이 정수(EE mask.ts) — 게이트1 은 이 스타일 컬럼에 «월 첫날 기준 만나이» 파생만 허용한다(firewall.ts).
+export type MaskStyle = "full" | "partial" | "email" | "hash" | "null" | "age";
 
 export interface FieldMeta {
   name: string;

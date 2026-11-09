@@ -222,7 +222,7 @@ export const dbSourcesCapabilities: Capability[] = [
       note: z.string().optional().describe("메모"),
     }),
   restOnly("org_db_column_mask_set", "컬럼 마스킹 정책 저장/삭제",
-    "db_query 소스의 컬럼 마스킹(full|partial|email|hash|null)을 저장한다. remove=true 면 마스킹 해제. 게이트웨이가 결정론적으로 집행(고객 DB 무수정). 즉시 반영.",
+    "db_query 소스의 컬럼 마스킹(full|partial|email|hash|null|age)을 저장한다. age 는 생년월일 컬럼용 — 결과는 출생월·이번 달을 각각 1일로 묶은 만나이 정수이고, SQL 에서는 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <월 첫날 기준일>) 파생만 허용된다(MySQL). remove=true 면 마스킹 해제. 게이트웨이가 결정론적으로 집행(고객 DB 무수정). 즉시 반영.",
     [{ method: "POST", paths: ["/api/ui/org/db-source/column-mask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const source = slug(input.source, "source");
@@ -234,8 +234,8 @@ export const dbSourcesCapabilities: Capability[] = [
         await removeColumnMask(source, table, column, actorOf(user));
       } else {
         const style = str(input.style, "style", 12);
-        if (!["full", "partial", "email", "hash", "null"].includes(style)) throw new HttpError(400, "style 는 full|partial|email|hash|null");
-        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null", note: input.note == null ? undefined : str(input.note, "note", 500) }, actorOf(user));
+        if (!["full", "partial", "email", "hash", "null", "age"].includes(style)) throw new HttpError(400, "style 는 full|partial|email|hash|null|age");
+        await upsertColumnMask({ source, table_name: table, column_name: column, style: style as "full" | "partial" | "email" | "hash" | "null" | "age", note: input.note == null ? undefined : str(input.note, "note", 500) }, actorOf(user));
       }
       await refreshPolicy(true);
       return { ok: true };
@@ -243,7 +243,7 @@ export const dbSourcesCapabilities: Capability[] = [
       source: z.string().describe("DB 소스 이름"),
       table: z.string().describe("테이블 이름. 게이트웨이 내부 테이블은 항상 차단(시스템)이라 마스킹 대상이 아니다"),
       column: z.string().describe("컬럼 이름"),
-      style: z.enum(["full", "partial", "email", "hash", "null"]).optional().describe("마스킹 방식. remove=true 가 아니면 필수. 게이트웨이가 결정론적으로 집행(고객 DB 무수정)"),
+      style: z.enum(["full", "partial", "email", "hash", "null", "age"]).optional().describe("마스킹 방식. remove=true 가 아니면 필수. 게이트웨이가 결정론적으로 집행(고객 DB 무수정)"),
       remove: z.boolean().optional().describe("true=마스킹 해제"),
       note: z.string().optional().describe("메모"),
     }),

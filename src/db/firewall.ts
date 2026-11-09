@@ -153,6 +153,7 @@ export interface SourcePolicy {
   maskedCols: Set<string>; // key: `${lower(table)}.${lower(col)}`
   maskedColNames: Set<string>; // lower(col) — 미수식 참조 보수적 매칭용
   hasMasks: boolean;
+  ageCols?: Set<string>; // maskedCols 중 style=age(생년월일) — 월 첫날 기준 만나이 파생만 허용(ageDerivationRef)
 }
 // 게이트1 산출 — 게이트2(tools/db.ts) fail-closed 검증에 쓰는 '마스킹 출력 기대치'.
 export interface QueryPlan {
@@ -181,6 +182,67 @@ function refTableName(node: Record<string, unknown>): string | null {
   if (typeof t === "object" && typeof (t as { value?: unknown }).value === "string") return (t as { value: string }).value;
   return null;
 }
+// ── age 스타일 — 생년월일 컬럼에 허용하는 유일한 파생:
+//    TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <월 첫날 기준일>)
+//  결과가 만나이 정수뿐이라 어디에 써도(투영·조건·정렬) 드러나는 정보가 같다. 양쪽을 월 첫날로 묶는 이유:
+//  기준일을 하루씩 바꿔 가며 조회하면 나이가 바뀌는 날 = 생일이 드러난다. 기준일만 묶으면 «1일생인가» 1비트가 남아
+//  생일 쪽도 묶는다 — 드러나는 건 출생 연·월까지다. 결과 마스킹(EE mask.ts ageAtMonthStart)과 같은 산식이다.
+//  월 첫날로 인정하는 꼴은 'YYYY-MM-01' 리터럴과 DATE_FORMAT(<식>, '%Y-%m-01'|'%Y-01-01') 뿐이다 — 값이 늘 1일이라
+//  기준일 쪽 <식> 이 무엇이든 안전하다(<식> 안의 마스킹 컬럼은 일반 규칙으로 따로 막힌다).
+//  함수 이름은 수식 없는 것만 본다 — `s.timestampdiff(...)` 는 MySQL 에서 같은 이름의 저장 함수 호출이다.
+//  단위가 origin 노드(YEAR 키워드)로 오는 건 mysql 파서뿐이다 — pg 에는 TIMESTAMPDIFF 가 없어 그대로 막힌다.
+const MONTH_START_LITERAL = /^\d{4}-\d{2}-01$/;
+const MONTH_START_FORMAT = /^%Y-(%m|\d{2})-01$/;
+function fnName(node: Record<string, unknown>): string | null {
+  if (node.type !== "function" || node.name === null || typeof node.name !== "object") return null;
+  const { name: parts, schema } = node.name as { name?: unknown; schema?: unknown };
+  if (schema != null || !Array.isArray(parts) || parts.length !== 1) return null;
+  const v = (parts[0] as { value?: unknown } | null)?.value;
+  return typeof v === "string" ? v.toLowerCase() : null;
+}
+function fnArgs(node: Record<string, unknown>): Record<string, unknown>[] {
+  const a = (node.args as { value?: unknown } | null)?.value;
+  return Array.isArray(a) ? (a as Record<string, unknown>[]) : [];
+}
+function isStringLit(node: Record<string, unknown> | undefined, re: RegExp): boolean {
+  return !!node && (node.type === "single_quote_string" || node.type === "double_quote_string" || node.type === "string")
+    && typeof node.value === "string" && re.test(node.value);
+}
+// DATE_FORMAT(<식>, '%Y-%m-01'|'%Y-01-01') 이면 <식> 노드를, 아니면 null.
+function monthFloorInner(node: Record<string, unknown> | undefined): Record<string, unknown> | null {
+  if (!node || fnName(node) !== "date_format") return null;
+  const args = fnArgs(node);
+  return args.length === 2 && isStringLit(args[1], MONTH_START_FORMAT) ? args[0] : null;
+}
+function isMonthStart(node: Record<string, unknown> | undefined): boolean {
+  return isStringLit(node, MONTH_START_LITERAL) || monthFloorInner(node) !== null;
+}
+// 만나이 파생이면 그 생년월일 column_ref 노드를, 아니면 null.
+function ageDerivationRef(node: Record<string, unknown>): Record<string, unknown> | null {
+  if (fnName(node) !== "timestampdiff") return null;
+  const args = fnArgs(node);
+  if (args.length !== 3) return null;
+  const unit = args[0];
+  if (unit?.type !== "origin" || typeof unit.value !== "string" || unit.value.toUpperCase() !== "YEAR") return null;
+  const birth = monthFloorInner(args[1]);
+  if (birth?.type !== "column_ref" || !isMonthStart(args[2])) return null;
+  return birth;
+}
+function collectAgeDerivationRefs(root: unknown): Set<unknown> {
+  const out = new Set<unknown>();
+  const stack: unknown[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node === null || typeof node !== "object") continue;
+    if (Array.isArray(node)) { for (const el of node) stack.push(el); continue; }
+    const n = node as Record<string, unknown>;
+    const ref = ageDerivationRef(n);
+    if (ref) out.add(ref);
+    for (const v of Object.values(n)) if (v !== null && typeof v === "object") stack.push(v);
+  }
+  return out;
+}
+
 // 별칭 바인딩 — 수식 이름(lower) → 그 이름이 가리킬 수 있는 실제 테이블들(lower). 파생 테이블(FROM 서브쿼리)
 //  별칭은 빈 집합이다(그 컬럼은 안쪽 SELECT 의 출력이고, 안쪽의 원본 참조는 그 자리에서 따로 판정된다).
 type AliasBindings = Map<string, Set<string>>;
@@ -334,6 +396,24 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   // JOIN … USING(col) 의 조인키는 column_ref 가 아니라 이름 목록으로 온다 — 이름으로 보수 판정.
   for (const u of scan.usingCols) if (relevantNames.has(u)) throw new Error(blockedMsg(u));
 
+  // age 컬럼 판정 — isSensitive 와 같은 별칭 해석(그 참조에서 보이는 바인딩). 후보 테이블이 여럿이면 전부 age 여야 한다
+  //  (하나라도 다른 스타일이면 아님 — 넓게 잡은 바인딩이 허용 쪽으로 새지 않게). 미수식은 이 쿼리 테이블의 같은 이름 마스킹 컬럼 전부로 본다.
+  const ageCols = policy.ageCols ?? new Set<string>();
+  const isAgeCol = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean => {
+    if (ageCols.size === 0) return false;
+    const col = cn.toLowerCase();
+    const tr = refTableName(ref);
+    const bound = tr ? scope.get(tr.toLowerCase()) : undefined;
+    const keys = bound
+      ? [...bound].map((t) => `${t}.${col}`).filter((k) => policy.maskedCols.has(k))
+      : [...policy.maskedCols].filter((k) => k.endsWith(`.${col}`) && tableNames.includes(k.slice(0, k.indexOf("."))));
+    return keys.length > 0 && keys.every((k) => ageCols.has(k));
+  };
+  const ageDerived = ageCols.size > 0 ? collectAgeDerivationRefs(stmt) : new Set<unknown>();
+  const allowedAgeRef = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean =>
+    ageDerived.has(ref) && isAgeCol(ref, cn, scope);
+  const AGE_HINT = " — 생년월일(age) 컬럼은 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <기준일>) 만나이로만 쓸 수 있고, 기준일은 'YYYY-MM-01' 또는 DATE_FORMAT(<날짜>, '%Y-%m-01') 처럼 월 첫날이어야 합니다";
+
   // 허용 위치 = 최상위 투영의 bare column_ref / star (노드 아이덴티티로 판정)
   const allowedRef = new Set<unknown>();
   const allowedStar = new Set<unknown>();
@@ -351,7 +431,7 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
     for (const { ref, scope } of scan.refs) {
       const cn = refColName(ref);
       if (cn && cn !== "*" && isWholeRow(ref, cn, scope)) throw new Error(wholeRowMsg(cn));
-      if (cn && cn !== "*" && isSensitive(ref, cn, scope)) throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 집합연산(UNION 등)에 사용할 수 없습니다 — 단일 SELECT 로 직접 조회하세요`);
+      if (cn && cn !== "*" && isSensitive(ref, cn, scope) && !allowedAgeRef(ref, cn, scope)) throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 집합연산(UNION 등)에 사용할 수 없습니다 — 단일 SELECT 로 직접 조회하세요`);
       if (cn === "*" && starCovers(ref, scope).some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
     }
     return EMPTY_PLAN;
@@ -383,7 +463,10 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
     if (allowedRef.has(ref)) continue;
     // 출력 별칭은 최상위 SELECT 의 ORDER BY·GROUP BY·HAVING 에서만 보인다 — 서브쿼리 안 동명 참조는 별칭이 아니다.
     const viaAlias = scope === scan.rootScope && refTableName(ref) === null && maskedOutputAliases.has(cn.toLowerCase());
-    if (viaAlias || isSensitive(ref, cn, scope)) throw new Error(blockedMsg(cn));
+    if (viaAlias) throw new Error(blockedMsg(cn));
+    if (isSensitive(ref, cn, scope) && !allowedAgeRef(ref, cn, scope)) {
+      throw new Error(blockedMsg(cn) + (isAgeCol(ref, cn, scope) ? AGE_HINT : ""));
+    }
   }
 
   let minMaskedOutputs = 0;
