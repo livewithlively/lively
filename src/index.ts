@@ -32,6 +32,7 @@ import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
 import { registerNasDownloadRoute } from "./net/nas/nas-download-route.js";
+import { registerTransferRoutes } from "./transfer/routes.js";
 import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
 import { getProject as v6GetProject, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
@@ -187,6 +188,12 @@ app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
 app.use("/api/ui/browser/host/reply",
   (req, res, next) => { if (/^Bearer\s+\S/i.test(String(req.headers.authorization || ""))) next(); else res.status(401).json({ error: "토큰 머리글(Authorization: Bearer)로만 답할 수 있습니다" }); },
   express.json({ limit: "4mb" }));
+//  #5458 워크스페이스 간 옮기기 — 내보내기(파일)·내보내기 미리보기는 하나씩 고른 지식 이름 목록(최대 2만 개)을 본문에 싣는다.
+//   전역 1MB 보다 먼저 4MB 로 파싱한다(위 apps/install 과 같은 이유 — 먼저 파싱한 쪽이 이긴다). 경로 접두라 /export/preview 도 덮는다.
+//   자격(토큰 머리글·세션 쿠키)이 없는 요청은 **읽기 전에** 돌려보낸다(익명 요청이 큰 본문을 파싱시키지 못하게 — browser/host/reply 와 같은 문).
+app.use("/api/ui/transfer/export",
+  (req, res, next) => { if (/^Bearer\s+\S/i.test(String(req.headers.authorization || "")) || req.headers.cookie) next(); else res.status(401).json({ error: "unauthenticated" }); },
+  express.json({ limit: "4mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();
@@ -335,6 +342,8 @@ registerProjectV6Routes(app, verifier, {
 registerSessionLogRoutes(app, verifier);
 // NAS 파일 내려받기 — 브라우저 세션 쿠키만 받는다(nas_find 링크의 본문은 사람만 연다).
 registerNasDownloadRoute(app);
+// 워크스페이스 간 옮기기(#5458) — 파일이 오가는 두 경로(묶음 내려받기 · 올리기). 관리자만. JSON 표면은 capabilities/transfer.ts.
+registerTransferRoutes(app, verifier);
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭의 "CSV 다운로드". capability(res.json 일괄)로는 담을 수
 //  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 ee/audit/export-routes.ts 머리주석).
 //  ★ #1601 로 Enterprise 로 갔다 — 화면 집계(3탭)는 코어에 그대로 있고, 증빙 반출만 EE 다.
