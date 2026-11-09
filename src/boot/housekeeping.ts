@@ -353,9 +353,6 @@ function startBackgroundSweeps(): void {
   setInterval(() => { void perTenant("oauth-reap", () => reapOAuth()); }, 600_000).unref();
   // SSO 로그아웃(#1356) — 만료·회수된 웹 세션에 남은 IdP id_token(암호문)을 지운다. 30일 만료 단위라 1시간 주기로 충분.
   setInterval(() => { void perTenant("web-session-token-reap", () => reapEndedSessionTokens()); }, 60 * 60_000).unref();
-  // #5458 워크스페이스 간 옮기기 — 적용하지 않고 둔 미리보기의 파일 바이트를 하루 뒤 비우고, 멈춘 적용·되돌리기를 «일부만 들임» 으로 내린다.
-  //  옮기기 화면·API 를 열 때도 돌지만, 아무도 다시 열지 않으면 올린 파일이 DB 에 남는다 — 그래서 주기로도 돈다.
-  setInterval(() => { void perTenant("transfer-housekeeping", () => import("../transfer/apply.js").then((m) => m.transferHousekeeping())); }, 60 * 60_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
   //  ⚠ 설정도 **그 워크스페이스 안에서** 읽어야 한다 — 보존기간은 워크스페이스마다 다르다.
