@@ -60,6 +60,15 @@ export const IPC_WEB = {
   UPDATE_STATE: "lively-web:update-state",
   UPDATE_APPLY: "lively-web:update-apply",
   UPDATE: "lively-web:update",
+  // 웹 칸 페이지가 **새 탭**(target=_blank · 기능 없는 window.open)으로 연 주소를 앱 안의 새 웹 칸으로 (원준 2026-11-10).
+  //   SURFACE_TABS          웹 → 메인, true/false — «새 탭을 내가 받겠다»(구독)·«그만»(해제). 받겠다는 화면에만 보낸다 —
+  //                         구 웹 UI 는 이 길을 몰라서, 보냈다간 링크가 아무 데도 안 열린다(그땐 종전대로 시스템 브라우저).
+  //   SURFACE_OPEN_TAB      메인 → 웹, { id, guest, url } — guest = 링크를 누른 webview 게스트의 webContents id
+  //   SURFACE_OPEN_TAB_ACK  웹 → 메인, { id, ok } — 못 받았으면(그 게스트가 탭 대장에 없다 등) 메인이 시스템 브라우저로 넘긴다
+  //  ⚠ 웹이 고를 수 있는 건 «받는다/못 받았다» 뿐이다 — 주소는 메인이 정해 보내고, 웹은 http(s) 만 싣는다.
+  SURFACE_TABS: "lively-web:surface-tabs",
+  SURFACE_OPEN_TAB: "lively-web:surface-open-tab",
+  SURFACE_OPEN_TAB_ACK: "lively-web:surface-open-tab-ack",
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */

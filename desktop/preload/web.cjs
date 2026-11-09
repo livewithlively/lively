@@ -69,6 +69,28 @@ contextBridge.exposeInMainWorld("livelyDesktop", {
     install: () => ipcRenderer.invoke("lively-web:ext-install"),
     remove: (id) => ipcRenderer.invoke("lively-web:ext-remove", { id: String(id || "") }),
   } : null,
+  // 새 탭 → 앱 안의 새 웹 칸 (원준 2026-11-10 · main.mjs openSurfaceTab). 웹 칸 페이지가 «새 탭»으로 연 주소를
+  //  메인이 넘겨 주면 웹이 같은 세션 곁칸에 웹 칸을 하나 더 연다. onOpen 이 곧 «받겠다» 는 신호다(구독할 때 메인에 알린다) —
+  //  구 웹은 구독하지 않으므로 메인은 종전대로 시스템 브라우저로 보낸다. 해제 함수를 돌려준다(리스너가 쌓이지 않게).
+  //  cb 는 { guest, url } 를 받고 **받았으면 true** 를 돌려준다(Promise 도 된다) — 아니면 메인이 시스템 브라우저로 넘긴다.
+  surfaceTabs: boot.browserSurface ? {
+    onOpen: (cb) => {
+      if (typeof cb !== "function") return () => {};
+      const h = (_e, p) => {
+        const id = p && Number(p.id);
+        const reply = (ok) => ipcRenderer.send("lively-web:surface-open-tab-ack", { id, ok: ok === true });
+        try {
+          Promise.resolve(cb({ guest: Number(p && p.guest) || 0, url: String((p && p.url) || "") })).then(reply, () => reply(false));
+        } catch { reply(false); }
+      };
+      ipcRenderer.on("lively-web:surface-open-tab", h);
+      ipcRenderer.send("lively-web:surface-tabs", true);
+      return () => {
+        ipcRenderer.removeListener("lively-web:surface-open-tab", h);
+        ipcRenderer.send("lively-web:surface-tabs", false);
+      };
+    },
+  } : null,
   // 앱 업데이트(#1838) — 받아 둔 새 버전을 **웹 UI 가 알고, 그 자리에서 적용**하게 하는 다리.
   //  · 있고 없음이 곧 능력 선언이다: 구 앱 + 새 웹이면 이 객체가 없어 웹은 아무것도 그리지 않는다(브라우저도 같다).
   //  · 값을 넣어 두지 않고 물어보게 한다(get) — preload 는 문서 시작 때 한 번 도는데, 업데이트는 그 뒤에 받아진다.

@@ -53,6 +53,38 @@ export function startBrowserHost(): void {
   const poke = (): void => { const n = Date.now(); if (n - lastPoke > 15_000) { lastPoke = n; scheduleState(true); } };
   document.addEventListener('pointerdown', poke, true);
   document.addEventListener('keydown', poke, true);
+  //  웹 칸 페이지가 «새 탭»으로 연 주소를 앱 안의 새 웹 칸으로(원준 2026-11-10). 구 앱엔 이 다리가 없다 — 그땐 앱이 종전대로 시스템 브라우저로 보낸다.
+  const bridge = (window as any).livelyDesktop?.surfaceTabs;
+  if (bridge && typeof bridge.onOpen === 'function') bridge.onOpen((p: { guest: number; url: string }) => openFromPage(p.guest, p.url));
+}
+
+/** 이 세션에서 아직 안 쓴 가장 작은 탭 번호의 열쇠 — 살아 있는 탭과 주소만 기억된(dormant) 탭을 모두 피한다. */
+function freeTabKey(S: string): string {
+  const nos = new Set<number>([...tabsOfSession(S).map((t) => Number(tabNoOfKey(t.key))),
+    ...Object.keys(storedUrls()).filter((k) => sessionOfKey(k) === S).map((k) => Number(tabNoOfKey(k)))]);
+  let n = 1;
+  while (nos.has(n)) n++;
+  return keyOfTab(S, n);
+}
+
+/**
+ * 웹 칸 페이지가 **새 탭**(target=_blank 링크 · 기능 없는 window.open)으로 연 주소를 같은 세션의 새 웹 칸에 싣는다
+ *  (원준 2026-11-10 — «새 탭이 전부 앱 밖 브라우저로 나간다»). 메인(desktop/main/main.mjs openSurfaceTab)이 링크를 누른
+ *  게스트의 id 와 주소를 넘긴다. 그 게스트가 이 탭 대장에 없으면 false — 메인이 종전대로 시스템 브라우저로 넘긴다.
+ *  · 새 탭은 사람의 것이다 — AI 의 «지금 쓰는 탭»(current)을 바꾸지 않고 AI 표시도 켜지 않는다. AI 는 browser_tabs 로 본다.
+ *  · 셸에 «이 칸을 보이게» 를 보내 곁칸에 웹 칸(web#N)이 생기고 앞으로 나온다 — 브라우저에서 링크를 새 탭으로 연 것과 같다.
+ */
+async function openFromPage(guest: number, url: string): Promise<boolean> {
+  const src = guest ? allTabs().find((t) => { try { return t.view.getWebContentsId() === guest; } catch { return false; } }) : null;
+  if (!src) return false;
+  const u = normWebUrl(String(url || ''));
+  if (!/^https?:\/\//i.test(u)) return false;
+  const S = sessionOfKey(src.key);
+  const key = freeTabKey(S);
+  const t = ensureTab(key, u);
+  reveal(t);
+  revealedAt.set(key, Date.now());
+  return true;
 }
 
 // ── 연결 ────────────────────────────────────────────────────────────────────
@@ -309,11 +341,7 @@ async function exec(t: BTab, src: string, ms = 20_000): Promise<any> {
 async function opTabs(S: string, a: Record<string, any>): Promise<unknown> {
   const action = String(a.action || 'list');
   if (action === 'new') {
-    const nos = new Set<number>([...tabsOfSession(S).map((t) => Number(tabNoOfKey(t.key))),
-      ...Object.keys(storedUrls()).filter((k) => sessionOfKey(k) === S).map((k) => Number(tabNoOfKey(k)))]);
-    let n = 1;
-    while (nos.has(n)) n++;
-    const key = keyOfTab(S, n);
+    const key = freeTabKey(S);
     //  주소를 먼저 검사한다 — 정규화는 지금 http(s) 아니면 검색어로 바꾸지만, 그 불변식을 여기서도 못 박는다(file: · javascript: 를 싣지 않게).
     const u = a.url ? normWebUrl(String(a.url)) : '';
     if (a.url && !/^https?:\/\//i.test(u)) throw new Error('http(s) 주소만 열 수 있습니다: ' + a.url);

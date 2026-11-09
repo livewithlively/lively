@@ -1112,6 +1112,45 @@ function surfaceHostFocused(wc) {
   return !!owner && owner.isFocused();
 }
 
+// ── 새 탭 → 앱 안의 새 웹 칸 (원준 2026-11-10) ─────────────────────────────────────────────
+//  웹 칸 게스트가 «새 탭»(target=_blank · 기능 없는 window.open)으로 연 주소를 그 게스트를 품은 웹 화면에 넘겨,
+//  같은 세션 곁칸에 웹 칸을 하나 더 열게 한다(web/v2/browser-host.ts openFromPage). 종전엔 전부 시스템 브라우저로
+//  나가서, 메일 인증 링크처럼 AI 가 이어 다뤄야 할 페이지가 앱 밖으로 샜다.
+//  · 받겠다고 한(SURFACE_TABS true) 웹 화면에만 보낸다 — 구 웹 UI 는 이 길을 몰라 링크가 사라진다.
+//    화면이 새로 실리면(재적재·이동) 구독도 사라진 것이라 지운다 — 새 화면이 다시 구독한다.
+//  · 팝업 창(게스트가 아닌 서피스 창)엔 품은 웹 화면이 없다 → 종전대로 시스템 브라우저.
+//  · 웹이 못 받았다고 답하거나(그 게스트가 탭 대장에 없다) 제때 답이 없으면 시스템 브라우저로 넘긴다 — 링크가 사라지지 않게.
+const surfaceTabHosts = new Set();            // 새 탭을 받겠다고 한 웹 화면의 webContents id
+const surfaceTabWatched = new WeakSet();      // 재적재·닫힘을 지켜보고 있는 웹 화면(리스너를 한 번만 단다)
+const surfaceTabPending = new Map();          // 보낸 요청 id → { url, timer }
+let surfaceTabSeq = 0;
+const SURFACE_TAB_ACK_MS = 4000;
+
+function surfaceTabHost(wc) {
+  try {
+    if (wc.getType() !== "webview") return null;
+    const host = wc.hostWebContents;
+    return host && !host.isDestroyed() && surfaceTabHosts.has(host.id) ? host : null;
+  } catch { return null; }
+}
+
+function settleSurfaceTab(id, ok) {
+  const p = surfaceTabPending.get(id);
+  if (!p) return;
+  surfaceTabPending.delete(id);
+  clearTimeout(p.timer);
+  if (!ok) shell.openExternal(p.url);
+}
+
+function openSurfaceTab(wc, url) {
+  const host = surfaceTabHost(wc);
+  if (!host) { shell.openExternal(url); return; }
+  const id = ++surfaceTabSeq;
+  surfaceTabPending.set(id, { url, timer: setTimeout(() => settleSurfaceTab(id, false), SURFACE_TAB_ACK_MS) });
+  try { host.send(IPC_WEB.SURFACE_OPEN_TAB, { id, guest: wc.id, url }); }
+  catch { settleSurfaceTab(id, false); }
+}
+
 // 서피스가 연 팝업 창을 **우리가** 짓는다(setWindowOpenHandler 의 createWindow). 페이지의 기능 문자열은 크기 말고는 버린다 —
 //  frame·modal·show·alwaysOnTop 같은 값을 그대로 받으면 남의 페이지가 «닫기 없는 모달 창» · «숨은 창» 을 만든다(surfacePopupWindowSpec).
 //  주인 창 위에 떠서 사람이 로그인 창을 뒤로 잃지 않는다. 제목 앞엔 실제 호스트 — 주소줄이 없는 창이라 어디인지 보이게.
@@ -1303,7 +1342,7 @@ app.on("web-contents-created", (_e, wc) => {
     wc.setWindowOpenHandler(({ url, disposition, features }) => {
       // 스크립트가 창 기능을 주고 연 팝업은 앱 안의 작은 창으로 — opener 가 살아 팝업 로그인(구글·애플·MS)이 결과를 돌려받는다.
       //  그 밖(target=_blank 링크 · Shift+클릭 · 기능 없는 window.open)은 시스템 브라우저로. 판정 표는 surfaceWindowOpenTarget.
-      const t = surfaceWindowOpenTarget({ url, disposition, features, openPopups: surfacePopups.size });
+      const t = surfaceWindowOpenTarget({ url, disposition, features, openPopups: surfacePopups.size, inAppTabs: surfaceTabHost(wc) !== null });
       if (t === "deny") return { action: "deny" };
       // 크롬의 팝업 차단기 대신 — 사람이 그 앱 창을 쓰고 있을 때만, 그 탭 가족에서 10초에 3번·1분에 12번까지(surfaceOpenGate).
       if (!surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) return { action: "deny" };
@@ -1315,6 +1354,8 @@ app.on("web-contents-created", (_e, wc) => {
           createWindow: (options) => createSurfacePopup(wc, url, options),
         };
       }
+      // 탭 성격(target=_blank 링크 등)은 같은 세션의 새 웹 칸으로 — 웹 화면이 받겠다고 한 때만 "tab" 이 나온다.
+      if (t === "tab") { openSurfaceTab(wc, url); return { action: "deny" }; }
       shell.openExternal(url);
       return { action: "deny" };
     });
@@ -1670,6 +1711,23 @@ ipcMain.handle(IPC_WEB.EXT_INSTALL, async (e) => {
 ipcMain.handle(IPC_WEB.EXT_REMOVE, (e, arg) => {
   if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
   return removeExtension(arg && arg.id);
+});
+// 새 탭 → 앱 안의 새 웹 칸(위 openSurfaceTab) — 웹 화면의 구독·해제와 받았다는 답. 게이트웨이 출처만.
+ipcMain.on(IPC_WEB.SURFACE_TABS, (e, on) => {
+  if (!fromGateway(e)) return;
+  const wc = e.sender;
+  if (on !== true) { surfaceTabHosts.delete(wc.id); return; }
+  surfaceTabHosts.add(wc.id);
+  if (surfaceTabWatched.has(wc)) return;   // 지켜보기는 화면마다 한 번 — 구독·해제를 되풀이해도 리스너가 쌓이지 않게
+  surfaceTabWatched.add(wc);
+  const id = wc.id;
+  //  화면이 새로 실리면 그 화면의 구독(리스너)도 사라졌다 — 지워 두면 새 화면이 다시 구독할 때까지 종전 길(시스템 브라우저)로 간다.
+  wc.on("did-start-navigation", (ev) => { if (ev && ev.isMainFrame && !ev.isSameDocument) surfaceTabHosts.delete(id); });
+  wc.once("destroyed", () => surfaceTabHosts.delete(id));
+});
+ipcMain.on(IPC_WEB.SURFACE_OPEN_TAB_ACK, (e, r) => {
+  if (!fromGateway(e) || !r) return;
+  settleSurfaceTab(Number(r.id), r.ok === true);
 });
 // 앱 업데이트(#1838) — 메인 화면(웹 UI)이 '받아 둔 게 있다' 를 보고 그 자리에서 적용하게. 게이트웨이 출처만.
 //  ⚠ 적용은 **인자 없는 단일 동작**이다(이 앱을 닫고·설치하고·다시 띄운다) — 트레이 항목이 부르는 함수와 같다.
