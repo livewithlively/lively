@@ -77,13 +77,22 @@ test("R1 수정 라우트 — 저장 전에 읽고 저장 뒤에 알린다", () 
   const readAt = b.indexOf("getSessionState(req.params.id)");
   const relayAt = b.indexOf('relayNodeOp(nodeId, "edit"');
   const editAt = b.indexOf("await editSession(");
-  const nodeAnnounce = b.indexOf("await announce(invites, me)");
+  const nodeAnnounce = b.indexOf("await announce(invites, editorId)");
   const localAnnounce = b.indexOf("await announce(edited.invites");
   assert.ok(readAt > 0 && readAt < relayAt && readAt < editAt, "이전 명단을 저장 전에 읽어야 한다");
   assert.ok(relayAt > 0 && nodeAnnounce > relayAt, "노드 세션 — 릴레이(주인 판정) 뒤에 알린다");
   assert.ok(editAt > 0 && localAnnounce > editAt, "중앙 세션 — editSession(주인 판정) 뒤에 알린다");
   assert.match(b, /notifySessionInvitees\(/);
   assert.match(b, /res\.json\(\{ ok: true, notified \}\)/);
+});
+
+test("R1b 초대 멤버의 이름 변경은 이름만 요청할 때와 입장 권한을 확인한 뒤 주인 신원으로 실행한다", () => {
+  const b = routeBody('app.post("/api/ui/terminal/sessions/:id", auth');
+  assert.match(b, /const labelOnly = b\.label !== undefined && b\.invites === undefined/);
+  assert.match(b, /labelOnly && desired\?\.owner !== me && desired\?\.invites\.includes\(me\)/);
+  assert.match(b, /invitedRename && !\(await canAttach\(req\.params\.id, me\)\)/);
+  assert.match(b, /user: \{ userId: editorId \}/);
+  assert.match(b, /editSession\(editor, req\.params\.id/);
 });
 
 test("R2 나가기 라우트 — 거절이 먼저 · 주인 이름 · DB 행", () => {

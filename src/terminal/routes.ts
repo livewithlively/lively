@@ -1659,7 +1659,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  초대받은 사람에게 «내 것» 으로 돌려주지 않는다 — 다음 목록 갱신 전까지 화면이 주인 전용 단추를 세우지 않게.
     res.json({ ok: true, from: id, session: owner === me ? session : { ...session, owned: false } });
   }));
-  // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
+  // 세션 수정 — 초대 명단은 소유자만, 이름만 고칠 때는 입장 가능한 초대 멤버도 허용한다.
   app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     //  #3870 — 초대 알림은 «이번 저장으로 새로 들어온 사람» 에게만(session-invite.ts). 이전 명단은 저장 **전에** 읽는다.
@@ -1677,6 +1677,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       snapshot: nodeOfSession(req.params.id),
     }, fold);
     const labelOnly = b.label !== undefined && b.invites === undefined;
+    const me = idOf(userOf(req));
+    const invitedRename = !!(labelOnly && desired?.owner !== me && desired?.invites.includes(me));
+    if (invitedRename && !(await canAttach(req.params.id, me))) throw new HttpError(404, SESSION_NOT_FOUND);
+    // 노드·중앙의 editSession 은 주인만 받는다. 초대 여부를 게이트웨이에서 확인한 이름 요청만 주인 신원으로 실행한다.
+    const editor = invitedRename
+      ? { userId: desired!.owner, email: "", scopes: [], projects: [] } as LivelyUser
+      : userOf(req);
+    const editorId = idOf(editor);
     const centralGone = !relayId && labelOnly ? await sessionGoneVerdict(req.params.id).catch(() => null) : null;
     const rowNode = sessionRelayNodeId({ desired: desired?.node_id }, fold);
     const onNodeUp = !!relayId && nodeOnline(relayId);
@@ -1684,13 +1692,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const nodeGone = onNodeUp && labelOnly && relayId === rowNode ? await nodeRpc<boolean>(relayId, "gone", { id: req.params.id }).catch(() => null) : null;
     const editPath = sessionEditPath({ nodeId: relayId, rowNode, nodeOnline: onNodeUp, nodeGone, labelOnly, centralGone });
     if (editPath === "stored") {
-      //  지금 어디서도 돌지 않는 세션의 이름 — 기록에 사람 이름으로 적는다(복원이 이 이름으로 띄운다 · AI 가 못 덮는다). 주인만.
-      const me = idOf(userOf(req));
+      //  지금 어디서도 돌지 않는 세션의 이름 — 기록에 사람 이름으로 적는다(복원이 이 이름으로 띄운다 · AI 가 못 덮는다).
       const clean = cleanEditLabel(b.label);
       const no = storedLabelRefusal(desired, me, clean, readFailed);
       if (no) throw new HttpError(no.status, no.message);
       //  걸쇠 UPDATE 가 아무 행도 못 바꿨으면(그 사이 지워졌다) 적은 척하지 않는다.
-      if (!(await claimSessionLabel(req.params.id, clean, "human", me))) throw new HttpError(404, "세션을 찾을 수 없습니다");
+      if (!(await claimSessionLabel(req.params.id, clean, "human", editorId))) throw new HttpError(404, "세션을 찾을 수 없습니다");
       res.json({ ok: true, notified: 0, stored: true });
       return;
     }
@@ -1704,10 +1711,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       return notifySessionInvitees({ sessionId: req.params.id!, label, actor, invitees: fresh });
     };
     if (nodeId) {
-      const me = idOf(userOf(req));
-      const invites = b.invites !== undefined ? await validateInvites(b.invites, me) : undefined;
+      const invites = b.invites !== undefined ? await validateInvites(b.invites, editorId) : undefined;
       await relayNodeOp(nodeId, "edit", {
-        user: { userId: me }, id: req.params.id,
+        user: { userId: editorId }, id: req.params.id,
         patch: { label: b.label !== undefined ? String(b.label) : undefined },
         ...(invites !== undefined ? { invites } : {}),
       });
@@ -1726,7 +1732,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (b.label !== undefined) {
         const clean = String(b.label).replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
         if (clean) {
-          await claimSessionLabel(req.params.id, clean, "human", me)
+          await claimSessionLabel(req.params.id, clean, "human", editorId)
             .catch((e) => { console.warn(`[terminal] 노드 세션 이름 DB 반영 실패(${req.params.id}):`, (e as Error)?.message ?? e); return false; });
         }
       }
@@ -1736,15 +1742,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         await updateSessionStateMeta(req.params.id, { invites })
           .catch((e) => console.warn(`[terminal] 노드 세션 초대 DB 반영 실패(${req.params.id}):`, (e as Error)?.message ?? e));
       }
-      const notified = await announce(invites, me);   // 노드의 assertManage 를 지난 뒤 — 거부된 요청은 알림을 못 만든다
+      const notified = await announce(invites, editorId);   // 노드의 assertManage 를 지난 뒤 — 거부된 요청은 알림을 못 만든다
       res.json({ ok: true, notified });
       return;
     }
-    const edited = await editSession(userOf(req), req.params.id, {
+    const edited = await editSession(editor, req.params.id, {
       label: b.label !== undefined ? String(b.label) : undefined,
       invites: b.invites,
     });
-    const notified = await announce(edited.invites, idOf(userOf(req)));
+    const notified = await announce(edited.invites, editorId);
     res.json({ ok: true, notified });
   }));
   // 세션에서 나가기(#3870, 원준 2026-10-14) — ⚠ 주소는 `/leave` 가 아니다: 그건 «보던 화면을 떠남»(얼굴 걷기, chat-routes.ts)이다.
