@@ -453,6 +453,7 @@ async function showFile(root: string, rel: string, name: string, entry: Entry, s
       name, size,
       fetchView: () => fileFetch(viewUrl),
       fetchDownload: () => fileFetch(dlUrl),
+      streamUrl: apiUrl(viewUrl),   // #5480 — 영상·소리는 주소로(구간 응답 · 상한 없음)
       path: rel, fetchRel: (p) => fileFetch('/api/ui/terminal/browse/file?' + browseQs(root, p)),   // #4582 md 상대경로 그림
       cls: { img: 'fpg-img', pdf: 'fpg-pdf', html: 'fpg-html', md: 'fpg-md', code: 'fpg-code', table: 'fpg-table', audio: 'fpg-audio', video: 'fpg-video', msg: 'fpg-msg' },
       pdfHash: '#toolbar=1&view=FitH',

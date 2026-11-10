@@ -64,7 +64,8 @@ export interface ProjectStorage {
   /** 동기화 매니페스트(project-manifest 규칙) */
   manifest(limit?: number): Promise<Manifest>;
   stat(abs: string): Promise<StorageStat | null>;
-  readTo(abs: string, dest: Writable): Promise<void>;
+  /** range(양끝 포함)가 오면 그 구간만 흘린다 — HTTP Range(#5480) */
+  readTo(abs: string, dest: Writable, range?: { start: number; end: number } | null): Promise<void>;
   /** 작은 문서(상한 TEXT_MAX) 읽기. 없거나 파일이 아니면 null */
   readText(abs: string): Promise<string | null>;
   /** 작은 문서 쓰기 — 임시파일 뒤 rename(원자적). 부모 폴더는 만든다 */
@@ -165,8 +166,8 @@ function localStorage(base: string, project: StorageProject | null): ProjectStor
       try { const s = await fsp.stat(abs); return { file: s.isFile(), dir: s.isDirectory(), size: s.size, mtime: Math.floor(s.mtimeMs) }; }
       catch { return null; }
     },
-    readTo: (abs, dest) => new Promise<void>((resolve, reject) => {
-      const r = fs.createReadStream(abs);
+    readTo: (abs, dest, range) => new Promise<void>((resolve, reject) => {
+      const r = range ? fs.createReadStream(abs, { start: range.start, end: range.end }) : fs.createReadStream(abs);
       r.on("error", reject);
       r.on("end", () => resolve());
       r.pipe(dest);
@@ -285,7 +286,7 @@ function memberStorage(base: string, osUser: string, localBase: string, project:
       const s = await memberStat(osUser, abs);
       return s ? { file: s.file, dir: s.dir, size: s.size, mtime: s.mtime ?? 0 } : null;
     },
-    readTo: (abs, dest) => memberReadTo(osUser, abs, dest),
+    readTo: (abs, dest, range) => memberReadTo(osUser, abs, dest, range),
     readText: (abs) => memberNodeJson<string | null>(osUser, PROJECT_READ_TEXT_JS, { path: abs, max: TEXT_MAX }),
     async writeText(abs, data) { await memberNodeJson<boolean>(osUser, PROJECT_WRITE_TEXT_JS, { path: abs, data }); },
     async writeBuffer(abs, data) {
