@@ -8,7 +8,7 @@
 //   · root  — 칸 본문에 그대로 붙는 요소.
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
-import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
+import { api, apiUrl, el, relTime, toast } from '../core.js';
 import { confirmForceRestore, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 — 보관 칸의 × 는 휴지통으로 · #3870 강제 복원 확인
 import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { fmtSize } from '../projects/files.js';
@@ -25,7 +25,7 @@ import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세�
 import { tasksPart } from './panes-tasks.js';
 import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
 import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, WEB_OPEN_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
-import { htmlFrame, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
+import { canStream, codeBlock, htmlFrame, markdownBody, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
@@ -1499,13 +1499,32 @@ function viewerPart(ctx: PartCtx): Part {
         show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
         //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
-        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000), {
+        //  #5480 — 종전엔 20만 자에서 말없이 잘랐다(긴 회의록·보고서의 뒷부분이 그냥 없었다). 이제 끝까지 —
+        //   아주 긴 문서는 공용 렌더러가 문단 경계에서 나눠 앞부분부터 그리고 나머지는 «더 보기» 로 잇는다.
+        show(el('div', { class: 'pn-md' }, markdownBody(txt, {
           //  #4582 — md 의 상대경로 그림(`![](img/a.png)`)은 이 파일 폴더 기준으로 같은 파일 API 로 받는다.
           imgFetch: mdImgFetch(p2, (p) => fetch(fileUrl(p), fetchOpts)),
-        })), 'scale', () => 0);
+        }, 'pn-md-body')), 'scale', () => 0);
       } else {
-        show(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }), 'scale', () => 0);
+        //  #5480 — 40만 자에서 말없이 자르던 것을 걷었다. 100만 자까지는 종전 모양 그대로 통째로, 그보다 길면(수백 MB 로그)
+        //   공용 글 상자가 100만 자씩 그리고 나머지를 «더 보기» 로 잇는다.
+        show(txt.length <= 1_000_000 ? el('pre', { class: 'pn-ed-pre', text: txt }) : codeBlock(txt, '', 'pn-ed-pre'), 'scale', () => 0);
       }
+      return;
+    }
+    //  #5480 — 영상은 통째로 받지 않고 주소로 건다(서버 구간 응답 — 다 받기 전에 틀고, 상한이 없다). 쿠키가 없는 창이면 아래 종전 길로.
+    if (k.kind === 'video' && await canStream(fileUrl(p2))) {
+      if (path !== p2) return;
+      shownStamp = '';
+      const vd = el('video', { class: 'pn-ed-img', src: fileUrl(p2), controls: 'true', preload: 'metadata', playsinline: 'true' }) as HTMLVideoElement;
+      vd.addEventListener('error', () => {
+        if (path !== p2) return;
+        showPlain(el('div', { class: 'pn-empty' }, pnIcon('drop', 'pn-i big'), el('b', { text: '이 브라우저가 이 영상의 형식(코덱)을 재생하지 못해요.' }),
+          el('p', { class: 'pn-fine', text: '내려받아 재생하거나 MP4(H.264)로 바꿔 다시 올려 주세요.' }),
+          el('button', { class: 'pn-web-btn', type: 'button', text: '내려받기', onclick: () => { void authDownload(fileUrl(p2) + '&download=1', base(p2)); } })));
+      }, { once: true });
+      show(vd, 'px', () => vd.videoWidth || 0);
+      vd.addEventListener('loadedmetadata', () => { if (shown && shown.node === vd) zoom.apply(); });
       return;
     }
     if (k.kind === 'img' || k.kind === 'pdf' || k.kind === 'video') {
@@ -1545,6 +1564,7 @@ function viewerPart(ctx: PartCtx): Part {
       size: Number(head?.headers.get('x-file-size') || '') || list.find((f) => f.path === p2)?.size,
       fetchView: () => fetch(fileUrl(p2), fetchOpts),
       fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
+      streamUrl: fileUrl(p2),   // #5480 — 소리도 주소로(구간 응답)
       path: p2, fetchRel: (p) => fetch(fileUrl(p), fetchOpts),
       cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
       mkBtn: (label, onClick) => el('button', { class: 'pn-web-btn', type: 'button', text: label, onclick: onClick }),

@@ -324,6 +324,36 @@ test("★★ S6 저장소 분리면 모든 op 가 그 멤버 경계를 거친다
   } finally { relayOff(); }
 });
 
+test("★ S8 구간 읽기(#5480 — 미리보기 Range) — 로컬과 멤버 경계가 같은 바이트 · 마지막 1바이트 · 구간 부재면 전부", async () => {
+  const data = Buffer.from(Array.from({ length: 70_000 }, (_, i) => (i * 7) % 256));   // 파이프 버퍼(64KB)를 넘겨 스트리밍 경로를 탄다
+  const collect = async (st: Awaited<ReturnType<typeof S.projectStorage>>, f: string, range?: { start: number; end: number } | null): Promise<Buffer> => {
+    const sink = new PassThrough(); const parts: Buffer[] = [];
+    sink.on("data", (c: Buffer) => parts.push(c));
+    await st.readTo(f, sink, range);
+    return Buffer.concat(parts);
+  };
+  const check = async (st: Awaited<ReturnType<typeof S.projectStorage>>, label: string): Promise<void> => {
+    const f = path.join(st.base, "v", "clip.bin");
+    put(f, data);
+    assert.deepEqual(await collect(st, f, { start: 100, end: 199 }), data.subarray(100, 200), `${label} 가운데 구간`);
+    assert.deepEqual(await collect(st, f, { start: 0, end: 0 }), data.subarray(0, 1), `${label} 첫 1바이트`);
+    assert.deepEqual(await collect(st, f, { start: data.length - 1, end: data.length - 1 }), data.subarray(data.length - 1), `${label} 마지막 1바이트`);
+    assert.deepEqual(await collect(st, f, { start: 1000, end: data.length - 1 }), data.subarray(1000), `${label} 열린 끝`);
+    assert.deepEqual(await collect(st, f), data, `${label} 구간 부재 → 전부`);
+    assert.deepEqual(await collect(st, f, null), data, `${label} 구간 null → 전부`);
+  };
+  relayOff();
+  await check(await S.projectStorage("project/81", null), "로컬");
+  relayOn();
+  try {
+    const st = await S.projectStorage("project/82", actor);
+    const before = relayCalls().length;
+    await check(st, "멤버");
+    assert.ok(relayCalls().slice(before).every((l) => l.startsWith(`${OS_USER} `)), "구간 읽기도 멤버 경계를 거친다");
+    assert.ok(relayCalls().length > before, "멤버 저장소의 읽기가 중계를 탔다(배선)");
+  } finally { relayOff(); }
+});
+
 // ═══ S3 이관 ═══════════════════════════════════════════════════════════════════
 
 const MTIME_S = Date.UTC(2020, 0, 2, 3, 4, 5) / 1000;

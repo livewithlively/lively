@@ -42,12 +42,14 @@ import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 �
 import { SHARED_MOVE_SCOPE, findFileMove } from "../v6/file-move-store.js";
 import { followMovedPath, normalizeMovePath } from "../files/file-move-core.js";   // #4822 — 읽기 라우트가 옛 경로를 따라간다
 import { logger } from "../log.js";
+import { previewContentType, rangeResponse } from "../files/byte-range.js";   // #5480 — 미리보기 상한 대신 구간 응답
 import { projectFoldersUnder, isFolderOrAncestorOf } from "../v6/shared-folder-store.js";
 import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
 const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB (#1870 — terminal-files 와 동일해야 한다. receiveUpload 스트리밍이라 RAM 무관)
-const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
+// 미리보기에 크기 상한이 없다(#5480) — 종전 25MB 413 은 스트리밍 응답이라 메모리를 지키지도 않으면서 큰 영상·문서를 «못 읽었어요» 로
+//  만들었다. 큰 파일은 HTTP Range(files/byte-range)로 필요한 구간만 나간다.
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 // 신원 id — 터미널/세션로그 라우트와 동일 헬퍼(userId 우선, email 폴백). 노드 세션 소유/가시성 판정이 그 라우트들과
 //  같은 값을 써야 노드에서 연 프로젝트 세션이 어느 표면에서든 일관되게 보인다(#905 C4).
@@ -55,18 +57,8 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 // 확장자→Content-Type. **PDF/이미지 인라인 미리보기의 핵심** — 이 헤더가 없으면 브라우저가 blob 을 text 로
 //  취급해 iframe 에 PDF 원시바이트(%PDF-1.3…)가 그대로 노출된다. 미지정 확장자는 octet-stream(다운로드 유도).
-const MIME: Record<string, string> = {
-  pdf: "application/pdf",
-  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
-  webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", ico: "image/x-icon",
-  txt: "text/plain; charset=utf-8", md: "text/markdown; charset=utf-8",
-  csv: "text/csv; charset=utf-8", json: "application/json; charset=utf-8", log: "text/plain; charset=utf-8",
-};
-function contentTypeFor(name: string): string {
-  const i = name.lastIndexOf(".");
-  const ext = i >= 0 ? name.slice(i + 1).toLowerCase() : "";
-  return MIME[ext] || "application/octet-stream";
-}
+//  표는 files/byte-range 한 자리(브라우즈 라우트와 같은 값 — 영상·소리를 주소로 바로 틀 때도 이 값이 쓰인다).
+const contentTypeFor = previewContentType;
 
 // 프로젝트 소스 의존성 — org / v6 가 같은 라우트 로직을 공유하되 데이터 접근만 갈아끼운다.
 interface ProjectDeps {
@@ -302,7 +294,6 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     if (!st) throw new HttpError(404, "파일 없음");
     if (!st.file) throw new HttpError(400, "파일이 아닙니다");
     const download = req.query.download === "1";
-    if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
     //  따라갔으면 어디로 갔는지 머리로 남긴다(X-File-Moved-To — 프로젝트 폴더 기준 지금 경로, URI 인코딩). 성공 응답에만 싣는다.
     if (movedTo !== null) res.setHeader("X-File-Moved-To", encodeURIComponent(movedTo));
     //  #3870 판이 실린 미리보기(`&v=`)는 판이 지금 파일과 같을 때만 브라우저가 보관해도 된다 — 판정은 fileCacheHeaders 한 자리.
@@ -323,9 +314,13 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     } else {
       res.setHeader("Content-Type", contentTypeFor(abs));
     }
+    //  #5480 — 구간 요청(영상·소리 요소가 보낸다)이면 그 구간만. 상한 없이 1GB 영상도 바로 튼다.
+    const rr = rangeResponse(req.headers.range, st.size);
+    for (const [k, v] of Object.entries(rr.headers)) res.setHeader(k, v);
+    res.status(rr.status);
     // HEAD 는 머리만 — 익스프레스는 HEAD 를 GET 핸들러로 보내는데, 여기서 안 끊으면 1.5초마다 PDF 를 통째로 읽는다.
-    if (req.method === "HEAD") { res.end(); return; }
-    await store.readTo(abs, res).catch((e) => {
+    if (req.method === "HEAD" || rr.status === 416) { res.end(); return; }
+    await store.readTo(abs, res, rr.range).catch((e) => {
       if (!res.headersSent) throw new HttpError(500, "읽기 실패");
       res.destroy(e as Error);
     });
