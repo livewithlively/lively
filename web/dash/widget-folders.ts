@@ -340,6 +340,7 @@ function dashFolderBrowser(root, startPath) {
         name, size,
         fetchView: () => dashAuthFetch(viewUrl),
         fetchDownload: () => dashAuthFetch(dlUrl),
+        streamUrl: apiUrl(viewUrl),   // #5480 — 영상·소리는 주소로(구간 응답 · 상한 없음)
         path: rel, fetchRel: (p) => dashAuthFetch('/api/ui/terminal/browse/file?' + qp(p)),   // #4582 md 상대경로 그림
         // 기존 크기 규칙(20-dashboard.css .dash-fp-*)을 보존하려고 화면 클래스를 함께 얹는다.
         cls: { img: 'dash-fp-img', pdf: 'dash-fp-pdf', md: 'dash-fp-md', code: 'dash-fp-code', html: 'dash-fp-pdf', table: 'dash-fp-tablewrap', audio: 'dash-fp-audio', video: 'dash-fp-video', msg: 'dash-fp-msg' },

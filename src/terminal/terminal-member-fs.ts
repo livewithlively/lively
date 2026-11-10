@@ -247,9 +247,13 @@ export function memberRm(osUser: string, absPath: string): Promise<void> {
 }
 
 // 멤버 파일 → dest(res). cat 으로 스트리밍, dest 로 pipe(백프레셔 존중).
-export function memberReadTo(osUser: string, absPath: string, dest: Writable): Promise<void> {
+//  range(양끝 포함)가 오면 그 구간만 — 영상 미리보기의 HTTP Range(#5480, files/byte-range). 스크립트는 고정 리터럴, 값은 argv.
+export function memberReadTo(osUser: string, absPath: string, dest: Writable, range?: { start: number; end: number } | null): Promise<void> {
   return new Promise((resolve, reject) => {
-    const c = memberSpawn(osUser, ["cat", "--", absPath], ["ignore", "pipe", "pipe"]);
+    const argv = range
+      ? ["sh", "-c", 'tail -c +"$1" -- "$3" | head -c "$2"', "lively-range", String(Math.floor(range.start) + 1), String(Math.floor(range.end) - Math.floor(range.start) + 1), absPath]
+      : ["cat", "--", absPath];
+    const c = memberSpawn(osUser, argv, ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
     c.on("error", reject);
     if (!c.stdout) return reject(new Error("member read: no stdout"));

@@ -187,6 +187,10 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .fp-table th { background: var(--bg-tint); font-weight: 700; position: sticky; top: 0; }
 .fp-table .fp-cn { color: var(--muted-2); text-align: right; background: var(--bg-tint); font-variant-numeric: tabular-nums; }
 .fp-tablemore { margin-top: 8px; font-size: 12px; color: var(--muted-2); }
+/* #5480 — 긴 표·글·문서는 잘라 버리지 않고 «더 보기 / 전부 보기» 로 잇는다(lib/file-preview.ts progressive) */
+.fp-more { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0; }
+.fp-more-btn { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--line, rgba(127,127,127,.35)); background: var(--bg, transparent); color: var(--ink, inherit); cursor: pointer; }
+.fp-more-btn:hover { background: var(--bg-tint, rgba(127,127,127,.12)); }
 
 /* ── 사무문서(docx·pptx·hwpx·odt·epub) 렌더 (#3778) ────────────────────────────
    워드의 조판을 재현하지 않는다 — «무슨 문서인지 읽힌다»가 기준이다. 그래서 폭을 글줄 길이로 묶고

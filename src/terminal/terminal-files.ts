@@ -57,6 +57,7 @@ import { appIdOfLink, buildFileInfo } from "../files/file-view.js";   // #4672 �
 import { sameNameScope, rankSameName, findSameNameLocal, SAME_NAME_JS, SAME_NAME_LIMITS, type SameNameFound } from "../files/same-name.js";
 import { projectFolderOfCoord, projectIdForSessionCoord } from "../project/folder-bind.js";
 import { logger } from "../log.js";
+import { previewContentType, rangeResponse } from "../files/byte-range.js";   // #5480 — 미리보기 상한 대신 구간 응답
 
 // 업로드 상한(#1870) — 종전 50MB 는 화면 녹화·데이터셋이 걸렸다. receiveUpload 가 임시파일로 **스트리밍**하므로
 //  (RAM 상주 없음, upload-file.ts) 상한을 올려도 메모리 위험이 없다. project-routes.ts MAX_UPLOAD 와 같은 값이어야 한다.
@@ -64,11 +65,10 @@ const MAX_UPLOAD = 1024 * 1024 * 1024; // 1GB
 // ⚠ 노드 세션 릴레이(아래 PUT 의 ?node= 분기)만은 예외 — 본문을 통째로 RAM 에 모아 ws 청크로 중계하므로
 //  거기까지 1GB 로 열면 게이트웨이 메모리가 업로드 하나에 잡아먹힌다. 그 경로는 종전 상한을 유지한다.
 const NODE_RELAY_MAX = 50 * 1024 * 1024; // 50MB
-// 인라인 미리보기 상한 — 프로젝트 파일 라우트(project-routes.ts MAX_PREVIEW)와 **같은 값**이어야 한다(#1436):
-//  공유 링크는 root+path 하나로 공유/개인/프로젝트 폴더를 똑같이 가리키는데, 같은 파일이 어느 라우트를 타는지에
-//  따라 "미리보기엔 너무 큽니다"가 갈리면 링크를 받은 사람에게는 그게 그냥 고장으로 보인다.
-//  (종전 2MB 는 대시보드 위젯 미리보기만 염두에 둔 값이라 5MB PDF 보고서조차 링크로 열리지 않았다.)
-const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB
+// 인라인 미리보기에 크기 상한이 없다(#5480) — 프로젝트 파일 라우트(project-routes.ts)와 **같은 규칙**이어야 한다(#1436):
+//  공유 링크는 root+path 하나로 공유/개인/프로젝트 폴더를 똑같이 가리키므로 라우트마다 답이 갈리면 그냥 고장으로 보인다.
+//  종전 25MB 413 은 응답이 스트리밍이라 메모리를 지키지도 않으면서 26MB 데모 영상을 «읽지 못했어요» 로 만들었다.
+//  큰 파일은 HTTP Range(files/byte-range)로 필요한 구간만 나간다 — 영상은 다 받기 전에 틀린다.
 // 디렉터리 한 칸 읽기(로컬 fs) — **심링크를 따라가** 실효 종류를 정한다(#1744).
 //  dirent.isDirectory() 는 링크에 대해 언제나 false 라, 그대로 두면 폴더를 가리키는 링크(세션 폴더의 ./project 가 그
 //  대표)가 목록에 '파일'로 나와 탐색기에서 들어갈 수 없었다 — 눌러도 미리보기만 열렸다. stat 은 링크를 따라가므로
@@ -124,30 +124,54 @@ function assertPathForm(rel: string, abs: string, existing = false): void {
   if (problem) throw new HttpError(400, pathFormMessage(problem), { body: { code: PATH_FORM_CODE } });
 }
 
-// 파일 한 개를 응답으로 — 미리보기(상한 MAX_PREVIEW) 또는 내려받기(?download=1). 격리 멤버면 그 uid 로 stat+cat.
+// 파일 한 개를 응답으로 — 미리보기(상한 없음 · 구간 응답, #5480) 또는 내려받기(?download=1). 격리 멤버면 그 uid 로 stat+cat.
 //  브라우즈(root·path)와 자료 원본(자료 id, #1631)이 같은 한 벌을 지난다 — 상한·Content-Disposition·no-store 가 갈리지 않게.
 //  notFound — 파일이 없을 때의 답. 브라우즈는 못 봄과 같은 몸(browseNotFound)을 넘긴다.
-async function sendFile(res: express.Response, abs: string, osUser: string | null, download: boolean,
+async function sendFile(req: express.Request, res: express.Response, abs: string, osUser: string | null, download: boolean,
   notFound: () => HttpError = () => new HttpError(404, "파일 없음")): Promise<void> {
-  const setDl = (): void => {
-    res.setHeader("Cache-Control", "no-store");
-    if (download) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`);
-  };
+  let size: number;
   if (osUser) {
     const st = await memberStat(osUser, abs);
     if (!st) throw notFound();
     if (!st.file) throw new HttpError(400, "파일이 아닙니다");
-    if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-    setDl();
-    await memberReadTo(osUser, abs, res).catch((e) => { if (!res.headersSent) throw new HttpError(500, "읽기 실패"); res.destroy(e as Error); });
+    size = st.size;
+  } else {
+    let st: fs.Stats;
+    try { st = await fsp.stat(abs); } catch { throw notFound(); }
+    if (!st.isFile()) throw new HttpError(400, "파일이 아닙니다");
+    size = st.size;
+  }
+  const range = beginFileResponse(req, res, abs, size, download);
+  if (range === false) return;
+  await streamFile(res, abs, osUser, range);
+}
+
+// 파일 응답의 머리 — 캐시 · 내려받기 · 형식 · 크기 · 구간(#5480). false 면 본문 없이 끝났다(HEAD · 416).
+//  ⚠ 미리보기도 Content-Type 을 싣는다 — 영상·소리·PDF 를 주소로 바로 열면(<video src>) 브라우저가 이 값으로 판정한다.
+function beginFileResponse(req: express.Request, res: express.Response, abs: string, size: number, download: boolean): { start: number; end: number } | null | false {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-File-Size", String(size));
+  if (download) {
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`);
+  } else {
+    res.setHeader("Content-Type", previewContentType(abs));
+  }
+  const rr = rangeResponse(req.headers.range, size);
+  for (const [k, v] of Object.entries(rr.headers)) res.setHeader(k, v);
+  res.status(rr.status);
+  //  HEAD 는 머리만 — 익스프레스는 HEAD 를 GET 핸들러로 보낸다. 안 끊으면 크기를 물을 때마다 1GB 를 읽는다.
+  if (req.method === "HEAD" || rr.status === 416) { res.end(); return false; }
+  return rr.range;
+}
+
+async function streamFile(res: express.Response, abs: string, osUser: string | null, range: { start: number; end: number } | null): Promise<void> {
+  if (osUser) {
+    await memberReadTo(osUser, abs, res, range).catch((e) => { if (!res.headersSent) throw new HttpError(500, "읽기 실패"); res.destroy(e as Error); });
     return;
   }
-  let st: fs.Stats;
-  try { st = await fsp.stat(abs); } catch { throw notFound(); }
-  if (!st.isFile()) throw new HttpError(400, "파일이 아닙니다");
-  if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-  setDl();
-  fs.createReadStream(abs).pipe(res);
+  (range ? fs.createReadStream(abs, { start: range.start, end: range.end }) : fs.createReadStream(abs))
+    .on("error", (e) => { if (!res.headersSent) res.status(500).json({ error: "읽기 실패" }); else res.destroy(e); })
+    .pipe(res);
 }
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
@@ -687,7 +711,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
   // 미리보기/다운로드(?download=1). 격리 멤버면 그 uid 로 stat+cat.
   app.get("/api/ui/terminal/browse/file", auth, wrap(async (req, res) => {
     const { abs, osUser } = await resolveBrowse(req, true);
-    await sendFile(res, abs, osUser, req.query.download === "1", browseNotFound);   // 없는 파일 = 못 보는 자리와 같은 몸(#4847)
+    await sendFile(req, res, abs, osUser, req.query.download === "1", browseNotFound);   // 없는 파일 = 못 보는 자리와 같은 몸(#4847)
   }));
   // 자료(올린 파일)의 원본 — **자료 id 로** 연다(#1631). 개인 폴더 업로드를 «팀원 모두» 로 올린 자료(share=team)는 올린 사람이
   //  아닌 사람도 목록·원문에서 보는데, 브라우즈 API(root=personal)는 **보는 사람 자기** 개인 폴더로 풀려 동료에게는 «파일 없음»
@@ -710,7 +734,7 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     const { base, abs } = await resolveRootPath(owner, "personal", loc.rel, osUser);
     if (abs === base) throw new HttpError(404, "자료 없음");
     await assertJailed(base, abs, osUser);
-    await sendFile(res, abs, osUser, req.query.download === "1");
+    await sendFile(req, res, abs, osUser, req.query.download === "1");
   }));
   // 업로드(raw 스트림 → 임시파일 → rename). 격리 멤버면 그 uid 로 써서 파일 소유자=멤버(세션 셸이 이후 편집 가능).
   //  취소·끊김이면 목적지는 손대지 않는다 — 덮어쓰기 업로드를 끊어도 원본이 살아있다(#797 — upload-file.ts).
@@ -767,38 +791,21 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
       const u = { userId: idOf(userOf(req)) };
       const head = await nodeRpc<{ size: number }>(nodeId, "fsRead", { id: req.params.id, path: rel, offset: 0, len: 0, user: u });
       if (head.size == null) throw new HttpError(404, "파일 없음");
-      if (!download && head.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-      res.setHeader("Cache-Control", "no-store");
-      if (download) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(rel))}`);
-      for (let offset = 0; offset < head.size;) {
-        const r = await nodeRpc<{ data?: string; eof?: boolean }>(nodeId, "fsRead", { id: req.params.id, path: rel, offset, len: NODE_FS_CHUNK, user: u });
+      //  상한 없음(#5480) — 청크를 하나씩 받아 흘리므로 메모리는 청크 하나다. 구간 요청이면 그 구간만 노드에 묻는다.
+      const range = beginFileResponse(req, res, rel, head.size, download);
+      if (range === false) return;
+      const from = range ? range.start : 0, to = range ? range.end + 1 : head.size;
+      for (let offset = from; offset < to;) {
+        const len = Math.min(NODE_FS_CHUNK, to - offset);
+        const r = await nodeRpc<{ data?: string; eof?: boolean }>(nodeId, "fsRead", { id: req.params.id, path: rel, offset, len, user: u });
         if (r.data) res.write(Buffer.from(r.data, "base64"));
-        offset += NODE_FS_CHUNK;
-        if (r.eof) break;
+        offset += len;
+        if (r.eof || res.destroyed) break;
       }
       res.end(); return;
     }
     const { abs, osUser } = await resolveInSession(req, true);
-    const download = req.query.download === "1";
-    const setDl = (): void => {
-      res.setHeader("Cache-Control", "no-store");
-      if (download) res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}`);
-    };
-    if (osUser) {
-      const st = await memberStat(osUser, abs);
-      if (!st) throw new HttpError(404, "파일 없음");
-      if (!st.file) throw new HttpError(400, "파일이 아닙니다");
-      if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-      setDl();
-      await memberReadTo(osUser, abs, res).catch((e) => { if (!res.headersSent) throw new HttpError(500, "읽기 실패"); res.destroy(e as Error); });
-      return;
-    }
-    let st: fs.Stats;
-    try { st = await fsp.stat(abs); } catch { throw new HttpError(404, "파일 없음"); }
-    if (!st.isFile()) throw new HttpError(400, "파일이 아닙니다");
-    if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
-    setDl();
-    fs.createReadStream(abs).pipe(res);
+    await sendFile(req, res, abs, osUser, req.query.download === "1");   // 브라우즈와 같은 한 벌(상한 없음 · 구간 응답, #5480)
   }));
 
   // 새 폴더 생성. 격리 세션은 멤버 uid 로(생성 파일 소유자=멤버).

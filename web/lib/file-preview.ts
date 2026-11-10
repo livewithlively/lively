@@ -39,7 +39,10 @@ const AUDIO_MIME: Record<string, string> = { mp3: 'audio/mpeg', wav: 'audio/wav'
 const VIDEO_MIME: Record<string, string> = { mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', ogv: 'video/ogg', mkv: 'video/x-matroska' };
 const PREVIEW_IMG = Object.keys(IMG_MIME);
 const PREVIEW_TABLE = new Set(['csv', 'tsv']);
-const MEDIA_MAX = 80 * 1024 * 1024;   // 미디어는 서버 인라인 상한을 우회해 받으므로 메모리 보호 상한을 클라가 둔다
+//  #5480 — 미디어에 크기 상한을 두지 않는다. 주소로 바로 틀 수 있으면(streamUrl) 브라우저가 구간(Range)만 받아 가고,
+//   못 틀면 통째로 받는다. 종전 80MB 상한은 «큰 영상은 미리보기 대신 다운로드» 로 끝났다(원준 2026-11-10 «넘 짜증나»).
+//   남겨 둔 이름은 옛 호출부 호환 — 값은 무한대다.
+const MEDIA_MAX = Number.POSITIVE_INFINITY;
 const HTML_EXTS = new Set(['html', 'htm']);
 const MD_EXTS = new Set(['md', 'markdown']);
 const PREVIEW_TEXT = ['txt', 'text', 'md', 'markdown', 'json', 'jsonl', 'ndjson', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd', 'html', 'htm', 'css', 'scss', 'sass', 'less', 'styl', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'properties', 'xml', 'sql', 'java', 'go', 'rs', 'c', 'cc', 'cpp', 'cxx', 'h', 'hpp', 'hh', 'cs', 'rb', 'php', 'lua', 'r', 'kt', 'kts', 'swift', 'scala', 'dart', 'vue', 'svelte', 'pl', 'pm', 'ex', 'exs', 'erl', 'hs', 'clj', 'zig', 'nim', 'm', 'mm', 'gradle', 'groovy', 'tf', 'hcl', 'proto', 'graphql', 'gql', 'ipynb', 'patch', 'diff', 'srt', 'vtt', 'tex', 'bib', 'rst', 'adoc', 'org', 'eml', 'log', 'env', 'gitignore', 'gitattributes', 'editorconfig', 'dockerfile', 'makefile', 'lock'];
@@ -69,34 +72,62 @@ function parseDelimited(text: string, delim: string): string[][] {
       else field += c;
     } else if (c === '"') inQ = true;
     else if (c === delim) { row.push(field); field = ''; }
-    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; if (rows.length > 3000) break; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
     else if (c !== '\r') field += c;
   }
   if (field !== '' || row.length) { row.push(field); rows.push(row); }
   return rows;
 }
 
+// ══ 긴 것은 자르지 않고 «더 보기» 로 (#5480) ═══════════════════════════════════════════════
+//  종전엔 표 500행 · 글 40만 자 · 압축 목록 500개 · 사무문서 3000 덩이에서 잘라 «전체는 내려받아 확인하세요» 로 끝냈다.
+//  한 번에 다 그리면 화면이 얼고, 잘라 버리면 볼 수가 없다 — 그래서 **앞부분을 그리고 나머지를 단추로 이어 붙인다**.
+//  render(from, to) 는 [from, to) 를 그려 제자리에 붙인다. 「전부 보기」 는 한 번에 끝까지(사람이 고른 것이니 얼어도 된다).
+const STEP_ROWS = 1000;
+const STEP_CHARS = 1_000_000;
+function progressive(total: number, step: number, render: (from: number, to: number) => void, unit: (n: number) => string): any {
+  let shown = Math.min(total, step);
+  render(0, shown);
+  if (shown >= total) return null;
+  const bar = el('div', { class: 'fp-tablemore fp-more' });
+  const label = el('span');
+  const mk = (t: string, fn: () => void): any => { const b = el('button', { type: 'button', class: 'fp-more-btn', text: t }); b.onclick = fn; return b; };
+  const paint = (): void => {
+    if (shown >= total) { bar.remove(); return; }
+    label.textContent = '… ' + unit(total - shown) + ' 더 있어요 ';
+  };
+  const moreBtn = mk('더 보기', () => { const to = Math.min(total, shown + step); render(shown, to); shown = to; paint(); });
+  const allBtn = mk('전부 보기', () => { render(shown, total); shown = total; paint(); });
+  bar.append(label, moreBtn, allBtn);
+  paint();
+  return bar;
+}
+
 function tablePreview(text: string, delim: string, cls?: string): any {
   const wrap = el('div', { class: 'fp-tablewrap' + (cls ? ' ' + cls : '') });
   const rows = parseDelimited(text, delim);
   if (!rows.length) { wrap.append(el('div', { class: 'fp-msg' }, '빈 파일이에요.')); return wrap; }
-  const MAXR = 500, MAXC = 60;
-  const head = rows[0].slice(0, MAXC);
+  //  열은 머리줄과 본문 중 가장 넓은 줄까지 — 머리줄이 짧은 CSV 도 뒷칸이 안 사라지게(앞 1천 줄로 잰다).
+  let ncol = rows[0].length;
+  for (let i = 1; i < Math.min(rows.length, 1000); i++) if (rows[i].length > ncol) ncol = rows[i].length;
+  const head = rows[0];
   const table = el('table', { class: 'fp-table' });
   const htr = el('tr', {}, el('th', { class: 'fp-cn' }, '#'));
-  for (const cell of head) htr.append(el('th', {}, cell));
+  for (let c = 0; c < ncol; c++) htr.append(el('th', {}, head[c] != null ? head[c] : ''));
   table.append(el('thead', {}, htr));
   const tbody = el('tbody');
-  const body = rows.slice(1, 1 + MAXR);
-  body.forEach((r, i) => {
-    const tr = el('tr', {}, el('td', { class: 'fp-cn' }, String(i + 1)));
-    for (let c = 0; c < head.length; c++) tr.append(el('td', { title: r[c] != null ? r[c] : '' }, r[c] != null ? r[c] : ''));
-    tbody.append(tr);
-  });
   table.append(tbody);
   wrap.append(table);
-  const extra = (rows.length - 1) - body.length;
-  if (extra > 0) wrap.append(el('div', { class: 'fp-tablemore' }, '… 그리고 ' + extra.toLocaleString() + '개 행 더 — 전체는 다운로드해 확인하세요.'));
+  const body = rows.length - 1;
+  const more = progressive(body, STEP_ROWS, (from, to) => {
+    for (let i = from; i < to; i++) {
+      const r = rows[i + 1];
+      const tr = el('tr', {}, el('td', { class: 'fp-cn' }, String(i + 1)));
+      for (let c = 0; c < ncol; c++) tr.append(el('td', { title: r[c] != null ? r[c] : '' }, r[c] != null ? r[c] : ''));
+      tbody.append(tr);
+    }
+  }, (n) => n.toLocaleString() + '개 행이');
+  if (more) wrap.append(more);
   return wrap;
 }
 
@@ -121,8 +152,36 @@ function htmlFrame(text: string, name: string, cls?: string): any {
 
 function codeBlock(text: string, ext: string, cls?: string): any {
   const pre = el('pre', { class: 'fp-code' + (PREVIEW_CODE.has(ext) ? ' is-code' : '') + (cls ? ' ' + cls : '') });
-  pre.textContent = text;
-  return pre;
+  if (text.length <= STEP_CHARS) { pre.textContent = text; return pre; }
+  //  #5480 — 아주 긴 글(수백 MB 로그)은 앞 100만 자를 그리고 나머지는 단추로 이어 붙인다. 종전엔 화면마다 40만 자에서 잘랐다.
+  //   자르는 자리는 줄바꿈에 맞춘다(한 줄이 두 조각에 걸쳐 갈라져 보이지 않게).
+  const cut = (at: number): number => { if (at >= text.length) return text.length; const nl = text.lastIndexOf('\n', at); return nl > at - 200_000 ? nl + 1 : at; };
+  const bounds: number[] = [0];
+  while (bounds[bounds.length - 1] < text.length) bounds.push(cut(bounds[bounds.length - 1] + STEP_CHARS));
+  const chunks = bounds.length - 1;
+  const more = progressive(chunks, 1, (from, to) => { pre.append(document.createTextNode(text.slice(bounds[from], bounds[to]))); },
+    (n) => (text.length - bounds[chunks - n]).toLocaleString() + '자가');
+  return more ? el('div', { class: 'fp-wrap' }, pre, more) : pre;
+}
+
+/** md 를 그린다 — 아주 긴 문서는 문단 경계(코드 울타리 밖의 빈 줄)에서 나눠 앞부분부터, 나머지는 «더 보기» 로(#5480). */
+function markdownBody(text: string, opts: Parameters<typeof renderMarkdown>[1], cls: string): any {
+  const art = el('article', { class: cls });
+  if (text.length <= STEP_CHARS) { art.append(renderMarkdown(text, opts)); return art; }
+  const parts: string[] = [];
+  let start = 0, fence = false, at = 0;
+  for (const line of text.split('\n')) {
+    const end = at + line.length + 1;
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    if (!fence && line.trim() === '' && end - start >= STEP_CHARS) { parts.push(text.slice(start, end)); start = end; }
+    at = end;
+  }
+  if (start < text.length) parts.push(text.slice(start));
+  const box = el('div', { class: 'fp-wrap' }, art);
+  const more = progressive(parts.length, 1, (from, to) => { for (let i = from; i < to; i++) art.append(renderMarkdown(parts[i], opts)); },
+    (n) => '문서 ' + n.toLocaleString() + '조각이');
+  if (more) box.append(more);
+  return box;
 }
 
 // ══ 사무문서·압축·바이트 — 「미지원」을 대신하는 세 렌더러 ═══════════════════════════════════
@@ -164,14 +223,16 @@ const runsNode = (runs: Run[]): any[] => runs.map(runNode);
 function officeBody(doc: OfficeDoc, cls: string | undefined, urls: string[]): any {
   const wrap = el('article', { class: 'fp-doc' + (cls ? ' ' + cls : '') });
   let imgs = 0;
-  for (const b of doc.blocks as Block[]) {
-    if (b.k === 'h') { wrap.append(el('h' + Math.min(6, Math.max(1, b.level)), {}, ...runsNode(b.runs))); continue; }
-    if (b.k === 'sep') { wrap.append(el('div', { class: 'fp-docsep', text: b.title })); continue; }
+  const blocks = doc.blocks as Block[];
+  const paintBlocks = (from: number, to: number): void => { for (const b of blocks.slice(from, to)) paintBlock(b); };
+  const paintBlock = (b: Block): void => {
+    if (b.k === 'h') { wrap.append(el('h' + Math.min(6, Math.max(1, b.level)), {}, ...runsNode(b.runs))); return; }
+    if (b.k === 'sep') { wrap.append(el('div', { class: 'fp-docsep', text: b.title })); return; }
     if (b.k === 'p') {
       const p = el(b.list ? 'li' : 'p', { class: b.list ? 'fp-docli' : null }, ...runsNode(b.runs));
       if (b.indent) p.style.marginInlineStart = Math.min(6, b.indent) * 16 + 'px';
       wrap.append(p);
-      continue;
+      return;
     }
     if (b.k === 'table') {
       const t = el('table', { class: 'fp-table' });
@@ -183,9 +244,9 @@ function officeBody(doc: OfficeDoc, cls: string | undefined, urls: string[]): an
       });
       t.append(body);
       wrap.append(el('div', { class: 'fp-tablewrap' }, t));
-      continue;
+      return;
     }
-    if (b.k === 'img' && imgs < 40) {
+    if (b.k === 'img' && imgs < 2000) {
       imgs++;
       const im = el('img', { class: 'fp-docimg', alt: '', loading: 'lazy' });
       void doc.media(b.part).then((bytes) => {
@@ -196,9 +257,11 @@ function officeBody(doc: OfficeDoc, cls: string | undefined, urls: string[]): an
       }).catch(() => im.remove());
       wrap.append(im);
     }
-  }
-  if (doc.truncated) wrap.append(el('div', { class: 'fp-tablemore' }, '… 문서가 길어 앞부분만 보여 드려요 — 전체는 내려받아 확인하세요.'));
-  return wrap;
+  };
+  const more = progressive(blocks.length, 2000, paintBlocks, (n) => '문단 ' + n.toLocaleString() + '개가');
+  const out = more ? el('div', { class: 'fp-wrap' }, wrap, more) : wrap;
+  if (doc.truncated) out.append(el('div', { class: 'fp-tablemore' }, '… 문서가 아주 길어 앞부분만 보여 드려요 — 전체는 내려받아 확인하세요.'));
+  return out;
 }
 
 /** 통합문서(xlsx·ods) → 시트 단추 + 표. 시트가 하나면 단추 줄을 두지 않는다. */
@@ -215,13 +278,17 @@ function sheetBody(doc: SheetDoc, cls: string | undefined, mkBtn: PreviewHost['m
       for (const c of head) htr.append(el('th', {}, c));
       t.append(el('thead', {}, htr));
       const tb = el('tbody');
-      s.rows.slice(1).forEach((r, ri) => {
-        const tr = el('tr', {}, el('td', { class: 'fp-cn' }, String(ri + 1)));
-        for (let c = 0; c < head.length; c++) tr.append(el('td', { title: r[c] || '' }, r[c] || ''));
-        tb.append(tr);
-      });
       t.append(tb);
       wrap.append(t);
+      const more = progressive(s.rows.length - 1, STEP_ROWS, (from, to) => {
+        for (let ri = from; ri < to; ri++) {
+          const r = s.rows[ri + 1];
+          const tr = el('tr', {}, el('td', { class: 'fp-cn' }, String(ri + 1)));
+          for (let c = 0; c < head.length; c++) tr.append(el('td', { title: r[c] || '' }, r[c] || ''));
+          tb.append(tr);
+        }
+      }, (n) => n.toLocaleString() + '개 행이');
+      if (more) wrap.append(more);
     }
     if (doc.truncated) wrap.append(el('div', { class: 'fp-tablemore' }, '… 시트가 커서 앞부분만 보여 드려요 — 전체는 내려받아 확인하세요.'));
     host.replaceChildren(wrap);
@@ -241,14 +308,15 @@ function archiveBody(entries: Array<{ name: string; size: number; dir: boolean }
   const t = el('table', { class: 'fp-table' });
   t.append(el('thead', {}, el('tr', {}, el('th', { class: 'fp-cn' }, '#'), el('th', {}, '이름'), el('th', {}, '크기'))));
   const tb = el('tbody');
-  const shown = files.slice(0, 500);
-  shown.forEach((e, i) => tb.append(el('tr', {},
-    el('td', { class: 'fp-cn' }, String(i + 1)),
-    el('td', { title: e.name }, e.name),
-    el('td', { class: 'fp-cn' }, bytesShort(e.size)))));
   t.append(tb);
   wrap.append(el('div', { class: 'fp-docsep', text: `압축 파일 ${files.length.toLocaleString()}개` }), t);
-  if (files.length > shown.length) wrap.append(el('div', { class: 'fp-tablemore' }, '… 그리고 ' + (files.length - shown.length).toLocaleString() + '개 더.'));
+  const more = progressive(files.length, STEP_ROWS, (from, to) => {
+    for (let i = from; i < to; i++) {
+      const e = files[i];
+      tb.append(el('tr', {}, el('td', { class: 'fp-cn' }, String(i + 1)), el('td', { title: e.name }, e.name), el('td', { class: 'fp-cn' }, bytesShort(e.size))));
+    }
+  }, (n) => n.toLocaleString() + '개가');
+  if (more) wrap.append(more);
   return wrap;
 }
 function bytesShort(n: number): string {
@@ -260,7 +328,7 @@ function bytesShort(n: number): string {
 
 /** 마지막 겹 — 무엇인지 못 알아본 바이트. **그래도 보여준다**(16진 + 아스키). 「지원하지 않아요」로 끝내지 않는다. */
 function hexBody(bytes: Uint8Array, cls: string | undefined): any {
-  const N = Math.min(bytes.length, 4096);
+  const N = Math.min(bytes.length, 64 * 1024);
   const lines: string[] = [];
   for (let i = 0; i < N; i += 16) {
     const row = bytes.subarray(i, Math.min(i + 16, N));
@@ -317,8 +385,12 @@ export interface PreviewHost {
   size?: number;
   /** 인라인 미리보기용 응답(서버 미리보기 상한 적용 — 413 이면 '너무 큼' 안내). */
   fetchView: () => Promise<Response>;
-  /** 원본 응답(상한 우회 — 미디어 전용). */
+  /** 원본 응답(미디어를 주소로 못 틀 때 통째로 받는 길). */
   fetchDownload: () => Promise<Response>;
+  /** #5480 — 브라우저가 **주소로 바로** 열 수 있는 미리보기 주소(같은 출처 · 로그인 쿠키로 인증되는 API). 주면 영상·소리를
+   *  <video src> 로 걸어 서버의 구간 응답(HTTP Range)으로 받는다 — 다 받기 전에 틀고, 1GB 영상도 메모리에 통째로 쥐지 않는다.
+   *  쿠키가 없는 판(토큰만 있는 창)이면 열기 전에 HEAD 로 확인해 통째로 받는 길(fetchDownload)로 돌아간다. */
+  streamUrl?: string;
   /** #4582 — md 가 거는 상대경로 그림(`![](img/a.png)`)을 받는다. 인자는 **이 파일 폴더 기준으로 이미 푼** 경로(joinRel).
    *  없으면 상대경로 그림은 종전처럼 브라우저가 앱 주소 기준으로 풀어 깨진다 — 파일 좌표를 아는 화면은 반드시 준다. */
   fetchRel?: (path: string) => Promise<Response>;
@@ -339,6 +411,33 @@ export interface PreviewHost {
   /** #4075 — 주면 html 격리 프레임에 검토 다리(lib/frame-bridge)를 건다. 값은 파일마다 다른 저장 이름 공간(예 `<프로젝트>:<경로>`). */
   bridgeNs?: string;
 }
+
+/** 이 주소를 브라우저가 쿠키만으로 열 수 있나 — 토큰 머리 없이 HEAD 를 한 번 묻는다. 구간 응답(Accept-Ranges)을 하는
+ *  서버여야 «주소로 틀기» 가 이득이다(옛 서버는 큰 파일에 413 을 줬다) — 그 머리가 없으면 통째로 받는 길로 간다. */
+async function canStream(url: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' });
+    return r.ok && /bytes/i.test(r.headers.get('accept-ranges') || '');
+  } catch { return false; }
+}
+
+/** 응답의 앞부분만 읽는다 — 아주 큰 «모르는 파일» 을 통째로 메모리에 올리지 않고 머리로 판정하려고(#5480). */
+async function readHead(res: Response, limit: number): Promise<{ bytes: Uint8Array; complete: boolean }> {
+  if (!res.body) { const b = new Uint8Array(await res.arrayBuffer()); return { bytes: b, complete: true }; }
+  const rd = res.body.getReader();
+  const parts: Uint8Array[] = []; let n = 0; let complete = false;
+  for (;;) {
+    const { done, value } = await rd.read();
+    if (done) { complete = true; break; }
+    parts.push(value); n += value.length;
+    if (n >= limit) { void rd.cancel().catch(() => {}); break; }
+  }
+  const out = new Uint8Array(n); let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return { bytes: out, complete };
+}
+/** 이보다 큰 «모르는 파일» 은 머리만 받아 본다 — zip·OLE 로 보이면 그때 통째로 받는다. */
+const HEAD_ONLY_OVER = 256 * 1024 * 1024;
 
 export interface PreviewOut {
   /** 본문 노드. */
@@ -407,16 +506,22 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
   }
 
   if (AUDIO_MIME[ext] || VIDEO_MIME[ext]) {
-    // 미디어는 인라인 상한을 넘기 쉬워 원본으로 받고, 메모리 보호는 클라 상한으로.
-    if (host.size && host.size > MEDIA_MAX) return msg('파일이 커서 미리보기 대신 다운로드해 확인하세요.');
-    const r = await readable(host.fetchDownload, '파일'); if (failed(r)) return r.fail;
+    //  #5480 — 크기 상한 없음. 주소로 틀 수 있으면 브라우저가 구간만 받아 가고(다 받기 전에 재생 · 건너뛰기),
+    //   못 틀면 통째로 받아 blob 으로 건다. 종전엔 80MB 를 넘으면 «다운로드해 확인하세요» 로 끝났다.
     const isVid = !!VIDEO_MIME[ext];
-    const src = URL.createObjectURL(new Blob([await r.blob()], { type: isVid ? VIDEO_MIME[ext] : AUDIO_MIME[ext] }));
+    let src = '';
+    if (host.streamUrl && await canStream(host.streamUrl)) src = host.streamUrl;
+    else {
+      const r = await readable(host.fetchDownload, '파일'); if (failed(r)) return r.fail;
+      src = URL.createObjectURL(new Blob([await r.blob()], { type: isVid ? VIDEO_MIME[ext] : AUDIO_MIME[ext] }));
+    }
     const extra = isVid ? cls.video : cls.audio;
-    return {
-      body: el(isVid ? 'video' : 'audio', { class: (isVid ? 'fp-video' : 'fp-audio') + (extra ? ' ' + extra : ''), src, controls: 'true', preload: 'metadata', playsinline: 'true' }),
-      tools: [], wide: isVid,
-    };
+    const media = el(isVid ? 'video' : 'audio', { class: (isVid ? 'fp-video' : 'fp-audio') + (extra ? ' ' + extra : ''), src, controls: 'true', preload: 'metadata', playsinline: 'true' });
+    //  크기가 아니라 **코덱** 때문에 못 트는 경우(mkv·HEVC 를 크롬에서)는 그렇다고 말한다 — 검은 상자만 남기지 않는다.
+    const box = el('div', { class: 'fp-wrap' }, media);
+    media.addEventListener('error', () => box.replaceChildren(el('div', { class: 'fp-msg' + (cls.msg ? ' ' + cls.msg : '') },
+      '이 브라우저가 이 ' + (isVid ? '영상' : '소리') + '의 형식(코덱)을 재생하지 못해요 — 내려받아 재생하거나 MP4(H.264)·MP3 로 바꿔 다시 올리세요.')), { once: true });
+    return { body: box, tools: [], wide: isVid };
   }
 
   const isMd = MD_EXTS.has(ext);
@@ -428,7 +533,24 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
   //  ⑤ 그래도 모르면 16진 — 어느 갈래로 가든 **무언가는 그려진다**.
   if (!isMd && !isHtml && !isText) {
     const r0 = await readable(host.fetchView, '파일'); if (failed(r0)) return r0.fail;
-    const buf = await r0.arrayBuffer();
+    //  #5480 — 아주 큰 모르는 파일은 머리만 받아 판정한다. zip·OLE 로 보이면 그때 다시 통째로 받는다(구조가 파일 끝에 있다).
+    let headOnly = false;
+    let buf: ArrayBuffer;
+    if (host.size && host.size > HEAD_ONLY_OVER && !OFFICE_EXTS.has(ext) && !ARCHIVE_EXTS.has(ext)) {
+      const h = await readHead(r0, 4 * 1024 * 1024);
+      const b = h.bytes;
+      const container = (b[0] === 0x50 && b[1] === 0x4b) || (b[0] === 0xd0 && b[1] === 0xcf && b[2] === 0x11 && b[3] === 0xe0);
+      if (container && !h.complete) {
+        const r1 = await readable(host.fetchView, '파일'); if (failed(r1)) return r1.fail;
+        buf = await r1.arrayBuffer();
+      } else {
+        headOnly = !h.complete;
+        //  잘린 자리가 여러 바이트 글자(한글) 한가운데면 UTF-8 판정이 깨진다 — 마지막 줄바꿈까지만 쓴다.
+        const nl = headOnly ? b.lastIndexOf(0x0a) : -1;
+        const keep = nl > 0 ? b.subarray(0, nl + 1) : b;
+        buf = keep.buffer.slice(keep.byteOffset, keep.byteOffset + keep.byteLength) as ArrayBuffer;
+      }
+    } else buf = await r0.arrayBuffer();
     const bytes = new Uint8Array(buf);
     const { openZip, looksZip } = await zipMod();
 
@@ -505,7 +627,8 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
       if (!sniffed) return msg('빈 파일이에요.');
       //  .rtf 는 zip 도 CFB 도 아닌 **글자**다 — 제어어를 걷어 본문만 남긴다.
       const shown = ext === 'rtf' ? (await officeMod()).rtfToText(sniffed) : sniffed;
-      return { body: codeBlock(shown, ext === 'rtf' ? '' : ext, cls.code), tools: [], wide: false };
+      const code = codeBlock(shown, ext === 'rtf' ? '' : ext, cls.code);
+      return { body: headOnly ? el('div', { class: 'fp-wrap' }, code, el('div', { class: 'fp-tablemore' }, '… 파일이 아주 커서(' + bytesShort(host.size || 0) + ') 앞 4MB 를 보여 드려요 — 전체는 내려받아 확인하세요.')) : code, tools: [], wide: false };
     }
     //  ⓔ 마지막 겹 — 그래도 바이트는 보여 준다.
     return { body: hexBody(bytes, cls.code), tools: [], wide: false };
@@ -525,7 +648,7 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
   //   그 세 가지를 셸이 대신하는 다리를 건다(문서마다 저장 이름 공간이 다르다). 안 주면 종전과 같다.
   const bridged = (f: any): any => { if (host.bridgeNs) attachFrameBridge(f, host.bridgeNs); return f; };
   const rendered = (): any => (isMd
-    ? el('article', { class: 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : '') }, renderMarkdown(text, { imgFetch: mdImgFetch(host.path, host.fetchRel) }))
+    ? markdownBody(text, { imgFetch: mdImgFetch(host.path, host.fetchRel) }, 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : ''))
     : isHtml
       ? bridged(htmlFrame(text, name, cls.html))
       : codeBlock(text, ext, cls.code));
@@ -564,5 +687,5 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
 
 export {
   ARCHIVE_EXTS, AUDIO_MIME, IMG_MIME, MEDIA_MAX, OFFICE_EXTS, PREVIEW_CODE, PREVIEW_IMG, PREVIEW_TABLE, PREVIEW_TEXT, RISKY_IMG, VIDEO_MIME,
-  buildFilePreview, codeBlock, fileExtOf, htmlFrame, joinRel, mdImgFetch, parseDelimited, tablePreview,
+  buildFilePreview, canStream, codeBlock, fileExtOf, htmlFrame, joinRel, markdownBody, mdImgFetch, parseDelimited, tablePreview,
 };
