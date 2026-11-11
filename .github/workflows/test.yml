@@ -393,6 +393,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/knowledge-chunk-rls.pg-test.mjs
+      # 활성화가 앱 역할 비밀번호를 평문으로 SQL 에 싣지 않는지 — 소유자 접속 문장은 서버 감사 로그에 그대로 남는다. 그 비밀번호로 실제 로그인되는지도 본다.
+      - name: 활성화 앱 역할 비밀번호 평문 미전송 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/tenancy/activate-role-password.pg-test.mjs
       # ⑤-b1g 백필 CLI(#5232) — `.env` 로 켠 박스 그대로 CLI 를 자식 프로세스로 띄운다. 숫자 설정 없이 1초를 넘기는 문서 · 시간 상한 · 종료코드 · 채운 벡터를 실제 DB 로 본다.
       - name: 백필 CLI PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
