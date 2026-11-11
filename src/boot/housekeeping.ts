@@ -36,7 +36,7 @@ import { forEachTenant } from "../scheduler/tenant-fanout.js";   // #2479 — �
 import { ensureStateDirs, stateRoot } from "../ops/state-dir.js";
 import { roots, sharedRoot } from "../terminal/terminal-sessions.js";
 import { startLogJanitor } from "../ops/log-janitor.js";
-import { startCallLogPrune } from "../org/policies/call-log-prune.js";
+import { startCallLogPrune, pruneCallLogByPolicy } from "../org/policies/call-log-prune.js";
 import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
 import { loadStoragePolicy, loadCallLogPolicy } from "../org/policies/runtime-loaders.js";
 import { getRuntimeConfig } from "../org/store.js";
@@ -263,7 +263,11 @@ export const DB_BOOT_STEPS: BootStep[] = [
   { name: "log-janitor", gate: "scheduler", run: () => startLogJanitor(loadStoragePolicy) },
   // 호출 감사로그 prune(#1082) — mcp_call_log 를 보존기간(관리탭) 밖까지만 남긴다. 도입 이래 무기한 쌓이던 표라
   //  기간 정책이 없으면 개인 단위 활동 기록이 박스 수명 내내 축적된다. 같은 단일 프로세스 게이트(중복 DELETE 방지).
-  { name: "call-log-prune", gate: "scheduler", run: () => startCallLogPrune(loadCallLogPolicy) },
+  //  ⚠ 워크스페이스마다 돈다(perTenant) — 컨텍스트 밖에서 돌면 등록부 모드에서 primary 의 정책으로 primary 행만
+  //   지우고, 다른 워크스페이스의 호출 로그는 보존기간이 지나도 남는다. 정책도 그 워크스페이스 안에서 읽는다.
+  //   매니지드(요청별 테넌시)는 이 스텝이 꺼지고 CP 하우스키핑 틱(web.ts)이 같은 일을 테넌트마다 한다.
+  { name: "call-log-prune", gate: "scheduler", tenancy: "per-tenant",
+    run: () => startCallLogPrune(() => perTenant("call-log-prune", () => pruneCallLogByPolicy(loadCallLogPolicy))) },
   // 공유 빌드 캐시(#813 T3) — 세션이 쓸 캐시 디렉터리를 그룹쓰기(2775)로 미리 보장한다.
   //  멤버별 격리 OS 유저(#524)들이 같은 캐시를 써야 하므로 권한이 중요하다. 비치명(툴이 각자 만들기도 한다).
   { name: "shared-build-cache", gate: "always", run: ensureSharedBuildCache },
