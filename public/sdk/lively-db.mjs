@@ -10,13 +10,14 @@
 //    const app = express();
 //    app.use(livelyIdentity());                            // 들어온 요청의 사람 신원(X-Lively-Identity)을 그 요청의 DB 호출에 싣는다
 //    app.get("/api/contacts", async (_req, res) => res.json(await db.select().from(schema.contacts)));
-//    app.get("/api/me", (req, res) => res.json(livelyMember(req)));   // 이 요청의 사람 {id, name, variant, job}(한글 id · 이름도 풀어서)
+//    app.get("/api/me", (req, res) => res.json(livelyMember(req)));   // 이 요청의 사람 {id, name, variant, job, jobSource}(한글 id · 이름도 풀어서)
 //
 //  백그라운드 작업(#4486 — 요청 하나는 30초, 작업은 15분까지 · 같은 앱 코드의 라우트를 라이블리가 뒤에서 부른다):
 //    const jobs = livelyJobs();                            // 환경변수 LIVELY_API_URL · LIVELY_APP_TOKEN · 신원은 livelyIdentity() 가 실은 것
 //    app.post("/api/transcribe", async (req, res) => res.status(202).json(await jobs.start("/api/jobs/transcribe", { file: req.body.file })));
 //    app.post("/api/jobs/transcribe", async (req, res) => {        // 작업 라우트 — 일을 다 끝낸 뒤 답한다(답한 뒤의 일은 멈춘다)
-//      const text = await callTranscribeApi(req.body.file);        //  여기서 부르는 DB 는 작업을 시작한 사람 이름으로 쓴다(livelyMember(req).job 이 작업 번호)
+//      const text = await callTranscribeApi(req.body.file);        //  여기서 부르는 DB 는 작업을 시작한 사람 이름으로 쓴다(livelyMember(req).job 이 작업 번호 ·
+//                                                                  //   .jobSource 가 시작한 자리 — 앱 화면이면 app-ui · app-front, MCP 면 mcp)
 //      await db.insert(schema.transcripts).values({ text });
 //      res.json({ ok: true });                                     //  2xx 면 작업 done · 그 밖은 failed(응답 앞 64KB 가 결과로 남는다)
 //    });
@@ -32,7 +33,7 @@ import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/pg-proxy";
 
-export const LIVELY_DB_SDK_VERSION = "4";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487) · 4 = generateDrizzleSchema 의 references.column
+export const LIVELY_DB_SDK_VERSION = "5";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487) · 4 = generateDrizzleSchema 의 references.column · 5 = livelyMember(req).jobSource
 const IDENTITY_HEADER = "x-lively-identity";
 
 /** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · index(묶음에서 몇 번째 문장인지, 0부터). */
@@ -60,7 +61,7 @@ export function livelyIdentity() {
 }
 
 /**
- * 이 요청의 사람 — 앱 서버 함수 앞의 검사 층(#4485)이 신원을 검사한 뒤 붙인 머리글을 풀어 준다: {id, name, variant}. 없으면 null.
+ * 이 요청의 사람 — 앱 서버 함수 앞의 검사 층(#4485)이 신원을 검사한 뒤 붙인 머리글을 풀어 준다: {id, name, variant, job, jobSource}. 없으면 null.
  *  x-lively-member(구성원 id) · x-lively-member-name(이름)은 퍼센트 인코딩이다(한글 id «윤상민» 도 머리글에 실리게) — 그대로 쓰지 말고 이것으로 읽는다.
  *  ⚠ 라이블리 앱 서버 함수 안에서만 믿을 수 있다(검사 층이 들어온 같은 이름 머리글을 지우고 다시 쓴다). 그 밖에서 돌리면 누구나 이 머리글을 붙일 수 있다.
  *  자가호스팅 박스(#4487)에서는 박스 위 다른 프로세스가 컨테이너의 앱 포트로 검사 층을 건너뛰고 보낼 수 있다 — 검사 층이 싣는 열쇠(x-lively-guard-key)가
@@ -81,8 +82,14 @@ export function livelyMember(req) {
   const id = one("x-lively-member");
   if (!id) return null;
   //  job — 백그라운드 작업이면 그 작업 번호(#4486 — 검사 층이 게이트웨이에 «이 작업 시작» 을 확인받은 뒤 붙인다), 사람이 보낸 요청이면 null.
-  const job = Number(one("x-lively-job"));
-  return { id: dec(id), name: dec(one("x-lively-member-name") ?? ""), variant: one("x-lively-variant") === "draft" ? "draft" : "pub", job: Number.isSafeInteger(job) && job > 0 ? job : null };
+  const n = Number(one("x-lively-job"));
+  const job = Number.isSafeInteger(n) && n > 0 ? n : null;
+  //  jobSource — 그 작업을 시작한 자리(x-lively-job-source · 검사 층 6 판부터): app-ui(라이블리 화면 안의 앱) · app-front(앱 주소로 연 앱 화면) ·
+  //   mcp(MCP 도구 부르기 — AI 세션 포함) · web(REST) · app-server(앱 서버 코드) · app-job(작업 안의 작업) · mcp-tool(앱이 선언한 MCP 도구).
+  //   작업이 아니거나 · 옛 검사 층이거나 · 꼴이 틀리면 null — «앱 화면에서 누른 것만» 받는 라우트는 null 을 화면이 아닌 것으로 읽는다.
+  const src = job ? one("x-lively-job-source") : null;
+  const jobSource = typeof src === "string" && /^[a-z][a-z-]{0,31}$/.test(src) ? src : null;
+  return { id: dec(id), name: dec(one("x-lively-member-name") ?? ""), variant: one("x-lively-variant") === "draft" ? "draft" : "pub", job, jobSource };
 }
 
 // ── 백그라운드 작업(#4486 앱 v2-7) ────────────────────────────────────────────────────────
