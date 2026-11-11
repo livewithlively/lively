@@ -826,6 +826,26 @@
   "input_hash": "4442a5a6f6164db4"
  },
  {
+  "name": "org_record_scope_get",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/record-scope"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_record_scope_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/record-scope"
+  ],
+  "input_hash": "0e3cc75348cbea72"
+ },
+ {
   "name": "org_auto_runs",
   "scope": "memory",
   "mcp": true,

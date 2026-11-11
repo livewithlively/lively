@@ -391,8 +391,12 @@ function armPeerGuards() {
 const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
 //  셸 명령은 훅과 같은 판정 파일이 낸다 — 배치 실행이 막힌 윈도우 PC 에선 `lively` 대신 node 로 바로 부르는 꼴(record-scope.mjs workRootAddVia).
 //  범위 밖이라고 판정했으면 그 파일은 이미 불러와져 있다. 그 함수가 없는 옛 훅 폴더면 종전 문구.
-const outsideToolText = () => "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
-  + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`;
+//  «어디서나» 방식의 제외 폴더면 같은 명령(work-root add)이 제외 목록에서 빼는 일을 한다 — 문구만 둘로 가른다.
+const outsideToolText = (reason = "outside") => (reason === "excluded"
+  ? "이 폴더는 라이블리 제외 폴더라서 라이블리가 꺼져 있습니다. "
+    + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 켜세요(제외 목록에서 뺍니다) — 다음 메시지부터 연결됩니다.`
+  : "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
+    + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`);
 let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
 async function loadScopeModule() {
   if (scopeMod !== undefined) return scopeMod;
@@ -409,6 +413,11 @@ function scopeInNow() {
   if (!scopeMod || !scopeKnowsFolder()) return true;
   try { return scopeMod.inScopeNow({ env: process.env, cwd: process.cwd(), lively: LIVELY }).inScope; }
   catch { return true; }
+}
+//  꺼진 이유(outside · excluded) — 범위 밖 호출에 돌려줄 문구를 가르는 데만 쓴다.
+function scopeReasonNow() {
+  try { return scopeMod?.inScopeNow({ env: process.env, cwd: process.cwd(), lively: LIVELY }).reason || "outside"; }
+  catch { return "outside"; }
 }
 
 export function serveMcpLocal({ input = process.stdin, output = process.stdout } = {}) {
@@ -465,7 +474,7 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
       } else if (method === "tools/list") {
         okr(id, { tools: scopeIn() ? TOOLS.map(toolSpec) : [] });
       } else if (method === "tools/call" && !scopeIn()) {
-        okr(id, { content: [{ type: "text", text: outsideToolText() }], isError: true });   // 기록 범위 밖(#5016)
+        okr(id, { content: [{ type: "text", text: outsideToolText(scopeReasonNow()) }], isError: true });   // 기록 범위 밖(#5016)
       } else if (method === "tools/call") {
         try {
           okr(id, await handleCall(params && params.name, params && params.arguments));

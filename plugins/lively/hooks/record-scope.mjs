@@ -3,8 +3,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // 왜 (#5016, 알파컷 요청 2026-10-26): 훅·MCP 가 사용자 범위로 깔려 있어 **어느 폴더에서 켠 AI 든** 라이블리가 붙었다.
-//  팀원이 개인 폴더에서 한 말이 첫 지시 프로젝트·지식·대화 기록으로 팀 워크스페이스에 올라갔다. 그래서 컴퓨터마다
-//  «작업 폴더에서만(기본) | 어디서나» 를 고르고, 작업 폴더 밖에서 켠 세션은 인코그니토와 똑같이 둔다.
+//  팀원이 개인 폴더에서 한 말이 첫 지시 프로젝트·지식·대화 기록으로 팀 워크스페이스에 올라갔다. 그래서 범위를 두고,
+//  범위 밖에서 켠 세션은 인코그니토와 똑같이 둔다.
+//  방식은 **조직(관리자)이 정한다**(2026-11-11 — 처음엔 컴퓨터마다 골랐다): «작업 폴더에서만(기본 꺼짐 · 허용 목록) | 어디서나(기본 켜짐 ·
+//  제외 목록)». 구성원은 컴퓨터마다 **목록만** 덮어쓴다(자기 줄 더하기·빼기, 조직 줄 끄기·켜기). 서버가 유효 값을 계산해 내려준다
+//  (src/org/store/record-scope.ts) — 이 파일은 그 값으로 판정만 한다.
 //
 // 누가 쓰나 — 판정이 갈리면 «도구는 있는데 훅은 꺼진» 반쪽 세션이 생기므로 전부 이 파일을 쓴다:
 //   훅: session-preload(설정 받기·알림) · run-custom · work-flag · stop-writeback-gate · sync-harness-assets
@@ -16,20 +19,24 @@
 //   ① 라이블리가 띄운 세션 — 켬. 웹·노드가 띄운 것(LIVELY_SESSION_ID — 폴더는 게이트웨이가 골랐다)과 사람이 `lively run` 으로
 //      띄운 것(LIVELY_RUN=1 — 라이블리로 켜겠다고 고른 것, 상민님 2026-10-26). 모드(읽기만·인코그니토)는 띄울 때 정한 대로 간다.
 //   ② 이 컴퓨터 설정 사본이 아직 없다 — 켬(종전 동작). 아래 «설정 사본» 참고.
-//   ③ 이 컴퓨터의 기록 범위가 «어디서나» — 켬.
+//   ③ «어디서나» 방식 — 세션 폴더가 제외 폴더와 같거나 그 아래가 아니면 켬. 제외 폴더 안이어도 ④ 표식이 있으면 켬. 아니면 끔(excluded).
+//      제외 목록 = 유효 제외 목록(조직 줄 중 이 컴퓨터가 끈 것 빼고 ∪ 이 컴퓨터 줄).
 //   ④ 세션 폴더나 그 위에 라이블리 프로젝트 표식(.lively/project.json — project_id 가 든 것)이 있다 — 켬.
 //      `lively work` 의 ~/lively/projects/<번호> · 노드가 받은 공유폴더 ~/workspace/project/<번호> · `lively project init` 한 폴더.
-//   ⑤ 세션 폴더가 등록한 작업 폴더와 같거나 그 아래 — 켬. 목록 = 이 컴퓨터 설정 ∪ ~/.lively/work-roots(설치 시드·손 편집) ∪ env.
-//   ⑥ 그 밖 — 끔.
+//   ⑤ 세션 폴더가 작업 폴더와 같거나 그 아래 — 켬. 목록 = 유효 허용 목록 ∪ ~/.lively/work-roots(설치 시드·손 편집 — 이 컴퓨터가 끈
+//      조직 줄은 뺀다) ∪ env.
+//   ⑥ 그 밖 — 끔(outside).
 //
-// 설정 사본: ~/.lively/record-scope.json — 이 컴퓨터 설정의 **로컬 사본**(정본은 서버 org_member.local_scope_pref[machine_id]).
+// 설정 사본: ~/.lively/record-scope.json — 이 컴퓨터 **유효 값**의 로컬 사본(정본은 서버 — 조직 org_runtime_config.record_scope_policy·work_roots
+//   + 이 컴퓨터 오버라이드 org_member.local_scope_pref[machine_id]). 모양: {scope, work_roots, exclude_roots, off_roots, org, updated_at, synced_at, pending}.
 //   설치기·세션 시작 훅(session-preload)이 서버와 맞추고(syncScopeSettings), 나머지는 이 파일만 읽는다(네트워크 0).
 //   ⚠ 사본이 **없으면**(설치 시드가 오프라인이었음 · 구 게이트웨이 · 테스트) 종전 동작이다. 서버 기본값이 «작업 폴더에서만» 이라
 //    한 번이라도 받아 오면 그때부터 판정이 걸린다 — 받기 전에 전부 끄면 오프라인 한 번에 라이블리가 영영 안 붙는 세션이 생기고,
 //    그걸 되살릴 길(이 파일)을 받는 것도 그 세션이다.
 //   ⚠ 사본이 **깨졌으면**(읽히지만 모양이 틀림) «작업 폴더에서만» 으로 본다 — 한 번 받은 적이 있다는 뜻이라 닫는 쪽이 맞고,
 //    다음 세션 시작이 서버 값으로 덮는다.
-//   바꾼 것은 먼저 pending 에 합치고(같은 키는 나중 것이 이긴다) 그 묶음을 서버에 올린다 — 올리기 성공분만 pending 에서 걷는다.
+//   바꾼 것은 먼저 pending 에 합치고(같은 경로를 넣었다 빼면 서로 지운다) 그 묶음을 서버에 올린다 — 올리기 성공분만 pending 에서 걷는다.
+//   pending: add·remove(허용 목록) · exclude_add·exclude_remove(제외 목록). 옛 키트가 남긴 scope 는 올리기만 하고 판정엔 안 쓴다(서버가 버린다).
 //
 // 세션 폴더(sessionDirOf): «AI 를 켠 자리» 다. 세션 중에 AI 가 cd 해도 바뀌지 않아야 판정이 흔들리지 않는다.
 //   LIVELY_SESSION_DIR(어댑터가 실음) > CLAUDE_PROJECT_DIR(클로드가 훅·MCP 에 싣는 시작 폴더) > 훅 입력 cwd > 프로세스 cwd.
@@ -129,13 +136,13 @@ function cleanRoots(list) {
   }
   return out.slice(0, MAX_ROOTS);
 }
+const PENDING_LISTS = ["add", "remove", "exclude_add", "exclude_remove"];
+const cleanOrg = (o) => (o && typeof o === "object" && !Array.isArray(o) ? { work_roots: cleanRoots(o.work_roots), exclude_roots: cleanRoots(o.exclude_roots) } : { work_roots: [], exclude_roots: [] });
 function cleanPending(p) {
   if (!p || typeof p !== "object" || Array.isArray(p)) return null;
   const out = {};
   if (isScope(p.scope)) out.scope = p.scope;
-  const add = cleanRoots(p.add), remove = cleanRoots(p.remove);
-  if (add.length) out.add = add;
-  if (remove.length) out.remove = remove;
+  for (const k of PENDING_LISTS) { const v = cleanRoots(p[k]); if (v.length) out[k] = v; }
   return Object.keys(out).length ? out : null;
 }
 
@@ -147,7 +154,8 @@ export function scopeFileState(lively) {
   try {
     const j = JSON.parse(raw);
     if (!j || typeof j !== "object" || Array.isArray(j) || !isScope(j.scope)) return { state: "corrupt", file: null };
-    return { state: "ok", file: { scope: j.scope, work_roots: cleanRoots(j.work_roots), updated_at: typeof j.updated_at === "string" ? j.updated_at : "",
+    return { state: "ok", file: { scope: j.scope, work_roots: cleanRoots(j.work_roots), exclude_roots: cleanRoots(j.exclude_roots),
+      off_roots: cleanRoots(j.off_roots), org: cleanOrg(j.org), updated_at: typeof j.updated_at === "string" ? j.updated_at : "",
       synced_at: typeof j.synced_at === "string" ? j.synced_at : "", pending: cleanPending(j.pending) } };
   } catch { return { state: "corrupt", file: null }; }
 }
@@ -159,23 +167,29 @@ export const readScopeFile = (lively) => scopeFileState(lively).file;
 export const rootKey = (p, home) => normPath(expandHome(p, home));
 
 /** 판정에 쓰는 값 — 서버 상태 위에 아직 못 올린 변경(pending)을 얹는다.
- *  사본이 없으면 null(= 종전 동작), 깨졌으면 «작업 폴더에서만 · 빈 목록»(머리말 참고). */
+ *  사본이 없으면 null(= 종전 동작), 깨졌으면 «작업 폴더에서만 · 빈 목록»(머리말 참고).
+ *  방식(scope)은 서버가 준 조직 값 그대로다 — pending 의 scope(옛 키트가 남긴 것)는 판정에 쓰지 않는다. */
 export function effectiveSettings(lively) {
   const st = scopeFileState(lively);
   if (st.state === "missing") return null;
-  if (st.state === "corrupt") return { scope: DEFAULT_SCOPE, work_roots: [], updated_at: "", synced_at: "", pending: null, corrupt: true };
+  if (st.state === "corrupt") return { scope: DEFAULT_SCOPE, work_roots: [], exclude_roots: [], off_roots: [], org: cleanOrg(null),
+    updated_at: "", synced_at: "", pending: null, corrupt: true };
   const f = st.file;
   const home = dirname(lively);
   const p = f.pending || {};
-  const removed = (x) => (p.remove || []).some((r) => rootKey(r, home) === rootKey(x, home));
-  const roots = [...f.work_roots, ...(p.add || [])]
-    .filter((x, i, a) => !removed(x) && a.findIndex((y) => rootKey(y, home) === rootKey(x, home)) === i);
-  return { scope: p.scope || f.scope, work_roots: roots, updated_at: f.updated_at, synced_at: f.synced_at, pending: f.pending };
+  const same = (a) => (b) => rootKey(a, home) === rootKey(b, home);
+  const apply = (base, add = [], remove = []) => [...base, ...add]
+    .filter((x, i, a) => !remove.some(same(x)) && a.findIndex(same(x)) === i);
+  //  끈 조직 줄 = 서버가 말한 것 + 아직 못 올린 빼기 − 아직 못 올린 더하기(다시 켬). ~/.lively/work-roots 파일 줄을 거르는 데 쓴다.
+  const off = apply(f.off_roots, p.remove, p.add);
+  return { scope: f.scope, work_roots: apply(f.work_roots, p.add, p.remove), exclude_roots: apply(f.exclude_roots, p.exclude_add, p.exclude_remove),
+    off_roots: off, org: f.org, updated_at: f.updated_at, synced_at: f.synced_at, pending: f.pending };
 }
 
 export function writeScopeFile(lively, data) {
   mkdirSync(lively, { recursive: true });
   const body = { scope: isScope(data.scope) ? data.scope : DEFAULT_SCOPE, work_roots: cleanRoots(data.work_roots),
+    exclude_roots: cleanRoots(data.exclude_roots), off_roots: cleanRoots(data.off_roots), org: cleanOrg(data.org),
     updated_at: data.updated_at || "", synced_at: data.synced_at || "", ...(cleanPending(data.pending) ? { pending: cleanPending(data.pending) } : {}) };
   // 쓰는 도중에 다른 훅이 읽어도 반쪽 JSON 을 보지 않게 — 같은 폴더의 임시 파일에 쓰고 이름을 바꾼다.
   const tmp = join(lively, `.${SETTINGS_FILE}.${process.pid}.${Date.now()}.tmp`);
@@ -186,21 +200,24 @@ export function writeScopeFile(lively, data) {
 
 /** 서버 응답 하나를 사본으로 굳힌다. pending 은 호출자가 정한다. */
 export function recordServerState(lively, pref, pending = null) {
-  return writeScopeFile(lively, { scope: pref.scope, work_roots: pref.work_roots, updated_at: pref.updated_at || "",
-    synced_at: new Date().toISOString(), pending });
+  //  옛 게이트웨이는 제외 목록·끈 줄·조직 목록을 안 준다 — 없으면 빈 목록이다(옛 판엔 그런 것이 없다).
+  return writeScopeFile(lively, { scope: pref.scope, work_roots: pref.work_roots, exclude_roots: pref.exclude_roots, off_roots: pref.off_roots,
+    org: pref.org, updated_at: pref.updated_at || "", synced_at: new Date().toISOString(), pending });
 }
 
-/** 못 올린 변경을 합친다 — 같은 경로를 넣었다 뺐으면 서로 지우고, scope 는 나중 것이 이긴다. 파일이 없으면 기본값 위에 만든다. */
-export function addPending(lively, { scope, add = [], remove = [] } = {}) {
-  const f = readScopeFile(lively) || { scope: DEFAULT_SCOPE, work_roots: [], updated_at: "", synced_at: "", pending: null };
-  return writeScopeFile(lively, { ...f, pending: mergePending(f.pending, { scope, add, remove }, dirname(lively)) });
+/** 못 올린 변경을 합친다 — 같은 경로를 넣었다 뺐으면 서로 지운다(목록마다 따로). 파일이 없으면 기본값 위에 만든다. */
+export function addPending(lively, { add = [], remove = [], exclude_add = [], exclude_remove = [] } = {}) {
+  const f = readScopeFile(lively) || { scope: DEFAULT_SCOPE, work_roots: [], exclude_roots: [], off_roots: [], org: null, updated_at: "", synced_at: "", pending: null };
+  return writeScopeFile(lively, { ...f, pending: mergePending(f.pending, { add, remove, exclude_add, exclude_remove }, dirname(lively)) });
 }
-function mergePending(base, { scope, add = [], remove = [] }, home) {
+function mergePending(base, { add = [], remove = [], exclude_add = [], exclude_remove = [] }, home) {
   const p = { ...(base || {}) };
   const same = (a) => (b) => rootKey(a, home) === rootKey(b, home);
-  for (const a of add) { p.remove = (p.remove || []).filter((x) => !same(a)(x)); if (!(p.add || []).some(same(a))) p.add = [...(p.add || []), a]; }
-  for (const r of remove) { p.add = (p.add || []).filter((x) => !same(r)(x)); if (!(p.remove || []).some(same(r))) p.remove = [...(p.remove || []), r]; }
-  if (isScope(scope)) p.scope = scope;
+  const put = (inKey, outKey, list) => {
+    for (const a of list) { p[outKey] = (p[outKey] || []).filter((x) => !same(a)(x)); if (!(p[inKey] || []).some(same(a))) p[inKey] = [...(p[inKey] || []), a]; }
+  };
+  put("add", "remove", add); put("remove", "add", remove);
+  put("exclude_add", "exclude_remove", exclude_add); put("exclude_remove", "exclude_add", exclude_remove);
   return cleanPending(p);
 }
 /** 올리기에 성공한 묶음(posted)을 지금 pending 에서 걷는다 — 그 사이 새로 쌓인 것(다른 프로세스의 CLI)은 남는다. */
@@ -210,8 +227,7 @@ function withoutPosted(current, posted, home) {
   const same = (a, b) => rootKey(a, home) === rootKey(b, home);
   const out = { ...current };
   if (posted.scope && out.scope === posted.scope) delete out.scope;
-  if (out.add) out.add = out.add.filter((x) => !(posted.add || []).some((y) => same(x, y)));
-  if (out.remove) out.remove = out.remove.filter((x) => !(posted.remove || []).some((y) => same(x, y)));
+  for (const k of PENDING_LISTS) if (out[k]) out[k] = out[k].filter((x) => !(posted[k] || []).some((y) => same(x, y)));
   return cleanPending(out);
 }
 
@@ -222,15 +238,29 @@ export function legacyRoots(lively) {
   } catch { return []; }
 }
 
-/** 작업 폴더 목록(펼친 절대경로) — 이 컴퓨터 설정 ∪ work-roots 파일 ∪ LIVELY_WORK_ROOTS. 상대경로 줄은 버린다. */
+/** 작업 폴더 목록(펼친 절대경로) — 유효 허용 목록 ∪ work-roots 파일 ∪ LIVELY_WORK_ROOTS. 상대경로 줄은 버린다.
+ *  work-roots 파일은 설치 때 깔린 조직 목록의 사본이기도 하다 — 이 컴퓨터가 끈 조직 줄(off_roots)은 파일에 남아 있어도 뺀다. */
 export function workRootsOf(lively, settings, env = process.env) {
   const home = dirname(lively);
-  const list = [...(settings?.work_roots || []), ...legacyRoots(lively)];
+  const off = (settings?.off_roots || []).map((r) => rootKey(r, home));
+  const list = [...(settings?.work_roots || []), ...legacyRoots(lively).filter((r) => !off.includes(rootKey(r, home)))];
   //  env 는 PATH 와 같은 꼴(POSIX `:` · 윈도우 `;`) — 윈도우 경로의 `C:` 를 자르지 않게 플랫폼 구분자만 쓴다.
   const e = String(env.LIVELY_WORK_ROOTS || "").trim();
   if (e) list.push(...e.split(delimiter).map((s) => s.trim()).filter(Boolean));
   const out = [];
   for (const r of list) {
+    const x = expandHome(r, home);
+    if (!isAbsolute(x)) continue;
+    if (!out.some((y) => normPath(y) === normPath(x))) out.push(resolve(x));
+  }
+  return out;
+}
+
+/** 제외 폴더 목록(펼친 절대경로) — 유효 제외 목록만(«어디서나» 방식에서 쓴다). 상대경로 줄은 버린다. */
+export function excludeRootsOf(lively, settings) {
+  const home = dirname(lively);
+  const out = [];
+  for (const r of settings?.exclude_roots || []) {
     const x = expandHome(r, home);
     if (!isAbsolute(x)) continue;
     if (!out.some((y) => normPath(y) === normPath(x))) out.push(resolve(x));
@@ -250,13 +280,21 @@ export function matchWorkRoot(dir, roots) {
 
 // ── 판정 ─────────────────────────────────────────────────────────────────────
 /**
- * @returns {{ inScope: boolean, reason: "spawned"|"unsynced"|"anywhere"|"project"|"work_root"|"outside", dir: string, scope?: string, root?: string }}
+ * @returns {{ inScope: boolean, reason: "spawned"|"unsynced"|"anywhere"|"project"|"work_root"|"outside"|"excluded", dir: string, scope?: string, root?: string }}
+ *  root — project: 표식이 있는 폴더 · work_root: 품은 작업 폴더 · excluded: 품은 제외 폴더.
  */
 export function decideRecordScope({ env = process.env, dir = "", lively = livelyDirOf(env) } = {}) {
   if (String(env.LIVELY_SESSION_ID || "").trim() || String(env.LIVELY_RUN || "").trim() === "1") return { inScope: true, reason: "spawned", dir };
   const s = effectiveSettings(lively);
   if (!s) return { inScope: true, reason: "unsynced", dir };
-  if (s.scope === "anywhere") return { inScope: true, reason: "anywhere", dir, scope: s.scope };
+  if (s.scope === "anywhere") {
+    const ex = dir ? matchWorkRoot(dir, excludeRootsOf(lively, s)) : null;
+    if (!ex) return { inScope: true, reason: "anywhere", dir, scope: s.scope };
+    //  제외 폴더 안이어도 라이블리 프로젝트 폴더는 켠다 — 표식은 «여기는 라이블리로 일한다» 를 사람이 고른 것이다(작업 폴더에서만 방식과 같다).
+    const marker = findProjectMarker(dir, dirname(lively));
+    if (marker) return { inScope: true, reason: "project", dir, scope: s.scope, root: dirname(dirname(marker)) };
+    return { inScope: false, reason: "excluded", dir, scope: s.scope, root: ex };
+  }
   if (dir) {
     const marker = findProjectMarker(dir, dirname(lively));
     if (marker) return { inScope: true, reason: "project", dir, scope: s.scope, root: dirname(dirname(marker)) };
@@ -285,7 +323,9 @@ export function machineIdOf(lively, { create = true } = {}) {
 // ── 서버와 맞추기(설치기 · 세션 시작 훅 · CLI) ────────────────────────────────
 //  보내는 것: 회원 토큰 + 이 컴퓨터 id + (pending 이 있으면) 바꾼 값. **세션 id·폴더·대화는 보내지 않는다** —
 //  작업 폴더 밖 세션도 이 조회는 하므로(안 하면 웹에서 새로 등록한 폴더를 그 폴더의 세션이 영영 모른다) 신원 헤더를 싣지 않는다.
-const validPref = (j) => !!j && typeof j === "object" && isScope(j.scope) && Array.isArray(j.work_roots);
+//  제외 목록·끈 줄·조직 목록은 옛 게이트웨이가 안 준다 — 있으면 배열이어야 하고, 없으면 빈 것으로 본다.
+const validPref = (j) => !!j && typeof j === "object" && isScope(j.scope) && Array.isArray(j.work_roots)
+  && ["exclude_roots", "off_roots"].every((k) => j[k] === undefined || Array.isArray(j[k]));
 const newer = (a, b) => { const x = Date.parse(a || ""), y = Date.parse(b || ""); return Number.isFinite(x) && Number.isFinite(y) && x > y; };
 
 async function call(send, url, { method = "GET", body, token, timeoutMs }) {
@@ -306,7 +346,8 @@ async function pushPending({ lively, base, token, send, machineId, timeoutMs }) 
   const posted = readScopeFile(lively)?.pending || null;
   if (!posted) return { ok: true, pushed: false };
   const r = await call(send, `${base}/api/ui/me/local-scope`, { method: "POST", token, timeoutMs,
-    body: { machine_id: machineId, ...(posted.scope ? { scope: posted.scope } : {}), ...(posted.add ? { add: posted.add } : {}), ...(posted.remove ? { remove: posted.remove } : {}) } });
+    body: { machine_id: machineId, ...(posted.scope ? { scope: posted.scope } : {}),
+      ...Object.fromEntries(PENDING_LISTS.filter((k) => posted[k]).map((k) => [k, posted[k]])) } });
   if (!r.ok || !validPref(r.body?.preference)) return { ok: false, pushed: false, status: r.status };
   const now = readScopeFile(lively);
   recordServerState(lively, r.body.preference, withoutPosted(now?.pending || null, posted, dirname(lively)));
@@ -327,9 +368,9 @@ export async function syncScopeSettings({ lively, gw, token, send, machineId = m
 }
 
 /** CLI 의 한 번 바꾸기 — 먼저 pending 에 합치고(나중 변경이 이긴다) 그 묶음을 올린다. 못 닿으면 묶음은 그대로 남는다
- *  (다음 세션 시작·다음 CLI 가 올린다). 판정은 어느 쪽이든 곧바로 새 값을 본다. */
-export async function changeScopeSettings({ lively, gw, token, send, machineId = machineIdOf(lively), scope, add = [], remove = [], timeoutMs = 2500 }) {
-  addPending(lively, { scope, add, remove });
+ *  (다음 세션 시작·다음 CLI 가 올린다). 판정은 어느 쪽이든 곧바로 새 값을 본다. 방식(scope)은 여기서 못 바꾼다 — 조직이 정한다. */
+export async function changeScopeSettings({ lively, gw, token, send, machineId = machineIdOf(lively), add = [], remove = [], exclude_add = [], exclude_remove = [], timeoutMs = 2500 }) {
+  addPending(lively, { add, remove, exclude_add, exclude_remove });
   if (gw && token && machineId && typeof send === "function") {
     const r = await pushPending({ lively, base: String(gw).replace(/\/+$/, ""), token, send, machineId, timeoutMs });
     if (r.ok && r.pushed) return { synced: true, settings: readScopeFile(lively) };
@@ -377,14 +418,34 @@ export function connectHint(harness = "claude", { plugin = false, addCmd = workR
 const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$]+$/.test(d) && d.length <= MAX_ROOT_LEN;
 
 /** 범위 밖 세션 시작 알림 — 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext).
+ *  reason·root 는 판정(decideRecordScope) 그대로 — excluded(«어디서나» 방식의 제외 폴더)면 무엇을 빼야 켜지는지(root)를 말한다.
  *  win·nodeExe·lively 는 등록 명령의 꼴을 정한다(workRootAddCommand) — 시험만 바꿔 넣는다. */
-export function outsideNotice({ dir = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
+export function outsideNotice({ dir = "", reason = "outside", root = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
   const add = (d = "") => workRootAddCommand({ win, nodeExe, cliPath: join(lively, "lib", "lively.mjs"), dir: d });
   const hint = connectHint(harness, { plugin, addCmd: add() });
-  const user = plugin ? `[라이블리] 작업 폴더가 아니라 꺼져 있습니다 · 여기서 쓰려면 ${hint}하세요` : `[라이블리] 작업 폴더가 아니라 꺼져 있습니다 · 여기서 쓰려면 ${hint}`;
+  const excluded = reason === "excluded";
+  const why = excluded ? "제외 폴더라 꺼져 있습니다" : "작업 폴더가 아니라 꺼져 있습니다";
+  const user = plugin ? `[라이블리] ${why} · 여기서 쓰려면 ${hint}하세요` : `[라이블리] ${why} · 여기서 쓰려면 ${hint}`;
   const where = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)는` : "이 세션을 연 폴더는";
-  const run = safeDir(dir) ? `\`${add(dir)}\`` : `이 폴더에서 \`${add()}\``;
   const shellNote = isDirect(add()) ? `(${PS_NOTE} 실행한다. 배치 실행이 막힌 PC 에서도 되도록 \`lively\` 대신 node 로 바로 부르는 꼴이다)` : "";
+  if (excluded) {
+    //  켜려면 품은 제외 폴더(root)를 목록에서 빼야 한다 — 그 아래 전부가 켜지므로 사람이 그걸 알고 고르게 한다.
+    const exDir = safeDir(root) ? root : "";
+    const run = exDir ? `\`${add(exDir)}\`` : `\`${add()}\``;
+    const whereEx = exDir ? `이 컴퓨터의 라이블리 제외 폴더(\`${exDir}\`) 안이라` : "이 컴퓨터의 라이블리 제외 폴더 안이라";
+    const how = plugin
+      ? `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 그 제외 폴더를 이 컴퓨터에서 끄라고 안내하라 — 다음 세션부터 연결된다.`
+      : `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — 그 제외 폴더가 이 컴퓨터의 제외 목록에서 빠져 그 아래 전부가 연결되고, 이 세션도 다음 메시지부터 연결된다. 그 아래 전부가 켜진다는 것을 사람에게 먼저 말하라.`;
+    const ai = [
+      "## 라이블리 꺼짐 — 제외 폴더 (#5016)",
+      `${where} ${whereEx} 라이블리가 꺼져 있다 — 회사 맥락 주입·기록·대화 업로드·라이블리 도구가 이 세션엔 없다.`,
+      "다른 곳(예: ~/.codex/AGENTS.md · ~/.config/opencode/AGENTS.md)에 라이블리 블록이 남아 있어도 그 규칙(기록하라 등)은 이 세션에 적용하지 마라.",
+      how,
+      "사람이 요청하지 않았는데 제외 목록을 바꾸지 마라.",
+    ].join("\n");
+    return { user, ai };
+  }
+  const run = safeDir(dir) ? `\`${add(dir)}\`` : `이 폴더에서 \`${add()}\``;
   const how = plugin
     ? `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 컴퓨터의 작업 폴더에 등록하라고 안내하라 — 다음 세션부터 연결된다.`
     : `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — 이 폴더가 작업 폴더로 등록되고 이 세션도 다음 메시지부터 연결된다.`;

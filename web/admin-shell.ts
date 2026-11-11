@@ -20,6 +20,7 @@ import { openMyProfileModal } from './me-profile.js';
 import { myAiSection } from './me-ai.js';
 import { myLoginsSection } from './me-logins.js';
 import { myAssetsSection } from './me-assets.js';
+import { recordScopeEditor } from './admin-record-scope.js';
 import { memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
 import { memberAiConnectorsPanel } from './admin-ai-connectors.js';   // #4427 구성원 Claude 커넥터 — 정책 스위치 · 연결 현황
 import { reposPanel } from './admin-repos.js';
@@ -612,6 +613,8 @@ function agentAssetsSection(detail, data) {
     segTabs('agent-assets', [
       { key: 'assets', label: '스킬 · 서브에이전트 · 커맨드', render: (h) => harnessAssetEditor(h, data) },
       { key: 'hooks', label: '커스텀 훅 (코드)', render: (h) => customHookEditor(h, data) },
+      // 기록 범위(#5016 후속) — 구성원 컴퓨터에서 라이블리를 켤 폴더의 조직 기본값. 스킬처럼 조직이 깔고 구성원은 컴퓨터마다 목록만 덮어쓴다.
+      { key: 'record-scope', label: '기록 범위', show: !!state.admin.canEdit, render: (h) => { void recordScopeEditor(h); } },
     ]));
 }
 
