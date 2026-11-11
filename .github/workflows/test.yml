@@ -438,6 +438,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/mirror/notion-sweep.pg-test.mjs
+      # ⑤-d2 무변경 재싱크(#1667) — 외부 좌표 미러가 바뀐 것 없는 재싱크에서 판 · updated_at 을 올리지 않고 last_synced_at ·
+      #    수집기 표식만 고치는가. 무변경으로 잘못 보면 원본 변경이 조용히 버려지고, 놓치면 전량 재인입 커넥터가 주기마다
+      #    수천 행의 판을 올린다 — 둘 다 upsert 와 jsonb · timestamptz 왕복의 결과라 행을 깔고 다시 읽는다.
+      - name: 미러 무변경 재싱크 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/mirror/resync-noop.pg-test.mjs
       # ⑤-e 프로젝트 저장소 이관의 소유 확인(#4064) — 매니지드 게이트웨이 로컬 폴더는 워크스페이스로 안 갈려
       #    «이 워크스페이스 것으로 증명된 파일만» 멤버 저장소로 옮긴다. 증명이 SQL 에 산다: AGENTS.md 는 «그 파일이
       #    쓰인 시각에 쓰던 이름»(가장 늦은 감사 행·창 경계·창 상한·이름 없는 행), 일반 파일은 자료 좌표 대조.
