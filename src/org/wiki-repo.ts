@@ -19,7 +19,8 @@ import path from "node:path";
 import { PROJECT_SHARED_BASE } from "../project/project-fs.js";
 import { REPOS_SUBDIR } from "../project/project-provision.js";
 import { getRepo } from "../domainmap/core/repos.js";
-import { listMarkdown } from "../connectors/domain-wiki.js";
+import { listMarkdown, selectMarkdown } from "../connectors/domain-wiki.js";
+import { parseGlobList } from "../connectors/path-glob.js";
 import { upsertCollector, listCollectors } from "./store/collectors.js";
 import { HttpError } from "../http-error.js";
 
@@ -88,6 +89,26 @@ export function blobBaseUrl(gitUrl: string | null | undefined, branch: string | 
   return { url: `https://${h}/${repoPath}/-/blob/${br}`, guessed: true };
 }
 
+/**
+ * 클론이 지금 체크아웃한 브랜치 — 수집기는 워킹트리를 읽으므로 근거 링크도 그 브랜치를 가리켜야 한다.
+ *  레지스트리의 default_branch 와 다를 수 있다: 클론은 원격 HEAD(호스트의 기본 브랜치)를 받는데, 레지스트리 값은
+ *  사람이 등록할 때 적은 것이다(실측: 원격 기본이 develop 인 레포가 레지스트리에는 main — 링크가 다른 판을 열었다).
+ *  `.git` 이 파일(워크트리 · 서브모듈)이면 gitdir 을 따라간다. 분리된 HEAD 이거나 못 읽으면 null(호출부가 레지스트리 값을 쓴다).
+ */
+export function cloneHeadBranch(clonePath: string): string | null {
+  try {
+    let gitDir = path.join(clonePath, ".git");
+    if (fs.statSync(gitDir).isFile()) {
+      const m = fs.readFileSync(gitDir, "utf8").match(/^gitdir:\s*(.+)\s*$/m);
+      if (!m) return null;
+      gitDir = path.resolve(clonePath, m[1].trim());
+    }
+    const head = fs.readFileSync(path.join(gitDir, "HEAD"), "utf8").trim();
+    const ref = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+    return ref ? ref[1].trim() || null : null;
+  } catch { return null; }
+}
+
 export interface WikiRepoEnsureResult {
   repo: string;
   collector_id: number;
@@ -99,6 +120,8 @@ export interface WikiRepoEnsureResult {
   content_subdir: string;
   /** 지금 그 경로에서 보이는 .md 개수 — 켜기 전에 "정말 위키인가"를 사람이 가늠하는 유일한 숫자. */
   markdown_files: number;
+  /** 수집기에 포함/제외 경로가 있으면 그 범위 안의 개수(실제로 지식이 될 수). 범위 설정이 없으면 생략. */
+  markdown_files_in_scope?: number;
   base_url: string | null;
   /** base_url 을 호스트 문법으로 추정했는가(열리지 않으면 사람이 고쳐야 한다). */
   base_url_guessed: boolean;
@@ -128,8 +151,9 @@ export async function ensureWikiRepoCollector(opts: {
 
   const contentSubdir = detectContentSubdir(clonePath);
   const contentRoot = path.join(clonePath, contentSubdir);
-  const markdownFiles = fs.existsSync(contentRoot) ? listMarkdown(contentRoot).length : 0;
-  const base = blobBaseUrl(row?.git_url ?? null, row?.default_branch ?? null);
+  const markdownList = fs.existsSync(contentRoot) ? listMarkdown(contentRoot) : [];
+  const markdownFiles = markdownList.length;
+  const base = blobBaseUrl(row?.git_url ?? null, cloneHeadBranch(clonePath) ?? row?.default_branch ?? null);
 
   const key = wikiCollectorKey(repo);
   const instance = wikiInstance(repo);
@@ -159,6 +183,11 @@ export async function ensureWikiRepoCollector(opts: {
     note: `등록 레포 '${repo}' 의 마크다운을 지식으로 인입합니다(#1881 G9). 경로는 게이트웨이 공유 클론이라 사람이 관리하지 않습니다.`,
   }, opts.actor, opts.source ?? "web");
 
+  //  범위는 커넥터와 같은 함수로 센다(selectMarkdown) — 미리보기 숫자와 실제 인입이 어긋나지 않게.
+  const include = parseGlobList(String(view.config?.include ?? existing?.config?.include ?? ""));
+  const exclude = parseGlobList(String(view.config?.exclude ?? existing?.config?.exclude ?? ""));
+  const inScope = include.length || exclude.length ? selectMarkdown(markdownList, include, exclude).length : undefined;
+
   return {
     repo,
     collector_id: view.id,
@@ -169,6 +198,7 @@ export async function ensureWikiRepoCollector(opts: {
     clone_path: clonePath,
     content_subdir: contentSubdir,
     markdown_files: markdownFiles,
+    ...(inScope === undefined ? {} : { markdown_files_in_scope: inScope }),
     base_url: base.url,
     base_url_guessed: base.guessed,
   };

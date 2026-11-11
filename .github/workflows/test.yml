@@ -446,6 +446,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/mirror/resync-noop.pg-test.mjs
+      # ⑤-d3 domain-wiki 경로 식별 모드의 라우팅(#1670) — 경로 모드 항목은 외부 좌표 upsert 로만 가서 같은 이름의 사람 지식을
+      #    덮지 않는가 · 슬러그 모드는 종전처럼 이름 키로 채택하는가. 갈림이 fields 한 칸이라 행을 깔고 다시 읽어야 보인다.
+      - name: domain-wiki 경로 모드 라우팅 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/mirror/domain-wiki-path.pg-test.mjs
       # ⑤-e 프로젝트 저장소 이관의 소유 확인(#4064) — 매니지드 게이트웨이 로컬 폴더는 워크스페이스로 안 갈려
       #    «이 워크스페이스 것으로 증명된 파일만» 멤버 저장소로 옮긴다. 증명이 SQL 에 산다: AGENTS.md 는 «그 파일이
       #    쓰인 시각에 쓰던 이름»(가장 늦은 감사 행·창 경계·창 상한·이름 없는 행), 일반 파일은 자료 좌표 대조.
