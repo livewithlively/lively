@@ -13,6 +13,7 @@
 //   R3 역할 있음 + 상태파일 같은 역할인데 비밀번호 없음 → ALTER ROLE PASSWORD
 //   각 갈래: ① 보낸 SQL 어디에도 평문 없음 ② 역할 문장이 실제로 가로채졌다(훅이 헛돌지 않았다) ③ 저장값이 보낸 SCRAM verifier 그대로
 //           ④ 상태파일의 앱 DSN 으로 로그인된다 ⑤ (R2 · R3) 직전 비밀번호로는 로그인이 안 된다
+//           ④ · ⑤ 는 틀린 비밀번호가 거부되는(trust 가 아닌) 접속 경로에서 본다 — 그런 경로가 없으면 실패로 친다
 import pg from "pg";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
@@ -81,6 +82,19 @@ try {
   };
   const stored = async () => String((await su.query(`SELECT rolpassword FROM pg_authid WHERE rolname=$1`, [ROLE])).rows[0]?.rolpassword ?? "");
 
+  //  공식 postgres 이미지는 루프백(127.0.0.1)을 trust 로 두고 나머지 주소만 scram-sha-256 으로 검사한다. CI 의 서비스
+  //   컨테이너는 같은 파드라 루프백으로 닿으므로, 이 머신의 비루프백 주소로도 붙어 보고 틀린 비밀번호가 거부되는 주소를 쓴다.
+  const onHost = (dsn, host) => { const u = new URL(dsn); u.hostname = host; return u.toString(); };
+  const authHost = async (dsn) => {
+    const cands = [new URL(dsn).hostname, ...Object.values(os.networkInterfaces()).flat()
+      .filter((i) => i && i.family === "IPv4" && !i.internal).map((i) => i.address)];
+    for (const h of cands) {
+      const wrong = new URL(onHost(dsn, h)); wrong.password = "definitely-wrong-password";
+      const r = await canLogin(wrong.toString());
+      if (r.startsWith("ERR") && /password authentication failed/i.test(r)) return h;
+    }
+    return null;
+  };
   const branch = async (tag, roleRe, prevDsn) => {
     SENT.length = 0;
     await activateWorkspaceRegistry({ ownerMember: "pgt-admin" });
@@ -92,8 +106,13 @@ try {
     const sv = await stored();
     chk(`${tag}③ 저장된 값이 보낸 SCRAM verifier 그대로다(서버가 평문을 받아 해시한 게 아니다)`,
       sv.startsWith("SCRAM-SHA-256$") && SENT.some((s) => s.includes(sv)), sv.slice(0, 20));
-    chk(`${tag}④ 상태파일의 앱 DSN 으로 로그인된다`, (await canLogin(dsn)) === ROLE, await canLogin(dsn));
-    if (prevDsn) chk(`${tag}⑤ 직전 비밀번호로는 로그인이 안 된다`, (await canLogin(prevDsn)).startsWith("ERR"), "직전 비밀번호가 아직 통한다");
+    //  ④ · ⑤ 는 비밀번호를 실제로 검사하는 접속 경로에서만 뜻이 있다 — trust 경로에서는 아무 비밀번호나 통한다.
+    const host = await authHost(dsn);
+    chk(`${tag}④' 비밀번호를 검사하는 접속 경로가 있다(틀린 비밀번호가 거부된다)`, !!host, "모든 후보 주소가 trust 다 — 로그인 단언이 헛돈다");
+    if (!host) return dsn;
+    const login = await canLogin(onHost(dsn, host));
+    chk(`${tag}④ 상태파일의 앱 DSN 으로 로그인된다(${host})`, login === ROLE, login);
+    if (prevDsn) chk(`${tag}⑤ 직전 비밀번호로는 로그인이 안 된다`, (await canLogin(onHost(prevDsn, host))).startsWith("ERR"), "직전 비밀번호가 아직 통한다");
     return dsn;
   };
 
