@@ -97,6 +97,13 @@ const token = () => (
   || (process.env.LIVELY_TOKEN || "").trim()
 ).trim();
 
+// 상류 연결 방식 — 정본은 lively-mcp-gateway.mjs 의 connectionMode(까닭·우선순위 주석이 거기 있다). 같은 설정을 같은 규칙으로 읽는다.
+//  import 하지 않는 까닭: 그 모듈은 불러오는 것만으로 전역 uncaughtException·unhandledRejection 핸들러를 단다(이 프로세스의 예외까지 삼킨다).
+const connectionMode = () => {
+  const v = String(process.env.LIVELY_MCP_CONNECTION || readLively("mcp-connection") || "").trim().toLowerCase();
+  return v === "reuse" ? "reuse" : "fresh";
+};
+
 // stdout 은 JSON-RPC 전용이다 — 실수로 새어나간 console.log 가 프로토콜을 깨지 않게 stderr 로 묶는다.
 console.log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
 
@@ -112,6 +119,8 @@ function makeCtx(callCwd) {
     try {
       const headers = { authorization: `Bearer ${tok}` };
       if (body !== undefined) headers["content-type"] = "application/json";
+      //  이 프로세스도 세션 내내 떠 있어 네트워크가 바뀐 뒤의 죽은 keep-alive 연결을 집을 수 있다(까닭은 lively-mcp-gateway.mjs 의 연결 방식 주석).
+      if (connectionMode() === "fresh") headers.connection = "close";
       const res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
       // 401/403 은 **무엇을 하라는지**까지 말한다(#2617). 종전 문구는 "게이트웨이 401 (/api/ui/repos)" 뿐이라,
       //  이걸 받은 에이전트가 처방을 몰라 로컬 툴을 통째로 포기하고 손으로 우회했다(실측 2026-09-03 — 그 바람에
