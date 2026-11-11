@@ -33,6 +33,7 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { itemsPool } from "../../db/client.js";
+import { scramSha256Verifier } from "../../db/scram-verifier.js";
 import { IDENTITY_GLOBAL_TABLES, TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID, ensureTenantColumn } from "../../db/tenant-column.js";
 import { writeTenancyRuntime, readTenancyRuntimeSync, registryModeActive } from "./state.js";
 import { PRIMARY_SLUG, invalidateRegistryCache } from "./registry.js";
@@ -228,13 +229,14 @@ export async function activateWorkspaceRegistry(opts: {
   let password: string;
   if (prior && roleExists && priorUser === appRole && !opts.appDsn) {
     try { password = new URL(prior.app_dsn).password; } catch { password = ""; }
-    if (!password) { password = crypto.randomBytes(24).toString("base64url"); await itemsPool.query(`ALTER ROLE ${qi(appRole)} PASSWORD '${password}'`); }
+    if (!password) { password = crypto.randomBytes(24).toString("base64url"); await itemsPool.query(`ALTER ROLE ${qi(appRole)} PASSWORD '${scramSha256Verifier(password)}'`); }
   } else {
     password = crypto.randomBytes(24).toString("base64url");
-    // 비밀번호는 식별자가 아니라 리터럴 — base64url 은 따옴표·백슬래시가 없어 안전하다(생성 직후라 주입면 없음).
+    // 평문이 아니라 verifier 를 보낸다 — 소유자 접속의 문장은 서버 감사 로그(log_statement)에 그대로 남는다(db/scram-verifier.ts).
+    //  verifier 는 base64 와 `$`·`:` 뿐이라 따옴표·백슬래시가 없어 리터럴로 넣어도 안전하다.
     await itemsPool.query(roleExists
-      ? `ALTER ROLE ${qi(appRole)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${password}'`
-      : `CREATE ROLE ${qi(appRole)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${password}'`);
+      ? `ALTER ROLE ${qi(appRole)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${scramSha256Verifier(password)}'`
+      : `CREATE ROLE ${qi(appRole)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${scramSha256Verifier(password)}'`);
   }
   await grantAppRole(itemsPool, owner, appRole);
 
