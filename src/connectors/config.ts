@@ -310,8 +310,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "instance", env: "DOMAIN_WIKI_INSTANCE", secret: false, label: "Instance", hint: "repo 식별자 (기본 domain-wiki)" },
       //  경로 식별 · 범위 · 가리기 — 큰 제품 문서 레포용(파일명이 겹치는 레포). 비우면 종전 동작 그대로.
       { key: "id_mode", env: "DOMAIN_WIKI_ID_MODE", secret: false, label: "식별 방식", hint: "slug(기본 · 파일명이 곧 지식 이름) | path(레포 상대경로로 식별 — 같은 파일명이 여럿이거나 한글 파일명이 있는 레포). 첫 싱크 전에 정한다 — 나중에 바꾸면 옛 행은 보관되고 새로 만들어진다(사람이 붙인 분류·핀은 옛 행에 남는다)" },
-      { key: "include", env: "DOMAIN_WIKI_INCLUDE", secret: false, label: "포함 경로", hint: "glob, 쉼표 또는 줄바꿈 구분(줄바꿈을 쓰면 쉼표는 패턴의 일부) (예: Card/, docs/**/*.md) — 비우면 전부, 적었는데 유효한 패턴이 없으면 아무것도 안 들어온다" },
-      { key: "exclude", env: "DOMAIN_WIKI_EXCLUDE", secret: false, label: "제외 경로", hint: "glob, 쉼표 또는 줄바꿈 구분 (예: **/_archive/ = 어느 깊이든, scripts/ = 루트의 그 폴더, CLAUDE.md = 어느 깊이의 그 파일) — 포함보다 우선" },
+      { key: "include", env: "DOMAIN_WIKI_INCLUDE", secret: false, label: "포함 경로", hint: "glob, 쉼표 또는 줄바꿈 구분(줄바꿈을 쓰면 쉼표는 패턴의 일부) (예: Card/, docs/**/*.md) — 비우면 전부, 적었는데 유효한 패턴이 없으면 아무것도 안 들어온다. 범위를 좁히면 범위 밖이 된 문서의 지식은 다음 싱크에 보관된다" },
+      { key: "exclude", env: "DOMAIN_WIKI_EXCLUDE", secret: false, label: "제외 경로", hint: "glob, 쉼표 또는 줄바꿈 구분 (예: **/_archive/ = 어느 깊이든, scripts/ = 루트의 그 폴더, CLAUDE.md = 어느 깊이의 그 파일) — 포함보다 우선. 이미 들어온 문서를 제외하면 그 지식은 다음 싱크에 보관된다" },
       { key: "mask", env: "DOMAIN_WIKI_MASK", secret: false, label: "민감정보 가리기", hint: "phone,email,bizno,rrn 또는 all — 쓰기 전에 전화번호·이메일·사업자번호·주민/법인번호를 가림 (기본 안 가림 · 모르는 낱말이 있으면 전부 가림). 첫 싱크 전에 켠다 — 나중에 켜면 이전 판(변경 이력)에 가리기 전 본문이 남는다. 파일 경로·이름은 가리지 않는다(민감한 경로는 제외 경로로)" },
       { key: "mask_keep_email_domains", env: "DOMAIN_WIKI_MASK_KEEP_EMAIL", secret: false, label: "남길 이메일 도메인", hint: "쉼표 구분 (예: example.com) — 조직 구성원 주소는 가리지 않음" },
     ],

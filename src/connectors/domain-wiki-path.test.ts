@@ -214,15 +214,15 @@ const NAMES: Record<string, string> = {
 };
 const RELS = Object.keys(NAMES);
 const nameOf = (rel: string): string => NAMES[rel] ?? `unknown-${rel}`;
-const NOTION_KEY = "notion-310746a5-e573-8002-a8e4-cc75b89ec108";
-const T = buildPathLinkTargets(RELS, nameOf, new Set([NOTION_KEY]));
+const NOTION_PAGE = "notion-310746a5-e573-8002-a8e4-cc75b89ec108";
+const T = buildPathLinkTargets(RELS, nameOf, new Set([NOTION_PAGE]));
 const L = (md: string, fromRel: string): string => normalizeWikiLinksByPath(md, fromRel, T);
 const sorted = (xs: readonly string[] | undefined): string[] => [...(xs ?? [])].sort();
 
 test("§2.3 buildPathLinkTargets: byPath 는 경로 → nameOf(경로), notion 은 주어진 집합", () => {
   for (const rel of RELS) assert.equal(T.byPath.get(rel), NAMES[rel], `§2.3 byPath.get(${rel}) = nameOf(${rel})`);
   assert.equal(T.byPath.get("Card/none.md"), undefined, "§2.3 rels 에 없는 경로는 byPath 에 없다");
-  assert.equal(T.notion.has(NOTION_KEY), true, "§2.3 notion 집합을 그대로 담는다");
+  assert.equal(T.notion.has(NOTION_PAGE), true, "§2.3 notion 집합을 그대로 담는다");
 });
 
 test("§2.3 buildPathLinkTargets: byBase 는 pathBaseKey(경로) → 그 파일명을 가진 이름들", () => {
@@ -498,6 +498,89 @@ test("§3.8 한 글 안에 여러 종류가 섞여도 각각 가리고 센다", 
     "전화 [전화번호], [전화번호] / 메일 [이메일] / 사업자 [사업자번호] / 주민 [주민·법인번호] / 대표 1588-1234",
     "§3.8 종류마다 가린다");
   assert.deepEqual(counts(r), { phone: 2, email: 1, bizno: 1, rrn: 1 }, "§3.8 종류별 개수");
+});
+
+// ── §3.9 리뷰 수정(2026-11-11, #1670) — 사양 엣지 표(행마다 단언) ──────────────────────────────────────
+//  이메일: 가리기를 켠 싱크가 파일 하나 때문에 멈추면 안 된다(입력 길이에 대략 선형). 결과는 종전과 같다 —
+//   붙어 있는 주소 둘도 둘 다 가린다. 지역부(@ 앞)가 64자(RFC 5321 상한)를 넘으면 @ 앞 64자와 도메인만 가린다.
+//   A1 @ 없는 이메일 글자 덩어리 10만 자 → 2초 안 · 그대로 | A2 정상 주소 | A3 + 로 붙은 주소 둘 → 둘 다
+//   A4 남길 도메인 | A5 지역부 정확히 64자 → 통째 | A6 65자 → 앞 1자만 남음 | A7 지역부 10만 자 + 도메인 → 2초 안 · 1건
+//   A8 a@ + 점 없는 글자 10만 자 → 2초 안 · 그대로
+//  전화: 국번을 괄호로 감싼 꼴도 괄호까지 가린다. 종전 꼴 · 종전 «안 가림» 은 그대로.
+//   B1 (02) 1234-5678 | B2 (031) 123-4567 · (02)1234-5678 · (010) 1234-5678 | B3 종전 꼴 | B4 가운데 3자리
+//   B5 가운데 2자리 · 가운데-끝 구분자 없음 → 그대로 | B6 0 으로 시작하지 않는 괄호 국번 → 그대로
+type Masked = ReturnType<typeof maskSensitive>;
+const within = (ms: number, fn: () => Masked): Masked => {
+  const t0 = Date.now(); const r = fn(); const dt = Date.now() - t0;
+  assert.ok(dt < ms, `${ms}ms 안에 끝나야 한다(걸린 시간 ${dt}ms)`);
+  return r;
+};
+
+test("§3.9 A1 email — @ 없는 이메일 글자 덩어리 10만 자도 2초 안에 끝나고 그대로 둔다", () => {
+  const blob = "aZ9._%+-".repeat(12_500);
+  const r = within(2000, () => maskSensitive(blob, K("email")));
+  assert.equal(r.text, blob, "§3.9 A1 그대로");
+  assert.equal(r.masked.email, 0, "§3.9 A1 개수 0");
+});
+
+test("§3.9 A2·A3·A4 email — 정상 주소 · 붙은 주소 둘 · 남길 도메인", () => {
+  const a2 = maskSensitive("연락 hong.gil-dong+tag@mail.example.co.kr 로", K("email"));
+  assert.equal(a2.text, "연락 [이메일] 로", "§3.9 A2 정상 주소");
+  assert.equal(a2.masked.email, 1, "§3.9 A2 개수 1");
+  const a3 = maskSensitive("a@b.com+c@d.com", K("email"));
+  assert.equal(a3.text, "[이메일][이메일]", "§3.9 A3 + 로 붙은 주소 둘 다");
+  assert.equal(a3.masked.email, 2, "§3.9 A3 개수 2");
+  const a4 = maskSensitive("x@example.com", K("email"), ["example.com"]);
+  assert.equal(a4.text, "x@example.com", "§3.9 A4 남길 도메인");
+  assert.equal(a4.masked.email, 0, "§3.9 A4 개수 0");
+});
+
+test("§3.9 A5·A6 email 경계 — 지역부 64자는 통째, 65자는 앞 1자만 남는다", () => {
+  const a5 = maskSensitive(`${"a".repeat(64)}@x.com`, K("email"));
+  assert.equal(a5.text, "[이메일]", "§3.9 A5 지역부 64자 → 통째");
+  assert.equal(a5.masked.email, 1, "§3.9 A5 개수 1");
+  const a6 = maskSensitive(`b${"a".repeat(64)}@x.com`, K("email"));
+  assert.equal(a6.text, "b[이메일]", "§3.9 A6 지역부 65자 → 앞 1자만 남음");
+  assert.equal(a6.masked.email, 1, "§3.9 A6 개수 1");
+});
+
+test("§3.9 A7·A8 email — 아주 긴 지역부 · 점 없는 긴 도메인도 2초 안", () => {
+  const long = `${"a".repeat(100_000)}@x.com`;
+  const r7 = within(2000, () => maskSensitive(long, K("email")));
+  assert.equal(r7.masked.email, 1, "§3.9 A7 개수 1");
+  assert.equal(r7.text, `${"a".repeat(100_000 - 64)}[이메일]`, "§3.9 A7 @ 앞 64자와 도메인을 가린다");
+  const dotless = `a@${"b".repeat(100_000)}`;
+  const r8 = within(2000, () => maskSensitive(dotless, K("email")));
+  assert.equal(r8.text, dotless, "§3.9 A8 도메인에 점이 없으면 주소가 아니다");
+  assert.equal(r8.masked.email, 0, "§3.9 A8 개수 0");
+});
+
+test("§3.9 B1·B2·B4 phone — 괄호 국번 꼴은 괄호까지 가린다", () => {
+  const b1 = maskSensitive("대표 (02) 1234-5678 입니다", K("phone"));
+  assert.equal(b1.text, "대표 [전화번호] 입니다", "§3.9 B1 (02) 1234-5678");
+  assert.equal(b1.masked.phone, 1, "§3.9 B1 개수 1");
+  for (const p of ["(031) 123-4567", "(02)1234-5678", "(010) 1234-5678", "(02) 123-4567"]) {
+    const r = maskSensitive(`연락처 ${p} 로`, K("phone"));
+    assert.equal(r.text, "연락처 [전화번호] 로", `§3.9 B2·B4 가린다: ${p}`);
+    assert.equal(r.masked.phone, 1, `§3.9 B2·B4 개수 1: ${p}`);
+  }
+});
+
+test("§3.9 B3 phone — 종전 꼴은 그대로 가린다", () => {
+  for (const p of ["02-1234-5678", "031.123.4567", "02 1234 5678", "02)1234-5678", "010-1234-5678", "01012345678"]) {
+    const r = maskSensitive(`연락처 ${p} 로`, K("phone"));
+    assert.equal(r.text, "연락처 [전화번호] 로", `§3.9 B3 가린다: ${p}`);
+    assert.equal(r.masked.phone, 1, `§3.9 B3 개수 1: ${p}`);
+  }
+});
+
+test("§3.9 B5·B6 phone — 가운데 2자리 · 가운데-끝 구분자 없음 · 0 으로 시작하지 않는 괄호 국번은 그대로", () => {
+  for (const s of ["(02) 12-3456", "(02) 12345678", "(1588) 1234", "(12) 3456-7890"]) {
+    const text = `값 ${s} 끝`;
+    const r = maskSensitive(text, K("phone"));
+    assert.equal(r.text, text, `§3.9 B5·B6 안 가린다: ${s}`);
+    assert.equal(r.masked.phone, 0, `§3.9 B5·B6 개수 0: ${s}`);
+  }
 });
 
 // ═══════════════════════════════ §4 수집기 순수 함수 ═══════════════════════════════
