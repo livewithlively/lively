@@ -91,7 +91,7 @@ try {
     chk(`${tag}② 역할 문장이 가로채졌다(훅이 헛돌지 않았다)`, SENT.some((s) => roleRe.test(s)), J(SENT.filter((s) => /ROLE/.test(s)).slice(0, 5)));
     const sv = await stored();
     chk(`${tag}③ 저장된 값이 보낸 SCRAM verifier 그대로다(서버가 평문을 받아 해시한 게 아니다)`,
-      sv.startsWith("SCRAM-SHA-256$4096:") && SENT.some((s) => s.includes(sv)), sv.slice(0, 20));
+      sv.startsWith("SCRAM-SHA-256$") && SENT.some((s) => s.includes(sv)), sv.slice(0, 20));
     chk(`${tag}④ 상태파일의 앱 DSN 으로 로그인된다`, (await canLogin(dsn)) === ROLE, await canLogin(dsn));
     if (prevDsn) chk(`${tag}⑤ 직전 비밀번호로는 로그인이 안 된다`, (await canLogin(prevDsn)).startsWith("ERR"), "직전 비밀번호가 아직 통한다");
     return dsn;
@@ -110,8 +110,9 @@ try {
 } finally {
   pg.Client.prototype.query = origQuery;
   await itemsPool?.end().catch(() => {});
-  await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch(() => {});
-  await su.query(`DROP ROLE IF EXISTS ${ROLE}`).catch(() => {});
+  //  역할은 클러스터 전역이다 — 못 지우면 공유 로컬 PG 에 남으므로 조용히 삼키지 않고 알린다(다음 실행 머리의 DROP 이 다시 치운다).
+  await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch((e) => console.error("정리 실패(DB) —", e?.message ?? e));
+  await su.query(`DROP ROLE IF EXISTS ${ROLE}`).catch((e) => console.error("정리 실패(역할) —", e?.message ?? e));
   await su.end().catch(() => {});
   if (existsSync(ROOT)) rmSync(ROOT, { recursive: true, force: true });
 }

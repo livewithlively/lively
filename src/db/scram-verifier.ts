@@ -11,12 +11,13 @@
 //  (src/backend/libpq/auth-scram.c)이 정하고, 회귀는 org/tenancy/activate-role-password.pg-test.mjs 가 실제 로그인으로 잡는다.
 import crypto from "node:crypto";
 
-export function scramSha256Verifier(password: string, opts: { salt?: Buffer; iterations?: number } = {}): string {
+export function scramSha256Verifier(password: string): string {
   // SCRAM 은 비밀번호를 SASLprep 으로 정규화한 뒤 해시한다. 출력 가능한 ASCII 는 SASLprep 이 바꾸지 않으므로
   //  그 범위만 받는다 — 밖의 문자를 정규화 없이 해시하면 서버가 기대하는 값과 갈려 로그인이 깨진다.
   if (!/^[\x21-\x7e]+$/.test(password)) throw new Error("SCRAM verifier 는 공백 없는 출력 가능 ASCII 비밀번호만 만든다");
-  const salt = opts.salt ?? crypto.randomBytes(16);
-  const iterations = opts.iterations ?? 4096;
+  // salt 16바이트 · 4096회는 Postgres 가 평문을 받아 직접 만들 때의 기본값과 같다.
+  const salt = crypto.randomBytes(16);
+  const iterations = 4096;
   const salted = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256");
   const clientKey = crypto.createHmac("sha256", salted).update("Client Key").digest();
   const storedKey = crypto.createHash("sha256").update(clientKey).digest();
