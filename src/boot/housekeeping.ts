@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "../auth/bearer.js";
 import { registryModeActive } from "../org/tenancy/state.js";
 import { autoActivateWorkspaceRegistry } from "../org/tenancy/activate.js";
+import { syncPrimaryWorkspaceName } from "../org/tenancy/registry.js";   // #5524 — 기본 워크스페이스 이름 맞추기
+import { getOrgProfile } from "../org/store/profile.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
 import { reapOAuth } from "../org/store/oauth.js";
@@ -213,6 +215,19 @@ export const DB_BOOT_STEPS: BootStep[] = [
     markSchemaBoot("restarting");
     // 로그 flush·진행 중 healthz 응답 여유만 주고 끝낸다. 종료코드 0 = 의도된 재기동(launchd/systemd KeepAlive).
     setTimeout(() => process.exit(0), 500);
+  } },
+  // #5524 — 기본 워크스페이스(primary)의 등록부 이름을 조직 프로필의 보이는 이름에 맞춘다(신고 2026-11-11 «저장 눌러도
+  //  그대로»). 저장할 때마다 맞추는 일은 updateOrgProfile 이 한다 — 이 스텝은 **그 전에 생긴 어긋남**을 거둔다:
+  //  활성화가 프로필보다 먼저 돌아 «우리 워크스페이스» 로 굳은 박스, 고치기 전 판에서 이름을 저장한 박스.
+  //  자리: 활성화(workspace-registry) **뒤** — 활성화 부팅은 거기서 재기동하므로, 다음 부팅에 등록부 행이 선 뒤 맞춘다.
+  //  registry 에서만 돈다(단일 모드 화면은 등록부를 안 그리고, 매니지드는 registry 를 켜지 않는다). 같으면 쓰지 않는다. 비치명.
+  { name: "primary-workspace-name", gate: "always", run: async () => {
+    if (!registryModeActive()) return;
+    try {
+      if (await syncPrimaryWorkspaceName(await getOrgProfile())) logger.info("기본 워크스페이스 이름을 조직 프로필에 맞췄습니다(#5524)");
+    } catch (err) {
+      logger.warn({ err }, "기본 워크스페이스 이름 맞추기 실패(비치명 — 다음 저장·부팅에서 다시 맞춘다)");
+    }
   } },
   // 프로비저닝 디폴트 콘텐츠 시딩(#713) — 코드가 이름으로 전제하는 지식·훅·스킬(예: 모든 프로젝트 AGENTS.md 가
   //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
