@@ -393,6 +393,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/knowledge-chunk-rls.pg-test.mjs
+      # 호출 감사로그 prune 의 워크스페이스별 실행 — DELETE 에 워크스페이스 조건이 없어 행 보안이 격리의 전부다. 보존기간도 워크스페이스별 행에서 읽는다.
+      - name: 호출 감사로그 prune 워크스페이스별 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/policies/call-log-prune.pg-test.mjs
       # ⑤-b1g 백필 CLI(#5232) — `.env` 로 켠 박스 그대로 CLI 를 자식 프로세스로 띄운다. 숫자 설정 없이 1초를 넘기는 문서 · 시간 상한 · 종료코드 · 채운 벡터를 실제 DB 로 본다.
       - name: 백필 CLI PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}

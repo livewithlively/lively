@@ -130,8 +130,9 @@ export async function initOrgCore(pool: Pool): Promise<void> {
   //  args = redactDeep(시크릿 마스킹) + 큰 문자열 절단 + 총량 캡(src/org/policies/tool-log.ts). 본문 같은 대형 페이로드는 잘려 들어간다.
   //  읽는 쪽: 직접/LLM 쿼리(db_query 가 이 테이블을 SELECT) + 대시보드 집계(/api/ui/tool-usage → 관리탭 'MCP 호출 통계').
   //  harness = 접속 신원(x-lively-harness 헤더 우선, 없으면 UA — claude-code/codex/openclaw/null). actor = 토큰 principal(userId).
-  //  ⚠ 보존정책: v1 은 무제한(소팀 볼륨 가정 — 일 수천~수만 행, 90일<1M 행은 postgres 무리 없음). 성장 시
-  //   주기 prune(예: DELETE WHERE called_at < now()-INTERVAL '90 days')를 별도 cron 액션으로 추가한다(현재 미구현).
+  //  보존: 관리탭 보존기간(call_log_policy — org/policies/call-log-policy.ts)을 넘긴 행은 org/policies/call-log-prune.ts 가 지운다.
+  //   부르는 자리 — 자가호스팅은 부팅 하우스키핑 'call-log-prune' 스텝(boot/housekeeping.ts, 워크스페이스마다),
+  //   매니지드는 CP 하우스키핑 틱(web.ts /api/ops/housekeeping/tick).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS mcp_call_log(
       id BIGSERIAL PRIMARY KEY,
