@@ -575,6 +575,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/capabilities/knowledge/write-gate-name.pg-test.mjs
+      # ⑤-m2b 외부 미러 지식의 내용 쓰기 거절(#1669) — 판정은 순수 함수지만 그것이 knowledge_save · knowledge_set_title 의
+      #    «어떤 쓰기보다 먼저» 에 걸려 있는지는 핸들러를 불러 행을 다시 읽어야 보인다(빠지면 저장은 성공으로 답하고 재싱크가 지운다).
+      - name: 미러 지식 쓰기 거절 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/knowledge/mirror-guard.pg-test.mjs
       # ⑤-m3 지식 fields 부분 갱신 — 잠근 행 위에서 병합·버전 대조·감사가 한 트랜잭션에 묶이는가. 목으로는 jsonb 왕복과
       #    FOR UPDATE 위의 CAS 가 안 보인다(그 파일 머리말의 사양 엣지 표).
       - name: 지식 fields 갱신 PG 통합 테스트
