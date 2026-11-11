@@ -11,7 +11,11 @@
 //     (tokens-devices.ts: includeControlPlane && hasDangerous && hasCredential) 화면이 그걸 몰라서
 //     소셜/SSO 로만 들어온 사람에게 **채울 수 없는 빈 칸**을 보여줬다. 빈 채로 눌러도 사실은 통과하지만,
 //     사람은 "난 비번이 없는데" 하고 **체크를 풀어** 관리 권한 없는 토큰을 받는다 — 조용한 권한 손실이다.
-//     그래서 /api/ui/me/logins 의 hasPassword 를 보고 칸 자체를 없앤다.
+//   · ★★ 그리고 «어느 비밀번호인가» 도 화면이 몰랐다(#3970). 매니지드에서 사람이 아는 비번은 **라이블리
+//     계정(app.lvly.io)** 것인데, 종전 화면은 /api/ui/me/logins 의 hasPassword(= 이 게이트웨이 로컬 비번)를
+//     봤다. 프로비저닝이 심어 둔 «아무도 모르는 로컬 비번» 때문에 그 값은 늘 true 였고, 라이블리 비번을
+//     정확히 넣어도 403 이었다 — 같은 «채울 수 없는 칸» 이 이름만 바꿔 돌아온 것이다.
+//     그래서 지금은 /api/ui/cli/device/stepup-info 로 **서버 판정을 그대로** 읽는다(cp|local|none).
 import { api, busy, el, state, toast, usernameAnchor } from './core.js';
 
 export async function renderActivate(view: any): Promise<void> {
@@ -63,12 +67,17 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
   // control-plane opt-in — admin/runtime 보유 멤버만 노출.
   const scopes: string[] = Array.isArray(state.me?.scopes) ? state.me.scopes : [];
   const canCp = scopes.includes('admin') || scopes.includes('runtime');
-  // 이 계정에 **로컬 비밀번호가 있나** — step-up 을 물을지의 유일한 근거(서버 판정과 같은 축).
-  //  못 물어보면(일시 오류) **있다고 본다**: 없는데 물으면 한 번 더 누르면 되지만, 있는데 안 물으면 게이트가 사라진다.
-  let hasPassword = true;
+  // 무엇으로 재확인할 것인가 — 서버와 **같은 판정**을 읽는다(코어 delivery/step-up.ts, #3970).
+  //  cp=라이블리 계정 비밀번호(매니지드) · local=이 워크스페이스 비밀번호(셀프호스트) · none=물을 것 없음.
+  //  ⚠ 종전엔 /api/ui/me/logins 의 hasPassword 를 봤는데, 그 값은 **이 게이트웨이의 로컬 비번**만 안다.
+  //   매니지드에선 프로비저닝이 심은 «아무도 모르는 비번» 때문에 늘 true 였고, 그래서 화면은 답할 수 없는
+  //   칸을 띄웠다(라이블리 비번을 정확히 넣어도 403). 어느 비번인지는 서버만 알 수 있으니 서버에 묻는다.
+  //  못 물어보면(일시 오류) **묻는 쪽으로 둔다**: 없는데 물으면 한 번 더 누르면 되지만, 있는데 안 물으면 게이트가 사라진다.
+  let stepUp: 'cp' | 'local' | 'none' = 'cp';
   if (canCp) {
-    try { hasPassword = (await api('/api/ui/me/logins'))?.hasPassword !== false; } catch { /* 보수적으로 유지 */ }
+    try { stepUp = (await api('/api/ui/cli/device/stepup-info'))?.method ?? 'cp'; } catch { /* 보수적으로 유지 */ }
   }
+  const needsPw = stepUp !== 'none';
   const cpChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
   // ★ 기본은 **켬**이다(#2044, 상민 결정 — 매니지드·셀프호스트 공통). 이 기기는 본인 컴퓨터이고, 관리 기능을
   //  못 쓰는 세션은 나중에 "왜 안 되지" 로 돌아온다. 체크박스는 애초에 그 권한을 가진 사람에게만 보이고(canCp),
@@ -76,17 +85,20 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
   cpChk.checked = true;
   // 여긴 진짜 계정 비밀번호(step-up)다 → autocomplete 를 명시해 브라우저가 **제대로** 돕게 둔다.
   //  단, 아이디칸을 명시하지 않으면 크롬이 위 승인코드칸을 아이디로 오인하므로 숨은 앵커를 바로 앞에 둔다(#1250).
-  const pwInput = el('input', { type: 'password', class: 'term-input', placeholder: '비밀번호 재확인',
+  //  ★ 어느 비밀번호인지 **칸이 직접 말한다**(#3970) — "비밀번호 재확인" 만 적혀 있으면 매니지드 사용자는
+  //   이 워크스페이스의 비번을 찾다가 막힌다. 사람이 아는 이름(라이블리 계정)으로 부른다.
+  const pwLabel = stepUp === 'cp' ? '라이블리 계정 비밀번호' : '이 워크스페이스의 비밀번호';
+  const pwInput = el('input', { type: 'password', class: 'term-input', placeholder: pwLabel,
     autocomplete: 'current-password', style: 'margin-top:6px' }) as HTMLInputElement;
   const pwAnchor = usernameAnchor();
   // 비번이 없는 계정엔 칸 자체를 만들지 않는다 — 못 채우는 칸은 안내가 아니라 장벽이다.
   const cpBlock = canCp ? el('div', { style: 'margin:8px 0;position:relative' },
     el('label', { class: 'admin-check', style: 'cursor:pointer' }, cpChk,
       el('span', { text: ' 관리 권한(admin/runtime) 포함 — 이 CLI 세션이 관리탭 기능(구성원·토큰·훅·DB소스)을 MCP로 다룹니다.' })),
-    ...(hasPassword ? [pwAnchor, pwInput]
+    ...(needsPw ? [pwAnchor, el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: `${pwLabel}로 한 번 더 확인합니다.` }), pwInput]
       : [el('p', { class: 'admin-hint', style: 'margin:6px 0 0',
           text: '이 계정은 비밀번호 없이(회사 계정·소셜 로그인) 들어와 있어 추가 확인이 필요 없습니다.' })])) : null;
-  if (canCp && hasPassword) cpChk.addEventListener('change', () => { pwInput.style.display = cpChk.checked ? 'block' : 'none'; });
+  if (canCp && needsPw) cpChk.addEventListener('change', () => { pwInput.style.display = cpChk.checked ? 'block' : 'none'; });
 
   const approveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '승인' });
   const denyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '거부' });
@@ -97,7 +109,7 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
       const body: any = { user_code: code };
       if (canCp && cpChk.checked) {
         body.include_control_plane = true;
-        if (hasPassword) body.password = pwInput.value;   // 비번이 없으면 필드 자체를 안 보낸다
+        if (needsPw) body.password = pwInput.value;   // 물을 것이 없으면 필드 자체를 안 보낸다
       }
       await api('/api/ui/cli/device/approve', { method: 'POST', body: JSON.stringify(body) });
       slot.replaceChildren(el('div', { class: 'install-ok' },
