@@ -4,6 +4,10 @@ import { itemsPool } from "../../db/client.js";
 import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
+import {
+  parseScopePref, defaultScopePref, applyLocalScopeChange as applyScopeChange, defaultOrgRecordScope,
+  type LocalScopePreference, type LocalScopePreferences, type LocalScopeChange, type OrgRecordScope,
+} from "./record-scope.js";
 
 // ── 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) ──────────────────────────────
 //  active → 비active(inactive·삭제) 전이는 **그 사람 이름으로 도는 것**(앱 동의·앱 세션·자격 리스)을 거둬야 한다.
@@ -844,60 +848,18 @@ export async function setLocalModePreference(id: string, machineId: string, mode
   return pref;
 }
 
-// ── 기록 범위(#5016) — 머신별. «작업 폴더에서만(기본) | 어디서나» + 작업 폴더 목록 ──
-//  세션 시작 훅(kit/hooks/session-preload.mjs)이 매 세션 이 머신 값을 받아 ~/.lively/record-scope.json 에 굳히고,
-//  훅·MCP 프록시가 그 사본으로 «이 폴더에서 켠 AI 에 라이블리를 붙일까» 를 정한다(kit/hooks/record-scope.mjs).
+// ── 기록 범위(#5016) — 구성원 컴퓨터별 오버라이드. 규칙(조직 값 · 유효 값 · 변경)은 ./record-scope.ts 한 곳이다 ──
+//  세션 시작 훅(kit/hooks/session-preload.mjs)이 매 세션 이 머신의 **유효 값**(조직 값 위에 이 오버라이드)을 받아
+//  ~/.lively/record-scope.json 에 굳히고, 훅·MCP 프록시가 그 사본으로 «이 폴더에서 켠 AI 에 라이블리를 붙일까» 를 정한다.
 //  ⚠ local_mode_pref 와 달리 **훅이 당긴다** — 범위 밖 세션은 LIVELY_OFF 가 아니라 훅이 스스로 판정해 꺼지는 것이라,
 //   설정을 받아 오는 시작 훅은 범위 밖에서도 돈다. 그래야 웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다.
-//  저장이 없는 머신은 기본값(work_folders · 빈 목록)이다 — 행을 미리 만들지 않는다(기본값을 바꾸면 그대로 따라가게).
-export type RecordScope = "work_folders" | "anywhere";
-export const DEFAULT_RECORD_SCOPE: RecordScope = "work_folders";
-export interface LocalScopePreference { scope: RecordScope; work_roots: string[]; updated_at: string }
-export type LocalScopePreferences = Record<string, LocalScopePreference>;
-/** 한 번의 변경 — work_roots 는 통째 교체(웹), add·remove 는 낱개(CLI·훅의 pending). 순서: 교체 → 더하기 → 빼기. */
-export interface LocalScopeChange { scope?: RecordScope; work_roots?: string[]; add?: string[]; remove?: string[] }
-// 한 머신 목록의 상한 — kit/hooks/record-scope.mjs 의 MAX_ROOTS · MAX_ROOT_LEN 과 같은 값이어야 한다(사본이 같은 규칙으로 자른다).
-export const MAX_WORK_ROOTS = 200;
-export const MAX_WORK_ROOT_LEN = 1000;
-
-const isRecordScope = (v: unknown): v is RecordScope => v === "work_folders" || v === "anywhere";
-// 끝 구분자만 떼고 비교한다 — 경로 해석(~ 펴기·대소문자)은 그 컴퓨터만 안다(서버는 사람마다 다른 홈을 모른다).
-const rootKeyOf = (p: string) => (p.length > 1 ? p.replace(/[\\/]+$/, "") || p : p);
-function cleanRootList(list: unknown): string[] {
-  if (!Array.isArray(list)) return [];
-  const out: string[] = [];
-  for (const v of list) {
-    const s = String(v ?? "").trim();
-    if (!s || s.length > MAX_WORK_ROOT_LEN) continue;
-    if (!out.some((x) => rootKeyOf(x) === rootKeyOf(s))) out.push(s);
-  }
-  return out.slice(0, MAX_WORK_ROOTS);
-}
-function parseScopePref(raw: unknown): LocalScopePreference | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const row = raw as Record<string, unknown>;
-  if (!isRecordScope(row.scope)) return null;
-  return { scope: row.scope, work_roots: cleanRootList(row.work_roots), updated_at: typeof row.updated_at === "string" ? row.updated_at : "" };
-}
-const defaultScopePref = (): LocalScopePreference => ({ scope: DEFAULT_RECORD_SCOPE, work_roots: [], updated_at: "" });
-
-// 등록할 수 있는 꼴 — 절대경로(POSIX `/` · 윈도우 `C:\` · UNC `\\`) 또는 `~` 로 시작(그 컴퓨터 홈 기준, 펴는 건 그 컴퓨터가 한다).
-//  상대경로는 판정하는 쪽(훅·MCP 프록시)의 cwd 에 묶여 뜻이 흔들린다 — kit/hooks/record-scope.mjs isRootForm 과 같은 규칙.
-export const isWorkRootForm = (s: string) => s === "~" || s.startsWith("~/") || s.startsWith("~\\") || s.startsWith("/")
-  || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith("\\\\");
-
-/** 순수 — 지금 값에 변경 하나를 얹는다(테스트가 직접 부른다). 등록(교체·더하기)엔 경로 꼴을 검사한다 — 빼기는 옛 쓰레기 줄도 걷게 검사하지 않는다. */
-export function applyLocalScopeChange(cur: LocalScopePreference, change: LocalScopeChange, now = new Date()): LocalScopePreference {
-  for (const s of [...cleanRootList(change.work_roots ?? []), ...cleanRootList(change.add ?? [])]) {
-    if (!isWorkRootForm(s)) throw new Error(`절대경로나 ~ 로 시작하는 경로만 작업 폴더로 등록할 수 있습니다: ${s}`);
-  }
-  let roots = change.work_roots !== undefined ? cleanRootList(change.work_roots) : [...cur.work_roots];
-  for (const a of cleanRootList(change.add ?? [])) if (!roots.some((x) => rootKeyOf(x) === rootKeyOf(a))) roots.push(a);
-  const drop = cleanRootList(change.remove ?? []).map(rootKeyOf);
-  roots = roots.filter((x) => !drop.includes(rootKeyOf(x)));
-  if (roots.length > MAX_WORK_ROOTS) throw new Error(`작업 폴더는 한 컴퓨터에 ${MAX_WORK_ROOTS}개까지입니다`);
-  return { scope: change.scope ?? cur.scope, work_roots: roots, updated_at: now.toISOString() };
-}
+//  저장이 없는 머신은 오버라이드가 없는 것이다(조직 값 그대로) — 행을 미리 만들지 않는다.
+export {
+  DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN, isWorkRootForm, applyLocalScopeChange, localScopeView,
+} from "./record-scope.js";
+export type {
+  RecordScope, LocalScopePreference, LocalScopePreferences, LocalScopeChange, LocalScopeView, LocalScopeEntry, OrgRecordScope,
+} from "./record-scope.js";
 
 export async function getLocalScopePreferences(id: string): Promise<LocalScopePreferences> {
   const r = await itemsPool.query(`SELECT local_scope_pref FROM org_member WHERE id=$1`, [id]);
@@ -911,19 +873,21 @@ export async function getLocalScopePreferences(id: string): Promise<LocalScopePr
   return out;
 }
 
-/** 한 머신 값 — 저장이 없으면 기본값(work_folders · 빈 목록). */
+/** 한 머신 값 — 저장이 없으면 빈 오버라이드(조직 값 그대로). */
 export async function getLocalScopePreference(id: string, machineId: string): Promise<LocalScopePreference> {
   return (await getLocalScopePreferences(id))[machineId] ?? defaultScopePref();
 }
 
-/** 한 머신 값을 바꾼다. 웹·CLI 가 같은 머신을 거의 동시에 고쳐도 한쪽이 사라지지 않게 그 행을 잠그고 읽어 고친다. */
-export async function updateLocalScopePreference(id: string, machineId: string, change: LocalScopeChange): Promise<LocalScopePreference> {
+/** 한 머신 값을 바꾼다. 웹·CLI 가 같은 머신을 거의 동시에 고쳐도 한쪽이 사라지지 않게 그 행을 잠그고 읽어 고친다.
+ *  org 는 지금 조직 값 — 조직 줄을 빼면 «이 컴퓨터에서 끔» 으로 남긴다(record-scope.ts applyLocalScopeChange). */
+export async function updateLocalScopePreference(id: string, machineId: string, change: LocalScopeChange,
+  org: OrgRecordScope = defaultOrgRecordScope()): Promise<LocalScopePreference> {
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
     const r = await client.query(`SELECT local_scope_pref->$2::text AS pref FROM org_member WHERE id=$1 FOR UPDATE`, [id, machineId]);
     if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
-    const next = applyLocalScopeChange(parseScopePref(r.rows[0].pref) ?? defaultScopePref(), change);
+    const next = applyScopeChange(parseScopePref(r.rows[0].pref) ?? defaultScopePref(), change, org);
     await client.query(
       `UPDATE org_member SET local_scope_pref = COALESCE(local_scope_pref,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb) WHERE id=$1`,
       [id, machineId, JSON.stringify(next)]);

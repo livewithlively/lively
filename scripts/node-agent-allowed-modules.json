@@ -50,6 +50,7 @@
   "dist/org/store/audit.js",
   "dist/org/store/members.js",
   "dist/org/store/profile.js",
+  "dist/org/store/record-scope.js",
   "dist/org/store/runtime-config.js",
   "dist/org/store/tokens.js",
   "dist/org/tenant-ttl-cache.js",

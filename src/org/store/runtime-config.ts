@@ -42,6 +42,8 @@ import {
   contextJobPolicySource,
 } from "../policies/context-job-policy.js";
 import { audit } from "./audit.js";
+// 조직 기록 범위(#5016 후속) — 규칙·모양은 record-scope.ts 한 곳(구성원 컴퓨터별 오버라이드와 같이 쓴다).
+import { parseOrgRecordScope, cleanRootList, type OrgRecordScope, type RecordScope } from "./record-scope.js";
 // 수집 실행 세션 크기(#4213 T11) — «한 칸 전용 입구»(아래 getCollectSessionPolicy · setCollectSessionPolicy). 큰 SELECT 에 섞지 않는다.
 import {
   type CollectSessionPolicy, type CollectSessionPolicyPatch, resolveCollectSessionPolicy, normalizeCollectSessionPolicy,
@@ -561,4 +563,43 @@ export async function setCollectSessionPolicy(
   invalidateCollectSessionPolicyCache();
   await audit("org_runtime_config", "1", "collect_session_policy", beforeRaw ?? {}, next, ctx.actor, ctx.source);
   return resolveCollectSessionPolicy(next);
+}
+
+// ── 조직 기록 범위(#5016 후속) — record_scope_policy{scope, exclude_roots} + 종전 work_roots 칸 ─────────────────
+//  «한 칸 전용 입구» 규약(위 collect_session_policy 와 같다): getRuntimeConfig 의 큰 SELECT · org_runtime_update 에 섞지 않는다.
+//   큰 SELECT 가 새 칸을 부르면 스키마보다 먼저 뜬 게이트웨이의 런타임 설정 읽기가 통째로 깨진다 — 여기서는 이 읽기만 실패한다
+//   (구성원 컴퓨터는 받기에 실패하면 가진 사본을 그대로 쓴다 — kit/hooks/record-scope.mjs syncScopeSettings).
+//  work_roots 는 종전처럼 org_runtime_update 로도 바뀐다(같은 칸). 규칙·모양은 store/record-scope.ts.
+
+/** 조직 기록 범위. 못 읽으면 던진다(«못 읽음» 을 «작업 폴더에서만 · 빈 목록» 으로 접으면 구성원 컴퓨터가 조직 줄을 잃는다). */
+export async function getOrgRecordScope(): Promise<OrgRecordScope> {
+  const r = await itemsPool.query(`SELECT record_scope_policy, work_roots, updated_at FROM org_runtime_config WHERE id=1`);
+  const row = r.rows[0] as { record_scope_policy?: unknown; work_roots?: unknown; updated_at?: unknown } | undefined;
+  return parseOrgRecordScope(row?.record_scope_policy, row?.work_roots, row?.updated_at);
+}
+
+/** 조직 기록 범위 저장 — 준 칸만 바꾼다(방식 · 허용 목록 · 제외 목록). 경로 꼴은 호출자가 검사한다(assertRootForms). 감사에 남긴다.
+ *  ⚠ «읽고 → 합쳐 → 통째로 쓰기» 를 하지 않는다 — 한 문장 안에서 준 키만 얹는다(record_scope_policy 는 jsonb `||` 로 키 단위,
+ *   work_roots 는 줄 때만). 그래야 같은 순간 다른 관리자가 다른 칸을 저장하거나 org_runtime_update 가 work_roots 를 바꿔도
+ *   그 값을 옛 읽기로 되돌려 덮지 않고, 안 건드린 work_roots 를 이 칸의 정리 규칙(200개 · 1000자)으로 잘라 쓰지도 않는다. */
+export async function setOrgRecordScope(
+  patch: { scope?: RecordScope; work_roots?: string[]; exclude_roots?: string[] }, ctx: { actor?: string; source?: string } = {},
+): Promise<OrgRecordScope> {
+  const before = await getOrgRecordScope();
+  const policyPatch: Record<string, unknown> = {};
+  if (patch.scope !== undefined) policyPatch.scope = patch.scope;
+  if (patch.exclude_roots !== undefined) policyPatch.exclude_roots = cleanRootList(patch.exclude_roots);
+  const workRoots = patch.work_roots !== undefined ? JSON.stringify(cleanRootList(patch.work_roots)) : null;
+  //  행이 없는 워크스페이스(처음 저장)도 있다 — 다른 칸은 전부 컬럼 기본값으로 선다.
+  await itemsPool.query(
+    `INSERT INTO org_runtime_config(id, record_scope_policy, work_roots, updated_at, updated_by)
+       VALUES(1, $1::jsonb, COALESCE($2::jsonb, '[]'::jsonb), now(), $3)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
+       record_scope_policy = COALESCE(org_runtime_config.record_scope_policy, '{}'::jsonb) || $1::jsonb,
+       work_roots = COALESCE($2::jsonb, org_runtime_config.work_roots),
+       version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [JSON.stringify(policyPatch), workRoots, ctx.actor ?? null]);
+  const after = await getOrgRecordScope();
+  await audit("org_runtime_config", "1", "record_scope", before, after, ctx.actor, ctx.source);
+  return after;
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 기록 범위(#5016) — 사양 엣지 표(행마다 단언 하나) · 실행: node kit/hooks/record-scope.test.mjs (exit 0=통과)
 //  사양: «작업 폴더에서만» 인 컴퓨터에서 작업 폴더 밖에서 켠 AI 세션엔 라이블리가 아무것도 하지 않는다(인코그니토와 같다).
+//  «어디서나» 면 제외 폴더 안에서 켠 세션만 그렇다. 방식은 조직이 정하고(서버 사본의 scope), 이 컴퓨터는 목록만 바꾼다.
 //  작업 폴더 = 라이블리가 띄운 세션 · 라이블리 프로젝트 표식(.lively/project.json) 아래 · 등록한 폴더 아래.
 //  설정 정본은 서버(컴퓨터별), 판정은 로컬 사본으로. 사본이 아직 없으면 종전 동작(어디서나).
 //  단언은 문구가 아니라 부작용으로 — 사본 파일 · 가짜 게이트웨이 요청 로그 · 출력 JSON 칸 · 표식 파일.
@@ -8,7 +9,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import * as rs from "./record-scope.mjs";
@@ -29,7 +30,7 @@ function sandbox() {
   mkdirSync(lively, { recursive: true }); mkdirSync(tmp, { recursive: true });
   return { root, home, lively, tmp, mk: (...p) => { const d = join(root, ...p); mkdirSync(d, { recursive: true }); return d; } };
 }
-const setScope = (lively, scope, roots = [], pending) => rs.writeScopeFile(lively, { scope, work_roots: roots, updated_at: "t", synced_at: "t", pending });
+const setScope = (lively, scope, roots = [], pending, more = {}) => rs.writeScopeFile(lively, { scope, work_roots: roots, updated_at: "t", synced_at: "t", pending, ...more });
 const decide = (sb, dir, env = {}) => rs.decideRecordScope({ env, dir, lively: sb.lively });
 // 자식 프로세스 env — 신원 env 를 비우고(sandboxEnv) 홈·tmp 를 샌드박스로. 세션 폴더는 CLAUDE_PROJECT_DIR 로 준다.
 //  ⚠ sandboxEnv 는 호스트 효과를 deny 로 둔다 — 그대로면 훅의 네트워크가 통째로 막혀 «범위 밖이라 요청 0» 이 무의미하게
@@ -128,6 +129,45 @@ if (!WIN) {
   finally { process.chdir(prev); }
 }
 
+// ══ «어디서나» 방식 — 제외 목록 ═══════════════════════════════════════════════
+{
+  const sb = sandbox(); const ex = sb.mk("personal"); const deep = sb.mk("personal", "diary", "2026"); const other = sb.mk("company", "repo");
+  const sib = sb.mk("personal-notes");
+  setScope(sb.lively, "anywhere", [], null, { exclude_roots: [ex] });
+  const d = decide(sb, deep);
+  check("X1 제외 폴더 아래는 끔 — 이유 excluded · 품은 제외 폴더", !d.inScope && d.reason === "excluded" && d.root === ex, JSON.stringify(d));
+  check("X2 제외 폴더 그 자체도 끔", !decide(sb, ex).inScope);
+  check("X3 제외 목록에 없는 폴더는 켬(이유 anywhere)", decide(sb, other).inScope && decide(sb, other).reason === "anywhere");
+  check("X4 이름 앞부분만 같은 옆 폴더는 켬", decide(sb, sib).inScope);
+  const proj = sb.mk("personal", "lp"); mkdirSync(join(proj, ".lively"), { recursive: true }); writeFileSync(join(proj, ".lively", "project.json"), JSON.stringify({ project_id: 9 }));
+  const pd = decide(sb, join(proj));
+  check("X5 제외 폴더 안이어도 라이블리 프로젝트 폴더는 켬", pd.inScope && pd.reason === "project", JSON.stringify(pd));
+  check("X6 라이블리가 띄운 세션은 제외 폴더 안이어도 켬", decide(sb, deep, { LIVELY_SESSION_ID: "box-1" }).inScope);
+  check("X7 «어디서나» 에선 허용 목록을 판정에 안 쓴다(제외 폴더 안의 작업 폴더도 끔)", (() => {
+    setScope(sb.lively, "anywhere", [deep], null, { exclude_roots: [ex] }); return !decide(sb, deep).inScope; })());
+  check("X8 «작업 폴더에서만» 에선 제외 목록을 판정에 안 쓴다(목록 밖은 끔 · 목록 안은 켬)", (() => {
+    setScope(sb.lively, "work_folders", [other], null, { exclude_roots: [other] }); return decide(sb, other).inScope && !decide(sb, deep).inScope; })());
+}
+{
+  const sb = sandbox(); const a = sb.mk("a"); const b = sb.mk("b");
+  setScope(sb.lively, "anywhere", [], { exclude_add: [a], exclude_remove: [b] }, { exclude_roots: [b] });
+  check("X9 아직 못 올린 제외 추가·제외 빼기는 판정에 바로 반영", !decide(sb, a).inScope && decide(sb, b).inScope);
+  const x = join(sb.home, "secret", "in"); mkdirSync(x, { recursive: true });
+  setScope(sb.lively, "anywhere", [], null, { exclude_roots: ["~/secret"] });
+  check("X10 `~/secret` 제외는 그 컴퓨터 홈 아래 secret 로 편다(끔)", !decide(sb, x).inScope);
+}
+{
+  //  조직 작업 폴더는 설치 때 ~/.lively/work-roots 파일로도 깔린다 — 이 컴퓨터에서 끈 조직 줄은 그 파일에 남아 있어도 안 켠다.
+  const sb = sandbox(); const company = join(sb.home, "company"); mkdirSync(company, { recursive: true });
+  writeFileSync(join(sb.lively, "work-roots"), "# 헤더\n~/company\n");
+  setScope(sb.lively, "work_folders", [], null, { off_roots: ["~/company"], org: { work_roots: ["~/company"], exclude_roots: [] } });
+  check("O1 이 컴퓨터에서 끈 조직 줄은 work-roots 파일에 있어도 끔", !decide(sb, company).inScope);
+  setScope(sb.lively, "work_folders", [], { add: ["~/company"] }, { off_roots: ["~/company"], org: { work_roots: ["~/company"], exclude_roots: [] } });
+  check("O2 끈 조직 줄을 다시 켜는 못 올린 변경은 바로 반영(켬)", decide(sb, company).inScope);
+  setScope(sb.lively, "work_folders", [], { remove: ["~/company"] });
+  check("O3 못 올린 빼기도 work-roots 파일 줄을 끈다", !decide(sb, company).inScope);
+}
+
 // ══ 세션 폴더 우선순위 ═══════════════════════════════════════════════════════
 {
   const env = { CLAUDE_PROJECT_DIR: "/c", CURSOR_PROJECT_DIR: "/u" };
@@ -147,10 +187,10 @@ function fakeServer(state) {
     if (state.status && state.status !== 200) return { ok: false, status: state.status, json: async () => ({}) };
     if ((opts.method || "GET") === "POST") {
       const b = JSON.parse(opts.body);
-      let roots = [...state.pref.work_roots];
-      for (const a of b.add || []) if (!roots.includes(a)) roots.push(a);
-      roots = roots.filter((r) => !(b.remove || []).includes(r));
-      state.pref = { scope: b.scope || state.pref.scope, work_roots: roots, updated_at: "srv" };
+      const apply = (list, add = [], remove = []) => { let r = [...list]; for (const a of add) if (!r.includes(a)) r.push(a); return r.filter((x) => !remove.includes(x)); };
+      //  진짜 서버처럼 scope 는 버린다 — 방식은 조직 값이다.
+      state.pref = { scope: state.pref.scope, work_roots: apply(state.pref.work_roots, b.add, b.remove),
+        exclude_roots: apply(state.pref.exclude_roots || [], b.exclude_add, b.exclude_remove), updated_at: "srv" };
       return { ok: true, status: 200, json: async () => ({ machine_id: b.machine_id, preference: state.pref }) };
     }
     return { ok: true, status: 200, json: async () => (state.garbage ? { hello: 1 } : { preference: state.pref, kit_version: "kv-9" }) };
@@ -188,10 +228,11 @@ function fakeServer(state) {
   const e1 = rs.effectiveSettings(sb.lively);
   check("Y7 서버에 못 닿으면 쌓아 두고 판정엔 바로 반영", !r1.synced && e1.work_roots.includes("/w/x") && e1.pending?.add?.[0] === "/w/x", JSON.stringify(e1));
   const up = fakeServer({ pref: { scope: "work_folders", work_roots: [], updated_at: "srv" } });
-  const r2 = await rs.changeScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send: up.send, machineId: "m-1", scope: "anywhere" });
+  const r2 = await rs.changeScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send: up.send, machineId: "m-1", exclude_add: ["/w/ex"] });
   const f2 = rs.readScopeFile(sb.lively);
-  check("Y8 닿으면 앞서 쌓인 변경까지 한 묶음으로 올려 서버 답을 사본으로 — 대기열이 빈다",
-    r2.synced && f2.scope === "anywhere" && f2.work_roots.includes("/w/x") && !f2.pending && up.calls[0]?.body?.add?.[0] === "/w/x", JSON.stringify(f2));
+  check("Y8 닿으면 앞서 쌓인 변경까지 한 묶음으로 올려 서버 답을 사본으로 — 대기열이 빈다(허용·제외 목록 함께)",
+    r2.synced && f2.work_roots.includes("/w/x") && f2.exclude_roots.includes("/w/ex") && !f2.pending
+    && up.calls[0]?.body?.add?.[0] === "/w/x" && up.calls[0]?.body?.exclude_add?.[0] === "/w/ex", JSON.stringify(f2));
 }
 {
   const sb = sandbox();
@@ -209,14 +250,16 @@ function fakeServer(state) {
 }
 {
   //  같은 키를 오프라인에서 바꾼 뒤 온라인에서 다시 바꾸면 **나중 것**이 이겨야 한다 — 판정(사본)도, 서버도.
+  //  방식(scope)은 이 컴퓨터가 못 바꾼다 — 옛 키트가 남긴 pending 의 scope 도 판정에 안 쓰고, 올리면 서버가 버린 값(조직 값)으로 굳는다.
   const sb = sandbox();
+  setScope(sb.lively, "work_folders", [], { scope: "anywhere" });
+  const out = sb.mk("personal");
+  check("Y11a 옛 키트가 남긴 pending 의 «어디서나» 는 판정에 안 쓴다(끔)", rs.effectiveSettings(sb.lively)?.scope === "work_folders" && !decide(sb, out).inScope);
   const st = { pref: { scope: "work_folders", work_roots: [], updated_at: "2026-10-26T00:00:00Z" } };
-  await rs.changeScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send: fakeServer({ down: true }).send, machineId: "m-1", scope: "anywhere" });
   const up = fakeServer(st);
-  const r = await rs.changeScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send: up.send, machineId: "m-1", scope: "work_folders" });
-  const e = rs.effectiveSettings(sb.lively);
-  check("Y11 오프라인 «어디서나» 뒤 온라인 «작업 폴더에서만» — 나중 것이 판정·서버 모두에 남는다",
-    r.synced && e?.scope === "work_folders" && st.pref.scope === "work_folders" && !rs.readScopeFile(sb.lively)?.pending, JSON.stringify({ e, srv: st.pref }));
+  await rs.syncScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send: up.send, machineId: "m-1" });
+  check("Y11b 그 pending 은 올리고 걷는다 — 서버(조직) 방식이 남는다",
+    up.calls[0]?.body?.scope === "anywhere" && !rs.readScopeFile(sb.lively)?.pending && rs.readScopeFile(sb.lively)?.scope === "work_folders", JSON.stringify(up.calls));
   const st2 = { pref: { scope: "work_folders", work_roots: ["/w/x"], updated_at: "2026-10-26T00:00:00Z" } };
   const sb2 = sandbox();
   rs.recordServerState(sb2.lively, st2.pref);
@@ -234,6 +277,30 @@ function fakeServer(state) {
   };
   await rs.syncScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send, machineId: "m-1" });
   check("Y13 맞추는 사이 끼어든 변경은 남는다(갱신 소실 없음)", rs.effectiveSettings(sb.lively).work_roots.includes("/w/late"), JSON.stringify(rs.readScopeFile(sb.lively)));
+}
+
+{
+  const sb = sandbox();
+  const pref = { scope: "anywhere", work_roots: ["~/w"], exclude_roots: ["~/p"], off_roots: ["~/w2"], org: { work_roots: ["~/w", "~/w2"], exclude_roots: ["~/p"] }, updated_at: "srv" };
+  await rs.syncScopeSettings({ lively: sb.lively, gw: "http://gw", token: "tk", send: fakeServer({ pref }).send, machineId: "m-1" });
+  const f = rs.readScopeFile(sb.lively);
+  check("Y14 서버가 준 제외 목록·끈 조직 줄·조직 목록을 사본에 굳힌다",
+    f?.scope === "anywhere" && f.exclude_roots[0] === "~/p" && f.off_roots[0] === "~/w2" && f.org.work_roots.length === 2 && f.org.exclude_roots[0] === "~/p", JSON.stringify(f));
+  const sb2 = sandbox();
+  await rs.syncScopeSettings({ lively: sb2.lively, gw: "http://gw", token: "tk", send: fakeServer({ pref: { scope: "work_folders", work_roots: ["/w"], updated_at: "srv" } }).send, machineId: "m-1" });
+  const f2 = rs.readScopeFile(sb2.lively);
+  check("Y15 옛 게이트웨이 응답(제외 목록 없음)도 받는다 — 빈 목록", f2?.work_roots[0] === "/w" && f2.exclude_roots.length === 0 && f2.off_roots.length === 0, JSON.stringify(f2));
+  const sb3 = sandbox(); setScope(sb3.lively, "work_folders", ["/keep"]);
+  await rs.syncScopeSettings({ lively: sb3.lively, gw: "http://gw", token: "tk", send: fakeServer({ pref: { scope: "anywhere", work_roots: [], exclude_roots: "nope", updated_at: "srv" } }).send, machineId: "m-1" });
+  check("Y16 제외 목록 모양이 틀린 응답이면 사본을 건드리지 않는다", rs.readScopeFile(sb3.lively)?.work_roots[0] === "/keep");
+}
+{
+  const n = rs.outsideNotice({ dir: "/h/personal/diary", reason: "excluded", root: "/h/personal", harness: "claude", win: false, nodeExe: "/usr/bin/node", lively: "/h/.lively" });
+  check("N9 제외 폴더 알림 — 사람에게 «제외 폴더» 를 말한다", n.user.includes("제외 폴더") && n.user.includes("/lively-connect"), n.user);
+  check("N10 제외 폴더 알림 — AI 에게 품은 제외 폴더를 빼는 명령과 «그 아래 전부» 를 준다",
+    n.ai.includes("`lively work-root add '/h/personal'`") && n.ai.includes("그 아래 전부") && n.ai.includes("제외 목록을 바꾸지 마라"), n.ai);
+  const o = rs.outsideNotice({ dir: "/h/x", harness: "claude", win: false, nodeExe: "/usr/bin/node", lively: "/h/.lively" });
+  check("N11 작업 폴더 밖 알림은 종전 그대로(이유를 안 주면 outside)", o.user.includes("작업 폴더가 아니라") && o.ai.includes("`lively work-root add '/h/x'`"), o.ai);
 }
 
 // ══ 알림 · 늦은 주입 표식 ════════════════════════════════════════════════════
@@ -601,7 +668,7 @@ function inChild(sb, code) {
   check("I4 설치·제거기의 커맨드 표식이 같은 글자다", !!mark("user-install.mjs") && mark("user-install.mjs") === mark("user-uninstall.mjs"));
 }
 {
-  const kit = readFileSync(join(HERE, "record-scope.mjs"), "utf8"), srv = readFileSync(join(HERE, "..", "..", "src", "org", "store", "members.ts"), "utf8");
+  const kit = readFileSync(join(HERE, "record-scope.mjs"), "utf8"), srv = readFileSync(join(HERE, "..", "..", "src", "org", "store", "record-scope.ts"), "utf8");
   const num = (s, re) => Number((s.match(re) || [])[1]);
   check("K1 작업 폴더 상한(개수·길이)이 서버와 같다",
     num(kit, /MAX_ROOTS = (\d+)/) === num(srv, /MAX_WORK_ROOTS = (\d+)/) && num(kit, /MAX_ROOT_LEN = (\d+)/) === num(srv, /MAX_WORK_ROOT_LEN = (\d+)/) && num(kit, /MAX_ROOTS = (\d+)/) > 0);
@@ -613,11 +680,46 @@ function inChild(sb, code) {
   setScope(sb.lively, "work_folders", []);
   const env = childEnv(sb, dir, { LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "" });
   const run = (...a) => { try { execFileSync(process.execPath, [join(CLI, "lively.mjs"), ...a], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20000 }); return 0; } catch (e) { return e.status ?? -1; } };
-  run("scope", "anywhere");
-  check("C3 lively scope anywhere(오프라인) 뒤엔 어디서나 켜진다", rs.effectiveSettings(sb.lively)?.scope === "anywhere" && decide(sb, dir).inScope);
-  run("scope", "work-folders");
+  const c3 = run("scope", "anywhere");
+  check("C3 ★ lively scope anywhere 는 거절한다(종료 2) — 방식은 조직이 정한다 · 사본도 판정도 그대로",
+    c3 === 2 && rs.effectiveSettings(sb.lively)?.scope === "work_folders" && !rs.readScopeFile(sb.lively)?.pending && !decide(sb, dir).inScope, String(c3));
   const code = run("work-root", "add", "/");
   check("C4 / 를 통째로 등록하려 하면 거절한다(종료 2 · 목록 그대로)", code === 2 && !rs.effectiveSettings(sb.lively).work_roots.includes("/"), String(code));
+}
+
+// ══ CLI 4 — 방식에 맞춘 켜기·끄기(work-root add|remove) · 조직 줄 ═════════════════
+{
+  const sb = sandbox(); const ex = sb.mk("personal"); const dir = sb.mk("personal", "diary"); const other = sb.mk("company");
+  setScope(sb.lively, "anywhere", [], null, { exclude_roots: [ex], org: { work_roots: [], exclude_roots: [] } });
+  const env = childEnv(sb, other, { LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "" });
+  //  CLI 의 안내(say)는 stderr 로 나간다 — 둘 다 모아 본다.
+  const run = (...a) => { const r = spawnSync(process.execPath, [join(CLI, "lively.mjs"), ...a], { env, encoding: "utf8", timeout: 20000 }); return { code: r.status ?? -1, out: String(r.stdout || "") + String(r.stderr || "") }; };
+  const r1 = run("work-root", "add", dir);
+  check("C6 «어디서나» — 제외 폴더 아래에서 켜기는 바꾸지 않고 품은 제외 폴더를 알려 준다",
+    r1.code === 0 && r1.out.includes(ex) && !rs.readScopeFile(sb.lively)?.pending && !decide(sb, dir).inScope, r1.out);
+  const r2 = run("work-root", "add", ex);
+  const p2 = rs.readScopeFile(sb.lively)?.pending || {};
+  check("C7 «어디서나» — 제외 폴더 그 자체를 켜면 제외 목록에서 뺀다(오프라인 → pending · 판정 즉시 켬)",
+    r2.code === 0 && (p2.exclude_remove || []).includes(ex) && decide(sb, dir).inScope, JSON.stringify({ p2, out: r2.out }));
+  const r3 = run("work-root", "remove", other);
+  const p3 = rs.readScopeFile(sb.lively)?.pending || {};
+  check("C8 «어디서나» — 끄기는 제외 목록에 넣는다(판정 즉시 끔)", r3.code === 0 && (p3.exclude_add || []).includes(other) && !decide(sb, other).inScope, JSON.stringify(p3));
+  check("C9 «어디서나» — 홈을 통째로 제외하려 하면 거절한다(종료 2)", run("work-root", "remove", sb.home).code === 2);
+}
+{
+  //  조직 줄은 서버가 원래 글자로 견준다 — 이 컴퓨터에서 편 경로가 아니라 `~/company` 그대로 보내야 «이 컴퓨터에서 끔» 이 된다.
+  const sb = sandbox(); const company = join(sb.home, "company"); mkdirSync(company, { recursive: true });
+  writeFileSync(join(sb.lively, "work-roots"), "# 헤더\n~/company\n");
+  setScope(sb.lively, "work_folders", ["~/company"], null, { org: { work_roots: ["~/company"], exclude_roots: [] } });
+  const env = childEnv(sb, company, { LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "" });
+  //  CLI 의 안내(say)는 stderr 로 나간다 — 둘 다 모아 본다.
+  const run = (...a) => { const r = spawnSync(process.execPath, [join(CLI, "lively.mjs"), ...a], { env, encoding: "utf8", timeout: 20000 }); return { code: r.status ?? -1, out: String(r.stdout || "") + String(r.stderr || "") }; };
+  const r = run("work-root", "remove", company);
+  const p = rs.readScopeFile(sb.lively)?.pending || {};
+  check("C10 조직 작업 폴더 끄기 — 원래 글자(~/company)를 보내고, 설치 파일 줄이 있어도 끔",
+    r.code === 0 && (p.remove || []).includes("~/company") && !decide(sb, company).inScope && r.out.includes("조직"), JSON.stringify({ p, out: r.out }));
+  const r2 = run("work-root", "add", company);
+  check("C11 다시 켜기 — 판정 즉시 켬", r2.code === 0 && decide(sb, company).inScope, r2.out);
 }
 
 // ══ CLI 3 — `lively run` 이 띄운 하네스가 LIVELY_RUN=1 을 받는다(가짜 claude 가 받은 env 로 잰다) ═════════

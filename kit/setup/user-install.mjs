@@ -481,7 +481,7 @@ const AG_END = "<!-- <<< lively-managed <<< -->";
 //  그록·안티그래비티·오픈코드는 시작 훅 출력이 AI 에게 안 가고(어댑터가 버린다) MCP 도구도 판정하지 않는다(세션 폴더 근거가 없다) —
 //  그래서 «시작 때 회사 맥락이 따로 안 들어온 세션» 은 기록 전에 CLI 로 한 번 확인하게 한다.
 export const AG_SCOPE_NOTE = "> 라이블리 기록 범위(#5016): 이 블록은 라이블리 작업 폴더에서 연 세션에만 적용된다. "
-  + "세션 시작 때 «라이블리 꺼짐 — 작업 폴더 밖» 안내를 받았거나 라이블리 도구(lively MCP)가 없는 세션이면 이 블록 전체를 무시하라. "
+  + "세션 시작 때 «라이블리 꺼짐» 안내(작업 폴더 밖 · 제외 폴더)를 받았거나 라이블리 도구(lively MCP)가 없는 세션이면 이 블록 전체를 무시하라. "
   + "둘 다 아닌데 세션 시작 때 라이블리 회사 맥락이 따로 들어오지 않았다면, 이 블록의 규칙대로 기록하기 전에 셸에서 `lively work-root list` 를 실행해 "
   + "«지금 폴더» 가 «꺼짐» 이면 이 블록을 무시하라.";
 function agentsMerge(existing, ctx) {
@@ -519,17 +519,18 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
   const folderRule = `<폴더> 자리에는 사람이 이 커맨드 뒤에 적은 경로가 있으면 그것을, 없으면 ${session}의 절대경로를 넣는다. 사람이 적은 경로: «$ARGUMENTS»`
     + (win || format === "cursor" || format === "frontmatter" ? " (비었거나 달러 기호로 시작하는 글자 그대로 남아 있으면 적은 경로가 없는 것이다)" : "");
   const cmds = [
-    { id: "lively-connect", description: "지금 폴더를 이 컴퓨터의 라이블리 작업 폴더로 등록하고 이 세션을 바로 연결합니다",
+    //  명령은 조직이 정한 방식(작업 폴더에서만 | 어디서나)에 맞춰 목록을 고른다 — 작업 폴더로 등록하거나 제외 목록에서 뺀다(kit/cli/lively.mjs cmdWorkRoot).
+    { id: "lively-connect", description: "지금 폴더에서 라이블리를 켜고 이 세션을 바로 연결합니다(작업 폴더로 등록하거나 제외 목록에서 뺍니다)",
       body: [
-        "이 폴더를 이 컴퓨터의 라이블리 작업 폴더로 등록하라.",
+        "이 폴더에서 라이블리를 켜라(이 컴퓨터의 작업 폴더로 등록하거나, 제외 폴더면 제외 목록에서 뺀다 — 명령이 알아서 고른다).",
         "",
         `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root add "<폴더>"\``,
         `   ${folderRule}`,
-        "2. 실행 결과를 사람에게 한두 줄로 전하라. 등록됐으면 «다음 메시지부터 이 폴더에서 라이블리가 연결됩니다» 라고 알려라. 실패했으면 결과에 나온 이유를 그대로 전하라.",
+        "2. 실행 결과를 사람에게 한두 줄로 전하라. 켜졌으면 «다음 메시지부터 이 폴더에서 라이블리가 연결됩니다» 라고 알려라. «제외 폴더 아래라서 꺼져 있다» 는 답이면 그 제외 폴더 이름과 «그 아래 전부가 켜진다» 는 것을 함께 전하고, 그 폴더를 제외 목록에서 뺄지 사람에게 물어라. 실패했으면 결과에 나온 이유를 그대로 전하라.",
       ].join("\n") },
-    { id: "lively-disconnect", description: "지금 폴더를 이 컴퓨터의 라이블리 작업 폴더 목록에서 뺍니다",
+    { id: "lively-disconnect", description: "지금 폴더에서 라이블리를 끕니다(작업 폴더 목록에서 빼거나 제외 목록에 넣습니다)",
       body: [
-        "이 폴더를 이 컴퓨터의 라이블리 작업 폴더 목록에서 빼라.",
+        "이 폴더에서 라이블리를 꺼라(이 컴퓨터의 작업 폴더 목록에서 빼거나, «어디서나» 방식이면 제외 목록에 넣는다 — 명령이 알아서 고른다).",
         "",
         `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root remove "<폴더>"\``,
         `   ${folderRule}`,
@@ -1846,7 +1847,9 @@ async function seedRecordScope() {
     const r = await rs.syncScopeSettings({ lively: LIVELY, gw, token, send: fetch, timeoutMs: 3000 });
     if (!r.ok) { console.log("  · 기록 범위 — 서버에서 못 받음(다음 세션 시작 때 받습니다)"); return; }
     const s = rs.effectiveSettings(LIVELY);
-    console.log(`  ✓ 기록 범위: ${s?.scope === "anywhere" ? "어디서나" : "작업 폴더에서만"}(이 컴퓨터 · 작업 폴더 ${s?.work_roots?.length || 0}개) — 바꾸기: lively scope · lively work-root`);
+    //  방식은 조직이 정한다 — 이 컴퓨터가 바꾸는 건 목록뿐이다(작업 폴더에서만 → 작업 폴더 · 어디서나 → 제외 폴더).
+    const line = s?.scope === "anywhere" ? `어디서나(제외 폴더 ${s?.exclude_roots?.length || 0}개 빼고)` : `작업 폴더에서만(작업 폴더 ${s?.work_roots?.length || 0}개)`;
+    console.log(`  ✓ 기록 범위: ${line} — 조직이 정한 방식 · 이 컴퓨터 목록 보기·바꾸기: lively scope · lively work-root`);
   } catch { /* 모듈 없음(구 번들) — 첫 세션 시작 훅이 받는다 */ }
 }
 

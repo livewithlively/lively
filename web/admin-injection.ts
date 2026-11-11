@@ -36,6 +36,7 @@ const jump = (label, hash, tab?) => el('button', { class: 'btn btn-ghost btn-sm'
   location.hash = hash;
 } });
 const HOOKS_TAB = { section: 'agent-assets', key: 'hooks' };
+const RECORD_SCOPE_TAB = { section: 'agent-assets', key: 'record-scope' };
 
 // ── 훅 주입 미리보기(V4-P5 J절) — 세션 시작 훅이 실제로 주입하는 최종 메시지. ──
 //  데이터 출처: GET /api/ui/org/hooks/preview (scope null = 인증만, REST 전용). 읽기 전용.
@@ -406,7 +407,10 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
       }),
       el('div', { class: 'dlv-col' },
         el('div', { class: 'dlv-grid dlv-grid-2' },
-          canEdit && isAdmin ? listEditor('작업 폴더 (work-roots)', '이 폴더에서 켠 세션을 라이블리 작업으로 봅니다. 한 줄에 절대경로 하나.', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
+          //  작업 폴더(work-roots)는 이제 조직 기록 범위의 허용 목록이다 — 방식·제외 목록과 함께 [스킬 · 훅 ▸ 기록 범위] 한 곳에서 고친다(두 곳에 같은 목록을 두지 않는다).
+          canEdit && isAdmin ? dlvBox('작업 폴더 (work-roots)', '이 폴더에서 켠 세션을 라이블리 작업으로 봅니다. 조직 기록 범위의 허용 목록과 같은 목록이라, 방식(작업 폴더에서만 | 어디서나)·제외 목록과 함께 한 곳에서 고칩니다.',
+            el('p', { class: 'admin-hint', text: (rc.work_roots || []).length ? (rc.work_roots || []).join(' · ') : '(비어 있음)' }),
+            el('div', { class: 'dlv-box-acts' }, jump('기록 범위에서 고치기 →', '#/system/agent-assets', RECORD_SCOPE_TAB))) : null,
           canEdit ? listEditor('기록으로 치는 툴 (write_tools)', '이 lively 툴을 쓴 세션에는 종료 때 기록을 권하지 않습니다. 비우면 기본 목록을 씁니다.', rc.write_tools, 'write_tools', 'knowledge_save') : null,
           pullToolsEditor()),
         hookBox(WORK_EVENTS))),
