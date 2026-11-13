@@ -213,7 +213,7 @@ t("F9 ★ 서피스의 새 창 처리기 — 판정 표 → 팝업 차단 대신
   const branch = seg.slice(at, seg.indexOf("\n  }\n", at) + 5);   // 분기 블록만(F2 와 같은 자르기)
   assert.match(branch, /setWindowOpenHandler\(\(\{ url, disposition, features \}\) =>/,
     "★ disposition·features 를 안 받는다 — 스크립트 팝업과 Shift+클릭·탭을 못 가른다");
-  assert.match(branch, /surfaceWindowOpenTarget\(\{ url, disposition, features, openPopups: surfacePopups\.size \}\)/,
+  assert.match(branch, /surfaceWindowOpenTarget\(\{ url, disposition, features, openPopups: surfacePopups\.size, inAppTabs: surfaceTabHost\(wc\) !== null \}\)/,
     "★ 판정 표를 안 쓰거나 **우리가 지은** 팝업 수를 안 넘긴다(상한 무력)");
   const deny = branch.indexOf('if (t === "deny") return { action: "deny" };');
   const gate = branch.indexOf('if (!surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) return { action: "deny" };');
@@ -545,6 +545,61 @@ t("T1~T6 제목 = 실제 출처 — 빈 창은 «빈 창»(누가 썼는지 제�
   for (const [u, o] of [["::bad", "::bad"], ["", null], [null, "javascript:1"]])                                          // T6
     assert.equal(surfacePopupTitle(u, "제목", o), "빈 창 — 제목", `${u} / ${o}`);
   assert.equal(surfacePopupTitle("https://evil.com/", "x", "https://www.linkedin.com/"), "evil.com — x", "★ http(s) 창은 자기 출처를 쓴다(opener 출처로 속이지 않는다)");
+});
+
+// ── N. 새 탭 → 앱 안의 새 웹 칸 (원준 2026-11-10 — «새 탭이 전부 앱 밖 브라우저로 나간다») ──────────────────
+const TABBY = (o) => surfaceWindowOpenTarget({ url: "https://mail.google.com/x", disposition: "foreground-tab", features: "", inAppTabs: true, ...o });
+
+t("N1 ★ 웹 화면이 받겠다고 하면 탭 성격 http(s) 는 앱 안의 새 웹 칸 — target=_blank · 뒤 탭 · Shift+클릭", () => {
+  assert.equal(TABBY({}), "tab");
+  assert.equal(TABBY({ disposition: "background-tab" }), "tab");
+  assert.equal(TABBY({ disposition: POP, features: "" }), "tab");                       // Shift+클릭(기능 없는 new-window)
+  assert.equal(TABBY({ url: "http://localhost:3000/" }), "tab");
+});
+
+t("N2 ★ 받겠다는 화면이 없으면(구 웹 UI) 종전대로 시스템 브라우저 — true 말고는 받겠다는 뜻이 아니다", () => {
+  for (const inAppTabs of [false, undefined, null, 1, "true", "yes", {}])
+    assert.equal(TABBY({ inAppTabs }), "external", String(inAppTabs));
+});
+
+t("N3 앱 안 새 칸이어도 DRM 은 밖으로 · mailto/tel 은 OS 로 · 열 수 없는 것과 빈 탭은 거부", () => {
+  assert.equal(TABBY({ url: "https://www.netflix.com/watch/1" }), "external");
+  assert.equal(TABBY({ url: "mailto:a@b.c" }), "external");
+  assert.equal(TABBY({ url: "tel:01012345678" }), "external");
+  for (const url of ["javascript:1", "file:///etc/passwd", "about:blank", "", null])
+    assert.equal(TABBY({ url }), "deny", String(url));
+});
+
+t("N4 ★ 스크립트 팝업(기능 문자열 있는 new-window)은 그대로 앱 안 작은 창 — 팝업 로그인의 opener 가 살아야 한다", () => {
+  assert.equal(TABBY({ url: GSI, disposition: POP, features: FEAT }), "popup");
+  assert.equal(TABBY({ url: "about:blank", disposition: POP, features: FEAT }), "popup");
+});
+
+t("N5 ★ 배선 — 문 뒤에서 tab 을 웹 화면에 넘기고, 받는 화면이 없거나 못 받으면 시스템 브라우저로", () => {
+  const hook = MAIN.indexOf('app.on("web-contents-created"');
+  const seg = MAIN.slice(hook);
+  const at = seg.indexOf("if (isSurfaceContents(wc))");
+  const branch = seg.slice(at, seg.indexOf("\n  }\n", at) + 5);
+  assert.match(branch, /inAppTabs: surfaceTabHost\(wc\) !== null/, "★ 받는 화면 여부를 판정 표에 안 넘긴다");
+  const gate = branch.indexOf("if (!surfaceLedger.check(wc,");
+  const tab = branch.indexOf('if (t === "tab") { openSurfaceTab(wc, url); return { action: "deny" }; }');
+  const ext = branch.indexOf("shell.openExternal(url);\n      return");
+  assert.ok(tab > gate, "★ 문(포커스·빈도)보다 먼저 새 칸을 연다 — 광고 페이지가 칸을 쏟는다");
+  assert.ok(ext > tab, "tab 이 시스템 브라우저 뒤에 있다 — 둘 다 열린다");
+  const host = fnBody("surfaceTabHost");
+  assert.match(host, /wc\.getType\(\) !== "webview"/, "★ 팝업 창(품은 웹 화면 없음)까지 웹 화면으로 보낸다");
+  assert.match(host, /surfaceTabHosts\.has\(host\.id\)/, "★ 받겠다고 하지 않은 화면(구 웹 UI)에도 보낸다 — 링크가 사라진다");
+  const open = fnBody("openSurfaceTab");
+  assert.match(open, /if \(!host\) \{ shell\.openExternal\(url\); return; \}/, "받는 화면이 없을 때 링크가 사라진다");
+  assert.match(open, /setTimeout\(\(\) => settleSurfaceTab\(id, false\), SURFACE_TAB_ACK_MS\)/, "★ 답이 없을 때 시스템 브라우저로 넘기지 않는다");
+  assert.match(fnBody("settleSurfaceTab"), /if \(!ok\) shell\.openExternal\(p\.url\);/, "★ 못 받았다는 답에 링크가 사라진다");
+  for (const ch of ["SURFACE_TABS", "SURFACE_OPEN_TAB_ACK"]) {
+    const i = MAIN.indexOf(`ipcMain.on(IPC_WEB.${ch},`);
+    assert.ok(i >= 0, `${ch} 처리기가 없다`);
+    assert.match(MAIN.slice(i, i + 200), /if \(!fromGateway\(e\)/, `★ ${ch} 가 출처를 안 본다 — 남의 페이지가 새 칸 길을 켜고 끈다`);
+  }
+  assert.match(PRELOAD, /surfaceTabs: boot\.browserSurface \? \{/, "★ 서피스 능력 없는 화면에도 새 칸 다리를 준다");
+  assert.match(PRELOAD, /removeListener\("lively-web:surface-open-tab", h\)/, "해제가 리스너를 안 뗀다 — 쌓인다");
 });
 
 console.log(`\n${pass} passed`);

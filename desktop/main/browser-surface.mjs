@@ -122,17 +122,21 @@ export const SURFACE_POPUP_LIMIT = 4;
  * 웹 칸 안에서 **새 창**(window.open · target=_blank)을 어디서 열지 (#5025).
  *   - "popup"    앱 안의 작은 창으로 연다 — **opener 관계가 산다**. 구글·애플·마이크로소프트의 «팝업 로그인» 은 그 창이
  *                로그인 결과를 opener 로 돌려준다(postMessage). 시스템 브라우저로 넘기면 결과가 돌아올 길이 없다.
+ *   - "tab"      앱 안의 새 웹 칸(같은 세션)으로 연다 — opener 는 없다(탭과 같다)
  *   - "external" 시스템 브라우저로 넘긴다
  *   - "deny"     열지 않는다
  *
  * 앱 안으로 들이는 건 **스크립트가 창 기능을 주고 연 팝업**뿐이다 — disposition "new-window" 에 기능 문자열이 있을 때.
  *  Shift+클릭도 "new-window" 지만 기능이 비어 있고 opener 도 없어서(OpenURLFromTab) 앱 안에 열면 주소줄 없는 창만 남는다.
- *  탭 성격(target=_blank 링크 · 기능 없는 window.open = "foreground-tab"/"background-tab")과 함께 시스템 브라우저로 보낸다
- *  (웹 칸엔 탭 줄이 없다 — 웹 칸의 새 탭으로 받는 건 별건, #4993). 열지 말지의 빈도·포커스 판정은 surfaceOpenGate.
+ *  탭 성격(target=_blank 링크 · 기능 없는 window.open = "foreground-tab"/"background-tab")과 함께 **앱 안의 새 웹 칸**으로 보낸다
+ *  ("tab" — 같은 세션 곁칸에 웹 칸을 하나 더 열어 그 주소를 싣는다, web/v2/browser-host.ts openFromPage). 원준 2026-11-10:
+ *  «새 탭으로 열리는 모든 탭이 앱 밖 브라우저로 나간다» — 메일 인증 링크처럼 AI 가 이어서 다뤄야 할 페이지가 앱 밖으로 새면
+ *  AI 가 손을 못 댄다. 단 **웹 화면이 그 길을 받겠다고 했을 때만**(inAppTabs — 구 웹 UI 는 받을 줄 모른다) 이고,
+ *  http(s) 가 아니거나 DRM 사이트면 종전대로 시스템 브라우저다. 열지 말지의 빈도·포커스 판정은 surfaceOpenGate.
  *  disposition 문자열은 Electron 이 준다(v43.3.0 electron_api_web_contents.cc — NEW_POPUP·NEW_WINDOW → "new-window").
  *  빈 주소(about:blank)는 «창을 먼저 열고 주소는 나중에 넣는» 흔한 모양이라 팝업으로는 받고, 시스템 브라우저로는 안 보낸다.
  */
-export function surfaceWindowOpenTarget({ url, disposition, features, openPopups = 0 } = {}) {
+export function surfaceWindowOpenTarget({ url, disposition, features, openPopups = 0, inAppTabs = false } = {}) {
   const raw = String(url || "").trim();
   const blank = !raw || /^about:blank(?:[?#]|$)/i.test(raw);
   if (disposition === "new-window" && String(features || "").trim()) {
@@ -140,7 +144,9 @@ export function surfaceWindowOpenTarget({ url, disposition, features, openPopups
     if (t !== "allow") return t;
     return openPopups >= SURFACE_POPUP_LIMIT ? "deny" : "popup";
   }
-  return surfaceNavTarget(raw) === "deny" ? "deny" : "external";
+  const nav = surfaceNavTarget(raw);
+  if (nav === "deny") return "deny";
+  return nav === "allow" && inAppTabs === true ? "tab" : "external";
 }
 
 /** 팝업 창의 최소 크기 — 이보다 작으면 사람이 못 보고 못 닫는다(1×1 창 같은 속임수). */

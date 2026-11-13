@@ -393,8 +393,14 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
     ts.forEachChild(n, (c) => findReveal(c, fn));
   };
   findReveal(sf, null);
-  eq(reveals, ["withTab:revealOnce", "revealOnce:reveal", "opTabs:reveal", "opTabs:revealOnce", "opHandoff:reveal"],
-    "T3 읽기·조작(withTab), 탭 생성·선택, 사람에게 넘기기만 웹 칸을 표시한다");
+  eq(reveals, ["openFromPage:reveal", "withTab:revealOnce", "revealOnce:reveal", "opTabs:reveal", "opTabs:revealOnce", "opHandoff:reveal"],
+    "T3 페이지가 새 탭으로 연 칸(사람이 링크를 눌렀다), 읽기·조작(withTab), 탭 생성·선택, 사람에게 넘기기만 웹 칸을 표시한다");
+  //  T3' 페이지가 새 탭으로 연 칸은 사람의 것 — AI 의 «지금 쓰는 탭»(current)·AI 표시(markAi)를 건드리지 않는다(원준 2026-11-10).
+  let ofp = '';
+  const findOfp = (n) => { if (ts.isFunctionDeclaration(n) && n.name?.text === "openFromPage") ofp = n.getText(sf); ts.forEachChild(n, findOfp); };
+  findOfp(sf);
+  eq([!!ofp, /current\.set|markAi/.test(ofp), /https\?:/.test(ofp)], [true, false, true],
+    "T3' openFromPage 는 AI 기본 탭·AI 표시를 바꾸지 않고 http(s) 만 싣는다");
   ok(/hostPost\('\/api\/ui\/browser\/host\/reveal'/.test(HOST) && /if \(t\.mode !== 'docked'\) requestReveal\(t\)/.test(HOST),
     "T4 표시는 같은 창의 로컬 사건과 다른 창의 서버 사건을 함께 쓴다");
 }
