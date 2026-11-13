@@ -207,7 +207,9 @@ function openBackfill(reload) {
           el('b', { text: `${d.locked}건이 새로 잠기고 ${d.resynced ?? 0}건의 대상이 바뀝니다` }),
           el('span', { text: `검사 ${d.scanned}건 · 이미 맞음 ${d.already_locked}건 · 규칙 없음 ${d.no_rule}건`
             + (d.resync_refused ? ` · 볼 수 없어 넓히지 못함 ${d.resync_refused}건` : '')
-            + (d.unit_managed ? ` · 수집 단위가 정함 ${d.unit_managed}건` : '') })),
+            + (d.unit_managed ? ` · 수집 단위가 정함 ${d.unit_managed}건` : '')
+            + (d.skipped_empty ? ` · 규칙 대상이 비어 건너뜀 ${d.skipped_empty}건` : '')
+            + (d.truncated ? ` · 한도에 걸려 오래된 자료는 못 봄` : '') })),
         (d.samples || []).length
           ? el('ul', { class: 'vax-samples' }, ...(d.samples || []).map((s) => el('li', { text: String(s) })))
           : null);

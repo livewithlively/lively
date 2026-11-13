@@ -47,7 +47,7 @@
 //   R5 수집 단위가 공개범위를 정하는 자료는 다시 맞추지 않는다(unit_managed)
 //   R6 dry_run 은 세기만 한다
 //   R7 자료 대상이 팀이면 그 팀원은 넓힐 수 있고 팀 밖 사람은 못 넓힌다 · channel 로 그 채널 자료만 훑는다
-//   R8 규칙 대상이 비어 있으면 재적용하지 않는다(대상 0 으로 덮지 않는다)
+//   R8 규칙 대상이 비어 있으면 잠그지도 다시 맞추지도 않는다(대상 0 으로 덮지 않는다)
 //   T1 프리셋 레인의 저장된 옛 문구는 글자 그대로 같을 때만 새 문구로 · 사람이 고친 줄은 그대로 · 두 번째는 0건
 import crypto from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -688,18 +688,27 @@ try {
     await itemsPool.query(`UPDATE source SET fields = jsonb_build_object('container_ref', $2::text) WHERE id=$1`, [sT, chT]);
     const r7a = await run(OUT, false, chT);
     const r7 = await run(C, false, chT);
-    chk("R7 ★팀 밖(OUT)은 거절 · 팀원(C)은 B·C 로 넓힌다 · channel 로 그 채널 자료 1건만 훑는다",
-      r7a.ok && r7a.v.resync_refused === 1 && r7a.v.scanned === 1 && r7.ok && r7.v.resynced === 1 && r7.v.scanned === 1
+    chk("R7 ★팀 밖(OUT)은 거절 · 팀원(C)은 B·C 로 넓힌다",
+      r7a.ok && r7a.v.resync_refused === 1 && r7.ok && r7.v.resynced === 1
       && JSON.stringify(await srcAud(sT)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])),
       JSON.stringify({ r7a, r7, aud: await srcAud(sT) }));
+    const sN = await mkSource(true, [`member:${B}`], { system: SYS3, ext: `${TAG}-r7n` });
+    await itemsPool.query(`UPDATE source SET fields = jsonb_build_object('container_name', $2::text) WHERE id=$1`, [sN, `${TAG}-chN`]);
+    const r7n = await run(B, true, `${TAG}-chN`);
+    chk("R7b channel 은 그 채널 자료만 훑는다 — container_ref·container_name 둘 다",
+      r7a.v?.scanned === 1 && r7.v?.scanned === 1 && r7n.ok && r7n.v.scanned === 1 && r7n.v.resynced === 1 && r7n.v.truncated === false,
+      JSON.stringify({ a: r7a.v?.scanned, b: r7.v?.scanned, r7n }));
 
     //  R8 — 규칙 대상이 비면(저장 도중을 읽은 판·테이블 직접 수정) 대상 0 으로 덮지 않는다.
+    await itemsPool.query(`DELETE FROM source WHERE id=$1`, [sN]);
+    const sO = await mkSource(false, [], { system: SYS3, ext: `${TAG}-r8o` });
     await setPol([]);
     const r8 = await run(B);
-    chk("R8 ★빈 대상 규칙은 재적용하지 않는다 · 자료는 B·C 그대로",
-      r8.ok && r8.v.resynced === 0 && r8.v.resync_skipped_empty >= 3
-      && JSON.stringify(await srcAud(sR)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])),
-      JSON.stringify({ r8, aud: await srcAud(sR) }));
+    const oVis = (await itemsPool.query(`SELECT visibility FROM source WHERE id=$1`, [sO])).rows[0]?.visibility;
+    chk("R8 ★빈 대상 규칙은 잠그지도 다시 맞추지도 않는다 · 잠긴 자료는 B·C 그대로 · 열린 자료는 열린 채",
+      r8.ok && r8.v.resynced === 0 && r8.v.locked === 0 && r8.v.skipped_empty === 4 && r8.v.unit_managed === 1
+      && JSON.stringify(await srcAud(sR)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])) && oVis === "open",
+      JSON.stringify({ r8, aud: await srcAud(sR), oVis }));
   }
 
   // ── T1 프리셋 레인 문구 이관 ──
