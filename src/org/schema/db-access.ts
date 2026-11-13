@@ -5,7 +5,7 @@
 //  실행(await) 순서는 org/schema.ts 오케스트레이터가 소유한다(분할 전 시퀀스 그대로 — SCHEMA_SQL_LOG
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
 import type { Pool } from "pg";
-import { ensureCheck } from "./ddl-util.js";
+import { ensureCheck, redefineCheck } from "./ddl-util.js";
 
 export async function initDbAccessPolicies(pool: Pool): Promise<void> {
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
@@ -73,7 +73,7 @@ export async function initDbAccessPolicies(pool: Pool): Promise<void> {
 
   // ── org_db_column_mask — 개인정보 컬럼 마스킹 정책(웹 관리, 컴플라이언스, #186). 라이브 스키마 위 오버레이. ──
   //  집행은 게이트웨이가 결정론적으로(고객 DB 무수정): 게이트1(AST 파생차단)+게이트2(출처기반 결과 마스킹, src/db/firewall.ts·tools/db.ts).
-  //  style: full(전체) | partial(부분) | email(로컬부) | hash(sha256) | null(널).
+  //  style: full(전체) | partial(부분) | email(로컬부) | hash(sha256) | null(널) | age(생년월일 → 월 첫날 기준 만나이).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_db_column_mask(
       source TEXT NOT NULL,
@@ -85,7 +85,7 @@ export async function initDbAccessPolicies(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT,
       PRIMARY KEY (source, table_name, column_name));
-    ${ensureCheck("org_db_column_mask", { org_db_column_mask_style_chk: "style IN ('full','partial','email','hash','null')" })}
+    ${redefineCheck("org_db_column_mask", "org_db_column_mask_style_chk", "style IN ('full','partial','email','hash','null','age')")}
   `);
 
   // ── org_db_subject_key — db 접근 감사(P5, #746)의 '조회 대상 식별자' 컬럼 지정(웹/REST 관리). ──

@@ -123,8 +123,10 @@ export function applyMaskOverlay(base: SourcePolicy, source: string, unmask?: Re
   const effMask = getMaskStyleMap(source, unmask);
   const maskedCols = new Set(effMask.keys());
   const maskedColNames = new Set<string>();
+  const ageCols = new Set<string>();
   for (const k of maskedCols) maskedColNames.add(k.slice(k.indexOf(".") + 1));
-  return { ...base, maskedCols, maskedColNames, hasMasks: maskedCols.size > 0 };
+  for (const [k, style] of effMask) if (style === "age") ageCols.add(k);
+  return { ...base, maskedCols, maskedColNames, hasMasks: maskedCols.size > 0, ageCols };
 }
 
 // ── 게이트2(출처기반 마스킹)용 — 마스킹 (table,col) 을 소스 카탈로그의 (oid,attnum) 로 해석해 style 맵을 만든다. ──

@@ -273,4 +273,203 @@ rejects("op 3-16: 한계 — 단항 |/ (제곱근) 는 여전히 거부", "selec
 // mysql dialect 는 중화 대상이 아니다 — 원래 파싱되던 건 그대로 되고(아래), 원래 안 되던 <=> 는 그대로 거부(vec 2-13).
 okMy("op 3-17: mysql dialect 무변경 — 원래 되던 비트연산 & 는 그대로 통과", "select a & b from t");
 
+// ══════════ 마스킹 규칙은 CTE·서브쿼리·UNION 분기 안의 별칭에도 같다 ══════════
+//  별칭은 그 별칭을 정의한 쿼리 범위(와 그 바깥)에서 해석된다 — 최상위 FROM 만 보면 안쪽 별칭이 비어 보인다.
+const acct = withMask("accounts.account_no");
+const bothDialects = (name: string, sql: string, pol: SourcePolicy = acct, re: RegExp = /최상위 SELECT 투영/): void => {
+  rejectsP(`${name} (pg)`, sql, pol, re);
+  rejMy(`${name} (mysql)`, sql, re, pol);
+};
+bothDialects("scope-1: CTE 안 별칭 + CASE·CAST 파생",
+  "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d");
+rejMy("scope-1b: CTE 안 별칭 + REGEXP·CAST SIGNED (mysql)",
+  "WITH d AS (SELECT CASE WHEN a.account_no REGEXP '^[0-9]+$' THEN CAST(a.account_no AS SIGNED) END AS x FROM accounts a) SELECT x FROM d",
+  /최상위 SELECT 투영/, acct);
+bothDialects("scope-2: CTE 가 별칭 수식 컬럼을 그대로 내보내도 차단",
+  "WITH c AS (SELECT a.account_no FROM accounts a) SELECT account_no FROM c");
+bothDialects("scope-3: FROM 서브쿼리(파생 테이블) 안 별칭",
+  "SELECT x FROM (SELECT substring(a.account_no, 1, 3) AS x FROM accounts a) t");
+bothDialects("scope-4: 스칼라 서브쿼리 안 별칭 집계",
+  "SELECT o.id, (SELECT max(a.account_no) FROM accounts a WHERE a.id = o.account_id) AS m FROM orders o");
+bothDialects("scope-5: EXISTS 서브쿼리 안 별칭 조건",
+  "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = o.account_id AND a.account_no LIKE '1%')");
+bothDialects("scope-6: IN 서브쿼리 안 별칭 조건",
+  "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')");
+bothDialects("scope-7: 서브쿼리 안 조인키",
+  "SELECT x.id FROM (SELECT o.id FROM orders o JOIN accounts a ON a.account_no = o.ref) x");
+bothDialects("scope-8: UNION 두 번째 분기의 별칭",
+  "SELECT id FROM orders UNION SELECT a.account_no FROM accounts a", acct, /집합연산|최상위 SELECT 투영/);
+bothDialects("scope-9: 이어지는 CTE(앞 CTE 를 뒤 CTE 가 가공)",
+  "WITH c1 AS (SELECT a.account_no AS v FROM accounts a), c2 AS (SELECT v FROM c1) SELECT v FROM c2");
+rejectsP("scope-10: 중첩 CTE (pg)",
+  "WITH c1 AS (WITH c2 AS (SELECT a.account_no AS v FROM accounts a) SELECT v FROM c2) SELECT v FROM c1", acct, /최상위 SELECT 투영/);
+rejMy("scope-10: 중첩 CTE (mysql)",
+  "WITH c1 AS (WITH c2 AS (SELECT a.account_no AS v FROM accounts a) SELECT v FROM c2) SELECT v FROM c1", /최상위 SELECT 투영/, acct);
+bothDialects("scope-11: 재귀 CTE 앵커의 별칭",
+  "WITH RECURSIVE r AS (SELECT a.account_no AS v, 1 AS n FROM accounts a UNION ALL SELECT v, n + 1 FROM r WHERE n < 3) SELECT v FROM r",
+  acct, /집합연산|최상위 SELECT 투영/);
+bothDialects("scope-12: 섀도잉 — 바깥 a=무마스킹 테이블, 안쪽 a=마스킹 테이블",
+  "SELECT a.id FROM orders a WHERE a.id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')");
+bothDialects("scope-13: 바깥 별칭을 안쪽에서 상관 참조",
+  "SELECT o.id FROM accounts a JOIN orders o ON o.account_id = a.id WHERE EXISTS (SELECT 1 FROM orders o2 WHERE o2.ref = a.account_no)");
+bothDialects("scope-14: JOIN USING 조인키", "SELECT a.id FROM accounts a JOIN orders o USING (account_no)");
+bothDialects("scope-15: 최상위 투영 별칭으로 정렬", "SELECT account_no AS n FROM accounts ORDER BY n");
+rejMy("scope-16: 최상위 투영 별칭으로 HAVING 필터 (mysql)",
+  "SELECT account_no AS n FROM accounts HAVING n LIKE '1%'", /최상위 SELECT 투영/, acct);
+bothDialects("scope-17: 위치 번호로 마스킹 컬럼 정렬", "SELECT id, account_no FROM accounts ORDER BY 2");
+bothDialects("scope-18: 위치 번호로 마스킹 컬럼 묶기", "SELECT account_no, count(*) AS c FROM accounts GROUP BY 1");
+bothDialects("scope-19: 마스킹 테이블 * 와 위치 번호 정렬", "SELECT * FROM accounts ORDER BY 2", acct, /위치 번호|최상위 SELECT 투영/);
+
+// pg 는 미수식 테이블 이름·별칭을 행 전체 값으로 읽는다 — 출처가 없어 결과 마스킹이 못 가린다.
+for (const [n, sql] of [
+  ["별칭 투영", "SELECT a FROM accounts a"],
+  ["테이블 이름 투영", "SELECT accounts FROM accounts"],
+  ["to_json", "SELECT to_json(a) FROM accounts a"],
+  ["텍스트 캐스트 조건", "SELECT id FROM accounts a WHERE a::text LIKE '%12%'"],
+  ["서브쿼리 안", "SELECT id FROM accounts a WHERE (SELECT a) IS NOT NULL"],
+] as const) rejectsP(`scope-row-${n}: 행 전체 참조 거부`, sql, acct, /행 전체 참조/);
+okMy("scope-row-mysql: mysql 은 행 전체 참조 문법이 없어 테이블명과 같은 컬럼은 그대로", "SELECT status FROM status", withMask("status.secret"));
+// pg 파서는 NATURAL JOIN 의 조인키를 AST 에 남기지 않는다(NATURAL 을 별칭으로 읽음) — 마스킹 소스에선 거부.
+rejectsP("scope-natural: NATURAL JOIN 거부", "SELECT t.account_no FROM accounts NATURAL JOIN (SELECT '1' AS account_no) t", acct, /NATURAL JOIN/);
+okP("scope-alias-sub: 서브쿼리 안 동명 참조는 출력 별칭이 아니다",
+  "SELECT account_no AS n, (SELECT max(n) FROM other) AS m FROM accounts", acct);
+
+// `*` 는 몇 개 컬럼으로 펼쳐질지 모른다 — 위치 번호가 어느 컬럼을 가리키는지 알 수 없어 거부.
+bothDialects("scope-pos-star-1: 비마스킹 테이블 * 뒤의 위치 번호 정렬",
+  "SELECT o.*, a.account_no, a.id FROM orders o, accounts a ORDER BY 3", acct, /위치 번호/);
+bothDialects("scope-pos-star-2: 조인 + 비마스킹 테이블 * 뒤의 위치 번호 정렬",
+  "SELECT o.*, a.account_no FROM orders o JOIN accounts a ON a.id = o.account_id ORDER BY 3", acct, /위치 번호/);
+okP("scope-pos-star-ok-1: 비마스킹 CTE * 뒤 위치 번호는 통과", "WITH c AS (SELECT a.id FROM accounts a) SELECT * FROM c ORDER BY 1", acct);
+okMy("scope-pos-star-ok-2: 비마스킹 파생 테이블 * 뒤 위치 번호는 통과 (mysql)", "SELECT t.* FROM (SELECT a.id FROM accounts a) t ORDER BY 1", acct);
+// UNION 의 두 번째 분기 * 도 그 분기의 테이블로 판정한다.
+bothDialects("scope-union-star-1: 두 번째 분기의 마스킹 테이블 *", "SELECT * FROM orders UNION ALL SELECT * FROM accounts", acct, /집합연산/);
+bothDialects("scope-union-star-2: 두 번째 분기의 별칭 수식 *", "SELECT o.* FROM orders o UNION ALL SELECT a.* FROM accounts a", acct, /집합연산/);
+// pg 파서는 FROM 컬럼 별칭 목록(`t AS a(x, y)`)을 별칭 문자열 "a(x, y)" 로 준다 — 컬럼 이름이 바뀌어 판정할 수 없다.
+rejectsP("scope-colalias-1: FROM 컬럼 별칭 목록 + 파생", "SELECT substring(a.y, 1, 3) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
+rejectsP("scope-colalias-2: FROM 컬럼 별칭 목록 + 조건", "SELECT x FROM accounts AS a(x, y) WHERE y LIKE '1%'", acct, /컬럼 별칭 목록/);
+rejectsP("scope-colalias-3: FROM 컬럼 별칭 목록 + 행 전체", "SELECT to_json(a) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
+// 가드 — 윈도 함수·LATERAL·DISTINCT ON·FILTER 안의 마스킹 컬럼, 같은 별칭을 다른 테이블에 겹쳐 쓴 경계(과잉 차단 쪽)
+bothDialects("scope-guard-window: 윈도 함수 정렬", "SELECT rank() OVER (ORDER BY account_no) AS r FROM accounts");
+rejectsP("scope-guard-lateral: LATERAL 안 참조",
+  "SELECT o.id FROM orders o, LATERAL (SELECT a.account_no FROM accounts a WHERE a.id = o.account_id) t", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-distinct-on: DISTINCT ON", "SELECT DISTINCT ON (account_no) id FROM accounts", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-filter: 집계 FILTER 조건", "SELECT count(*) FILTER (WHERE account_no LIKE '1%') FROM accounts", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-overlap: 같은 별칭을 다른 테이블에 겹쳐 쓰면 동명 비마스킹 컬럼도 차단(넓은 해석의 대가)",
+  "SELECT a.id FROM accounts a WHERE a.id IN (SELECT a.order_id FROM orders a WHERE a.account_no = 'x')", acct, /최상위 SELECT 투영/);
+
+// 마스킹 없는 컬럼은 범위와 무관하게 계속 허용된다(과잉 차단 회귀 방지)
+okP("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼",
+  "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼 (mysql)",
+  "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct);
+okP("scope-ok-2: 서브쿼리·EXISTS 의 무마스킹 컬럼",
+  "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = o.account_id AND a.status = 'x')", acct);
+okP("scope-ok-3: UNION 분기의 무마스킹 컬럼", "SELECT a.id FROM accounts a UNION SELECT o.id FROM orders o", acct);
+okP("scope-ok-4: 무마스킹 테이블의 동명 컬럼은 서브쿼리 안에서도 통과",
+  "SELECT a.id FROM orders a WHERE a.id IN (SELECT b.order_id FROM orders b WHERE b.account_no = 'x')", acct);
+okP("scope-ok-5: 최상위 투영은 서브쿼리가 있어도 그대로 허용 + minMasked",
+  "SELECT a.account_no FROM accounts a WHERE a.id IN (SELECT o.account_id FROM orders o WHERE o.status = 'x')", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("scope-ok-6: 무마스킹 컬럼 위치 번호 정렬", "SELECT id, account_no FROM accounts ORDER BY 1", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("scope-ok-7: 무마스킹 컬럼 JOIN USING", "SELECT a.id FROM accounts a JOIN orders o USING (id)", acct);
+okP("scope-ok-8: 파생 테이블 별칭 수식 투영(무마스킹)", "SELECT t.k FROM (SELECT a.id AS k FROM accounts a) t", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+
+// 언마스크 grant 보유자 — getSourcePolicy 가 그 컬럼을 마스킹 집합에서 빼서 넘긴다(tools/db.ts). 같은 쿼리가 통과해야 한다.
+const granted = withMask("users.phone"); // accounts.account_no 는 grant 로 빠짐, 다른 테이블 마스킹만 남은 정책
+okP("scope-grant-1: grant 보유자는 CTE 안 파생도 통과",
+  "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d", granted);
+okMy("scope-grant-2: grant 보유자는 서브쿼리 안 조건도 통과 (mysql)",
+  "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')", granted);
+
+// ══════════ age 스타일 — 생년월일은 «월 첫날 기준 만나이» 파생만 허용 ══════════
+//  생일·기준일을 모두 월 첫날로 묶어 두면 기준일을 바꿔 가며 조회해도 드러나는 건 출생 연·월까지다(일 단위 생일 역산 차단).
+const agePolicy = (): SourcePolicy => ({
+  ...withMask("users.birth_date", "users.phone"),
+  ageCols: new Set(["users.birth_date"]),
+});
+const AGE_HINT = /TIMESTAMPDIFF\(YEAR/;
+const BIRTH_YM = "DATE_FORMAT(u.birth_date, '%Y-%m-01')";
+okMy("age-1: 과거 기준일 컬럼을 월 첫날로 내린 만나이",
+  `SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE_FORMAT(c.cutoff, '%Y-%m-01')) AS age FROM users u JOIN contracts c ON c.user_id = u.id`,
+  agePolicy(), (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("age-2b: 쌍따옴표 날짜 리터럴도 같은 값이라 허용(의도)",
+  'SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, "%Y-%m-01"), "2024-03-01") AS age FROM users', agePolicy());
+rejMy("age-x16: 월 자리가 00 인 형식 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-00-01'), '2024-03-01') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x17: 월 자리가 13 인 형식 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), DATE_FORMAT(now(), '%Y-13-01')) FROM users", AGE_HINT, agePolicy());
+for (const [n, sql] of [
+  ["허용 꼴 그대로", "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users"],
+  ["pg 식 age()", "SELECT date_part('year', age('2024-03-01', birth_date)) FROM users"],
+  ["조건", "SELECT id FROM users WHERE birth_date < '1990-03-01'"],
+] as const) rejectsP(`age-pg-${n}: pg 에서는 age 컬럼의 어떤 파생도 불허`, sql, agePolicy(), /최상위 SELECT 투영|Unparseable/);
+okP("age-pg-투영: pg 에서도 원본 직접 투영은 통과(게이트2 가 만나이로 마스킹)", "SELECT birth_date FROM users", agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okMy("age-2: 월 첫날 날짜 리터럴 기준 + 미수식 컬럼",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') AS age FROM users", agePolicy());
+okMy("age-3: 소문자 함수·단위 + 연 첫날 형식",
+  "SELECT timestampdiff(year, date_format(u.birth_date, '%Y-%m-01'), date_format(now(), '%Y-01-01')) FROM users u", agePolicy());
+okMy("age-4: 만나이 조건 필터(값이 만나이뿐이라 투영과 정보량 같음)",
+  `SELECT u.id FROM users u WHERE TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') >= 19`, agePolicy());
+okMy("age-5: 원본 직접 투영은 통과 + 게이트2 마스킹 대상", "SELECT birth_date FROM users", agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+rejMy("age-x0: 생일 쪽을 월 첫날로 안 묶으면 거부(1일생 여부가 드러남)",
+  "SELECT TIMESTAMPDIFF(YEAR, u.birth_date, '2024-03-01') FROM users u", AGE_HINT, agePolicy());
+rejMy("age-x1: 기준일이 일 단위(DATE(cutoff))면 거부",
+  `SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE(c.cutoff)) AS age FROM users u JOIN contracts c ON c.user_id = u.id`, AGE_HINT, agePolicy());
+rejMy("age-x2: 월 중간 날짜 리터럴 기준 거부", `SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-15') FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x3: 단위 DAY 거부", `SELECT TIMESTAMPDIFF(DAY, ${BIRTH_YM}, '2024-03-01') FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x4: 단위 MONTH 거부", `SELECT TIMESTAMPDIFF(MONTH, ${BIRTH_YM}, '2024-03-01') FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x5: 인자 순서 뒤집기 거부", `SELECT TIMESTAMPDIFF(YEAR, '2024-03-01', ${BIRTH_YM}) FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x6: DATEDIFF 거부", "SELECT DATEDIFF('2024-03-01', birth_date) FROM users", AGE_HINT, agePolicy());
+rejMy("age-x7: 월 추출 거부", "SELECT MONTH(birth_date) FROM users", AGE_HINT, agePolicy());
+rejMy("age-x8: 일 추출 거부", "SELECT DAY(u.birth_date) FROM users u", AGE_HINT, agePolicy());
+rejMy("age-x9: 월·일 포맷 거부", "SELECT DATE_FORMAT(birth_date, '%m-%d') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x9b: 연·월 포맷만 따로 꺼내기 거부", "SELECT DATE_FORMAT(birth_date, '%Y-%m-01') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x10: 비교 조건으로 생일 탐색 거부", "SELECT id FROM users WHERE birth_date < '1990-03-15'", AGE_HINT, agePolicy());
+rejMy("age-x11: 원본으로 정렬 거부", "SELECT id FROM users ORDER BY birth_date", AGE_HINT, agePolicy());
+rejMy("age-x12: 기준일 식 안에 원본을 넣는 우회 거부",
+  `SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE_FORMAT(u.birth_date, '%Y-%m-01')) FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x13: 다른 스타일(partial) 컬럼은 같은 형태라도 종전대로 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(phone, '%Y-%m-01'), '2024-03-01') FROM users", /최상위 SELECT 투영/, agePolicy());
+rejMy("age-x14: age 지정 없는 마스킹 생년월일은 종전대로 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users", /최상위 SELECT 투영/, withMask("users.birth_date"));
+rejMy("age-x15: 스키마 수식 함수(저장 함수 호출)는 내장 함수로 보지 않는다",
+  "SELECT s.timestampdiff(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users", AGE_HINT, agePolicy());
+okMy("age-ok: ageCols 없는 기존 정책은 동작 무변경(마스킹 없는 컬럼 자유)",
+  "SELECT TIMESTAMPDIFF(YEAR, created_at, '2024-03-15') FROM users", withMask("users.birth_date"));
+
+// age 파생은 CTE·서브쿼리 안에서도 같은 별칭 해석으로 판정한다(그 밖의 파생은 범위와 무관하게 막힌다).
+okMy("age-scope-1: CTE 안 만나이 파생 허용",
+  `WITH c AS (SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') AS age FROM users u) SELECT id FROM c WHERE age >= 19`, agePolicy());
+// CTE 가 내보내는 age 는 이미 만나이 정수다 — 바깥에서 그대로 투영해도 원본·일 정보가 없어 마스킹이 필요 없다.
+okMy("age-scope-2: CTE 가 만나이 결과 별칭을 내보내 바깥에서 그대로 SELECT",
+  `WITH c AS (SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') AS age FROM users u) SELECT id, age FROM c`, agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("age-scope-3: 파생 테이블 안 만나이 + 바깥 별칭 섀도잉",
+  `SELECT t.age FROM (SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') AS age FROM users u) t JOIN orders u ON u.id = 1`, agePolicy());
+rejMy("age-scope-x1: CTE 안 일 단위 파생 거부",
+  "WITH c AS (SELECT u.id, DAY(u.birth_date) AS d FROM users u) SELECT id, d FROM c", AGE_HINT, agePolicy());
+rejMy("age-scope-x2: CTE 안 기준일이 일 단위면 거부",
+  `WITH c AS (SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE(o.cutoff)) AS age FROM users u JOIN orders o ON o.user_id = u.id) SELECT age FROM c`, AGE_HINT, agePolicy());
+rejMy("age-scope-x3: CTE 가 연·월만 꺼내 바깥에서 나이 계산하는 우회 거부",
+  "WITH c AS (SELECT DATE_FORMAT(u.birth_date, '%Y-%m-01') AS ym FROM users u) SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(ym, '%Y-%m-01'), '2024-03-01') FROM c", AGE_HINT, agePolicy());
+rejMy("age-scope-x4: 같은 별칭이 age 테이블과 다른 스타일 테이블에 겹치면 허용하지 않는다",
+  "SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM people u WHERE TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), '2024-03-01') > 1)",
+  /최상위 SELECT 투영/, { ...withMask("users.birth_date", "people.birth_date"), ageCols: new Set(["users.birth_date"]) });
+
+// 실사용 꼴 — 기준일이 CTE 의 DATETIME 컬럼, 생년월일은 LEFT JOIN 한 사용자 상세 테이블.
+okMy("age-usage: 코호트 CTE 기준일 + LEFT JOIN 생년월일",
+  "WITH cohort AS (SELECT a.id AS apply_id, a.user_id, a.created_at AS cutoff FROM loan_applications a WHERE a.status = 'done') " +
+  "SELECT c.apply_id, TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), DATE_FORMAT(c.cutoff, '%Y-%m-01')) AS age " +
+  "FROM cohort c JOIN loan_applications a ON a.id = c.apply_id LEFT JOIN users u ON u.id = a.user_id",
+  agePolicy(), (p) => assert.equal(p.minMaskedOutputs, 0));
+rejMy("age-usage-x: 같은 꼴에서 기준일을 일 단위(DATE(c.cutoff))로 두면 거부",
+  "WITH cohort AS (SELECT a.id AS apply_id, a.user_id, a.created_at AS cutoff FROM loan_applications a) " +
+  "SELECT c.apply_id, TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), DATE(c.cutoff)) AS age " +
+  "FROM cohort c JOIN loan_applications a ON a.id = c.apply_id LEFT JOIN users u ON u.id = a.user_id", AGE_HINT, agePolicy());
+
 console.log(`\n${pass} checks passed`);
