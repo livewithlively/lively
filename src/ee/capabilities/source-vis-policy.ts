@@ -232,10 +232,11 @@ const backfill: Capability = {
     "지금 정책을 **이미 수집된 자료**에 적용한다. 정책은 원래 자료가 태어날 때만 적용되므로, 정책을 새로 세웠다면 " +
     "이걸로 과거분을 맞춘다. 이미 잠긴 자료도 규칙의 대상이 바뀌었으면 지금 대상으로 다시 맞춘다(resynced). " +
     "대상을 넓히는 재적용은 그 자료를 지금 볼 수 있는 사람이나 긴급 열람 중인 사람만 할 수 있고, 아니면 건너뛴다(resync_refused). " +
-    "수집 단위가 공개범위를 정하는 자료는 건너뛴다(unit_managed) — 이 자료는 단위의 구성원·공개범위가 바뀌거나 다시 저장될 때 " +
+    "이미 잠긴 자료 중 수집 단위가 공개범위를 정하는 자료는 건너뛴다(unit_managed) — 이 자료는 단위의 구성원·공개범위가 바뀌거나 다시 저장될 때 " +
     "단위 공개범위 ∩ 정책으로 맞춰지고, 정책 변경만으로는 바뀌지 않는다. " +
     "규칙 대상이 비어 있으면 아무도 못 보게 되므로 잠그지도 다시 맞추지도 않는다(skipped_empty). already_locked 는 잠겨 있고 대상도 같은 자료다. " +
     "다른 작업이 쥐고 있던 자료는 건너뛰고 lock_busy 로 센다 — 다시 부르면 그 자료부터 맞춘다. truncated=true 면 limit 에 걸려 오래된 자료를 못 봤다(channel 로 나눠 부른다). " +
+    "미리보기는 잠금 경합을 모르므로 lock_busy 로 빠질 자료도 locked·resynced 로 센다. " +
     "dry_run=true(기본)면 **무엇이 몇 건 바뀌는지만** 돌려주고 실제로 바꾸지 않는다. " +
     "⚠ 되돌리기 어려운 대량 변경이라 실제 적용은 dry_run=false 로 명시해야 한다.",
   scope: "admin",
@@ -271,7 +272,9 @@ const backfill: Capability = {
          FROM source s
         WHERE s.external_system = ANY($1::text[])
           AND ($3::text IS NULL OR s.fields->>'container_ref' = $3 OR s.fields->>'container_name' = $3)
-        ORDER BY s.id DESC LIMIT $2`, [systems, limit, input.channel ? String(input.channel) : null]);
+        ORDER BY s.id DESC LIMIT $2`, [systems, limit + 1, input.channel ? String(input.channel) : null]);
+    const truncated = rows.length > limit;
+    if (truncated) rows.length = limit;
 
     //  이미 잠긴 자료를 넓히는 재적용은 정책 편집(setPolicy)과 같은 선을 지킨다 — 그 자료를 지금 볼 수 있는 사람이거나
     //   전체 긴급열람 중이어야 한다. 이 선이 없으면 «새 규칙을 만들고(넓힘 검사 없음) 백필» 로 못 보던 과거 자료를 열 수 있다.
@@ -317,7 +320,7 @@ const backfill: Capability = {
       if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}${locked ? " (대상 갱신)" : ""}`.trim());
     }
     return {
-      dry_run: dry, scanned: rows.length, truncated: rows.length === limit, systems,
+      dry_run: dry, scanned: rows.length, truncated, systems,
       locked: toLock, resynced, resync_refused: resyncRefused, unit_managed: unitManaged, skipped_empty: skippedEmpty,
       ...(dry ? {} : { lock_busy: lockBusy }),
       already_locked: already, no_rule: noRule, samples,
