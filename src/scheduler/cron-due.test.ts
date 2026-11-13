@@ -9,6 +9,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { cronDue, runOnceDue } from "./cron-due.js";
+import { cronStaggerOffsetMs } from "./cron-stagger.js";
+import { parseCron, nextCronTime } from "./cron-expr.js";
 
 const r = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const ENGINE = r("./engine.ts");
@@ -96,6 +98,12 @@ test("표 B·C — 건드리지 않은 축이 그대로고, 새 판정이 실제
     "B1 1회성 분기가 시각을 안 본다 — 저장한 시각과 상관없이 다음 틱에 돈다");
   assert.ok(ENGINE.indexOf("runOnceDue({") < ENGINE.indexOf("if (job.cron_expr) return cronDue({"),
     "B1 1회성 판정이 시각형 판정보다 뒤에 있다 — 안 돈 1회성이 바로 due 가 된다");
+  //  C3 시각형 분기가 잡 id 로 정한 고정 지연을 싣는다(cron-stagger.ts) — 빠지면 정각 잡들이 다시 한 틱에 몰린다.
+  assert.match(ENGINE, /if \(job\.cron_expr\) return cronDue\(\{[^\n]*offsetMs: cronStaggerOffsetMs\(job\.id, job\.cron_expr, cronStaggerSec\(\)\)/,
+    "C3 시각형 판정에 고정 지연이 안 실렸다");
+  //  C4 표시(next_run_at)가 판정과 같은 지연을 더한다 — 다르면 화면이 실제와 다른 시각을 말한다.
+  const nextRun = ENGINE.slice(ENGINE.indexOf("function computeNextRun"), ENGINE.indexOf("async function executeAndRecord"));
+  assert.match(nextRun, /cronStaggerOffsetMs\(job\.id, job\.cron_expr, cronStaggerSec\(\)\)/, "C4 next_run_at 에 지연이 빠졌다");
   //  B2·B3 주기형 분기 — 종전 그대로(last + interval, 최소 60초 하한).
   assert.match(ENGINE, /return now - last >= Math\.max\(60, Number\(job\.interval_sec\) \|\| 600\) \* 1000/,
     "B2 주기형 판정이 바뀌었다 — 이번 범위가 아니다");
@@ -161,4 +169,127 @@ test("O2b ★ 프로젝트 재현 — 4분 간격 30개를 저장해도 지난 �
   assert.equal(dueAt(start + 4 * 60_000), 1);
   assert.equal(dueAt(start + 40 * 60_000), 10);
   assert.equal(dueAt(start + 120 * 60_000), 30);
+});
+
+// ── 고정 지연(cron-stagger.ts) — 사양 표 D·G ─────────────────────────────────────
+//  정각에 몰린 시각형 잡을 잡 id 로 정한 지연만큼 늦춘다. 지켜야 할 것은 셋이다: 지연 전엔 안 돌고 지나면 돈다 ·
+//  지연을 켜고 끄는 순간에도 직전 회차를 다시 돌지 않는다 · 어떤 틱 간격에서도 회차를 건너뛰거나 두 번 돌지 않는다.
+const H = "0 * * * *";
+
+test("D1 지연 전엔 due 아님, 지나면 due", () => {
+  const o = { expr: H, lastRunAt: "2026-11-07T09:00:40Z", tz: "UTC", offsetMs: 40_000 };
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T10:00:00Z") }), false, "매치 정각에 지연을 무시하고 돌았다");
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T10:00:40Z") - 1 }), false, "지연 1ms 전에 돌았다");
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T10:00:40Z") }), true, "지연이 지났는데 안 돌았다");
+});
+
+test("D2 지연 0·미지정은 종전 판정과 같다", () => {
+  const grid = [ms("2026-11-07T09:59:59Z"), ms("2026-11-07T10:00:00Z"), ms("2026-11-07T10:03:20Z")];
+  for (const now of grid) {
+    const base = cronDue({ expr: H, lastRunAt: "2026-11-07T09:00:05Z", now, tz: "UTC" });
+    assert.equal(cronDue({ expr: H, lastRunAt: "2026-11-07T09:00:05Z", now, tz: "UTC", offsetMs: 0 }), base);
+  }
+});
+
+test("D3 한 번도 안 돈 잡은 지연 없이 바로 due(첫 실행 규칙 그대로)", () => {
+  assert.equal(cronDue({ expr: H, lastRunAt: null, now: ms("2026-11-07T10:00:00Z"), tz: "UTC", offsetMs: 80_000 }), true);
+});
+
+test("D4 ★ 지연을 켜는 순간 — 지연 없이 돈 직전 회차를 다시 돌지 않는다", () => {
+  //  10:00:05 에 지연 없이 돌았다(배포 전). 배포 뒤 지연 60초가 붙어도 10시 회차는 이미 돈 것이다.
+  const o = { expr: H, lastRunAt: "2026-11-07T10:00:05Z", tz: "UTC", offsetMs: 60_000 };
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T10:01:30Z") }), false, "10시 회차를 한 번 더 돌았다");
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T10:59:59Z") }), false);
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T11:01:00Z") }), true, "11시 회차(+지연)를 안 돌았다");
+  //  매일 잡도 같다 — 배포가 한낮이어도 새벽 회차를 다시 돌지 않는다.
+  assert.equal(cronDue({ expr: "30 4 * * *", lastRunAt: "2026-11-07T04:30:10Z", now: ms("2026-11-07T10:00:00Z"), tz: "UTC", offsetMs: 60_000 }), false);
+});
+
+test("D5 지연을 끄는 순간 — 지연을 두고 돈 회차를 다시 돌지 않고 다음 정각에 돈다", () => {
+  const o = { expr: H, lastRunAt: "2026-11-07T10:01:20Z", tz: "UTC", offsetMs: 0 };
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T10:30:00Z") }), false);
+  assert.equal(cronDue({ ...o, now: ms("2026-11-07T11:00:00Z") }), true);
+});
+
+//  틱을 흉내 낸다 — engine 처럼 due 면 그 틱 시각을 last_run_at(실행 시작)으로 적는다.
+//  delay(i) = i 번째 틱이 제 시각보다 늦게 온 몫(ms) — CP 가 부르는 틱은 제때 안 올 수 있다.
+type Delay = (i: number) => number;
+const ON_TIME: Delay = () => 0;
+function simulate(expr: string, offsetMs: number, tickMs: number, phaseMs: number, startIso: string, hours: number, delay: Delay): number[] {
+  const start = ms(startIso);
+  let last: string = new Date(start + offsetMs).toISOString(); // 정상 상태: 직전 회차를 지연대로 돌았다
+  const runs: number[] = [];
+  for (let i = 0, t0 = start + offsetMs + phaseMs; t0 < start + hours * 3_600_000; i++, t0 += tickMs) {
+    const t = t0 + delay(i);
+    if (cronDue({ expr, lastRunAt: last, now: t, tz: "UTC", offsetMs })) { runs.push(t); last = new Date(t).toISOString(); }
+  }
+  return runs;
+}
+//  매치마다 [매치 + 지연, + 틱 + 최대 늦음) 안에 정확히 한 번 · 그 밖의 실행은 없다.
+function missesAndExtras(expr: string, offsetMs: number, tickMs: number, phaseMs: number, startIso: string, hours: number,
+  delay: Delay = ON_TIME, maxDelayMs = 0) {
+  const runs = simulate(expr, offsetMs, tickMs, phaseMs, startIso, hours, delay);
+  const end = ms(startIso) + hours * 3_600_000;
+  const win = tickMs + maxDelayMs;
+  let misses = 0, used = 0, until = 0;
+  const parsed = parseCron(expr);
+  for (let m = nextCronTime(parsed, new Date(ms(startIso)), "UTC")!.getTime(); m + offsetMs + win <= end;
+    m = nextCronTime(parsed, new Date(m), "UTC")!.getTime()) {
+    const hit = runs.filter((r) => r >= m + offsetMs && r < m + offsetMs + win).length;
+    if (hit !== 1) misses++;
+    used += hit;
+    until = m + offsetMs + win;
+  }
+  //  마지막 창 뒤(시뮬레이션 끝에 걸친 회차)의 실행은 세지 않는다.
+  return { misses, extras: runs.filter((r) => r < until).length - used };
+}
+//  [식, 최소 매치 간격(분)] — 7분 간격 식은 시간 경계에서 11분이 된다(*/7 은 56→다음 시 0 이 4분이라 쓰지 않는다).
+const EXPRS: Array<[string, number]> = [
+  [H, 60], ["*/30 * * * *", 30], ["*/10 * * * *", 10], ["0,7,14,21,28,35,42,49 * * * *", 7],
+  ["*/6 * * * *", 6], ["*/5 * * * *", 5], ["*/2 * * * *", 2],
+];
+
+test("G1 ★ 제때 오는 틱 — 어떤 틱 간격·위상에서도 회차를 건너뛰거나 두 번 돌지 않는다(실제 지연 함수로)", () => {
+  const ticks = [30_000, 300_000]; // 인프로세스 타이머(engine.ts TICK_MS) · 매니지드 HTTP 틱 격자(이 파일 머리말)
+  for (const [expr, gapMin] of EXPRS) {
+    for (const id of ["distill-inbox", "job-1", "job-2", "job-3", "wikilink-sweep"]) {
+      const off = cronStaggerOffsetMs(id, expr, 90);
+      for (const tick of ticks) {
+        if (tick > gapMin * 60_000) continue; // 틱이 간격보다 성기면 지연과 무관하게 건너뛴다(종전)
+        for (const phase of [0, 1_000, tick / 3, tick - 1_000]) {
+          const r = missesAndExtras(expr, off, tick, phase, "2026-11-07T00:00:00Z", 6);
+          assert.deepEqual(r, { misses: 0, extras: 0 }, `${expr} id=${id} off=${off} tick=${tick} phase=${phase}`);
+        }
+      }
+    }
+  }
+});
+
+test("G1b ★ 늦게 오는 5분 틱(0~60초) — 그래도 회차를 건너뛰거나 두 번 돌지 않는다", () => {
+  const tick = 300_000, maxDelay = 60_000;
+  const delays: Array<[string, Delay]> = [
+    ["7틱마다 60초", (i) => (i % 7 === 6 ? maxDelay : 0)],
+    ["0~60초 고루", (i) => ((i * 37) % 61) * 1_000],
+  ];
+  const ids = Array.from({ length: 40 }, (_, i) => `job-${i}`);
+  for (const [expr, gapMin] of EXPRS) {
+    if (tick + maxDelay > gapMin * 60_000) continue; // 지연 없이도 늦음만으로 건너뛰는 간격(종전)
+    for (const id of ids) {
+      const off = cronStaggerOffsetMs(id, expr, 90);
+      for (const [name, delay] of delays) {
+        for (const phase of [0, tick / 2, tick - 1_000]) {
+          const r = missesAndExtras(expr, off, tick, phase, "2026-11-07T00:00:00Z", 6, delay, maxDelay);
+          assert.deepEqual(r, { misses: 0, extras: 0 }, `${expr} id=${id} off=${off} ${name} phase=${phase}`);
+        }
+      }
+    }
+  }
+});
+
+test("G2 음성대조 — 상한을 넘긴 지연은 정말로 회차를 건너뛴다(상한이 필요한 이유)", () => {
+  //  5분 틱에서 5분마다 도는 잡에 80초를 주면 10분에 한 번만 돈다. cronStaggerOffsetMs 는 이 잡을 흩지 않는다.
+  //  틱이 «매치 + 지연» 직전에 깨는 위상 — 실행이 거의 한 틱 늦게 시작해 다음 매치 분으로 넘어간다.
+  const r = missesAndExtras("*/5 * * * *", 80_000, 300_000, 299_000, "2026-11-07T00:00:00Z", 2);
+  assert.ok(r.misses > 0, "시뮬레이터가 누락을 못 본다 — G1 이 헛통과한다");
+  assert.equal(cronStaggerOffsetMs("job-1", "*/5 * * * *", 90), 0);
 });
