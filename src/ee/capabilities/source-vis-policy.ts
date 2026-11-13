@@ -230,7 +230,10 @@ const backfill: Capability = {
   title: "자료 공개범위 정책 소급 적용",
   description:
     "지금 정책을 **이미 수집된 자료**에 적용한다. 정책은 원래 자료가 태어날 때만 적용되므로, 정책을 새로 세웠다면 " +
-    "이걸로 과거분을 맞춘다. dry_run=true(기본)면 **무엇이 몇 건 바뀌는지만** 돌려주고 실제로 바꾸지 않는다. " +
+    "이걸로 과거분을 맞춘다. 이미 잠긴 자료도 규칙의 대상이 바뀌었으면 지금 대상으로 다시 맞춘다(resynced). " +
+    "대상을 넓히는 재적용은 그 자료를 지금 볼 수 있는 사람이나 긴급 열람 중인 사람만 할 수 있고, 아니면 건너뛴다(resync_refused). " +
+    "수집 단위가 공개범위를 정하는 자료는 단위 쪽이 맞추므로 다시 맞추지 않는다(unit_managed). " +
+    "dry_run=true(기본)면 **무엇이 몇 건 바뀌는지만** 돌려주고 실제로 바꾸지 않는다. " +
     "⚠ 되돌리기 어려운 대량 변경이라 실제 적용은 dry_run=false 로 명시해야 한다.",
   scope: "admin",
   input: {
@@ -256,18 +259,47 @@ const backfill: Capability = {
     const dry = input.dry_run !== false;   // 기본은 미리보기 — 대량 변경은 명시적으로만
 
     const { rows } = await itemsPool.query(
-      `SELECT id, external_system, visibility,
-              fields->>'container_ref' AS c_ref, fields->>'container_name' AS c_name
-         FROM source
-        WHERE external_system = ANY($1::text[])
-        ORDER BY id DESC LIMIT $2`, [systems, limit]);
+      `SELECT s.id, s.external_system, s.visibility,
+              s.fields->>'container_ref' AS c_ref, s.fields->>'container_name' AS c_name,
+              COALESCE((SELECT array_agg(sm.subject_kind || ':' || sm.member_id)
+                          FROM source_member sm WHERE sm.source_id = s.id), '{}') AS aud,
+              EXISTS(SELECT 1 FROM collect_unit_source us WHERE us.source_id = s.id AND us.audience) AS unit_owned
+         FROM source s
+        WHERE s.external_system = ANY($1::text[])
+        ORDER BY s.id DESC LIMIT $2`, [systems, limit]);
 
-    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0;
+    //  이미 잠긴 자료를 넓히는 재적용은 정책 편집(setPolicy)과 같은 선을 지킨다 — 그 자료를 지금 볼 수 있는 사람이거나
+    //   전체 긴급열람 중이어야 한다. 이 선이 없으면 «새 규칙을 만들고(넓힘 검사 없음) 백필» 로 못 보던 과거 자료를 열 수 있다.
+    const editor = user?.userId ?? "";
+    const privileged = (await effectiveViewer(editor)) === null;
+    const editorTeams = new Set((await itemsPool.query(
+      `SELECT team_id::text AS t FROM team_member WHERE member_id=$1`, [editor])).rows.map((x: any) => String(x.t)));
+    const seesNow = (aud: string[]): boolean => aud.some((k) =>
+      k === `member:${editor}` || (k.startsWith("team:") && editorTeams.has(k.slice(5))));
+
+    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0, resynced = 0, resyncRefused = 0, unitManaged = 0;
     const samples: string[] = [];
     for (const r of rows as any[]) {
       const picked = pickRule(rules, String(r.external_system), [r.c_ref, r.c_name]);
       if (picked.visibility !== "members") { noRule++; continue; }
-      if (r.visibility === "members") { already++; continue; }
+      if (r.visibility === "members") {
+        const cur: string[] = (r.aud ?? []).map(String);
+        const curSet = new Set(cur);
+        const want = new Set(picked.members.map((m) => `${m.subject_kind}:${m.member_id}`));
+        const widening = [...want].some((k) => !curSet.has(k));
+        if (!widening && curSet.size === want.size) { already++; continue; }
+        if (r.unit_owned) { unitManaged++; continue; }
+        if (widening && !privileged && !seesNow(cur)) { resyncRefused++; continue; }
+        resynced++;
+        if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""} (대상 갱신)`.trim());
+        if (!dry) {
+          knowledgeNarrowed += await withTx(async (c) => {
+            await applyVisibility(c, Number(r.id), picked.members);
+            return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
+          });
+        }
+        continue;
+      }
       toLock++;
       if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}`.trim());
       //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다(자료 → 지식 순).
@@ -281,7 +313,8 @@ const backfill: Capability = {
     }
     return {
       dry_run: dry, scanned: rows.length, systems,
-      locked: toLock, already_locked: already, no_rule: noRule, samples,
+      locked: toLock, resynced, resync_refused: resyncRefused, unit_managed: unitManaged,
+      already_locked: already, no_rule: noRule, samples,
       ...(dry ? {} : { knowledge_narrowed: knowledgeNarrowed }),
       note: dry ? "미리보기입니다 — 실제로 적용하려면 dry_run:false 로 다시 부르세요." : undefined,
     };

@@ -40,6 +40,12 @@
 //   E4 기존 지식 + derived_from 저장 중 판이 바뀌면 409 · 본문·연결·판 그대로
 //   D7 비공개 프로젝트 세션 + 잠긴 자료로 새 지식 → 409 · 지식 없음 / 열린 자료면 프로젝트 리스트로 잠겨 태어난다
 //   V2 지식 상세 — 안 보이는 조상 문서의 제목을 싣지 않는다
+//   R1 이미 잠긴 자료 — 규칙 대상이 넓어지면 백필이 다시 맞춘다 · 그 자료를 못 보는 사람이 부르면 건너뛴다(resync_refused)
+//   R2 그 자료를 보는 사람이 부르면 넓어진 대상으로 맞춘다 · 지식은 넓히지 않는다
+//   R3 규칙 대상이 좁아지면 누가 불러도 좁힌다 · 그 자료로 만든 지식도 같이 좁혀진다
+//   R4 전체 긴급열람 중이면 못 보던 자료도 넓힌다
+//   R5 수집 단위가 공개범위를 정하는 자료는 다시 맞추지 않는다(unit_managed)
+//   R6 dry_run 은 세기만 한다
 //   T1 프리셋 레인의 저장된 옛 문구는 글자 그대로 같을 때만 새 문구로 · 사람이 고친 줄은 그대로 · 두 번째는 0건
 import crypto from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -47,7 +53,7 @@ const { itemsPool, withTx } = await import(`${DIST}/db/client.js`);
 const { knowledgeSave } = await import(`${DIST}/capabilities/knowledge/authoring.js`);
 const { sourceCapabilities } = await import(`${DIST}/capabilities/source.js`);
 const { visAxesCapabilities } = await import(`${DIST}/capabilities/vis-axes.js`);
-const { canSeeKnowledge, invalidateVisibilityCache } = await import(`${DIST}/v6/visibility.js`);
+const { canSeeKnowledge, invalidateVisibilityCache, invalidateBreakGlass } = await import(`${DIST}/v6/visibility.js`);
 const { invalidateVisAxes } = await import(`${DIST}/v6/visibility-axes.js`);
 const { invalidateSourceVisRules } = await import(`${DIST}/v6/source-vis-policy.js`);
 const { linkKnowledgeSource, getKnowledge } = await import(`${DIST}/v6/knowledge-store.js`);
@@ -69,7 +75,8 @@ const A = `__${TAG}_a`, B = `__${TAG}_b`, C = `__${TAG}_c`, OUT = `__${TAG}_out`
 const MEMBERS = [A, B, C, OUT];
 const CAT = `${TAG}-cat`;
 const SYS = `${TAG}sys`;              // 이 시험의 자료만 쓰는 external_system
-const SYS2 = `${TAG}pol`;             // 정책(잠금 규칙)이 걸린 external_system — N4·M2
+const SYS2 = `${TAG}pol`;
+const SYS3 = `${TAG}rs`;              // 대상 재적용(R) 전용 — 규칙을 바꿔 가며 쓴다             // 정책(잠금 규칙)이 걸린 external_system — N4·M2
 const PROJ_SESSION = `box-${TAG}-9c0d1e2f`;
 const APP = `${TAG}app`;              // 수집 단위 앱 키
 const JOB = `${TAG}-job`;
@@ -131,7 +138,7 @@ const setAxes = async (patch) => {
 async function cleanup() {
   await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}_fail ON knowledge_source`).catch(() => {});
   await itemsPool.query(`DROP TRIGGER IF EXISTS ${TAG}_bump ON knowledge_source`).catch(() => {});
-  await itemsPool.query(`DELETE FROM knowledge WHERE external_system = ANY($1::text[])`, [[SYS, SYS2]]);
+  await itemsPool.query(`DELETE FROM knowledge WHERE external_system = ANY($1::text[])`, [[SYS, SYS2, SYS3]]);
   await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE note LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM session_project WHERE session_id=$1`, [PROJ_SESSION]);
   await itemsPool.query(`DELETE FROM project WHERE name LIKE $1`, [`${TAG}%`]);
@@ -139,7 +146,8 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [`${TAG}-%`]);
   await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='knowledge' AND entity_key LIKE $1`, [`${TAG}-%`]);
   await itemsPool.query(`DELETE FROM collect_unit WHERE app=$1`, [APP]);
-  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[])`, [[SYS, APP, SYS2]]);
+  await itemsPool.query(`DELETE FROM vis_break_glass WHERE member_id = ANY($1::text[])`, [MEMBERS]);
+  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[])`, [[SYS, APP, SYS2, SYS3]]);
   await itemsPool.query(`DELETE FROM org_task WHERE requester_session LIKE $1`, [`cron:${JOB}%`]);
   await itemsPool.query(`DELETE FROM org_cron WHERE id=$1`, [JOB]);
   await itemsPool.query(`DELETE FROM project_list WHERE name LIKE $1`, [`${TAG}%`]);
@@ -592,6 +600,83 @@ try {
     const forB = await getKnowledge(kname("v2"), B);
     chk("V2 안 보이는 조상 문서의 제목을 싣지 않는다", (forOut?.ancestors ?? []).length === 0, JSON.stringify(forOut?.ancestors));
     chk("V2b 볼 수 있는 사람에게는 그대로", (forB?.ancestors ?? []).length === 1, JSON.stringify(forB?.ancestors));
+  }
+
+  // ── R 이미 잠긴 자료의 대상 재적용(정책 대상이 바뀐 뒤 백필) ──
+  {
+    const backfill = sourceVisPolicyCapabilities.find((c) => c.name === "source_vis_policy_backfill");
+    const run = (actor, dry = false) => attempt(() => backfill.handler({ system: SYS3, dry_run: dry }, { userId: actor }, { actor, source: "web" }));
+    const pol = (await itemsPool.query(
+      `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, priority, enabled, note) VALUES($1, NULL, 'members', 0, true, $2) RETURNING id`,
+      [SYS3, `${TAG}-resync`])).rows[0].id;
+    const setPol = async (ms) => {
+      await itemsPool.query(`DELETE FROM org_source_vis_policy_member WHERE policy_id=$1`, [pol]);
+      for (const m of ms) await itemsPool.query(`INSERT INTO org_source_vis_policy_member(policy_id, subject_kind, member_id) VALUES($1,'member',$2)`, [pol, m]);
+      invalidateSourceVisRules();
+    };
+    const srcAud = async (sid) => (await itemsPool.query(
+      `SELECT subject_kind || ':' || member_id AS s FROM source_member WHERE source_id=$1 ORDER BY 1`, [sid])).rows.map((r) => r.s);
+    const sorted = (xs) => [...xs].sort();
+
+    await setPol([A]);
+    const sR = await mkSource(true, [`member:${A}`], { system: SYS3, ext: `${TAG}-r1` });
+    const rk = await attempt(() => save(NEW(kname("r1"), { derived_from: [sR] })));
+    chk("R0 배선 — A 만 보는 잠긴 자료로 만든 지식은 A 만", rk.ok && JSON.stringify(await knowAud(kname("r1"))) === JSON.stringify([`member:${A}`]), JSON.stringify(rk));
+    await setPol([A, B]);
+
+    const d0 = await run(A, true);
+    chk("R6 dry_run 은 세기만 한다 — 대상 갱신 1건 · 자료는 그대로",
+      d0.ok && d0.v.resynced === 1 && d0.v.locked === 0 && JSON.stringify(await srcAud(sR)) === JSON.stringify([`member:${A}`]),
+      JSON.stringify({ d0, aud: await srcAud(sR) }));
+
+    const r1 = await run(C);
+    chk("R1 ★그 자료를 못 보는 사람(C)의 넓히는 재적용은 건너뛴다 · 자료는 A 만",
+      r1.ok && r1.v.resync_refused === 1 && r1.v.resynced === 0 && JSON.stringify(await srcAud(sR)) === JSON.stringify([`member:${A}`]),
+      JSON.stringify({ r1, aud: await srcAud(sR) }));
+
+    const r2 = await run(A);
+    chk("R2 ★그 자료를 보는 사람(A)이 부르면 A·B 로 맞춘다",
+      r2.ok && r2.v.resynced === 1 && JSON.stringify(await srcAud(sR)) === JSON.stringify(sorted([`member:${A}`, `member:${B}`])),
+      JSON.stringify({ r2, aud: await srcAud(sR) }));
+    chk("R2b 지식은 넓히지 않는다(A 만 그대로)", JSON.stringify(await knowAud(kname("r1"))) === JSON.stringify([`member:${A}`]), JSON.stringify(await knowAud(kname("r1"))));
+    const r2c = await run(A);
+    chk("R2c 다시 부르면 이미 맞음 — 바꿀 것 없음", r2c.ok && r2c.v.resynced === 0 && r2c.v.already_locked >= 1, JSON.stringify(r2c));
+
+    //  R3 — 좁히기는 대상이 아닌 사람이 불러도 된다(새로 얻는 것이 없다). 지식도 같은 트랜잭션에서 좁혀진다.
+    const sR3 = await mkSource(true, [`member:${A}`, `member:${B}`], { system: SYS3, ext: `${TAG}-r3` });
+    const rk3 = await attempt(() => save(NEW(kname("r3"), { derived_from: [sR3] })));
+    await setPol([B]);
+    const r3 = await run(C);
+    chk("R3 ★좁아진 규칙은 C 가 불러도 적용 — 두 자료 모두 B 만",
+      r3.ok && rk3.ok && r3.v.resynced === 2 && JSON.stringify(await srcAud(sR)) === JSON.stringify([`member:${B}`])
+      && JSON.stringify(await srcAud(sR3)) === JSON.stringify([`member:${B}`]),
+      JSON.stringify({ r3, a: await srcAud(sR), b: await srcAud(sR3) }));
+    chk("R3b 그 자료로 만든 지식도 B 만(같이 좁혀진다)",
+      JSON.stringify(await knowAud(kname("r3"))) === JSON.stringify([`member:${B}`]) && !(await sees(kname("r3"), A)),
+      JSON.stringify(await knowAud(kname("r3"))));
+
+    //  R4 — 전체 긴급열람 중이면 못 보던 자료도 넓힌다(정책 편집과 같은 문).
+    await setPol([B, C]);
+    const r4a = await run(OUT);
+    await itemsPool.query(`INSERT INTO vis_break_glass(member_id, reason, expires_at) VALUES($1, $2, now() + interval '1 hour')`, [OUT, `${TAG} 시험`]);
+    invalidateBreakGlass();
+    const r4 = await run(OUT);
+    await itemsPool.query(`UPDATE vis_break_glass SET ended_at=now() WHERE member_id=$1`, [OUT]);
+    invalidateBreakGlass();
+    chk("R4 ★긴급열람 전엔 거절, 연 뒤엔 B·C 로 넓힌다",
+      r4a.ok && r4a.v.resync_refused === 2 && r4.ok && r4.v.resynced === 2
+      && JSON.stringify(await srcAud(sR)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])),
+      JSON.stringify({ r4a, r4, aud: await srcAud(sR) }));
+
+    //  R5 — 수집 단위가 정하는 자료는 단위 쪽 계산(단위 공개범위 ∩ 정책)을 따른다. 백필이 정책 대상으로 덮어쓰면 단위 공개범위가 깨진다.
+    const sU = await mkSource(true, [`member:${B}`], { system: SYS3, ext: `${TAG}-r5` });
+    const u = (await itemsPool.query(
+      `INSERT INTO collect_unit(app, ref, kind, visibility) VALUES($1, $2, 'other', 'viewers') RETURNING id`, [APP, `${TAG}-r5u`])).rows[0].id;
+    await itemsPool.query(`INSERT INTO collect_unit_source(unit_id, source_id, audience) VALUES($1,$2,true)`, [u, sU]);
+    const r5 = await run(B);
+    chk("R5 ★단위가 정하는 자료는 건드리지 않는다(unit_managed) · 자료는 B 만",
+      r5.ok && r5.v.unit_managed === 1 && JSON.stringify(await srcAud(sU)) === JSON.stringify([`member:${B}`]),
+      JSON.stringify({ r5, aud: await srcAud(sU) }));
   }
 
   // ── T1 프리셋 레인 문구 이관 ──
