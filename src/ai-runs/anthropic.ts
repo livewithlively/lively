@@ -120,7 +120,7 @@ export function textOfMessage(j: unknown): string {
   return content.map((b) => (b && typeof b === "object" && (b as { type?: unknown }).type === "text" ? String((b as { text?: unknown }).text ?? "") : "")).join("");
 }
 
-export interface SingleShotInput { model: string; prompt: string; system: string | null; maxTokens: number; /** 자격 meta.workspace_id — forwardHeaders 참조 */ workspaceId?: string | null; messages?: Array<{ role: "user" | "assistant"; content: string }> }
+export interface SingleShotInput { model: string; prompt: string; system: string | null; maxTokens: number; /** 자격 meta.workspace_id — forwardHeaders 참조 */ workspaceId?: string | null; messages?: Array<{ role: "user" | "assistant"; content: string }>; /** 생각 설정 — 주면 그대로 싣는다(화면 번역이 Haiku 의 생각을 끈다) */ thinking?: { type: "disabled" } }
 export interface SingleShotOutput { ok: boolean; status: number; text: string; usage: Usage; model: string | null; stopReason: string | null; error: string | null }
 
 /**
@@ -133,6 +133,7 @@ export async function singleShot(apiKey: string, i: SingleShotInput, signal: Abo
     messages: i.messages ?? [{ role: "user", content: i.prompt }],
   };
   if (i.system) body.system = i.system;
+  if (i.thinking) body.thinking = i.thinking;
   const r = await forwardToAnthropic({ path: "/v1/messages", headers: forwardHeaders({}, apiKey, i.workspaceId ?? null), body: JSON.stringify(body), stream: false, signal }, f);
   const u = await r.usage;
   let j: Record<string, unknown> = {};
