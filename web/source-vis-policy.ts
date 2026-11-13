@@ -204,12 +204,16 @@ function openBackfill(reload) {
       const d = await api('/api/ui/source-vis-policy/backfill', { method: 'POST', body: JSON.stringify({}) });
       replaceKids(out,
         el('div', { class: 'svp-warn' },
-          el('b', { text: `${d.locked}건이 새로 잠깁니다` }),
-          el('span', { text: `검사 ${d.scanned}건 · 이미 잠김 ${d.already_locked}건 · 규칙 없음 ${d.no_rule}건` })),
+          el('b', { text: `${d.locked}건이 새로 잠기고 ${d.resynced ?? 0}건의 대상이 바뀝니다` }),
+          el('span', { text: `검사 ${d.scanned}건 · 이미 맞음 ${d.already_locked}건 · 규칙 없음 ${d.no_rule}건`
+            + (d.resync_refused ? ` · 볼 수 없어 넓히지 못함 ${d.resync_refused}건` : '')
+            + (d.unit_managed ? ` · 수집 단위가 정함 ${d.unit_managed}건` : '')
+            + (d.skipped_empty ? ` · 규칙 대상이 비어 건너뜀 ${d.skipped_empty}건` : '')
+            + (d.truncated ? ` · 한도에 걸려 오래된 자료는 못 봄` : '') })),
         (d.samples || []).length
           ? el('ul', { class: 'vax-samples' }, ...(d.samples || []).map((s) => el('li', { text: String(s) })))
           : null);
-      (go as any).disabled = !d.locked;
+      (go as any).disabled = !d.locked && !d.resynced;
     } catch (e: any) { out.replaceChildren(errorNote(e, '미리보기에 실패했습니다')); }
   })();
 
@@ -217,7 +221,7 @@ function openBackfill(reload) {
     (go as any).disabled = true;
     try {
       const d = await api('/api/ui/source-vis-policy/backfill', { method: 'POST', body: JSON.stringify({ dry_run: false }) });
-      toast(`${d.locked}건에 적용했습니다`); back.remove(); reload();
+      toast(`${d.locked}건을 잠그고 ${d.resynced ?? 0}건의 대상을 바꿨습니다`); back.remove(); reload();
     } catch (e: any) { (go as any).disabled = false; toast('적용하지 못했습니다 — ' + e.message, true); }
   };
 }

@@ -10,8 +10,8 @@
 import { z } from "zod";
 import { HttpError } from "../../http-error.js";
 import type { Capability } from "../../capabilities/types.js";
-import { itemsPool, withTx } from "../../db/client.js";
-import { derivedEnforced, reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
+import { itemsPool } from "../../db/client.js";
+import { derivedEnforced, reconcileDerivedVisibility, withDerivedTx } from "../../v6/derived-visibility.js";
 import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
 } from "../../v6/source-vis-policy.js";
@@ -230,11 +230,19 @@ const backfill: Capability = {
   title: "자료 공개범위 정책 소급 적용",
   description:
     "지금 정책을 **이미 수집된 자료**에 적용한다. 정책은 원래 자료가 태어날 때만 적용되므로, 정책을 새로 세웠다면 " +
-    "이걸로 과거분을 맞춘다. dry_run=true(기본)면 **무엇이 몇 건 바뀌는지만** 돌려주고 실제로 바꾸지 않는다. " +
+    "이걸로 과거분을 맞춘다. 이미 잠긴 자료도 규칙의 대상이 바뀌었으면 지금 대상으로 다시 맞춘다(resynced). " +
+    "대상을 넓히는 재적용은 그 자료를 지금 볼 수 있는 사람이나 긴급 열람 중인 사람만 할 수 있고, 아니면 건너뛴다(resync_refused). " +
+    "이미 잠긴 자료 중 수집 단위가 공개범위를 정하는 자료는 건너뛴다(unit_managed) — 이 자료는 단위의 구성원·공개범위가 바뀌거나 다시 저장될 때 " +
+    "단위 공개범위 ∩ 정책으로 맞춰지고, 정책 변경만으로는 바뀌지 않는다. " +
+    "규칙 대상이 비어 있으면 아무도 못 보게 되므로 잠그지도 다시 맞추지도 않는다(skipped_empty). already_locked 는 잠겨 있고 대상도 같은 자료다. " +
+    "다른 작업이 쥐고 있던 자료는 건너뛰고 lock_busy 로 센다 — 다시 부르면 그 자료부터 맞춘다. truncated=true 면 limit 에 걸려 오래된 자료를 못 봤다(channel 로 나눠 부른다). " +
+    "미리보기는 잠금 경합을 모르므로 lock_busy 로 빠질 자료도 locked·resynced 로 센다. " +
+    "dry_run=true(기본)면 **무엇이 몇 건 바뀌는지만** 돌려주고 실제로 바꾸지 않는다. " +
     "⚠ 되돌리기 어려운 대량 변경이라 실제 적용은 dry_run=false 로 명시해야 한다.",
   scope: "admin",
   input: {
     system: z.string().optional().describe("이 커넥터만(생략하면 규칙이 있는 전 커넥터)"),
+    channel: z.string().optional().describe("이 채널만 — 자료의 container_ref(id) 또는 container_name. 한 커넥터 자료가 limit 보다 많을 때 채널별로 나눠 부른다"),
     dry_run: z.boolean().optional(),
     limit: z.number().int().min(1).max(50_000).optional(),
   },
@@ -256,32 +264,66 @@ const backfill: Capability = {
     const dry = input.dry_run !== false;   // 기본은 미리보기 — 대량 변경은 명시적으로만
 
     const { rows } = await itemsPool.query(
-      `SELECT id, external_system, visibility,
-              fields->>'container_ref' AS c_ref, fields->>'container_name' AS c_name
-         FROM source
-        WHERE external_system = ANY($1::text[])
-        ORDER BY id DESC LIMIT $2`, [systems, limit]);
+      `SELECT s.id, s.external_system, s.visibility,
+              s.fields->>'container_ref' AS c_ref, s.fields->>'container_name' AS c_name,
+              COALESCE((SELECT array_agg(sm.subject_kind || ':' || sm.member_id)
+                          FROM source_member sm WHERE sm.source_id = s.id), '{}') AS aud,
+              EXISTS(SELECT 1 FROM collect_unit_source us WHERE us.source_id = s.id AND us.audience) AS unit_owned
+         FROM source s
+        WHERE s.external_system = ANY($1::text[])
+          AND ($3::text IS NULL OR s.fields->>'container_ref' = $3 OR s.fields->>'container_name' = $3)
+        ORDER BY s.id DESC LIMIT $2`, [systems, limit + 1, input.channel ? String(input.channel) : null]);
+    const truncated = rows.length > limit;
+    if (truncated) rows.length = limit;
 
-    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0;
+    //  이미 잠긴 자료를 넓히는 재적용은 정책 편집(setPolicy)과 같은 선을 지킨다 — 그 자료를 지금 볼 수 있는 사람이거나
+    //   전체 긴급열람 중이어야 한다. 이 선이 없으면 «새 규칙을 만들고(넓힘 검사 없음) 백필» 로 못 보던 과거 자료를 열 수 있다.
+    const editor = user?.userId ?? "";
+    const privileged = (await effectiveViewer(editor)) === null;
+    const editorTeams = new Set((await itemsPool.query(
+      `SELECT team_id::text AS t FROM team_member WHERE member_id=$1`, [editor])).rows.map((x: any) => String(x.t)));
+    const seesNow = (aud: string[]): boolean => aud.some((k) =>
+      k === `member:${editor}` || (k.startsWith("team:") && editorTeams.has(k.slice(5))));
+
+    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0, resynced = 0, resyncRefused = 0, unitManaged = 0, skippedEmpty = 0, lockBusy = 0;
     const samples: string[] = [];
     for (const r of rows as any[]) {
       const picked = pickRule(rules, String(r.external_system), [r.c_ref, r.c_name]);
       if (picked.visibility !== "members") { noRule++; continue; }
-      if (r.visibility === "members") { already++; continue; }
-      toLock++;
-      if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}`.trim());
-      //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다(자료 → 지식 순).
-      //   종전엔 자료만 잠기고 그 자료로 증류한 지식은 공개로 남았다(상속이 연결 때 한 번뿐이었다).
+      const cur: string[] = (r.aud ?? []).map(String);
+      const curSet = new Set(cur);
+      const want = new Set(picked.members.map((m) => `${m.subject_kind}:${m.member_id}`));
+      const widening = [...want].some((k) => !curSet.has(k));
+      const locked = r.visibility === "members";
+      if (locked && !widening && curSet.size === want.size) { already++; continue; }
+      if (locked && r.unit_owned) { unitManaged++; continue; }
+      //  대상 0 으로 잠그거나 다시 맞추면 그 자료로 만든 지식까지 대상 0 이 되고 지식은 되넓힐 수 없다. 규칙 저장이 빈 대상을
+      //   막지만 정책 행과 대상 행을 트랜잭션 없이 따로 쓰므로(setPolicy) 규칙 캐시가 그 사이를 읽거나 테이블을 직접 고친 판에 대비한다.
+      if (!want.size) { skippedEmpty++; continue; }
+      //  대상 0 으로 닫힌 자료(정책을 못 읽은 판의 fail-closed)는 아무도 «지금 보는 사람» 이 아니므로 전체 긴급열람으로만 채운다.
+      if (locked && widening && !privileged && !seesNow(cur)) { resyncRefused++; continue; }
       if (!dry) {
-        knowledgeNarrowed += await withTx(async (c) => {
-          await applyVisibility(c, Number(r.id), picked.members);
-          return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
-        });
+        //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다(자료 → 지식 순).
+        //   withDerivedTx 는 잠금 대기 상한을 건다. 다른 작업이 쥔 자료는 건너뛰고(lock_busy) 다음 호출에서 다시 본다 —
+        //   여기서 끊으면 id 역순으로 도는 다음 호출도 같은 자리에서 멈춘다.
+        try {
+          knowledgeNarrowed += await withDerivedTx(async (c) => {
+            await applyVisibility(c, Number(r.id), picked.members);
+            return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
+          });
+        } catch (e) {
+          if (e instanceof HttpError && e.status === 503) { lockBusy++; continue; }
+          throw e;
+        }
       }
+      if (locked) resynced++; else toLock++;
+      if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}${locked ? " (대상 갱신)" : ""}`.trim());
     }
     return {
-      dry_run: dry, scanned: rows.length, systems,
-      locked: toLock, already_locked: already, no_rule: noRule, samples,
+      dry_run: dry, scanned: rows.length, truncated, systems,
+      locked: toLock, resynced, resync_refused: resyncRefused, unit_managed: unitManaged, skipped_empty: skippedEmpty,
+      ...(dry ? {} : { lock_busy: lockBusy }),
+      already_locked: already, no_rule: noRule, samples,
       ...(dry ? {} : { knowledge_narrowed: knowledgeNarrowed }),
       note: dry ? "미리보기입니다 — 실제로 적용하려면 dry_run:false 로 다시 부르세요." : undefined,
     };
