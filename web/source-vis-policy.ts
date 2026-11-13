@@ -219,7 +219,7 @@ function openBackfill(reload) {
     (go as any).disabled = true;
     try {
       const d = await api('/api/ui/source-vis-policy/backfill', { method: 'POST', body: JSON.stringify({ dry_run: false }) });
-      toast(`${d.locked}건에 적용했습니다`); back.remove(); reload();
+      toast(`${d.locked}건을 잠그고 ${d.resynced ?? 0}건의 대상을 바꿨습니다`); back.remove(); reload();
     } catch (e: any) { (go as any).disabled = false; toast('적용하지 못했습니다 — ' + e.message, true); }
   };
 }

@@ -46,6 +46,8 @@
 //   R4 전체 긴급열람 중이면 못 보던 자료도 넓힌다
 //   R5 수집 단위가 공개범위를 정하는 자료는 다시 맞추지 않는다(unit_managed)
 //   R6 dry_run 은 세기만 한다
+//   R7 자료 대상이 팀이면 그 팀원은 넓힐 수 있고 팀 밖 사람은 못 넓힌다 · channel 로 그 채널 자료만 훑는다
+//   R8 규칙 대상이 비어 있으면 재적용하지 않는다(대상 0 으로 덮지 않는다)
 //   T1 프리셋 레인의 저장된 옛 문구는 글자 그대로 같을 때만 새 문구로 · 사람이 고친 줄은 그대로 · 두 번째는 0건
 import crypto from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -75,8 +77,8 @@ const A = `__${TAG}_a`, B = `__${TAG}_b`, C = `__${TAG}_c`, OUT = `__${TAG}_out`
 const MEMBERS = [A, B, C, OUT];
 const CAT = `${TAG}-cat`;
 const SYS = `${TAG}sys`;              // 이 시험의 자료만 쓰는 external_system
-const SYS2 = `${TAG}pol`;
-const SYS3 = `${TAG}rs`;              // 대상 재적용(R) 전용 — 규칙을 바꿔 가며 쓴다             // 정책(잠금 규칙)이 걸린 external_system — N4·M2
+const SYS2 = `${TAG}pol`;             // 정책(잠금 규칙)이 걸린 external_system — N4·M2
+const SYS3 = `${TAG}rs`;              // 대상 재적용(R) 전용 — 규칙을 바꿔 가며 쓴다
 const PROJ_SESSION = `box-${TAG}-9c0d1e2f`;
 const APP = `${TAG}app`;              // 수집 단위 앱 키
 const JOB = `${TAG}-job`;
@@ -152,7 +154,7 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM org_cron WHERE id=$1`, [JOB]);
   await itemsPool.query(`DELETE FROM project_list WHERE name LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM category WHERE key=$1`, [CAT]);
-  await itemsPool.query(`DELETE FROM team WHERE key=$1`, [`${TAG}-team`]);
+  await itemsPool.query(`DELETE FROM team WHERE key = ANY($1::text[])`, [[`${TAG}-team`, `${TAG}-team2`]]);
   await itemsPool.query(`DELETE FROM org_member WHERE id = ANY($1::text[])`, [MEMBERS]);
   await setAxes({ source: true, knowledge: true });
   invalidateSourceVisRules(); invalidateDistillBatchCache();
@@ -605,7 +607,7 @@ try {
   // ── R 이미 잠긴 자료의 대상 재적용(정책 대상이 바뀐 뒤 백필) ──
   {
     const backfill = sourceVisPolicyCapabilities.find((c) => c.name === "source_vis_policy_backfill");
-    const run = (actor, dry = false) => attempt(() => backfill.handler({ system: SYS3, dry_run: dry }, { userId: actor }, { actor, source: "web" }));
+    const run = (actor, dry = false, channel) => attempt(() => backfill.handler({ system: SYS3, dry_run: dry, ...(channel ? { channel } : {}) }, { userId: actor }, { actor, source: "web" }));
     const pol = (await itemsPool.query(
       `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, priority, enabled, note) VALUES($1, NULL, 'members', 0, true, $2) RETURNING id`,
       [SYS3, `${TAG}-resync`])).rows[0].id;
@@ -677,6 +679,27 @@ try {
     chk("R5 ★단위가 정하는 자료는 건드리지 않는다(unit_managed) · 자료는 B 만",
       r5.ok && r5.v.unit_managed === 1 && JSON.stringify(await srcAud(sU)) === JSON.stringify([`member:${B}`]),
       JSON.stringify({ r5, aud: await srcAud(sU) }));
+
+    //  R7 — 팀 경유 권한. 이 분기가 열리는 쪽으로 틀리면 곧 우회다.
+    const T2 = (await itemsPool.query(`INSERT INTO team(key, name) VALUES($1,$1) RETURNING id`, [`${TAG}-team2`])).rows[0].id;
+    await itemsPool.query(`INSERT INTO team_member(team_id, member_id) VALUES($1,$2)`, [T2, C]);
+    const chT = `${TAG}-chT`;
+    const sT = await mkSource(true, [`team:${T2}`], { system: SYS3, ext: `${TAG}-r7` });
+    await itemsPool.query(`UPDATE source SET fields = jsonb_build_object('container_ref', $2::text) WHERE id=$1`, [sT, chT]);
+    const r7a = await run(OUT, false, chT);
+    const r7 = await run(C, false, chT);
+    chk("R7 ★팀 밖(OUT)은 거절 · 팀원(C)은 B·C 로 넓힌다 · channel 로 그 채널 자료 1건만 훑는다",
+      r7a.ok && r7a.v.resync_refused === 1 && r7a.v.scanned === 1 && r7.ok && r7.v.resynced === 1 && r7.v.scanned === 1
+      && JSON.stringify(await srcAud(sT)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])),
+      JSON.stringify({ r7a, r7, aud: await srcAud(sT) }));
+
+    //  R8 — 규칙 대상이 비면(저장 도중을 읽은 판·테이블 직접 수정) 대상 0 으로 덮지 않는다.
+    await setPol([]);
+    const r8 = await run(B);
+    chk("R8 ★빈 대상 규칙은 재적용하지 않는다 · 자료는 B·C 그대로",
+      r8.ok && r8.v.resynced === 0 && r8.v.resync_skipped_empty >= 3
+      && JSON.stringify(await srcAud(sR)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])),
+      JSON.stringify({ r8, aud: await srcAud(sR) }));
   }
 
   // ── T1 프리셋 레인 문구 이관 ──

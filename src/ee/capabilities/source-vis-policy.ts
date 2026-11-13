@@ -10,8 +10,8 @@
 import { z } from "zod";
 import { HttpError } from "../../http-error.js";
 import type { Capability } from "../../capabilities/types.js";
-import { itemsPool, withTx } from "../../db/client.js";
-import { derivedEnforced, reconcileDerivedVisibility } from "../../v6/derived-visibility.js";
+import { itemsPool } from "../../db/client.js";
+import { derivedEnforced, reconcileDerivedVisibility, withDerivedTx } from "../../v6/derived-visibility.js";
 import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
 } from "../../v6/source-vis-policy.js";
@@ -232,12 +232,15 @@ const backfill: Capability = {
     "지금 정책을 **이미 수집된 자료**에 적용한다. 정책은 원래 자료가 태어날 때만 적용되므로, 정책을 새로 세웠다면 " +
     "이걸로 과거분을 맞춘다. 이미 잠긴 자료도 규칙의 대상이 바뀌었으면 지금 대상으로 다시 맞춘다(resynced). " +
     "대상을 넓히는 재적용은 그 자료를 지금 볼 수 있는 사람이나 긴급 열람 중인 사람만 할 수 있고, 아니면 건너뛴다(resync_refused). " +
-    "수집 단위가 공개범위를 정하는 자료는 단위 쪽이 맞추므로 다시 맞추지 않는다(unit_managed). " +
+    "수집 단위가 공개범위를 정하는 자료는 건너뛴다(unit_managed) — 이 자료는 단위의 구성원·공개범위가 바뀌거나 다시 저장될 때 " +
+    "단위 공개범위 ∩ 정책으로 맞춰지고, 정책 변경만으로는 바뀌지 않는다. " +
+    "규칙 대상이 비어 있으면 아무도 못 보게 되므로 재적용하지 않는다(resync_skipped_empty). already_locked 는 잠겨 있고 대상도 같은 자료다. " +
     "dry_run=true(기본)면 **무엇이 몇 건 바뀌는지만** 돌려주고 실제로 바꾸지 않는다. " +
     "⚠ 되돌리기 어려운 대량 변경이라 실제 적용은 dry_run=false 로 명시해야 한다.",
   scope: "admin",
   input: {
     system: z.string().optional().describe("이 커넥터만(생략하면 규칙이 있는 전 커넥터)"),
+    channel: z.string().optional().describe("이 채널만 — 자료의 container_ref(id) 또는 container_name. 한 커넥터 자료가 limit 보다 많을 때 채널별로 나눠 부른다"),
     dry_run: z.boolean().optional(),
     limit: z.number().int().min(1).max(50_000).optional(),
   },
@@ -266,7 +269,8 @@ const backfill: Capability = {
               EXISTS(SELECT 1 FROM collect_unit_source us WHERE us.source_id = s.id AND us.audience) AS unit_owned
          FROM source s
         WHERE s.external_system = ANY($1::text[])
-        ORDER BY s.id DESC LIMIT $2`, [systems, limit]);
+          AND ($3::text IS NULL OR s.fields->>'container_ref' = $3 OR s.fields->>'container_name' = $3)
+        ORDER BY s.id DESC LIMIT $2`, [systems, limit, input.channel ? String(input.channel) : null]);
 
     //  이미 잠긴 자료를 넓히는 재적용은 정책 편집(setPolicy)과 같은 선을 지킨다 — 그 자료를 지금 볼 수 있는 사람이거나
     //   전체 긴급열람 중이어야 한다. 이 선이 없으면 «새 규칙을 만들고(넓힘 검사 없음) 백필» 로 못 보던 과거 자료를 열 수 있다.
@@ -277,7 +281,7 @@ const backfill: Capability = {
     const seesNow = (aud: string[]): boolean => aud.some((k) =>
       k === `member:${editor}` || (k.startsWith("team:") && editorTeams.has(k.slice(5))));
 
-    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0, resynced = 0, resyncRefused = 0, unitManaged = 0;
+    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0, resynced = 0, resyncRefused = 0, unitManaged = 0, skippedEmpty = 0;
     const samples: string[] = [];
     for (const r of rows as any[]) {
       const picked = pickRule(rules, String(r.external_system), [r.c_ref, r.c_name]);
@@ -289,23 +293,21 @@ const backfill: Capability = {
         const widening = [...want].some((k) => !curSet.has(k));
         if (!widening && curSet.size === want.size) { already++; continue; }
         if (r.unit_owned) { unitManaged++; continue; }
+        //  대상 0 으로 다시 맞추면 그 자료로 만든 지식까지 대상 0 이 되고 지식은 되넓힐 수 없다. 규칙 저장이 빈 대상을 막지만
+        //   규칙 캐시가 저장 도중(대상 DELETE 와 INSERT 사이)을 읽거나 테이블을 직접 고친 판에 대비한다.
+        if (!want.size) { skippedEmpty++; continue; }
         if (widening && !privileged && !seesNow(cur)) { resyncRefused++; continue; }
         resynced++;
         if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""} (대상 갱신)`.trim());
-        if (!dry) {
-          knowledgeNarrowed += await withTx(async (c) => {
-            await applyVisibility(c, Number(r.id), picked.members);
-            return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
-          });
-        }
-        continue;
+      } else {
+        toLock++;
+        if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}`.trim());
       }
-      toLock++;
-      if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}`.trim());
       //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다(자료 → 지식 순).
       //   종전엔 자료만 잠기고 그 자료로 증류한 지식은 공개로 남았다(상속이 연결 때 한 번뿐이었다).
+      //   withDerivedTx — 잠금 대기 상한·교착 재시도. 중간에 503 으로 끊겨도 다시 부르면 남은 자료부터 이어진다.
       if (!dry) {
-        knowledgeNarrowed += await withTx(async (c) => {
+        knowledgeNarrowed += await withDerivedTx(async (c) => {
           await applyVisibility(c, Number(r.id), picked.members);
           return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
         });
@@ -313,7 +315,7 @@ const backfill: Capability = {
     }
     return {
       dry_run: dry, scanned: rows.length, systems,
-      locked: toLock, resynced, resync_refused: resyncRefused, unit_managed: unitManaged,
+      locked: toLock, resynced, resync_refused: resyncRefused, unit_managed: unitManaged, resync_skipped_empty: skippedEmpty,
       already_locked: already, no_rule: noRule, samples,
       ...(dry ? {} : { knowledge_narrowed: knowledgeNarrowed }),
       note: dry ? "미리보기입니다 — 실제로 적용하려면 dry_run:false 로 다시 부르세요." : undefined,
