@@ -620,9 +620,9 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/distill/requeue-seen.pg-test.mjs
-      # ⑤-m3c 증류 사전필터 스레드 판정 — 상관 EXISTS 가 «같은 스레드 키의 활성 자료 집계» 로 거르는지, 그 서브쿼리가
-      #    source_thread_key_idx 를 두 열 다 걸고 탈 수 있는지. 인덱스는 스키마에 리터럴이라 어긋나도 유닛은 초록이다(그 파일 머리말).
-      - name: 증류 사전필터 스레드 인덱스 PG 통합 테스트
+      # ⑤-m3c 증류 사전필터 스레드 판정 — 스레드 목록과 source 의 조인 + HAVING 이 «같은 스레드 키의 활성 자료 집계» 로 거르는지,
+      #    그리고 행 수준 보안이 걸린 앱 역할에서 source 를 스레드마다 다시 읽지 않는지(실행계획의 읽은 행 수). 유닛은 SQL 모양만 본다(그 파일 머리말).
+      - name: 증류 사전필터 스레드 판정 PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test

@@ -102,7 +102,7 @@ const backlog = async (rules, withPrefilter = true) => {
 }
 // P3 — 사전필터가 source 를 스레드마다 다시 읽지 않는가(2026-11-07 운영 사례: 스레드 195개 × source 전체, 21초).
 //  ⚠ **반드시 RLS 가 걸린 비소유자 역할로 잰다 — 소유자·슈퍼유저로 돌리면 못 잡는다.** 슈퍼유저는 RLS 를 건너뛰고, 소유자는
-//   owner_all(true) 정책뿐이라 스레드 키 비교가 표현식 인덱스가 있으면 Index Cond 로 들어간다(이 PR 의 이전 커밋이 그렇게 숨었다). 그러면 스레드마다
+//   owner_all(true) 정책뿐이라 스레드 키 비교가 표현식 인덱스가 있으면 Index Cond 로 들어간다(소유자 역할로만 재면 그렇게 숨는다). 그러면 스레드마다
 //   도는 상관 서브쿼리도 스레드 행만 읽어 이 단언을 통과한다. 앱 역할에는 tenant_isolation 이 걸리고, leakproof 가 아닌
 //   jsonb `->>` 비교는 보안 조건보다 먼저 평가될 수 없어 인덱스 조건이 못 되므로, 같은 쿼리가 스레드마다 source 전체를 읽는다.
 //  역할·정책은 prod(org/tenancy/activate.ts ensureTenantPolicies)와 같은 모양으로 이 트랜잭션 안에서만 만들고 ROLLBACK 한다 —
