@@ -74,6 +74,18 @@ const FORBIDDEN_FUNCTIONS = new Set([
   "lo_export",
   "pg_sleep",
   "dblink",
+  // SQL 문장이나 테이블 이름을 **인자(문자열)** 로 받아 실행하는 함수 — 그 안에서 읽는 테이블은 AST 에 테이블로 남지 않아
+  //  테이블 게이트·마스킹 규칙이 닿지 않는다. 목록은 «아는 것» 일 뿐이다(확장이 더한 같은 부류는 못 막는다) —
+  //  db_query 실행 역할의 권한이 마지막 선이다.
+  "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema",
+  "cursor_to_xml", "cursor_to_xmlschema",
+  "table_to_xml", "table_to_xmlschema", "table_to_xml_and_xmlschema",
+  "schema_to_xml", "schema_to_xmlschema", "schema_to_xml_and_xmlschema",
+  "database_to_xml", "database_to_xmlschema", "database_to_xml_and_xmlschema",
+  "ts_stat", "ts_rewrite",
+  "dblink_exec", "dblink_connect", "dblink_connect_u", "dblink_open", "dblink_fetch", "dblink_send_query", "dblink_get_result",
+  // 서버 파일·대형 객체 읽기(pg_read_file 과 같은 부류)
+  "pg_read_binary_file", "pg_stat_file", "pg_ls_logdir", "pg_ls_waldir", "pg_ls_tmpdir", "lo_get", "loread",
 ]);
 // mysql AST 함수 차단(#715) — 주석 삽입(`SLEEP/**/(1)`) 등 정규식 우회 대비 2차 방어선.
 const MYSQL_FORBIDDEN_FUNCTIONS = new Set([
@@ -181,18 +193,204 @@ function refTableName(node: Record<string, unknown>): string | null {
   if (typeof t === "object" && typeof (t as { value?: unknown }).value === "string") return (t as { value: string }).value;
   return null;
 }
-// AST 하위 전 column_ref 노드 수집(CTE·서브쿼리·표현식·set-op 포함 전수). 노드 아이덴티티 보존.
-function collectColumnRefs(root: unknown): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
+// ── FROM 항목의 모양 ──
+//  파서(node-sql-parser 5.4)가 FROM 자리에 주는 모양은 아래가 전부다. 테이블 수집·별칭 바인딩·CTE 판정이 저마다
+//  «FROM 의 직계 table» 만 보면 괄호로 묶은 조인 안의 테이블이 통째로 빠지므로 모양 해석을 한 곳에 둔다.
+//   table   { db, table, as, … }                              실제 테이블(또는 CTE 이름)
+//   derived { expr: { ast, … }, as }                          파생 테이블(서브쿼리) — 안쪽은 자기 범위에서 따로 판정된다
+//   group   pg    { expr: { type: "tables", expr: [항목…] }, as }
+//           mysql { expr: [항목…], joins: [항목…] }             괄호로 묶은 조인 — 안쪽 항목도 같은 범위의 FROM 항목이다.
+//                 mysql 은 FROM 이 괄호 조인으로 시작하면 from 자체를 이 객체로 주고, 뒤따르는 조인을 joins 에 싣는다.
+//   opaque  함수형({ type: "expr", expr: { type: "function" | "tablefunc" } }) · VALUES · dual
+//           테이블을 직접 가리키지 않는다(인자·값 안의 서브쿼리는 일반 순회가 훑는다).
+//  그 밖의 모양은 무엇을 읽는지 알 수 없으므로 assertKnownFromShapes 가 거부한다(fail-closed).
+type FromShape =
+  | { kind: "table"; table: string }
+  | { kind: "derived" }
+  | { kind: "group"; items: unknown[] }
+  | { kind: "opaque" };
+function fromShape(item: unknown): FromShape | null {
+  if (item === null || typeof item !== "object" || Array.isArray(item)) return null;
+  const f = item as Record<string, unknown>;
+  if (typeof f.table === "string") return { kind: "table", table: f.table };
+  if (f.type === "dual") return { kind: "opaque" };
+  const e = f.expr;
+  if (Array.isArray(e)) {
+    if (f.joins !== undefined && f.joins !== null && !Array.isArray(f.joins)) return null;
+    return { kind: "group", items: [...e, ...(Array.isArray(f.joins) ? f.joins : [])] };
+  }
+  if (e === null || typeof e !== "object") return null;
+  const eo = e as Record<string, unknown>;
+  if (eo.ast !== null && typeof eo.ast === "object") return { kind: "derived" };
+  if (eo.type === "tables" && Array.isArray(eo.expr)) return { kind: "group", items: eo.expr };
+  if (eo.type === "values") return { kind: "opaque" };
+  if (f.type === "expr" && (eo.type === "function" || eo.type === "tablefunc")) return { kind: "opaque" };
+  return null;
+}
+// SELECT 노드의 from → 항목 목록(FROM 없음 = 빈 목록, mysql 의 «괄호 조인으로 시작하는 FROM» = 그 래퍼 하나).
+function fromItemsOf(from: unknown): unknown[] {
+  if (from === null || from === undefined) return [];
+  return Array.isArray(from) ? from : [from];
+}
+// 한 SELECT 의 FROM 이 그 범위에 들이는 항목 전부 — 괄호 조인은 래퍼와 안쪽 항목을 함께 낸다(파생 테이블 안쪽은 다른 범위).
+function scopeFromItems(from: unknown): Array<{ item: Record<string, unknown>; shape: FromShape | null }> {
+  const out: Array<{ item: Record<string, unknown>; shape: FromShape | null }> = [];
+  const visit = (it: unknown): void => {
+    if (it === null || typeof it !== "object" || Array.isArray(it)) return;
+    const shape = fromShape(it);
+    out.push({ item: it as Record<string, unknown>, shape });
+    if (shape?.kind === "group") for (const child of shape.items) visit(child);
+  };
+  for (const it of fromItemsOf(from)) visit(it);
+  return out;
+}
+// function 노드의 이름 파트(스키마 수식이면 여러 개) — v5: name = { name: [{ value }, …] }.
+function functionNameParts(node: unknown): string[] {
+  const parts = (node as { name?: { name?: unknown } } | null)?.name?.name;
+  if (!Array.isArray(parts)) return [];
+  return parts.map((p) => (p as { value?: unknown } | null)?.value).filter((v): v is string => typeof v === "string");
+}
+// pg 는 `FROM ONLY t` · `FROM ONLY (t)` 로 t 를 읽는데, 파서는 ONLY 를 테이블 이름(t 는 별칭)이나 함수 호출로 읽는다 —
+//  실제로 읽는 테이블이 AST 에 테이블로 남지 않는다. ONLY 는 pg 예약어라 인용하지 않은 테이블·함수 이름일 수 없다.
+function readsAsOnly(item: unknown, shape: FromShape): boolean {
+  if (shape.kind === "table") return shape.table.toLowerCase() === "only";
+  if (shape.kind !== "opaque") return false;
+  return functionNameParts((item as { expr?: unknown }).expr).some((p) => p.toLowerCase() === "only");
+}
+/**
+ * FROM 항목의 구조 검사(순수) — 모든 SELECT 의 FROM 항목이 위의 아는 모양인지 본다. 모르는 모양은 그 안에서 어떤 테이블을
+ *  읽는지 알 수 없어 테이블 게이트도 마스킹 규칙도 걸 수 없으므로 거부한다. 정책 유무와 무관하다(시스템 차단 테이블도 같은 길).
+ */
+export function assertKnownFromShapes(root: unknown, dialect: SqlDialect): void {
+  const check = (item: unknown): void => {
+    const shape = fromShape(item);
+    if (shape === null) throw new Error("Blocked: 해석할 수 없는 FROM 항목입니다 — 테이블·서브쿼리·조인으로 풀어 쓰세요");
+    if (dialect === "postgresql" && readsAsOnly(item, shape)) throw new Error("Blocked: FROM ONLY 는 쓸 수 없습니다 — ONLY 를 빼고 테이블 이름만 쓰세요");
+    if (shape.kind === "group") for (const child of shape.items) check(child);
+  };
   const stack: unknown[] = [root];
-  while (stack.length) {
+  while (stack.length > 0) {
     const node = stack.pop();
     if (node === null || typeof node !== "object") continue;
-    if (Array.isArray(node)) { for (const el of node) stack.push(el); continue; }
+    if (Array.isArray(node)) {
+      for (const el of node) stack.push(el);
+      continue;
+    }
     const n = node as Record<string, unknown>;
-    if (n.type === "column_ref") out.push(n);
-    for (const v of Object.values(n)) if (v !== null && typeof v === "object") stack.push(v);
+    for (const item of fromItemsOf(n.from)) check(item);
+    for (const val of Object.values(n)) {
+      if (val !== null && typeof val === "object") stack.push(val);
+    }
   }
+}
+
+// 별칭 바인딩 — 수식 이름(lower) → 그 이름이 가리킬 수 있는 실제 테이블들(lower). 파생 테이블(FROM 서브쿼리)
+//  별칭은 빈 집합이다(그 컬럼은 안쪽 SELECT 의 출력이고, 안쪽의 원본 참조는 그 자리에서 따로 판정된다).
+//  UNRESOLVED 가 든 집합은 «이 이름이 무엇의 컬럼을 가리키는지 알 수 없다» 는 뜻이다(함수형 FROM·VALUES 의 별칭) —
+//  빈 집합(해석된 파생 테이블)과 달리 컬럼 이름으로 보수 판정해야 한다. NUL 은 테이블 이름에 올 수 없어 겹치지 않는다.
+type AliasBindings = Map<string, Set<string>>;
+const UNRESOLVED = "\u0000";
+interface ScopedRef { ref: Record<string, unknown>; scope: AliasBindings }
+interface ScopedRefScan { refs: ScopedRef[]; usingCols: string[]; naturalJoin: boolean; columnAliasList: boolean; rootScope: AliasBindings | null }
+
+// 별칭 문자열에서 이름만 — pg 파서는 컬럼 별칭 목록을 별칭에 붙여 "a(x, y)" 로 준다.
+function aliasName(as: string): string {
+  return as.split("(")[0].trim();
+}
+// 반환값 = 실제 테이블에 FROM 컬럼 별칭 목록(`t AS a(x, y)`)이 붙어 있는가. pg 파서는 이걸 별칭 문자열 "a(x, y)" 로
+//  주므로 별칭도 컬럼 이름 바뀜도 해석할 수 없다. 파생 테이블·VALUES 의 `v(a, b)` 는 안쪽 SELECT 가 따로 판정돼 해당 없다.
+//  괄호 조인 안의 항목도 같은 범위에 묶는다 — 안쪽에서만 정의된 별칭이 바깥 범위의 동명 별칭으로 해석되지 않게.
+function bindFrom(from: unknown, into: AliasBindings): boolean {
+  let columnAliasList = false;
+  const bind = (name: string, real: string | null): void => {
+    const key = name.toLowerCase();
+    const set = into.get(key) ?? new Set<string>();
+    if (real) set.add(real);
+    into.set(key, set);
+  };
+  for (const { item, shape } of scopeFromItems(from)) {
+    const alias = typeof item.as === "string" && item.as ? item.as : null;
+    if (shape?.kind === "table") {
+      const rt = shape.table.toLowerCase();
+      bind(rt, rt);
+      if (alias?.includes("(")) columnAliasList = true;
+      else if (alias) bind(alias, rt);
+    } else if (shape?.kind === "derived") {
+      if (alias) bind(alias, null);
+    } else if (shape?.kind === "group") {
+      // 괄호 조인에 붙인 별칭(pg `(a JOIN b) AS j`)은 안쪽 테이블들의 컬럼을 가리킨다. 테이블이 아닌 항목이 섞여 있으면
+      //  그 컬럼의 출처는 알 수 없다.
+      if (!alias) continue;
+      const inner = scopeFromItems(shape.items);
+      const tables = inner.flatMap((x) => (x.shape?.kind === "table" ? [x.shape.table.toLowerCase()] : []));
+      if (alias.includes("(") && tables.length > 0) columnAliasList = true;
+      bind(aliasName(alias), null);
+      for (const t of tables) bind(aliasName(alias), t);
+      if (inner.some((x) => x.shape?.kind !== "table" && x.shape?.kind !== "derived" && x.shape?.kind !== "group")) bind(aliasName(alias), UNRESOLVED);
+    } else {
+      // 함수형 FROM·VALUES — tablefunc 는 별칭을 expr.as(함수 꼴)로 준다.
+      const name = alias ? aliasName(alias) : functionNameParts((item.expr as { as?: unknown } | null | undefined)?.as)[0];
+      if (name) bind(name, UNRESOLVED);
+    }
+  }
+  return columnAliasList;
+}
+
+// AST 하위 전 column_ref 를 **그 참조에서 보이는 별칭 바인딩**과 함께 수집(CTE·서브쿼리·표현식·set-op 전수, 노드 아이덴티티 보존).
+//  바인딩은 자기 SELECT 와 감싸는 SELECT 들의 FROM 을 **합친** 것이다 — SQL 의 '가장 안쪽 우선' 해석보다 넓게 잡아서,
+//  범위 모델이 DB 와 어긋나도(LATERAL·UNION 형제 분기·파생 테이블의 바깥 참조) 마스킹 테이블 후보를 놓치지 않는다.
+//  넓게 잡은 대가는 같은 별칭을 다른 테이블에 겹쳐 쓴 드문 쿼리의 과잉 차단뿐이다(fail-closed).
+function collectScopedRefs(root: unknown): ScopedRefScan {
+  const refs: ScopedRef[] = [];
+  const usingCols: string[] = [];
+  let naturalJoin = false;
+  let columnAliasList = false;
+  let rootScope: AliasBindings | null = null;
+  const walk = (node: unknown, scope: AliasBindings): void => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const el of node) walk(el, scope); return; }
+    const n = node as Record<string, unknown>;
+    if (n.type === "column_ref") refs.push({ ref: n, scope });
+    let inner = scope;
+    if (n.from !== null && typeof n.from === "object") {
+      inner = new Map([...scope].map(([k, v]) => [k, new Set(v)]));
+      if (bindFrom(n.from, inner)) columnAliasList = true;
+      if (n === root) rootScope = inner;
+      for (const { item: f } of scopeFromItems(n.from)) {
+        // pg 파서는 `t NATURAL JOIN u` 의 NATURAL 을 t 의 별칭으로 읽고 조인키를 남기지 않는다 — AST 가 원문과 다르다.
+        const as = f.as;
+        if (typeof as === "string" && as.toLowerCase() === "natural") naturalJoin = true;
+        const using = f.using;
+        if (!Array.isArray(using)) continue;
+        for (const u of using) {
+          const v = typeof u === "string" ? u : (u as { value?: unknown } | null)?.value;
+          if (typeof v === "string") usingCols.push(v.toLowerCase());
+        }
+      }
+    }
+    for (const v of Object.values(n)) if (v !== null && typeof v === "object") walk(v, inner);
+  };
+  walk(root, new Map());
+  return { refs, usingCols, naturalJoin, columnAliasList, rootScope };
+}
+
+// 최상위 ORDER BY / GROUP BY / DISTINCT ON 의 위치 번호(`ORDER BY 2`) — 투영의 몇 번째 컬럼을 가리키는지(1-based).
+//  pg 는 DISTINCT ON 의 식을 ORDER BY 와 같은 규칙으로 읽고, GROUP BY 의 ROLLUP(…)·CUBE(…) 안의 번호도 위치 번호로 읽는다.
+function positionalRefs(stmt: Record<string, unknown>): number[] {
+  const out: number[] = [];
+  const add = (e: unknown, inGroupBy: boolean): void => {
+    const x = e as { type?: unknown; value?: unknown; args?: unknown } | null;
+    if (x?.type === "number" && typeof x.value === "number") out.push(x.value);
+    else if (!inGroupBy) return;
+    else if (x?.type === "expr_list" && Array.isArray(x.value)) for (const v of x.value) add(v, true);
+    else if (x?.type === "function" && functionNameParts(x).some((p) => /^(rollup|cube)$/i.test(p))) add(x.args, true);
+  };
+  const g = stmt.groupby;
+  const groupItems = Array.isArray(g) ? g : (g && typeof g === "object" ? (g as { columns?: unknown }).columns : null);
+  for (const e of Array.isArray(groupItems) ? groupItems : []) add(e, true);
+  for (const o of Array.isArray(stmt.orderby) ? stmt.orderby : []) add((o as { expr?: unknown } | null)?.expr, false);
+  const distinctOn = (stmt.distinct as { columns?: unknown } | null | undefined)?.columns;
+  for (const d of Array.isArray(distinctOn) ? distinctOn : []) add((d as { expr?: unknown } | null)?.expr, false);
   return out;
 }
 
@@ -202,7 +400,7 @@ function collectColumnRefs(root: unknown): Record<string, unknown>[] {
  *  마스킹 컬럼은 최상위 SELECT 투영에 그대로(또는 최상위 *)만 허용 — 표현식/WHERE/JOIN/ORDER/서브쿼리/CTE/UNION 참조는 거부.
  *  그러면 마스킹 원본이 출력에 도달하는 경로는 '최상위 직접 투영/스타'뿐 → 출처가 확실 → 게이트2가 반드시 마스킹(건전).
  */
-export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: string[], policy: SourcePolicy): QueryPlan {
+export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: string[], policy: SourcePolicy, dialect: SqlDialect = "postgresql"): QueryPlan {
   // ── 테이블 게이트 — 참조 테이블 전부 effective allow 여야 함(effective = 정책행 or table_default). ──
   for (const t of tableNames) {
     const mode = policy.tableMode.get(t) ?? policy.tableDefault;
@@ -225,32 +423,45 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   }
   if (relevantNames.size === 0) return EMPTY_PLAN;
 
-  // 최상위 from 별칭맵 + 마스킹 테이블 판정
-  const aliasMap = new Map<string, string>(); // lower(alias|table) -> lower(realTable)
-  const topFromTables: string[] = [];
-  if (Array.isArray(stmt.from)) {
-    for (const f of stmt.from) {
-      const fo = f as { table?: unknown; as?: unknown };
-      if (typeof fo.table === "string") {
-        const rt = fo.table.toLowerCase();
-        topFromTables.push(rt);
-        aliasMap.set(rt, rt);
-        if (typeof fo.as === "string" && fo.as) aliasMap.set(fo.as.toLowerCase(), rt);
-      }
-    }
-  }
   const tableHasMask = (t: string): boolean => {
     for (const key of policy.maskedCols) if (key.startsWith(t + ".")) return true;
     return false;
   };
-  const isSensitive = (ref: Record<string, unknown>, cn: string): boolean => {
+  // 수식 참조는 그 참조에서 보이는 별칭 바인딩으로 실제 테이블을 찾는다. 바인딩이 없거나 해석 불가(UNRESOLVED)로
+  //  표시된 수식은 미수식과 같이 이름으로 보수 매칭한다(fail-closed) — 이름 매칭은 이 쿼리의 테이블 전부를 후보로 본다.
+  const isSensitive = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean => {
+    const col = cn.toLowerCase();
     const tr = refTableName(ref);
-    if (tr) {
-      const real = aliasMap.get(tr.toLowerCase()) ?? tr.toLowerCase();
-      return policy.maskedCols.has(`${real}.${cn.toLowerCase()}`);
-    }
-    return relevantNames.has(cn.toLowerCase()); // 미수식 — 보수적(이름 매칭, fail-closed)
+    const bound = tr ? scope.get(tr.toLowerCase()) : undefined;
+    if (bound && !bound.has(UNRESOLVED)) return [...bound].some((t) => policy.maskedCols.has(`${t}.${col}`));
+    return relevantNames.has(col);
   };
+  const scan = collectScopedRefs(stmt);
+  if (scan.naturalJoin) throw new Error("Blocked: 마스킹 컬럼이 있는 소스에서는 NATURAL JOIN 을 쓸 수 없습니다 — 조인 조건을 ON 으로 명시하세요");
+  if (scan.columnAliasList) throw new Error("Blocked: 마스킹 컬럼이 있는 소스에서는 FROM 컬럼 별칭 목록(t AS a(x, y))을 쓸 수 없습니다 — SELECT 목록에서 별칭을 주세요");
+  // pg 는 미수식 테이블 이름·별칭을 그 행 전체 값으로 읽는다(`SELECT a FROM t a` · to_json(a)). 출처가 없어 게이트2 가 못 가리므로,
+  //  마스킹 테이블에 바인딩된 이름이 미수식 컬럼처럼 쓰이면 어디서든 거부한다(동명 실컬럼이면 과잉 차단 — fail-closed).
+  const isWholeRow = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean => {
+    if (dialect !== "postgresql" || refTableName(ref) !== null) return false;
+    const bound = scope.get(cn.toLowerCase());
+    return !!bound && [...bound].some(tableHasMask);
+  };
+  const wholeRowMsg = (cn: string): string =>
+    `Blocked: 마스킹 컬럼이 있는 테이블 '${cn}' 의 행 전체 참조는 쓸 수 없습니다 — 필요한 컬럼을 명시하세요`;
+  const scopeOf = new Map(scan.refs.map((s) => [s.ref, s.scope] as const));
+  const topScope: AliasBindings = new Map();
+  bindFrom(stmt.from, topScope);
+  // * 가 덮는 실제 테이블 — 수식이면 그 이름의 바인딩, 미수식이면 그 SELECT 에서 보이는 바인딩 전부.
+  const starCovers = (ref: Record<string, unknown>, scope: AliasBindings): string[] => {
+    const tr = refTableName(ref);
+    if (tr) return [...(scope.get(tr.toLowerCase()) ?? new Set([tr.toLowerCase()]))];
+    return [...new Set([...scope.values()].flatMap((v) => [...v]))];
+  };
+  const blockedMsg = (cn: string): string =>
+    `Blocked: 마스킹 컬럼 '${cn}' 은 최상위 SELECT 투영에 그대로만 쓸 수 있습니다(표현식·WHERE·JOIN·ORDER·GROUP·서브쿼리 불가) — 개인정보 파생/필터 차단`;
+
+  // JOIN … USING(col) 의 조인키는 column_ref 가 아니라 이름 목록으로 온다 — 이름으로 보수 판정.
+  for (const u of scan.usingCols) if (relevantNames.has(u)) throw new Error(blockedMsg(u));
 
   // 허용 위치 = 최상위 투영의 bare column_ref / star (노드 아이덴티티로 판정)
   const allowedRef = new Set<unknown>();
@@ -266,37 +477,64 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
 
   // set-op(UNION 등)이면 최상위 투영도 출처 신뢰 불가 → 마스킹 컬럼 관여 자체를 금지.
   if ((stmt as { _next?: unknown })._next) {
-    for (const ref of collectColumnRefs(stmt)) {
+    for (const { ref, scope } of scan.refs) {
       const cn = refColName(ref);
-      if (cn && cn !== "*" && isSensitive(ref, cn)) throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 집합연산(UNION 등)에 사용할 수 없습니다 — 단일 SELECT 로 직접 조회하세요`);
-      if (cn === "*" && topFromTables.some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
+      if (cn && cn !== "*" && isWholeRow(ref, cn, scope)) throw new Error(wholeRowMsg(cn));
+      if (cn && cn !== "*" && isSensitive(ref, cn, scope)) throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 집합연산(UNION 등)에 사용할 수 없습니다 — 단일 SELECT 로 직접 조회하세요`);
+      if (cn === "*" && starCovers(ref, scope).some(tableHasMask)) throw new Error(`Blocked: 마스킹 테이블에 대한 '*' 은 집합연산에 사용할 수 없습니다`);
     }
     return EMPTY_PLAN;
   }
 
+  // 최상위 투영에 그대로 나온 마스킹 컬럼의 출력 별칭 — ORDER BY·GROUP BY·HAVING 은 이 별칭으로 원값을 다시 참조할 수 있다.
+  const maskedOutputAliases = new Set<string>();
+  if (Array.isArray(stmt.columns)) {
+    for (const item of stmt.columns) {
+      const it = item as { expr?: Record<string, unknown>; as?: unknown };
+      const e = it.expr;
+      if (!e || e.type !== "column_ref") continue;
+      const cn = refColName(e);
+      if (!cn || cn === "*" || !isSensitive(e, cn, topScope)) continue;
+      const as = typeof it.as === "string" ? it.as : (it.as as { value?: unknown } | null)?.value;
+      if (typeof as === "string" && as) maskedOutputAliases.add(as.toLowerCase());
+    }
+  }
+
   // 게이트1 본체 — 모든 column_ref 를 훑어 마스킹 컬럼이 허용 위치 밖이면 거부.
-  for (const ref of collectColumnRefs(stmt)) {
+  for (const { ref, scope } of scan.refs) {
     const cn = refColName(ref);
     if (cn === "*") {
       if (allowedStar.has(ref)) continue; // 최상위 투영 스타 — 게이트2가 출처로 마스킹
       throw new Error(`Blocked: '*' 는 서브쿼리 등 비최상위 위치에서 쓸 수 없습니다(마스킹 소스 보호) — 컬럼을 명시하세요`);
     }
     if (!cn) continue;
-    if (isSensitive(ref, cn) && !allowedRef.has(ref)) {
-      throw new Error(`Blocked: 마스킹 컬럼 '${cn}' 은 최상위 SELECT 투영에 그대로만 쓸 수 있습니다(표현식·WHERE·JOIN·ORDER·GROUP·서브쿼리 불가) — 개인정보 파생/필터 차단`);
-    }
+    if (isWholeRow(ref, cn, scope)) throw new Error(wholeRowMsg(cn));
+    if (allowedRef.has(ref)) continue;
+    // 출력 별칭은 최상위 SELECT 의 ORDER BY·GROUP BY·HAVING 에서만 보인다 — 서브쿼리 안 동명 참조는 별칭이 아니다.
+    const viaAlias = scope === scan.rootScope && refTableName(ref) === null && maskedOutputAliases.has(cn.toLowerCase());
+    if (viaAlias || isSensitive(ref, cn, scope)) throw new Error(blockedMsg(cn));
   }
 
   let minMaskedOutputs = 0;
   for (const node of allowedRef) {
     const n = node as Record<string, unknown>;
-    if (isSensitive(n, refColName(n) ?? "")) minMaskedOutputs++;
+    if (isSensitive(n, refColName(n) ?? "", scopeOf.get(n) ?? topScope)) minMaskedOutputs++;
   }
   let hasTopStarOverMaskedTable = false;
   for (const st of allowedStar) {
-    const tr = refTableName(st as Record<string, unknown>);
-    const scope = tr === null ? topFromTables : [aliasMap.get(tr.toLowerCase()) ?? tr.toLowerCase()];
-    if (scope.some(tableHasMask)) { hasTopStarOverMaskedTable = true; break; }
+    if (starCovers(st as Record<string, unknown>, topScope).some(tableHasMask)) { hasTopStarOverMaskedTable = true; break; }
+  }
+
+  // 위치 번호 정렬·묶기는 그 번호의 투영 컬럼을 참조하는 것과 같다. * 가 있으면 몇 칸으로 펼쳐질지 몰라 번호→컬럼을
+  //  알 수 없다. 그래도 * 가 마스킹 테이블을 덮지 않고 명시 컬럼에도 마스킹 컬럼이 없으면 어느 번호도 민감 컬럼에
+  //  닿지 않으므로 통과시키고, 둘 중 하나라도 있으면 거부한다.
+  const cols = Array.isArray(stmt.columns) ? stmt.columns : [];
+  for (const pos of positionalRefs(stmt)) {
+    if (hasTopStarOverMaskedTable || (allowedStar.size > 0 && minMaskedOutputs > 0)) throw new Error(`Blocked: '*' 가 있는 조회에서는 ORDER BY·GROUP BY·DISTINCT ON 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
+    const e = (cols[pos - 1] as { expr?: Record<string, unknown> } | undefined)?.expr;
+    if (!e || e.type !== "column_ref") continue;
+    const cn = refColName(e);
+    if (cn && cn !== "*" && isSensitive(e, cn, topScope)) throw new Error(blockedMsg(cn));
   }
   return { minMaskedOutputs, hasTopStarOverMaskedTable };
 }
@@ -339,38 +577,82 @@ const PARSER_KNOWN_OPS = new Set([
   "~", "~*", "!~", "!~*", // 정규식
 ]);
 const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/; // 달러 인용 태그(숫자로 시작 불가 — $1 은 파라미터)
+//  같은 스캔에서 **검증 파서와 DB 가 다르게 읽는 어휘 꼴**(lexHazard)도 찾는다. 파서가 «실패» 하면 거부로 끝나지만
+//  «다르게 읽으면» 파서가 보지 못한 SQL 이 그대로 실행되므로, 그런 꼴은 파싱 전에 거부한다:
+//   pg    · U&"…" / U&'…' — DB 는 유니코드 이스케이프를 풀어 다른 이름·값으로 읽는다.
+//         · 문자열 안의 백슬래시+따옴표 — 일반 문자열에서 백슬래시는 글자인데(standard_conforming_strings) 파서는
+//           이스케이프로 읽어 문자열이 끝나는 자리가 어긋난다. E'…' 도 함께 막는다(따옴표는 '' 로 쓸 수 있다).
+//         · 인용 식별자 안의 백슬래시 — 같은 이유(DB 는 글자, 파서는 이스케이프).
+//   mysql · 실행 주석(/*! … */ · /*M! … */) — 주석 꼴이지만 서버가 안의 SQL 을 실행한다.
+//         · 공백 없는 `--` — 뒤에 공백·제어문자가 없으면 주석이 아니라 빼기 두 번인데 파서는 주석으로 읽는다.
+//         · 줄 주석 안에 홀로 선 CR — 서버는 줄 주석을 LF 에서만 끝내는데 파서는 CR 에서도 끝낸다.
+//  이 판정이 맞으려면 스캐너가 따옴표·주석 경계를 그 DB 처럼 읽어야 한다 — 그래서 mysql 에서는 "…" 를 문자열로,
+//  # 을 줄 주석으로 읽고, 블록 주석은 겹치지 않으며(pg 만 겹친다), 줄 주석은 pg 에서 CR·LF, mysql 에서 LF 로 끝난다.
+const LEX_HAZARD = {
+  unicodeEscape: "Blocked: 유니코드 이스케이프 식별자·문자열(U&\"…\" · U&'…')은 쓸 수 없습니다 — 이름·값을 그대로 쓰세요",
+  backslashQuote: "Blocked: 문자열 안의 백슬래시+따옴표(\\')는 쓸 수 없습니다 — 따옴표는 '' 로 겹쳐 쓰세요",
+  backslashIdent: "Blocked: 인용 식별자 안의 백슬래시는 쓸 수 없습니다",
+  executableComment: "Blocked: 실행 주석(/*! … */)은 쓸 수 없습니다",
+  dashDash: "Blocked: '--' 바로 뒤에 공백이 없으면 주석이 아닙니다 — 주석은 '-- ' 로, 빼기는 띄어 쓰세요",
+  commentCr: "Blocked: 줄 주석 안에 줄바꿈 없는 CR(\\r) 문자가 있습니다 — 줄 주석은 줄바꿈(\\n)으로 끝내세요",
+} as const;
 interface SqlTextScan {
   parseSql: string; // 파서에 넘길 사본(pg 에서만 중화 — 그 외엔 원본과 동일)
   mixedCaseQuoted: boolean; // 대문자를 포함한 인용식별자("Person" · `Person`)가 원문에 있는가
+  lexHazard: string | null; // 검증 파서와 DB 가 다르게 읽는 어휘 꼴이 있으면 그 거부 문구(처음 만난 것)
 }
-function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
+function scanSqlText(sql: string, dialect: SqlDialect): SqlTextScan {
+  const pg = dialect === "postgresql";
   const out = sql.split("");
   const n = sql.length;
   let mixedCaseQuoted = false;
+  let lexHazard: string | null = null;
   let i = 0;
+  const skipLineComment = (): void => {
+    while (i < n && sql[i] !== "\n") {
+      if (sql[i] === "\r") {
+        if (pg) break;
+        if (sql[i + 1] !== "\n") lexHazard ??= LEX_HAZARD.commentCr;
+      }
+      i++;
+    }
+  };
   while (i < n) {
     const c = sql[i];
     if (c === "-" && sql[i + 1] === "-") { // 줄 주석
-      while (i < n && sql[i] !== "\n") i++;
+      if (!pg && i + 2 < n && sql.charCodeAt(i + 2) > 32) lexHazard ??= LEX_HAZARD.dashDash;
+      skipLineComment();
       continue;
     }
-    if (c === "/" && sql[i + 1] === "*") { // 블록 주석(pg 는 중첩 허용)
+    if (!pg && c === "#") { // mysql 줄 주석
+      skipLineComment();
+      continue;
+    }
+    if (c === "/" && sql[i + 1] === "*") { // 블록 주석(pg 는 중첩 허용, mysql 은 첫 */ 에서 끝난다)
+      if (!pg && (sql[i + 2] === "!" || ((sql[i + 2] === "M" || sql[i + 2] === "m") && sql[i + 3] === "!"))) lexHazard ??= LEX_HAZARD.executableComment;
       let depth = 1;
       i += 2;
       while (i < n && depth > 0) {
-        if (sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; continue; }
+        if (pg && sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; continue; }
         if (sql[i] === "*" && sql[i + 1] === "/") { depth--; i += 2; continue; }
         i++;
       }
       continue;
     }
-    if (c === "'") { // 문자열 리터럴('' 더블링 · 백슬래시 이스케이프 — sql-scrub 과 같은 관대한 규칙)
-      i++;
+    if (c === "'" || (!pg && c === "\"")) { // 문자열 리터럴(따옴표 더블링 · 백슬래시 이스케이프 — sql-scrub 과 같은 관대한 규칙). mysql 은 "…" 도 문자열
+      const start = ++i;
+      let end = n;
       while (i < n) {
-        if (sql[i] === "\\") { i += 2; continue; }
-        if (sql[i] === "'") { if (sql[i + 1] === "'") { i += 2; continue; } i++; break; }
+        if (sql[i] === "\\") {
+          if (pg && sql[i + 1] === c) lexHazard ??= LEX_HAZARD.backslashQuote;
+          i += 2;
+          continue;
+        }
+        if (sql[i] === c) { if (sql[i + 1] === c) { i += 2; continue; } end = i; i++; break; }
         i++;
       }
+      // mysql 의 "…" 는 ANSI_QUOTES 에서 식별자다 — 대소문자 관측은 식별자일 때와 같게 유지한다.
+      if (c === "\"" && sql.slice(start, end) !== sql.slice(start, end).toLowerCase()) mixedCaseQuoted = true;
       continue;
     }
     if (c === "\"" || c === "`") { // 인용 식별자 — 대소문자 보존 여부를 여기서 관측한다
@@ -382,8 +664,12 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
       }
       const ident = sql.slice(start, i);
       if (ident !== ident.toLowerCase()) mixedCaseQuoted = true;
+      if (pg && ident.includes("\\")) lexHazard ??= LEX_HAZARD.backslashIdent;
       i++;
       continue;
+    }
+    if (pg && (c === "U" || c === "u") && sql[i + 1] === "&" && (sql[i + 2] === "\"" || sql[i + 2] === "'")) {
+      lexHazard ??= LEX_HAZARD.unicodeEscape; // 따옴표·주석 밖에서만 여기에 온다
     }
     if (c === "$") { // 달러 인용 문자열($tag$…$tag$)
       const tag = DOLLAR_TAG_RE.exec(sql.slice(i))?.[0];
@@ -395,7 +681,7 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
       i++;
       continue;
     }
-    if (neutralizeOps && OP_CHARS.includes(c)) {
+    if (pg && OP_CHARS.includes(c)) {
       // 연산자 문자 런을 통째로 읽는다 — 부분 매칭 금지(`#>>` 를 `#>` 로 자르면 남은 `>` 가 파싱을 깬다).
       let end = i;
       while (end < n && OP_CHARS.includes(sql[end])) {
@@ -419,7 +705,7 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
     }
     i++;
   }
-  return { parseSql: out.join(""), mixedCaseQuoted };
+  return { parseSql: out.join(""), mixedCaseQuoted, lexHazard };
 }
 
 /**
@@ -428,7 +714,7 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
  *  미리 거부하므로 이 스캐너의 관대한 리터럴 규칙과 Postgres 의 렉싱이 어긋날 자리가 없다.
  */
 export function parserSafeCopy(sql: string): string {
-  return scanSqlText(sql, true).parseSql;
+  return scanSqlText(sql, "postgresql").parseSql;
 }
 
 // ── #1181 ① CTE(WITH) 는 테이블이 아니다 ──
@@ -441,6 +727,7 @@ export function parserSafeCopy(sql: string): string {
 //   - 이 walk 가 무언가를 놓치면 그 이름은 tableList 에 남아 게이트를 받는다(과잉차단 = fail-closed).
 interface TableRefScan {
   real: Set<string>; // 실제 테이블로 참조된 이름(lower)
+  realEntries: Set<string>; // 같은 참조를 parser.tableList 와 같은 꼴("select::{db}::{table}")로 — 테이블 집합에 합친다
   cteRefs: Set<string>; // CTE 로 참조된 이름(lower)
   cteNames: Set<string>; // 정의된 CTE 이름 전부(lower) — 시스템 차단 테이블명 충돌 검사용
 }
@@ -462,9 +749,14 @@ function cteEntryName(entry: Record<string, unknown>): { raw: string; quoted: bo
   return null;
 }
 function collectTableRefs(stmt: unknown, fold: boolean): TableRefScan {
-  const acc: TableRefScan = { real: new Set(), cteRefs: new Set(), cteNames: new Set() };
+  const acc: TableRefScan = { real: new Set(), realEntries: new Set(), cteRefs: new Set(), cteNames: new Set() };
   walkQueryScope(stmt, new Set<string>(), fold, acc);
   return acc;
+}
+function addRealTable(f: Record<string, unknown>, table: string, acc: TableRefScan): void {
+  const db = [f.db, f.schema].filter((x): x is string => typeof x === "string" && x.length > 0).join(".");
+  acc.real.add(table.toLowerCase());
+  acc.realEntries.add(`select::${db || "null"}::${table}`);
 }
 function walkQueryScope(node: unknown, visible: ReadonlySet<string>, fold: boolean, acc: TableRefScan): void {
   if (node === null || typeof node !== "object") return;
@@ -475,6 +767,8 @@ function walkQueryScope(node: unknown, visible: ReadonlySet<string>, fold: boole
   const n = node as Record<string, unknown>;
   const withList = Array.isArray(n.with) ? (n.with as Record<string, unknown>[]) : null;
   if (withList === null && n.type !== "select") { // 쿼리 스코프가 아니면 가시범위를 그대로 물려 내려간다
+    // FROM 자리 밖에서 만난 테이블 노드({db, table}) — 어떤 문법인지 모르므로 실제 테이블로 센다(게이트 대상, fail-closed).
+    if (typeof n.table === "string" && "db" in n && n.type !== "column_ref") addRealTable(n, n.table, acc);
     for (const v of Object.values(n)) if (v !== null && typeof v === "object") walkQueryScope(v, visible, fold, acc);
     return;
   }
@@ -492,26 +786,29 @@ function walkQueryScope(node: unknown, visible: ReadonlySet<string>, fold: boole
     }
     vis = scoped;
   }
-  if (Array.isArray(n.from)) {
-    for (const item of n.from) {
-      if (item === null || typeof item !== "object") continue;
-      const f = item as Record<string, unknown>;
-      const t = f.table;
-      if (typeof t === "string") {
-        const db = f.db;
-        const qualified = typeof db === "string" && db.length > 0 && db.toLowerCase() !== "null"; // 스키마 수식은 CTE 일 수 없다
-        const key = qualified ? null : identKey(t, false, fold);
-        if (key !== null && vis.has(key)) acc.cteRefs.add(t.toLowerCase());
-        else acc.real.add(t.toLowerCase());
-      }
-      for (const [k, v] of Object.entries(f)) { // 조인 조건·파생테이블(서브쿼리)은 같은 가시범위로 계속 훑는다
-        if (k === "table" || k === "db" || k === "as") continue;
-        if (v !== null && typeof v === "object") walkQueryScope(v, vis, fold, acc);
-      }
+  const visitFrom = (item: unknown): void => {
+    if (item === null || typeof item !== "object") return;
+    const f = item as Record<string, unknown>;
+    const shape = fromShape(item);
+    if (shape?.kind === "table") {
+      const t = shape.table;
+      const db = f.db;
+      const qualified = typeof db === "string" && db.length > 0 && db.toLowerCase() !== "null"; // 스키마 수식은 CTE 일 수 없다
+      const key = qualified ? null : identKey(t, false, fold);
+      if (key !== null && vis.has(key)) acc.cteRefs.add(t.toLowerCase());
+      else addRealTable(f, t, acc);
     }
-  }
+    // 괄호로 묶은 조인 — 안쪽 항목도 이 SELECT 의 FROM 항목이다(같은 가시범위에서 테이블·CTE 를 가린다).
+    if (shape?.kind === "group") for (const child of shape.items) visitFrom(child);
+    for (const [k, v] of Object.entries(f)) { // 조인 조건·파생테이블(서브쿼리)·함수 인자는 같은 가시범위로 계속 훑는다
+      if (k === "table" || k === "db" || k === "as") continue;
+      if (shape?.kind === "group" && (k === "expr" || k === "joins")) continue; // 위에서 항목으로 처리
+      if (v !== null && typeof v === "object") walkQueryScope(v, vis, fold, acc);
+    }
+  };
+  for (const item of fromItemsOf(n.from)) visitFrom(item);
   for (const [k, v] of Object.entries(n)) { // columns·where·orderby·_next(UNION) 등 — WITH 별칭이 보이는 범위
-    if (k === "with" || (k === "from" && Array.isArray(v))) continue; // 위에서 처리(배열이 아닌 from 은 여기서 훑는다)
+    if (k === "with" || k === "from") continue; // 위에서 처리
     if (v !== null && typeof v === "object") walkQueryScope(v, vis, fold, acc);
   }
 }
@@ -530,7 +827,8 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
 
   // 파서에 넘길 사본 — pgvector 연산자 중화(pg) + 인용식별자 대소문자 관측(#1181). 실행되는 SQL 은 언제나 원본.
-  const scan = scanSqlText(sql, dialect === "postgresql");
+  const scan = scanSqlText(sql, dialect);
+  if (scan.lexHazard) throw new Error(scan.lexHazard);
   const parseSql = scan.parseSql;
 
   let ast: unknown;
@@ -547,6 +845,8 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
   // CTE/서브쿼리 포함 전 함수 호출 검사 — pg: set_config/current_setting 등 / mysql: sleep·load_file 등(주석 우회 대비)
   assertNoForbiddenFunctions(stmts[0], dialect === "mysql" ? MYSQL_FORBIDDEN_FUNCTIONS : FORBIDDEN_FUNCTIONS);
+  // FROM 항목이 아는 모양이 아니면 그 안의 테이블을 셀 수 없다 — 테이블 게이트보다 먼저 거부한다.
+  assertKnownFromShapes(stmts[0], dialect);
 
   // #1181 ① — WITH 별칭은 테이블이 아니다. 스코프 인지로 훑어 'CTE 로만 참조된 이름'을 가려낸다.
   const refs = collectTableRefs(stmts[0], !scan.mixedCaseQuoted);
@@ -556,10 +856,12 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
   const cteOnly = new Set([...refs.cteRefs].filter((n) => !refs.real.has(n)));
 
-  // 참조 테이블 deny — node-sql-parser 의 tableList: "{type}::{db}::{table}" (조인/서브쿼리 포함 전수).
+  // 참조 테이블 deny — node-sql-parser 의 tableList: "{type}::{db}::{table}" (조인/서브쿼리 포함).
+  //  tableList 는 괄호로 묶은 조인 안의 테이블을 싣지 않는다(mysql 은 괄호 조인 뒤에 이어진 조인도) — AST 를 직접 훑어
+  //  모은 실제 테이블 참조와 합친 것이 시스템 차단·allow/deny·마스킹 관련성·감사 기록의 테이블 집합이다.
   let tables: string[];
   try {
-    tables = parser.tableList(parseSql, { database: dialect });
+    tables = [...new Set([...parser.tableList(parseSql, { database: dialect }), ...refs.realEntries])];
   } catch (e) {
     throw new Error(`Unparseable SQL: ${(e as Error).message}`);
   }
@@ -573,7 +875,7 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
       const dbPart = segs.length >= 3 ? segs[1] : null;
       // #1181 ① WITH 별칭 — 실제 테이블이 아니므로 게이트도 감사(tables)도 대상이 아니다(스키마 수식이면 CTE 일 수 없다).
       if ((!dbPart || dbPart === "null") && cteOnly.has(name)) continue;
-      tableNames.push(name); // 차단으로 throw 하더라도 감사(P5)가 '어떤 테이블을 건드리려 했나'를 알도록 먼저 수집
+      if (!tableNames.includes(name)) tableNames.push(name); // 차단으로 throw 하더라도 감사(P5)가 '어떤 테이블을 건드리려 했나'를 알도록 먼저 수집
       // mysql 크로스-스키마 거부(#715) — db-수식 참조는 소스 스키마와 일치할 때만(미수식 'null' 은 통과 —
       //  커넥션이 소스 스키마로 고정돼 있어 미수식은 그 스키마로 해석된다). information_schema/mysql/sys 포함 전부 차단.
       if (dialect === "mysql" && dbPart && dbPart !== "null" && dbPart.toLowerCase() !== srcSchema) {
@@ -588,7 +890,7 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
     }
 
     if (!policy) return { ...EMPTY_PLAN, tables: tableNames };
-    return { ...assertSourcePolicy(stmts[0] as Record<string, unknown>, tableNames, policy), tables: tableNames };
+    return { ...assertSourcePolicy(stmts[0] as Record<string, unknown>, tableNames, policy, dialect), tables: tableNames };
   } catch (e) {
     // P5(#746) — 차단 에러에 참조 테이블을 실어 tools/db.ts 가 감사 행(tables)을 채우게 한다(구조화 필터 db_audit_list table= 대응).
     if (e instanceof Error) (e as Error & { tables?: string[] }).tables = tableNames;

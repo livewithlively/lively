@@ -1,7 +1,7 @@
 // firewall 단위 체크 — RLS GUC 덮어쓰기/위험함수 차단 회귀(보안 핵심).
 // 실행: npm run build && node dist/db/firewall.test.js
 import assert from "node:assert/strict";
-import { assertSafeSelect, isSystemDeniedTable, type SourcePolicy } from "./firewall.js";
+import { assertKnownFromShapes, assertSafeSelect, isSystemDeniedTable, type SourcePolicy } from "./firewall.js";
 import { selfBaseTableMode, ITEMS_CONTENT_TABLES } from "./self-source.js";
 
 let pass = 0;
@@ -41,6 +41,25 @@ rejects("다중 문 거부", "SELECT 1; SELECT 2");
 rejects("DDL(DROP) 거부", "DROP TABLE t");
 rejects("pg_sleep 거부", "SELECT pg_sleep(10)");
 rejects("pg_read_file 거부", "SELECT pg_read_file('/etc/passwd')");
+// SQL·테이블 이름을 문자열 인자로 받아 실행하는 함수 — 그 안의 테이블은 AST 에 남지 않아 테이블 게이트가 못 본다.
+//  틀렸을 때: 시스템 차단 테이블 · 마스킹 컬럼이 문자열 한 겹으로 그대로 나간다(tables=[] 로 통과).
+for (const [name, sql] of [
+  ["query_to_xml", "SELECT query_to_xml('select * from s', true, false, '')"],
+  ["query_to_xml 스키마 수식", "SELECT pg_catalog.query_to_xml('select * from s', true, false, '')"],
+  ["query_to_xml FROM 자리", "SELECT x FROM query_to_xml('select * from s', true, false, '') AS x"],
+  ["query_to_xml 서브쿼리 안", "SELECT id FROM t WHERE id IN (SELECT 1 WHERE query_to_xml('select 1', true, false, '') IS NOT NULL)"],
+  ["query_to_xml_and_xmlschema", "SELECT query_to_xml_and_xmlschema('select * from s', true, false, '')"],
+  ["table_to_xml", "SELECT table_to_xml('s', true, false, '')"],
+  ["schema_to_xml", "SELECT schema_to_xml('public', true, false, '')"],
+  ["database_to_xml", "SELECT database_to_xml(true, false, '')"],
+  ["ts_stat", "SELECT word FROM ts_stat('select to_tsvector(body) from s')"],
+  ["dblink_exec", "SELECT dblink_exec('dbname=x', 'select 1')"],
+  ["pg_read_binary_file", "SELECT pg_read_binary_file('/etc/passwd')"],
+  ["lo_get", "SELECT lo_get(16400)"],
+] as const) rejects(`${name} 거부`, sql, /Blocked function/);
+ok("이름이 비슷한 일반 함수는 통과(to_tsvector · ts_rank · ts_headline)", () => {
+  assertSafeSelect("SELECT ts_rank(to_tsvector(body), plainto_tsquery('x')), ts_headline(body, plainto_tsquery('x')) FROM t");
+});
 
 // ══════════ 소스 정책(#186) — 테이블 게이트 + 게이트1(마스킹-파생 차단) ══════════
 const policy = (over: Partial<SourcePolicy> = {}): SourcePolicy => ({
@@ -272,5 +291,293 @@ okP("op 3-15: 런 경계 — a<=>-1 은 pg 렉싱대로 <=> 만 중화",
 rejects("op 3-16: 한계 — 단항 |/ (제곱근) 는 여전히 거부", "select |/ 16 as r from t", /Unparseable/);
 // mysql dialect 는 중화 대상이 아니다 — 원래 파싱되던 건 그대로 되고(아래), 원래 안 되던 <=> 는 그대로 거부(vec 2-13).
 okMy("op 3-17: mysql dialect 무변경 — 원래 되던 비트연산 & 는 그대로 통과", "select a & b from t");
+
+// ══════════ 마스킹 규칙은 CTE·서브쿼리·UNION 분기 안의 별칭에도 같다 ══════════
+//  별칭은 그 별칭을 정의한 쿼리 범위(와 그 바깥)에서 해석된다 — 최상위 FROM 만 보면 안쪽 별칭이 비어 보인다.
+const acct = withMask("accounts.account_no");
+const bothDialects = (name: string, sql: string, pol: SourcePolicy = acct, re: RegExp = /최상위 SELECT 투영/): void => {
+  rejectsP(`${name} (pg)`, sql, pol, re);
+  rejMy(`${name} (mysql)`, sql, re, pol);
+};
+bothDialects("scope-1: CTE 안 별칭 + CASE·CAST 파생",
+  "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d");
+rejMy("scope-1b: CTE 안 별칭 + REGEXP·CAST SIGNED (mysql)",
+  "WITH d AS (SELECT CASE WHEN a.account_no REGEXP '^[0-9]+$' THEN CAST(a.account_no AS SIGNED) END AS x FROM accounts a) SELECT x FROM d",
+  /최상위 SELECT 투영/, acct);
+bothDialects("scope-2: CTE 가 별칭 수식 컬럼을 그대로 내보내도 차단",
+  "WITH c AS (SELECT a.account_no FROM accounts a) SELECT account_no FROM c");
+bothDialects("scope-3: FROM 서브쿼리(파생 테이블) 안 별칭",
+  "SELECT x FROM (SELECT substring(a.account_no, 1, 3) AS x FROM accounts a) t");
+bothDialects("scope-4: 스칼라 서브쿼리 안 별칭 집계",
+  "SELECT o.id, (SELECT max(a.account_no) FROM accounts a WHERE a.id = o.account_id) AS m FROM orders o");
+bothDialects("scope-5: EXISTS 서브쿼리 안 별칭 조건",
+  "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = o.account_id AND a.account_no LIKE '1%')");
+bothDialects("scope-6: IN 서브쿼리 안 별칭 조건",
+  "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')");
+bothDialects("scope-7: 서브쿼리 안 조인키",
+  "SELECT x.id FROM (SELECT o.id FROM orders o JOIN accounts a ON a.account_no = o.ref) x");
+bothDialects("scope-8: UNION 두 번째 분기의 별칭",
+  "SELECT id FROM orders UNION SELECT a.account_no FROM accounts a", acct, /집합연산|최상위 SELECT 투영/);
+bothDialects("scope-9: 이어지는 CTE(앞 CTE 를 뒤 CTE 가 가공)",
+  "WITH c1 AS (SELECT a.account_no AS v FROM accounts a), c2 AS (SELECT v FROM c1) SELECT v FROM c2");
+rejectsP("scope-10: 중첩 CTE (pg)",
+  "WITH c1 AS (WITH c2 AS (SELECT a.account_no AS v FROM accounts a) SELECT v FROM c2) SELECT v FROM c1", acct, /최상위 SELECT 투영/);
+rejMy("scope-10: 중첩 CTE (mysql)",
+  "WITH c1 AS (WITH c2 AS (SELECT a.account_no AS v FROM accounts a) SELECT v FROM c2) SELECT v FROM c1", /최상위 SELECT 투영/, acct);
+bothDialects("scope-11: 재귀 CTE 앵커의 별칭",
+  "WITH RECURSIVE r AS (SELECT a.account_no AS v, 1 AS n FROM accounts a UNION ALL SELECT v, n + 1 FROM r WHERE n < 3) SELECT v FROM r",
+  acct, /집합연산|최상위 SELECT 투영/);
+bothDialects("scope-12: 섀도잉 — 바깥 a=무마스킹 테이블, 안쪽 a=마스킹 테이블",
+  "SELECT a.id FROM orders a WHERE a.id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')");
+bothDialects("scope-13: 바깥 별칭을 안쪽에서 상관 참조",
+  "SELECT o.id FROM accounts a JOIN orders o ON o.account_id = a.id WHERE EXISTS (SELECT 1 FROM orders o2 WHERE o2.ref = a.account_no)");
+bothDialects("scope-14: JOIN USING 조인키", "SELECT a.id FROM accounts a JOIN orders o USING (account_no)");
+bothDialects("scope-15: 최상위 투영 별칭으로 정렬", "SELECT account_no AS n FROM accounts ORDER BY n");
+rejMy("scope-16: 최상위 투영 별칭으로 HAVING 필터 (mysql)",
+  "SELECT account_no AS n FROM accounts HAVING n LIKE '1%'", /최상위 SELECT 투영/, acct);
+bothDialects("scope-17: 위치 번호로 마스킹 컬럼 정렬", "SELECT id, account_no FROM accounts ORDER BY 2");
+bothDialects("scope-18: 위치 번호로 마스킹 컬럼 묶기", "SELECT account_no, count(*) AS c FROM accounts GROUP BY 1");
+bothDialects("scope-19: 마스킹 테이블 * 와 위치 번호 정렬", "SELECT * FROM accounts ORDER BY 2", acct, /위치 번호|최상위 SELECT 투영/);
+
+// pg 는 미수식 테이블 이름·별칭을 행 전체 값으로 읽는다 — 출처가 없어 결과 마스킹이 못 가린다.
+for (const [n, sql] of [
+  ["별칭 투영", "SELECT a FROM accounts a"],
+  ["테이블 이름 투영", "SELECT accounts FROM accounts"],
+  ["to_json", "SELECT to_json(a) FROM accounts a"],
+  ["텍스트 캐스트 조건", "SELECT id FROM accounts a WHERE a::text LIKE '%12%'"],
+  ["서브쿼리 안", "SELECT id FROM accounts a WHERE (SELECT a) IS NOT NULL"],
+] as const) rejectsP(`scope-row-${n}: 행 전체 참조 거부`, sql, acct, /행 전체 참조/);
+okMy("scope-row-mysql: mysql 은 행 전체 참조 문법이 없어 테이블명과 같은 컬럼은 그대로", "SELECT status FROM status", withMask("status.secret"));
+// pg 파서는 NATURAL JOIN 의 조인키를 AST 에 남기지 않는다(NATURAL 을 별칭으로 읽음) — 마스킹 소스에선 거부.
+rejectsP("scope-natural: NATURAL JOIN 거부", "SELECT t.account_no FROM accounts NATURAL JOIN (SELECT '1' AS account_no) t", acct, /NATURAL JOIN/);
+okP("scope-alias-sub: 서브쿼리 안 동명 참조는 출력 별칭이 아니다",
+  "SELECT account_no AS n, (SELECT max(n) FROM other) AS m FROM accounts", acct);
+
+// `*` 는 몇 개 컬럼으로 펼쳐질지 모른다 — 위치 번호가 어느 컬럼을 가리키는지 알 수 없어 거부.
+bothDialects("scope-pos-star-1: 비마스킹 테이블 * 뒤의 위치 번호 정렬",
+  "SELECT o.*, a.account_no, a.id FROM orders o, accounts a ORDER BY 3", acct, /위치 번호/);
+bothDialects("scope-pos-star-2: 조인 + 비마스킹 테이블 * 뒤의 위치 번호 정렬",
+  "SELECT o.*, a.account_no FROM orders o JOIN accounts a ON a.id = o.account_id ORDER BY 3", acct, /위치 번호/);
+okP("scope-pos-star-ok-1: 비마스킹 CTE * 뒤 위치 번호는 통과", "WITH c AS (SELECT a.id FROM accounts a) SELECT * FROM c ORDER BY 1", acct);
+okMy("scope-pos-star-ok-2: 비마스킹 파생 테이블 * 뒤 위치 번호는 통과 (mysql)", "SELECT t.* FROM (SELECT a.id FROM accounts a) t ORDER BY 1", acct);
+// UNION 의 두 번째 분기 * 도 그 분기의 테이블로 판정한다.
+bothDialects("scope-union-star-1: 두 번째 분기의 마스킹 테이블 *", "SELECT * FROM orders UNION ALL SELECT * FROM accounts", acct, /집합연산/);
+bothDialects("scope-union-star-2: 두 번째 분기의 별칭 수식 *", "SELECT o.* FROM orders o UNION ALL SELECT a.* FROM accounts a", acct, /집합연산/);
+// pg 파서는 FROM 컬럼 별칭 목록(`t AS a(x, y)`)을 별칭 문자열 "a(x, y)" 로 준다 — 컬럼 이름이 바뀌어 판정할 수 없다.
+rejectsP("scope-colalias-1: FROM 컬럼 별칭 목록 + 파생", "SELECT substring(a.y, 1, 3) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
+rejectsP("scope-colalias-2: FROM 컬럼 별칭 목록 + 조건", "SELECT x FROM accounts AS a(x, y) WHERE y LIKE '1%'", acct, /컬럼 별칭 목록/);
+rejectsP("scope-colalias-3: FROM 컬럼 별칭 목록 + 행 전체", "SELECT to_json(a) FROM accounts AS a(x, y)", acct, /컬럼 별칭 목록/);
+// 가드 — 윈도 함수·LATERAL·DISTINCT ON·FILTER 안의 마스킹 컬럼, 같은 별칭을 다른 테이블에 겹쳐 쓴 경계(과잉 차단 쪽)
+bothDialects("scope-guard-window: 윈도 함수 정렬", "SELECT rank() OVER (ORDER BY account_no) AS r FROM accounts");
+rejectsP("scope-guard-lateral: LATERAL 안 참조",
+  "SELECT o.id FROM orders o, LATERAL (SELECT a.account_no FROM accounts a WHERE a.id = o.account_id) t", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-distinct-on: DISTINCT ON", "SELECT DISTINCT ON (account_no) id FROM accounts", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-filter: 집계 FILTER 조건", "SELECT count(*) FILTER (WHERE account_no LIKE '1%') FROM accounts", acct, /최상위 SELECT 투영/);
+rejectsP("scope-guard-overlap: 같은 별칭을 다른 테이블에 겹쳐 쓰면 동명 비마스킹 컬럼도 차단(넓은 해석의 대가)",
+  "SELECT a.id FROM accounts a WHERE a.id IN (SELECT a.order_id FROM orders a WHERE a.account_no = 'x')", acct, /최상위 SELECT 투영/);
+
+// 마스킹 없는 컬럼은 범위와 무관하게 계속 허용된다(과잉 차단 회귀 방지)
+okP("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼",
+  "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("scope-ok-1: CTE 안 별칭의 무마스킹 컬럼 (mysql)",
+  "WITH c AS (SELECT a.id, a.created_at FROM accounts a WHERE a.status = 'x') SELECT id FROM c", acct);
+okP("scope-ok-2: 서브쿼리·EXISTS 의 무마스킹 컬럼",
+  "SELECT o.id FROM orders o WHERE EXISTS (SELECT 1 FROM accounts a WHERE a.id = o.account_id AND a.status = 'x')", acct);
+okP("scope-ok-3: UNION 분기의 무마스킹 컬럼", "SELECT a.id FROM accounts a UNION SELECT o.id FROM orders o", acct);
+okP("scope-ok-4: 무마스킹 테이블의 동명 컬럼은 서브쿼리 안에서도 통과",
+  "SELECT a.id FROM orders a WHERE a.id IN (SELECT b.order_id FROM orders b WHERE b.account_no = 'x')", acct);
+okP("scope-ok-5: 최상위 투영은 서브쿼리가 있어도 그대로 허용 + minMasked",
+  "SELECT a.account_no FROM accounts a WHERE a.id IN (SELECT o.account_id FROM orders o WHERE o.status = 'x')", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("scope-ok-6: 무마스킹 컬럼 위치 번호 정렬", "SELECT id, account_no FROM accounts ORDER BY 1", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("scope-ok-7: 무마스킹 컬럼 JOIN USING", "SELECT a.id FROM accounts a JOIN orders o USING (id)", acct);
+okP("scope-ok-8: 파생 테이블 별칭 수식 투영(무마스킹)", "SELECT t.k FROM (SELECT a.id AS k FROM accounts a) t", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+
+// 언마스크 grant 보유자 — getSourcePolicy 가 그 컬럼을 마스킹 집합에서 빼서 넘긴다(tools/db.ts). 같은 쿼리가 통과해야 한다.
+const granted = withMask("users.phone"); // accounts.account_no 는 grant 로 빠짐, 다른 테이블 마스킹만 남은 정책
+okP("scope-grant-1: grant 보유자는 CTE 안 파생도 통과",
+  "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d", granted);
+okMy("scope-grant-2: grant 보유자는 서브쿼리 안 조건도 통과 (mysql)",
+  "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')", granted);
+
+// ══════════ 괄호로 묶은 조인 — 안쪽 테이블도 테이블 게이트·마스킹 규칙·감사 기록을 받는다 ══════════
+//  파서의 tableList 는 괄호 조인 안의 테이블을 싣지 않는다. 테이블 집합은 AST 에서 직접 모은 것과 합친다.
+const sortedTables = (p: ReturnType<typeof assertSafeSelect>): string[] => [...(p.tables ?? [])].sort();
+const bothDeny = (name: string, sql: string, re: RegExp, pol?: SourcePolicy): void => {
+  if (pol) rejectsP(`${name} (pg)`, sql, pol, re); else rejects(`${name} (pg)`, sql, re);
+  rejMy(`${name} (mysql)`, sql, re, pol);
+};
+bothDialects("paren-1: 괄호 조인 안 마스킹 컬럼의 표현식",
+  "SELECT lower(b.account_no) FROM orders a JOIN (accounts b JOIN foo f ON true) ON true");
+bothDialects("paren-2: 괄호 조인 안 마스킹 컬럼의 WHERE 조건",
+  "SELECT a.id FROM orders a JOIN (accounts b JOIN foo f ON true) ON true WHERE b.account_no LIKE '1%'");
+bothDialects("paren-3: 괄호 조인 안 테이블의 미수식 마스킹 컬럼",
+  "SELECT lower(account_no) FROM orders a JOIN (accounts b JOIN foo f ON true) ON true");
+bothDialects("paren-4: 괄호 조인 안 조인키(USING)",
+  "SELECT o.id FROM orders o JOIN (accounts a JOIN foo f USING (account_no)) ON true");
+bothDeny("paren-5: 괄호 조인 안 시스템 차단 테이블(정책 없음)",
+  "SELECT a.id FROM orders a JOIN (auth_token t JOIN foo f ON true) ON true", /Blocked table: auth_token/);
+bothDeny("paren-6: 괄호 조인 안 시스템 차단 테이블(정책 있음)",
+  "SELECT a.id FROM orders a JOIN (auth_token t JOIN foo f ON true) ON true", /Blocked table: auth_token/, acct);
+bothDeny("paren-7: 괄호 조인 안 미허용 테이블(allow-list)",
+  "SELECT p.id FROM project p JOIN (person x JOIN task t ON true) ON true", /Blocked table: person/, selfPolicy());
+okP("paren-8: 괄호 조인 안 테이블이 감사 tables 에 들어간다 (pg)",
+  "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct,
+  (p) => assert.deepEqual(sortedTables(p), ["bar", "foo", "orders"]));
+okMy("paren-8: 괄호 조인 안 테이블이 감사 tables 에 들어간다 (mysql)",
+  "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct,
+  (p) => assert.deepEqual(sortedTables(p), ["bar", "foo", "orders"]));
+ok("paren-9: 차단 에러의 tables 에도 괄호 조인 안 테이블이 실린다", () => {
+  assert.throws(
+    () => assertSafeSelect("SELECT lower(b.account_no) FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct),
+    (e: Error & { tables?: string[] }) => ["accounts", "foo", "orders"].every((t) => e.tables?.includes(t)),
+  );
+});
+rejectsP("paren-10: 겹친 괄호 조인 안 마스킹 컬럼 (pg)",
+  "SELECT lower(b.account_no) FROM orders a JOIN (x JOIN (accounts b JOIN foo f ON true) ON true) ON true", acct, /최상위 SELECT 투영/);
+rejectsP("paren-11: 맨 앞이 겹친 괄호 조인 (pg)",
+  "SELECT lower(b.account_no) FROM ((accounts b JOIN foo f ON true) JOIN bar ON true)", acct, /최상위 SELECT 투영/);
+rejects("paren-12: 겹친 괄호 조인 안 시스템 차단 테이블 (pg)",
+  "SELECT a.id FROM orders a JOIN (x JOIN (auth_token t JOIN foo f ON true) ON true) ON true", /Blocked table: auth_token/);
+rejects("paren-13: 괄호 조인 안 서브쿼리의 시스템 차단 테이블",
+  "SELECT a.id FROM orders a JOIN (foo f JOIN (SELECT id FROM auth_token) s ON true) ON true", /Blocked table: auth_token/);
+// mysql 은 FROM 이 괄호 조인으로 시작하면 FROM 전체를 다른 모양으로 준다(뒤따르는 조인이 따로 실린다).
+rejMy("paren-14: 괄호 조인 뒤에 조인된 마스킹 테이블 (mysql)",
+  "SELECT lower(o.account_no) FROM (foo f JOIN bar b ON true) JOIN accounts o ON true", /최상위 SELECT 투영/, acct);
+rejMy("paren-15: 괄호 조인 뒤에 조인된 시스템 차단 테이블 (mysql · 정책 없음)",
+  "SELECT f.id FROM (foo f JOIN bar b ON true) JOIN auth_token o ON true", /Blocked table: auth_token/);
+rejMy("paren-16: 괄호 조인 뒤 쉼표로 이은 마스킹 테이블 (mysql)",
+  "SELECT lower(o.account_no) FROM (foo f JOIN bar b ON true), accounts o", /최상위 SELECT 투영/, acct);
+rejMy("paren-17: 괄호 안 쉼표 목록 (mysql)",
+  "SELECT lower(b.account_no) FROM orders a JOIN (accounts b, foo f) ON true", /최상위 SELECT 투영/, acct);
+rejMy("paren-18: 괄호로 감싼 테이블 하나 FROM (accounts t) (mysql)",
+  "SELECT lower(t.account_no) FROM (accounts t)", /최상위 SELECT 투영/, acct);
+rejMy("paren-19: 겹친 괄호로 감싼 테이블 FROM ((accounts a)) (mysql)",
+  "SELECT lower(a.account_no) FROM ((accounts a))", /최상위 SELECT 투영/, acct);
+rejectsP("paren-20: 괄호로 감싼 테이블 하나 (pg 파서가 받는 꼴)", "SELECT lower(account_no) FROM (accounts t)", acct, /최상위 SELECT 투영/);
+okMy("paren-21: 괄호 조인으로 시작하는 FROM 의 감사 tables (mysql)",
+  "SELECT f.id FROM (foo f JOIN bar b ON true) JOIN orders o ON true", acct,
+  (p) => assert.deepEqual(sortedTables(p), ["bar", "foo", "orders"]));
+rejMy("paren-22: 괄호 조인 안의 다른 스키마 참조 (mysql)",
+  "SELECT a.id FROM orders a JOIN (otherdb.t b JOIN foo f ON true) ON true", /다른 스키마/);
+okMy("paren-23: 괄호 조인 안의 같은 스키마 수식은 통과 (mysql)",
+  "SELECT a.id FROM orders a JOIN (hf.t b JOIN foo f ON true) ON true", undefined,
+  (p) => assert.deepEqual(sortedTables(p), ["foo", "orders", "t"]));
+// 괄호 조인 자체는 정상 문법이다 — 마스킹·차단과 무관하면 정책이 있어도 통과한다(과잉 차단 회귀 방지).
+okP("paren-ok-1: 무관한 괄호 조인은 통과 (pg)", "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("paren-ok-1: 무관한 괄호 조인은 통과 (mysql)", "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct);
+ok("paren-ok-2: 정책 없이도 괄호 조인은 통과", () => assertSafeSelect("SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true"));
+okP("paren-ok-3: allow-list 소스에서 허용 테이블끼리의 괄호 조인",
+  "SELECT p.id FROM project p JOIN (task t JOIN activity a ON a.project_id = t.project_id) ON t.project_id = p.id", selfPolicy(),
+  (p) => assert.deepEqual(sortedTables(p), ["activity", "project", "task"]));
+okP("paren-ok-4: 괄호 조인 안의 CTE 이름은 테이블이 아니다",
+  "WITH c AS (SELECT project_id FROM task) SELECT p.id FROM project p JOIN (c JOIN activity a ON a.project_id = c.project_id) ON c.project_id = p.id",
+  selfPolicy(), (p) => assert.deepEqual(sortedTables(p), ["activity", "project", "task"]));
+okP("paren-ok-5: 괄호 조인 안 마스킹 테이블의 무마스킹 컬럼",
+  "SELECT b.id, f.name FROM orders a JOIN (accounts b JOIN foo f ON f.id = b.id) ON b.id = a.account_id WHERE b.status = 'x'", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+// 괄호 조인 안 마스킹 컬럼의 직접 투영은 허용 위치다 — 결과 마스킹이 가릴 수 있게 기대치에 세어져야 한다.
+okP("paren-ok-6: 괄호 조인 안 마스킹 컬럼의 최상위 직접 투영 + minMasked (pg)",
+  "SELECT b.account_no FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okMy("paren-ok-6: 괄호 조인 안 마스킹 컬럼의 최상위 직접 투영 + minMasked (mysql)",
+  "SELECT b.account_no FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("paren-ok-7: 괄호 조인을 덮는 최상위 * 는 마스킹 테이블을 덮는다",
+  "SELECT * FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct,
+  (p) => assert.equal(p.hasTopStarOverMaskedTable, true));
+// 괄호 조인에 붙인 별칭(pg) — 그 이름은 안쪽 테이블들의 컬럼을 가리킨다.
+rejectsP("paren-alias-1: 괄호 조인 별칭으로 수식한 마스킹 컬럼의 파생",
+  "SELECT lower(j.account_no) FROM (accounts b JOIN foo f ON true) AS j", acct, /최상위 SELECT 투영/);
+okP("paren-alias-2: 괄호 조인 별칭으로 수식한 직접 투영 + minMasked",
+  "SELECT j.account_no FROM (accounts b JOIN foo f ON true) AS j", acct, (p) => assert.equal(p.minMaskedOutputs, 1));
+rejectsP("paren-alias-3: 괄호 조인의 컬럼 별칭 목록",
+  "SELECT lower(j.x) FROM (accounts b JOIN foo f ON true) AS j(x, y)", acct, /컬럼 별칭 목록/);
+
+// 별칭 바인딩 — 안쪽 범위가 괄호 조인으로 같은 별칭을 다른 테이블에 다시 묶어도 그 테이블로 판정한다.
+bothDialects("bind-1: 서브쿼리의 괄호 조인이 바깥 별칭을 마스킹 테이블에 다시 묶음",
+  "SELECT id FROM orders a, accounts z WHERE EXISTS (SELECT 1 FROM (accounts a JOIN foo f ON true) WHERE lower(a.account_no) = 'x')");
+// 무엇에 묶였는지 알 수 없는 별칭(함수형 FROM)은 바깥의 동명 별칭에 기대지 않고 이름으로 보수 판정한다.
+rejectsP("bind-2: 함수형 FROM 별칭이 바깥 별칭을 가리면 이름으로 판정",
+  "SELECT o.id FROM orders g, accounts z WHERE EXISTS (SELECT 1 FROM generate_series(1, 2) g WHERE lower(g.account_no) = 'x')", acct, /최상위 SELECT 투영/);
+okP("bind-3: 파생 테이블 별칭은 해석된 빈 바인딩이다 — 안쪽 출력의 동명 컬럼은 마스킹 원본이 아니다",
+  "SELECT t.account_no FROM (SELECT o.account_no FROM orders o) t, accounts z", acct, (p) => assert.equal(p.minMaskedOutputs, 0));
+
+// pg 의 FROM ONLY — 파서는 ONLY 를 테이블 이름(뒤 이름은 별칭)이나 함수 호출로 읽어 실제 테이블이 AST 에 남지 않는다.
+rejects("only-1: FROM ONLY t 거부", "SELECT id FROM ONLY auth_token", /ONLY/);
+rejects("only-2: FROM ONLY (t) 거부", "SELECT id FROM ONLY (auth_token)", /ONLY/);
+rejects("only-3: JOIN ONLY t 거부", "SELECT o.id FROM orders o JOIN ONLY auth_token ON true", /ONLY/);
+rejectsP("only-4: FROM ONLY 마스킹 테이블 거부", "SELECT lower(account_no) FROM ONLY accounts", acct, /ONLY/);
+
+// FROM 항목이 아는 모양(테이블·파생 서브쿼리·괄호 조인·함수형·VALUES·dual)이 아니면 무엇을 읽는지 알 수 없다 → 거부.
+ok("from-shape-1: 모르는 FROM 항목은 거부", () => {
+  assert.throws(() => assertKnownFromShapes({ type: "select", from: [{ relation: "accounts" }] }, "postgresql"), /FROM/);
+  assert.throws(() => assertKnownFromShapes({ type: "select", from: { relation: "accounts" } }, "mysql"), /FROM/);
+  assert.throws(() => assertKnownFromShapes({ type: "select", from: [{ expr: { type: "tables", expr: [{ relation: "accounts" }] } }] }, "postgresql"), /FROM/);
+  assert.throws(() => assertKnownFromShapes({ type: "select", where: { ast: { type: "select", from: [{ expr: { type: "mystery" } }] } } }, "postgresql"), /FROM/);
+});
+ok("from-shape-2: 지금 받는 FROM 모양은 그대로 통과", () => {
+  for (const sql of [
+    "SELECT 1", "SELECT 1 FROM dual", "SELECT id FROM public.orders o", "SELECT t.x FROM (SELECT 1 AS x) t",
+    "SELECT g FROM generate_series(1, 3) g", "SELECT * FROM generate_series(1, 3) AS g(n)",
+    "SELECT * FROM json_to_recordset('[]') AS x(a int, b text)", "SELECT * FROM (VALUES (1, 2)) AS v(a, b)",
+    "SELECT o.id FROM orders o, LATERAL (SELECT f.id FROM foo f WHERE f.id = o.id) t",
+    "SELECT o.id FROM orders o LEFT JOIN LATERAL generate_series(1, o.n) g ON true",
+    "SELECT id FROM orders TABLESAMPLE SYSTEM (10)", "SELECT a.id FROM orders a CROSS JOIN (foo f CROSS JOIN bar b)",
+  ]) { assertSafeSelect(sql); assertSafeSelect(sql, acct); }
+  for (const sql of ["SELECT 1", "SELECT 1 FROM dual", "SELECT id FROM hf.orders o", "SELECT t.x FROM (SELECT 1 AS x) t",
+    "SELECT o.id FROM orders o, LATERAL (SELECT f.id FROM foo f WHERE f.id = o.id) t", "SELECT id FROM (orders)",
+    "SELECT a.id FROM (orders a, foo f)"]) { assertSafeSelect(sql, undefined, MY); assertSafeSelect(sql, acct, MY); }
+});
+
+// ══════════ pg 유니코드 이스케이프 식별자·문자열(U&"…" · U&'…') ══════════
+//  DB 는 이스케이프를 풀어 다른 이름으로 읽는데 검증 파서는 U 와 인용 이름을 따로 읽는다 — 이름으로 판정할 수 없어 거부한다.
+rejectsP("uesc-1: U&\"…\" 식별자의 파생", "SELECT left(U&\"account\\005Fno\", 100) FROM accounts", acct, /유니코드 이스케이프/);
+rejectsP("uesc-2: U&\"…\" 식별자의 WHERE 조건", "SELECT id FROM accounts WHERE U&\"account\\005Fno\" LIKE 'a%'", acct, /유니코드 이스케이프/);
+rejectsP("uesc-3: 소문자 u&\"…\"", "SELECT left(u&\"account\\005Fno\", 100) FROM accounts", acct, /유니코드 이스케이프/);
+rejects("uesc-4: 정책이 없어도 거부(테이블 이름도 같은 꼴로 쓸 수 있다)", "SELECT id FROM U&\"orders\"", /유니코드 이스케이프/);
+rejectsP("uesc-5: U&'…' 문자열", "SELECT id FROM accounts WHERE status = U&'d\\0061ta'", acct, /유니코드 이스케이프/);
+okP("uesc-ok-1: 문자열 리터럴 안의 U& 글자는 값", "SELECT id FROM accounts WHERE status = 'AT&T U&\"x\"'", acct);
+okP("uesc-ok-2: 주석 안의 U& 글자", "SELECT id FROM accounts -- U&\"x\"\n", acct);
+okP("uesc-ok-3: U 와 & 사이·뒤에 공백이 있으면 비트 연산이다", "SELECT o.u & o.flags AS f, o.u & \"flags\" AS g FROM orders o", acct);
+okMy("uesc-ok-4: mysql 은 대상 아님(무변경)", "SELECT u&\"x\" AS f FROM orders", acct);
+
+// ══════════ 위치 번호 — DISTINCT ON · ROLLUP/CUBE 안의 번호도 그 번호의 투영 컬럼을 가리킨다 ══════════
+rejectsP("pos-1: DISTINCT ON (번호) 가 마스킹 컬럼을 가리킴", "SELECT DISTINCT ON (2) id, account_no FROM accounts", acct, /최상위 SELECT 투영/);
+okP("pos-2: DISTINCT ON (번호) 가 무마스킹 컬럼을 가리키면 통과", "SELECT DISTINCT ON (1) id, account_no FROM accounts", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+rejectsP("pos-3: 마스킹 테이블 * 와 DISTINCT ON (번호)", "SELECT DISTINCT ON (2) * FROM accounts", acct, /위치 번호/);
+rejectsP("pos-4: GROUP BY ROLLUP (번호) 가 마스킹 컬럼을 가리킴", "SELECT account_no, count(*) AS c FROM accounts GROUP BY ROLLUP (1)", acct, /최상위 SELECT 투영/);
+rejectsP("pos-5: GROUP BY CUBE (번호, 번호)", "SELECT id, account_no, count(*) AS c FROM accounts GROUP BY CUBE (1, 2)", acct, /최상위 SELECT 투영/);
+okP("pos-6: GROUP BY ROLLUP (번호) 가 무마스킹 컬럼을 가리키면 통과", "SELECT id, count(*) AS c FROM accounts GROUP BY ROLLUP (1)", acct);
+
+// ══════════ 검증 파서와 DB 가 다르게 읽는 어휘 꼴 — 파서가 못 본 SQL 이 실행되지 않게 거부한다 ══════════
+//  pg: 일반 문자열에서 백슬래시는 글자다(standard_conforming_strings) — 파서는 이스케이프로 읽어 문자열 끝이 어긋난다.
+rejects("lex-pg-1: 문자열 안 백슬래시+따옴표", "SELECT 'a\\' AS x, id FROM orders --'", /백슬래시/);
+rejects("lex-pg-2: 인용 식별자 안 백슬래시", "SELECT \"a\\\" AS x, id FROM orders --\"", /백슬래시/);
+rejects("lex-pg-3: 줄 주석은 CR 에서도 끝난다 — 그 뒤의 문자열도 같은 규칙", "SELECT id -- memo\r , 'a\\' AS x FROM orders --'", /백슬래시/);
+okP("lex-pg-ok-1: 따옴표 앞이 아닌 백슬래시(정규식·LIKE)는 그대로", "SELECT id FROM orders WHERE note ~ '\\d+' OR note LIKE '100\\%'", acct);
+okP("lex-pg-ok-2: 따옴표 겹쳐 쓰기('')는 그대로", "SELECT id FROM orders WHERE note = 'it''s'", acct);
+okP("lex-pg-ok-3: 백슬래시 두 개로 끝나는 문자열은 양쪽이 같게 읽는다",
+  "SELECT id FROM orders WHERE note = 'a\\\\' AND id IN (SELECT o.id FROM foo o)", acct, (p) => assert.deepEqual(sortedTables(p), ["foo", "orders"]));
+//  mysql: 실행 주석(/*! … */)은 주석이 아니라 실행되는 SQL 이고, 공백 없는 `--` 는 주석이 아니라 빼기 두 번이다.
+rejMy("lex-my-1: 실행 주석 /*! … */", "SELECT id /*! , name */ FROM orders", /실행 주석/);
+rejMy("lex-my-2: 버전 붙은 실행 주석 /*!50000 … */", "SELECT id /*!50000 , name */ FROM orders", /실행 주석/);
+rejMy("lex-my-3: 일반 주석 뒤의 실행 주석(mysql 주석은 겹치지 않는다)", "SELECT id /* /* */ /*! , name */ -- */\n FROM orders", /실행 주석/);
+rejMy("lex-my-4: # 주석 안 따옴표 뒤의 실행 주석", "SELECT id # it's\n /*! , name */ FROM orders # '\n", /실행 주석/);
+rejMy("lex-my-5: 문자열 뒤의 실행 주석(\"…\" 안 백슬래시 이스케이프)", "SELECT \"a\\\"\" /*! , name */ , \"x\" FROM orders", /실행 주석/);
+rejMy("lex-my-6: 공백 없는 -- 는 주석이 아니다", "SELECT id FROM orders WHERE id = 5--1", /--/);
+rejMy("lex-my-7: 줄 주석 안에 홀로 선 CR", "SELECT id -- memo\r , '\n FROM orders -- '", /줄 주석/);
+rejMy("lex-my-8: # 주석 안에 홀로 선 CR", "SELECT id # memo\r , '\n FROM orders -- '", /줄 주석/);
+okMy("lex-my-ok-0: CRLF 로 끝나는 줄 주석은 그대로", "SELECT id -- memo\r\n FROM orders # memo\r\n WHERE id = 1");
+okMy("lex-my-ok-1: 일반 주석 · `-- ` 주석 · # 주석 · 줄 끝 -- 는 그대로",
+  "SELECT id /* 메모 */ FROM orders -- 메모\n WHERE id = 1 # it's\n AND id < 9 --\n");
+okMy("lex-my-ok-2: 문자열 리터럴 안의 /*! 와 -- 는 값", "SELECT id FROM orders WHERE note = '/*! x */' OR note = \"--x\"");
+okMy("lex-my-ok-3: 최적화 힌트 주석(/*+ … */)은 그대로", "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id FROM orders");
+ok("lex-ok: pg 의 공백 없는 -- 는 주석 그대로", () => assertSafeSelect("SELECT id FROM orders WHERE id = 5 --1\n"));
 
 console.log(`\n${pass} checks passed`);
