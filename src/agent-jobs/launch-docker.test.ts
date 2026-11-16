@@ -11,8 +11,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  DEFAULT_JOB_UID, DockerBoxError, JOB_BARE_HOME, JOB_CLAUDE_DIR_ENV, JOB_CLAUDE_HIDE_ALWAYS, JOB_CLAUDE_HIDE_FILES, JOB_CLAUDE_HIDE_IF_DIR, JOB_CLAUDE_TARGET,
-  JOB_CONTAINER_PRELUDE, JOB_LOCALE, claudeDirPrepScript, claudeHideTargets, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus,
+  DEFAULT_JOB_UID, DockerBoxError, JOB_BARE_HOME, JOB_CLAUDE_DIR_ENV, JOB_CLAUDE_HIDE_ALWAYS, JOB_CLAUDE_HIDE_FILES, JOB_CLAUDE_HIDE_IF_DIR, JOB_CLAUDE_MANAGED_DIR, JOB_CLAUDE_TARGET,
+  JOB_CONTAINER_PRELUDE, claudeManagedState, JOB_LOCALE, claudeDirPrepScript, claudeHideTargets, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus,
   dockerUnavailableMessage, ensureImageOnce, envFileText, gatewayClaudeDirPrep, hideBoxPaths, hideList, invalidateDockerBox, jobContainerArgs, jobContainerEnv,
   parseClaudePrep,
   jobContainerName, jobContainerPolicy, jobIdentities, jobPlacement, killDockerJob, launchDockerJob, liveDockerDeps, probeDockerBox, resetDockerProbesForTest, workDirState,
@@ -234,13 +234,13 @@ function argsAndPolicy(tr: Tree, place: Pick<JobPlacement, "uid" | "gid" | "grou
   fs.writeFileSync(envFile, "A=1\n", { mode: 0o600 });
   const args = jobContainerArgs({
     name: "lvly-job-42-0a1b2c3d", image: "node:22-bookworm-slim", labels: { "lvly.agent-job": "1", "lvly.agent-job.id": "42" }, place, memoryMb: 3072,
-    workHost: over.workHost ?? tr.work, workdir, claudeBin: tr.bin, envFile,
+    workHost: over.workHost ?? tr.work, workdir, claudeBin: tr.bin, managedHost: null, envFile,
   });
   const ids = over.ids ?? { users: [`${place.uid}:${place.gid}`], groups: place.groups };
   const policy = jobContainerPolicy({
     image: "node:22-bookworm-slim", work: { root: tr.apps, source: tr.work, target: "/work/apps/policy-bot" },
     claude: place.claude ? { root: place.claude.root, source: place.claude.host, target: place.claude.target, hide: place.claude.hide } : null,
-    claudeBin: tr.bin, envRoot: tr.run, home: place.home, users: ids.users, groups: ids.groups,
+    claudeBin: tr.bin, managedHost: null, envRoot: tr.run, home: place.home, users: ids.users, groups: ids.groups,
   });
   return { args, policy };
 }
@@ -296,7 +296,7 @@ await t("G6 인자의 막이 — 분리 · 끝나면 지움 · host 네트워크
     assert.ok(!args.join("\n").includes("bootSecret"), "부트 비밀은 인자에 없다");
     assert.ok(!args.some((a) => a === "-e" || a === "--env"), "env 는 파일로만");
     //  쉼표 · 따옴표가 든 경로는 --mount 에 못 싣는다 — 짓지 않는다(다시 해도 같다).
-    assert.throws(() => jobContainerArgs({ name: "lvly-job-42-0a1b2c3d", image: "i", labels: {}, place: subPlace(tr), memoryMb: 1, workHost: "/srv/a,b", workdir: "/work/apps/policy-bot", claudeBin: tr.bin, envFile: "/e" }),
+    assert.throws(() => jobContainerArgs({ name: "lvly-job-42-0a1b2c3d", image: "i", labels: {}, place: subPlace(tr), memoryMb: 1, workHost: "/srv/a,b", workdir: "/work/apps/policy-bot", claudeBin: tr.bin, managedHost: null, envFile: "/e" }),
       (e: unknown) => e instanceof JobLaunchError && !e.transient && /쉼표/.test(e.message));
   } finally { tr.done(); }
 });
@@ -335,7 +335,7 @@ await t("G7 정책이 막는 것 — 뿌리 밖 · 형제 앱 폴더 · 행과 �
 });
 
 await t("G8 정책 — 행의 작업 폴더가 두 꼴(앱 폴더 · 프로젝트 폴더) 밖이면 짓지 않는다", () => {
-  const mk = (target: string): DockerRunPolicy => jobContainerPolicy({ image: "i", work: { root: "/srv", source: "/srv/x", target }, claude: null, claudeBin: "/b", envRoot: "/r", home: JOB_BARE_HOME, users: ["1:1"], groups: [] });
+  const mk = (target: string): DockerRunPolicy => jobContainerPolicy({ image: "i", work: { root: "/srv", source: "/srv/x", target }, claude: null, claudeBin: "/b", managedHost: null, envRoot: "/r", home: JOB_BARE_HOME, users: ["1:1"], groups: [] });
   for (const bad of ["/work/apps/policy-bot/sub", "/work/apps/../etc", "/srv/lively/apps/x", "/work/shared/project/0", "/work/shared"]) assert.throws(() => mk(bad), /꼴이 아닙니다/, bad);
   assert.doesNotThrow(() => mk("/work/shared/project/12"));
 });
@@ -387,6 +387,8 @@ function fakeDeps(tr: Tree, over: Partial<DockerLaunchDeps> = {}): { d: DockerLa
     mkdirWork: async (osUser, abs, shared) => { c(`mkdirWork:${osUser}:${path.relative(tr.root, abs)}:${shared}`); },
     checkWork: async (work) => { c("checkWork"); return workDirState(work); },
     memoryMaxMb: async () => { c("memoryMaxMb"); return 3072; },
+    //  기본은 관리 설정을 켜지 않은 박스(폴더 없음) — 붙이지 않는다.
+    claudeManaged: async () => { c("claudeManaged"); return { host: path.join(tr.root, "etc-claude-code"), state: "missing" }; },
     ensureImage: async (image) => { c(`ensureImage:${image}`); },
     writeEnvFile: async (name, text) => {
       c(`writeEnvFile:${name}`); rec.envText = text;
@@ -421,7 +423,7 @@ await t("C1 격리 박스 · 구독 — 순서(도커 → 상한 → 그 계정 
     const r = await launchDockerJob(row(), SECRET, d);
     assert.equal(r.container, "lvly-job-42-0a1b2c3d");
     assert.deepEqual(rec.calls, [
-      "box", "memoryMaxMb", "accountUser:kim", "ensureOsUser:kim", "memberFacts:box_kim:true",
+      "box", "memoryMaxMb", "accountUser:kim", "ensureOsUser:kim", "memberFacts:box_kim:true", "claudeManaged",
       "resolveWork:apps/policy-bot:box_kim", "mkdirWork:box_kim:apps/policy-bot:false", "checkWork", "ensureImage:node:22-bookworm-slim",
       "writeEnvFile:lvly-job-42-0a1b2c3d", "checkWork", "run", "removeEnvFile",
     ]);
@@ -522,6 +524,7 @@ await t("C5 다시 해도 안 될 것 — 부수효과(작업 폴더 · env 파�
     ["작업 폴더 자리가 행과 다름(형제)", {}, (tr) => ({ resolveWork: async () => ({ abs: tr.other, base: tr.apps }) }), /맞지 않습니다/],
     ["작업 폴더 자리가 뿌리 밖", {}, (tr) => ({ resolveWork: async () => ({ abs: "/etc", base: tr.apps }) }), /맞지 않습니다/],
     ["검사기 거절", {}, () => ({ run: async () => { throw new DockerRunRejected("모르는 깃발입니다: --privileged"); } }), /컨테이너 인자를 거절/],
+    ["관리 설정 자리에 링크 · 폴더 아님", {}, (tr) => ({ claudeManaged: async () => ({ host: path.join(tr.root, "etc-claude-code"), state: "bad" as const }) }), /관리 설정 자리\(\/etc\/claude-code\)에 링크가 있거나 폴더가 아니라/],
   ];
   for (const [why, over, dover, re] of cases) {
     const tr = realTree();
@@ -552,6 +555,7 @@ await t("C6 인프라가 잠깐 막힘 — 일시(transient) 실패 · 단계 �
     ["작업 폴더 만들기", { mkdirWork: boom("EACCES") }, /작업 폴더를 만들지 못했습니다/],
     ["작업 폴더 확인", { checkWork: boom("EACCES") }, /작업 폴더를 만들지 못했습니다/],
     ["작업 폴더가 만든 뒤에도 없음", { checkWork: async () => "missing" as const }, /만든 뒤에도 없습니다/],
+    ["관리 설정 자리 확인", { claudeManaged: boom("EACCES") }, /작업 컨테이너를 확보하지 못했습니다: EACCES/],
     ["이미지", { ensureImage: boom("pull 실패") }, /작업 컨테이너를 확보하지 못했습니다: pull/],
     ["띄우기", { run: boom(`docker run 실패: Command failed: docker run ... LVLY_JOB_BOOT=${SECRET}`) }, /작업 컨테이너를 확보하지 못했습니다/],
   ];
@@ -686,6 +690,89 @@ await t("C12 띄우기 실패 글(앱이 받는다)에 박스 위 자리가 없�
       assert.ok(w.some((x) => JSON.stringify(x.obj).includes(tr.root)), `${why}: 로그에 원문이 없다 — ${JSON.stringify(w).slice(0, 300)}`);
     } finally { tr.done(); }
   }
+});
+
+await t("C13 Claude 관리 설정 폴더(구독 작업) — 박스에 실제 폴더면 /etc/claude-code 에 읽기 전용으로 붙고 정책이 그 폴더 하나만 읽기 전용으로 받는다 · 폴더가 없으면 인자 · 정책 어디에도 없다", async () => {
+  const tr = realTree();
+  try {
+    const managed = path.join(tr.root, "etc-claude-code");
+    fs.mkdirSync(managed);
+    fs.writeFileSync(path.join(managed, "managed-settings.json"), "{}");
+    const { d, rec } = fakeDeps(tr, { claudeManaged: async () => ({ host: managed, state: "dir" }) });
+    await launchDockerJob(row(), SECRET, d);
+    assert.equal(rec.guard, "ok", "진짜 검사기를 지났다");
+    const mount = `type=bind,src=${managed},dst=${JOB_CLAUDE_MANAGED_DIR},readonly`;
+    assert.equal(mounts(rec.args!).filter((m) => m.includes(JOB_CLAUDE_MANAGED_DIR)).length, 1);
+    assert.ok(mounts(rec.args!).includes(mount), mounts(rec.args!).join("\n"));
+    const mb = rec.policy!.binds.find((b) => b.source === managed);
+    assert.ok(mb, "정책에 관리 설정 바인드가 있다");
+    assert.deepEqual([mb.root, mb.rw], [managed, false]);
+    assert.deepEqual([JOB_CLAUDE_MANAGED_DIR, "/etc", "/etc/claude-code/x", JOB_CLAUDE_TARGET].map((s) => mb.targets!.test(s)), [true, false, false, false]);
+    //  정책이 막는 것 — 쓰기로 붙이기 · 관리 설정 폴더 대신 다른 박스 폴더 · 다른 자리.
+    const reject = (from: string, to: string, why: string): void => {
+      const a = rec.args!.map((x) => (x === from ? to : x));
+      assert.throws(() => assertSafeDockerRun(a, rec.policy!), (e: unknown) => e instanceof DockerRunRejected && /마운트 원본/.test(e.message), why);
+    };
+    reject(mount, `type=bind,src=${managed},dst=${JOB_CLAUDE_MANAGED_DIR}`, "쓰기로");
+    reject(mount, `type=bind,src=${tr.other},dst=${JOB_CLAUDE_MANAGED_DIR},readonly`, "다른 폴더를 그 자리에");
+    reject(mount, `type=bind,src=${managed},dst=/etc/other,readonly`, "다른 자리에");
+    //  정책을 켜지 않은 박스 — 인자 · 정책 모두 관리 설정 바인드만 빠진다(그 정책은 그 바인드를 거절한다).
+    const { d: d0, rec: r0 } = fakeDeps(tr);
+    await launchDockerJob(row(), SECRET, d0);
+    assert.equal(r0.guard, "ok");
+    assert.ok(!r0.args!.join("\n").includes(JOB_CLAUDE_MANAGED_DIR), "없으면 붙이지 않는다");
+    assert.deepEqual(r0.policy!.binds.map((b) => b.source), rec.policy!.binds.map((b) => b.source).filter((s) => s !== managed), "없으면 정책에 관리 설정 바인드가 없다");
+    assert.deepEqual(r0.args, rec.args!.filter((x, i, a) => x !== mount && !(x === "--mount" && a[i + 1] === mount)), "없으면 인자에 관리 설정 바인드가 없다");
+    assert.throws(() => assertSafeDockerRun(rec.args!, r0.policy!), (e: unknown) => e instanceof DockerRunRejected && /마운트 원본/.test(e.message), "관리 설정이 없는 박스의 정책은 그 바인드를 거절한다");
+  } finally { tr.done(); }
+});
+
+await t("C13b API 키 작업 — 관리 설정 폴더를 보지 않고 붙이지 않는다(프록시 토큰으로 돌아 로그인 조직 정책 아래에서 claude 가 시작을 거부한다) · 상태가 bad 여도 띄운다", async () => {
+  for (const state of ["dir", "bad"] as const) {
+    const tr = realTree();
+    try {
+      const managed = path.join(tr.root, "etc-claude-code");
+      fs.mkdirSync(managed);
+      const { d, rec } = fakeDeps(tr, { claudeManaged: async () => { rec.calls.push("claudeManaged"); return { host: managed, state }; } });
+      await launchDockerJob(row({ account_kind: "api_key", account_member: null } as Partial<AgentJobRow>), SECRET, d);
+      assert.equal(rec.guard, "ok", state);
+      assert.ok(!rec.calls.includes("claudeManaged"), `${state}: ${rec.calls.join(" ")}`);
+      assert.ok(!rec.args!.join("\n").includes(JOB_CLAUDE_MANAGED_DIR), state);
+      assert.ok(!rec.policy!.binds.some((b) => b.source === managed || b.targets?.test(JOB_CLAUDE_MANAGED_DIR)), state);
+    } finally { tr.done(); }
+  }
+});
+
+await t("C14 관리 설정 폴더 상태(claudeManagedState) — 실제 폴더 dir · 없음 missing · 폴더를 가리키는 링크 · 파일 · 안의 직속 항목이나 managed-settings.d/ 직속 항목이 링크면 bad", async () => {
+  const tr = realTree();
+  try {
+    const dir = path.join(tr.root, "etc-claude-code");
+    assert.equal(await claudeManagedState(dir), "missing");
+    fs.mkdirSync(dir);
+    assert.equal(await claudeManagedState(dir), "dir");
+    const link = path.join(tr.root, "etc-claude-code-link");
+    fs.symlinkSync(dir, link);
+    assert.equal(await claudeManagedState(link), "bad", "폴더를 가리켜도 링크면 붙이지 않는다");
+    const file = path.join(tr.root, "etc-claude-code-file");
+    fs.writeFileSync(file, "{}");
+    assert.equal(await claudeManagedState(file), "bad");
+    //  안의 파일 · 드롭인 폴더 — 실제 파일이면 dir, 링크가 하나라도 있으면 bad(컨테이너 안에서 폴더 밖을 가리키는 링크는 끊긴다).
+    fs.writeFileSync(path.join(dir, "managed-settings.json"), "{}");
+    fs.mkdirSync(path.join(dir, "managed-settings.d"));
+    fs.writeFileSync(path.join(dir, "managed-settings.d", "10-org.json"), "{}");
+    assert.equal(await claudeManagedState(dir), "dir");
+    const outside = path.join(tr.root, "outside.json");
+    fs.writeFileSync(outside, "{}");
+    fs.symlinkSync(outside, path.join(dir, "managed-mcp.json"));
+    assert.equal(await claudeManagedState(dir), "bad", "직속 항목이 링크");
+    fs.rmSync(path.join(dir, "managed-mcp.json"));
+    assert.equal(await claudeManagedState(dir), "dir");
+    fs.symlinkSync(outside, path.join(dir, "managed-settings.d", "20-x.json"));
+    assert.equal(await claudeManagedState(dir), "bad", "managed-settings.d/ 의 직속 항목이 링크");
+    fs.rmSync(path.join(dir, "managed-settings.d"), { recursive: true });
+    fs.symlinkSync(tr.other, path.join(dir, "managed-settings.d"));
+    assert.equal(await claudeManagedState(dir), "bad", "managed-settings.d 자체가 링크");
+  } finally { tr.done(); }
 });
 
 // ── K. 걷기 · 판의 자리 ────────────────────────────────────────────────────────
