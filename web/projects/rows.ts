@@ -145,7 +145,8 @@ function pjvSortProjects(arr, colSort) { return arr.slice().sort(pjvColSortCmp(c
 //  그래서 상태·담당자·우선순위 어느 그룹바이든 초안은 **맨 아래 한 묶음**으로만 선다 — 그룹 안에 섞이면 따로 뺀 뜻이 없다.
 //  기본은 접힘: 수십 개가 쌓여도 목록을 밀어내지 않는다(펼침은 그룹 접힘과 같은 자리에 저장).
 const pjvIsDraft = (p) => p && p.draft === true && p.status !== 'done';
-const PJV_DRAFT_HINT = '세션 첫 지시로 자동 생성된 프로젝트입니다. 제목이나 본문을 정리하면 목록에 올라갑니다.';
+//  #5522 — 초안은 만든 사람과 팀원만 본다. 지식 · 작업기록 · 파일을 남기거나 제목 · 본문을 정리하면 풀려 모두에게 보인다.
+const PJV_DRAFT_HINT = '세션 첫 지시로 자동 생성된 프로젝트입니다. 나와 초대한 사람에게만 보이고, 작업을 남기거나 제목 · 본문을 정리하면 모두에게 공개됩니다.';
 function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
   const drafts = shownProjects.filter(pjvIsDraft);
   if (!drafts.length) { pjvRenderStatusGroupsInner(main, shownProjects, selList, opts); return; }
@@ -692,7 +693,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
       : el('span', { class: 'pjv-tgroup-label', text: label });
 
   // 초안 묶음 헤더의 한 줄 설명(#4170) — 왜 여기 따로 서 있고 언제 올라가는지. 접혀 있을 때도 보인다.
-  const hintEl = () => isDraft ? el('span', { class: 'pjv-draft-hint', text: '첫 지시로 자동 생성 · 제목이나 본문을 정리하면 올라갑니다' }) : null;
+  const hintEl = () => isDraft ? el('span', { class: 'pjv-draft-hint', text: '나와 초대한 사람만 봅니다 · 작업을 남기거나 제목 · 본문을 정리하면 공개됩니다' }) : null;
   // 그룹 전체선택 체크박스(#664) — 헤더 좌측(행 체크박스와 같은 16px 자리). 레거시 선택(select) 모드에선 스페이서 유지.
   const headCheck = () => select
     ? el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' })
