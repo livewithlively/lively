@@ -186,11 +186,12 @@ let timer: NodeJS.Timeout | null = null;
 export function startScheduler(): void {
   if (timer) return;
   logger.info("scheduler started (in-process, org_cron)");
-  //  잘못 쓴 CRON_STAGGER_SEC 는 조용히 기본값으로 접힌다(cronStaggerSec) — 운영자가 끈 줄 알고 있지 않게 부팅 때 한 번 드러낸다.
+  //  잘못 쓴 CRON_STAGGER_SEC 는 조용히 기본값(꺼짐)으로 접힌다(cronStaggerSec) — 운영자가 켠 줄 알고 있지 않게 부팅 때 한 번 드러낸다.
+  //   소수는 내려서 쓰므로(45.9 → 45) 읽지 못한 값이 아니다.
   const staggerRaw = process.env.CRON_STAGGER_SEC;
   const staggerSec = cronStaggerSec();
-  if (staggerRaw != null && staggerRaw.trim() !== "" && Number(staggerRaw) !== staggerSec) {
-    logger.warn({ raw: staggerRaw, applied_sec: staggerSec }, "CRON_STAGGER_SEC 를 읽지 못해 다른 값으로 적용했다(0 이상 정수만 그대로 쓴다)");
+  if (staggerRaw != null && staggerRaw.trim() !== "" && Math.floor(Number(staggerRaw)) !== staggerSec) {
+    logger.warn({ raw: staggerRaw, applied_sec: staggerSec }, "CRON_STAGGER_SEC 를 읽지 못해 기본값으로 적용했다(0 이상의 수만 쓴다 · 0 이면 끔)");
   } else {
     logger.info({ applied_sec: staggerSec }, "시각형 크론 고정 지연 폭(CRON_STAGGER_SEC · 0 이면 끔)");
   }

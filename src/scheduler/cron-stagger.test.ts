@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  cronStaggerOffsetMs, cronMinGapSec, cronStaggerSec, CRON_STAGGER_DEFAULT_SEC, COARSEST_TICK_SEC, TICK_JITTER_SEC,
+  cronStaggerOffsetMs, cronMinGapSec, cronStaggerSec, CRON_STAGGER_DEFAULT_SEC, CRON_STAGGER_SUGGESTED_SEC, COARSEST_TICK_SEC, TICK_JITTER_SEC,
 } from "./cron-stagger.js";
 
 const HOURLY = "0 * * * *";
@@ -45,6 +45,19 @@ test("S4 서로 다른 id 가 흩어진다 — 정각 무리가 한 틱 창에 �
   }
 });
 
+test("S4b ★ 끝자리만 다른 id 도 흩어진다 — 번호를 붙인 이름 16개가 한 틱 창에 몰리지 않는다", () => {
+  //  틀렸을 때: 정각에 몰린 잡이 `sync-0` … `sync-15` 꼴이면 흩어도 전부 같은 30초 창에 남는다(해시에 마무리 섞기가 없을 때 실측 0/0/16).
+  //  S4 는 400개를 한꺼번에 보므로 이 국소 뭉침을 못 잡는다 — 접두마다 16개씩 따로 본다.
+  for (const prefix of ["job-", "sync-", "distill-", "connector-sync-notion-", "cron_"]) {
+    const offs = Array.from({ length: 16 }, (_, i) => cronStaggerOffsetMs(`${prefix}${i}`, HOURLY, 90) / 1000);
+    const wins = [0, 1, 2].map((w) => offs.filter((o) => o >= w * 30 && o < (w + 1) * 30).length);
+    assert.ok(Math.max(...wins) <= 10 && Math.min(...wins) >= 1, `${prefix}0..15 가 창 ${wins.join("/")} 로 몰렸다`);
+    //  이웃한 번호가 이웃한 지연을 받지 않는다 — 1초 차로 줄지어 서면 틱 경계에서 함께 넘어간다.
+    const adjacent = offs.filter((o, i) => i > 0 && Math.abs(o - offs[i - 1]) <= 1).length;
+    assert.ok(adjacent <= 3, `${prefix}0..15 중 ${adjacent}쌍이 1초 안에 붙어 있다`);
+  }
+});
+
 test("S5 ★ 상한 — 지연은 «최소 간격 − 가장 성긴 틱 간격 − 틱 늦음» 미만, 그 이하 간격이면 흩지 않는다", () => {
   const cases: Array<[string, number]> = [
     ["* * * * *", 0],          // 60초 간격
@@ -78,14 +91,17 @@ test("W 최소 간격 하한 — 분 필드만 본다", () => {
   assert.equal(cronMinGapSec([30, 0, 15]), 900, "정렬 안 된 입력");
 });
 
-test("E 설정값 — 비면 기본, 0 은 끔, 잡값은 기본으로 접는다", () => {
+test("E 설정값 — 비면 기본(꺼짐), 0 은 끔, 잡값은 기본으로 접는다", () => {
+  //  기본은 꺼짐이다 — 설정을 안 건드린 배포의 잡 실행 시각이 업그레이드로 바뀌지 않는다(5분 격자 틱 배포에서는 흩어지지 않고 밀리기만 한다).
+  assert.equal(CRON_STAGGER_DEFAULT_SEC, 0);
+  assert.equal(CRON_STAGGER_SUGGESTED_SEC, 90);
   assert.equal(cronStaggerSec({}), CRON_STAGGER_DEFAULT_SEC);
   assert.equal(cronStaggerSec({ CRON_STAGGER_SEC: "" }), CRON_STAGGER_DEFAULT_SEC);
   assert.equal(cronStaggerSec({ CRON_STAGGER_SEC: "  " }), CRON_STAGGER_DEFAULT_SEC);
   assert.equal(cronStaggerSec({ CRON_STAGGER_SEC: "0" }), 0, "0 으로 끌 수 없다");
   assert.equal(cronStaggerSec({ CRON_STAGGER_SEC: "45" }), 45);
   assert.equal(cronStaggerSec({ CRON_STAGGER_SEC: "45.9" }), 45);
-  //  잘못 쓴 값을 0(끔)으로 접으면 오타 하나로 흩뜨림이 조용히 꺼진다.
+  //  잘못 쓴 값은 기본값(꺼짐)이다 — 조용히 꺼진 채 두지 않게 startScheduler 가 부팅 때 경고로 드러낸다.
   for (const junk of ["abc", "-5", "NaN", "Infinity"]) {
     assert.equal(cronStaggerSec({ CRON_STAGGER_SEC: junk }), CRON_STAGGER_DEFAULT_SEC, junk);
   }
