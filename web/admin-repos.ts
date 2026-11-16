@@ -72,11 +72,13 @@ async function repoRefreshShared(name, ev) {
   try {
     const r = await api('/api/ui/repos/' + encodeURIComponent(name) + '/refresh', { method: 'POST' });
     const s7 = (x) => (x ? String(x).slice(0, 7) : '');
-    if (r && r.status === 'ok') alert('최신화 완료: ' + name + '\n' + s7(r.before) + ' → ' + s7(r.after));
-    else if (r && r.status === 'up-to-date') alert('이미 최신입니다: ' + name);
+    // 브랜치 한 줄(#1723) — 등록한 기본 브랜치로 바꿨거나, 어긋나 있는데 바꾸지 않은 사유. dirty·그 밖은 detail 에 이미 들어 있다.
+    const bn = (r && r.branch_note) ? '\n' + r.branch_note : '';
+    if (r && r.status === 'ok') alert('최신화 완료: ' + name + '\n' + s7(r.before) + ' → ' + s7(r.after) + bn);
+    else if (r && r.status === 'up-to-date') alert('이미 최신입니다: ' + name + bn);
     else if (r && r.status === 'dirty') alert('로컬 변경이 있어 건너뛰었습니다: ' + name + '\n' + (r.detail || ''));
     else if (r && r.status === 'no-clone') alert('공유 클론이 아직 없습니다(이 레포를 쓰는 프로젝트에서 먼저 provision): ' + name);
-    else if (r && r.status === 'no-upstream') alert('현재 브랜치에 upstream 이 없습니다: ' + name);
+    else if (r && r.status === 'no-upstream') alert('현재 브랜치에 upstream 이 없습니다: ' + name + bn);
     else alert('최신화 결과(' + (r && r.status) + '): ' + ((r && r.detail) || ''));
   } catch (e) {
     alert('최신화 실패: ' + (e && e.message ? e.message : e));
