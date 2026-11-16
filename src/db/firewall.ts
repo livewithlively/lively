@@ -362,16 +362,23 @@ function collectScopedRefs(root: unknown): ScopedRefScan {
   return { refs, usingCols, naturalJoin, columnAliasList, rootScope };
 }
 
-// 최상위 ORDER BY / GROUP BY 의 위치 번호(`ORDER BY 2`) — 투영의 몇 번째 컬럼을 가리키는지(1-based).
+// 최상위 ORDER BY / GROUP BY / DISTINCT ON 의 위치 번호(`ORDER BY 2`) — 투영의 몇 번째 컬럼을 가리키는지(1-based).
+//  pg 는 DISTINCT ON 의 식을 ORDER BY 와 같은 규칙으로 읽고, GROUP BY 의 ROLLUP(…)·CUBE(…) 안의 번호도 위치 번호로 읽는다.
 function positionalRefs(stmt: Record<string, unknown>): number[] {
   const out: number[] = [];
+  const add = (e: unknown, inGroupBy: boolean): void => {
+    const x = e as { type?: unknown; value?: unknown; args?: unknown } | null;
+    if (x?.type === "number" && typeof x.value === "number") out.push(x.value);
+    else if (!inGroupBy) return;
+    else if (x?.type === "expr_list" && Array.isArray(x.value)) for (const v of x.value) add(v, true);
+    else if (x?.type === "function" && functionNameParts(x).some((p) => /^(rollup|cube)$/i.test(p))) add(x.args, true);
+  };
   const g = stmt.groupby;
   const groupItems = Array.isArray(g) ? g : (g && typeof g === "object" ? (g as { columns?: unknown }).columns : null);
-  const orderItems = Array.isArray(stmt.orderby) ? stmt.orderby.map((o) => (o as { expr?: unknown } | null)?.expr) : [];
-  for (const e of [...(Array.isArray(groupItems) ? groupItems : []), ...orderItems]) {
-    const x = e as { type?: unknown; value?: unknown } | null;
-    if (x?.type === "number" && typeof x.value === "number") out.push(x.value);
-  }
+  for (const e of Array.isArray(groupItems) ? groupItems : []) add(e, true);
+  for (const o of Array.isArray(stmt.orderby) ? stmt.orderby : []) add((o as { expr?: unknown } | null)?.expr, false);
+  const distinctOn = (stmt.distinct as { columns?: unknown } | null | undefined)?.columns;
+  for (const d of Array.isArray(distinctOn) ? distinctOn : []) add((d as { expr?: unknown } | null)?.expr, false);
   return out;
 }
 
@@ -511,7 +518,7 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   //  닿지 않으므로 통과시키고, 둘 중 하나라도 있으면 거부한다.
   const cols = Array.isArray(stmt.columns) ? stmt.columns : [];
   for (const pos of positionalRefs(stmt)) {
-    if (hasTopStarOverMaskedTable || (allowedStar.size > 0 && minMaskedOutputs > 0)) throw new Error(`Blocked: '*' 가 있는 조회에서는 ORDER BY·GROUP BY 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
+    if (hasTopStarOverMaskedTable || (allowedStar.size > 0 && minMaskedOutputs > 0)) throw new Error(`Blocked: '*' 가 있는 조회에서는 ORDER BY·GROUP BY·DISTINCT ON 위치 번호를 쓸 수 없습니다 — 컬럼 이름을 쓰세요`);
     const e = (cols[pos - 1] as { expr?: Record<string, unknown> } | undefined)?.expr;
     if (!e || e.type !== "column_ref") continue;
     const cn = refColName(e);

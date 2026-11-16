@@ -515,4 +515,13 @@ ok("from-shape-2: 지금 받는 FROM 모양은 그대로 통과", () => {
     "SELECT a.id FROM (orders a, foo f)"]) { assertSafeSelect(sql, undefined, MY); assertSafeSelect(sql, acct, MY); }
 });
 
+// ══════════ 위치 번호 — DISTINCT ON · ROLLUP/CUBE 안의 번호도 그 번호의 투영 컬럼을 가리킨다 ══════════
+rejectsP("pos-1: DISTINCT ON (번호) 가 마스킹 컬럼을 가리킴", "SELECT DISTINCT ON (2) id, account_no FROM accounts", acct, /최상위 SELECT 투영/);
+okP("pos-2: DISTINCT ON (번호) 가 무마스킹 컬럼을 가리키면 통과", "SELECT DISTINCT ON (1) id, account_no FROM accounts", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+rejectsP("pos-3: 마스킹 테이블 * 와 DISTINCT ON (번호)", "SELECT DISTINCT ON (2) * FROM accounts", acct, /위치 번호/);
+rejectsP("pos-4: GROUP BY ROLLUP (번호) 가 마스킹 컬럼을 가리킴", "SELECT account_no, count(*) AS c FROM accounts GROUP BY ROLLUP (1)", acct, /최상위 SELECT 투영/);
+rejectsP("pos-5: GROUP BY CUBE (번호, 번호)", "SELECT id, account_no, count(*) AS c FROM accounts GROUP BY CUBE (1, 2)", acct, /최상위 SELECT 투영/);
+okP("pos-6: GROUP BY ROLLUP (번호) 가 무마스킹 컬럼을 가리키면 통과", "SELECT id, count(*) AS c FROM accounts GROUP BY ROLLUP (1)", acct);
+
 console.log(`\n${pass} checks passed`);
