@@ -14,6 +14,7 @@ import { HttpError } from "../http/rest-util.js";
 import { itemsPool } from "../db/client.js";
 import { hiddenProjects } from "../v6/visibility.js";
 import { getSessionState, updateSessionStateMeta } from "../sessions/session-state.js";
+import { agentNamingOpen } from "../sessions/session-label-source.js";   // #5552 — 이름짓기 안내 훅에 주는 답
 import { nodeOfSession, nodeRpc } from "../node/registry.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { applySessionProject, type SessionProjectBind } from "./session-project.js";
@@ -184,6 +185,12 @@ export interface SessionProjectContext {
   /** 세션 행이 아는 «이 세션이 도는 프로젝트 폴더»(#4135) — 공유 루트 아래 project.folder 에서 도는 세션만. 명시 바인딩이
    *  없을 때 훅이 env(TERMINAL_ROOT_SHARED)로 슬롯을 조립하는 대신 이 경로를 쓴다. 라이블리 소유 슬롯이라는 뜻은 그대로다. */
   session_dir?: string | null;
+  /**
+   * #5552 — 이 세션에 에이전트의 세션 이름짓기(session_rename)가 **지금** 먹히나(agentNamingOpen 머리말). 모르면 싣지 않는다.
+   *  이름짓기 안내 훅이 «이미 이름이 정해진 세션엔 세션 이름짓기를 안내하지 않는다» 를 pane env(여는 순간의 값)가 아니라
+   *  이 값으로 가른다 — project-agents-inject 가 받아 로컬에 적어 두고, 뒤 묶음의 안내 훅이 읽는다(추가 왕복 없음).
+   */
+  naming_open?: boolean;
   name?: string; content?: string;
 }
 
@@ -211,7 +218,16 @@ export async function sessionProjectContext(
   //  #4135 — 호출자(훅)가 node 를 안 밝혀도 세션 행에서 읽는다: 노드 세션의 pane 엔 LIVELY_NODE_ID 가 없어서 여태 folder·sync 가
   //   안 나갔고 자료 동기화가 조용히 죽어 있었다. 행 조회 실패는 «중앙 세션» 으로 본다(종전과 같음). 행은 소속이 확인된
   //   뒤에만 읽는다 — 이 함수는 매 턴 모든 세션이 부르므로 소속 없는 세션에 DB 왕복을 더하지 않는다.
-  const row = await getSessionState(id).catch(() => undefined);
+  //  #5552 — 조회 **실패**와 «행 없음» 을 가른다: 외부 실행 세션은 «행 없음» 이 곧 «이름짓기가 안 먹힌다» 라서, 잠깐의 DB 오류를
+  //   그렇게 읽으면 안 된다(아래 naming_open). 그 밖의 쓰임(노드·폴더)은 종전대로 실패를 «중앙 세션» 으로 본다.
+  let rowRead = true;
+  const row = await getSessionState(id).catch(() => { rowRead = false; return undefined; });
+  //  이름짓기 안내 훅에 주는 답 — folder·sync 처럼 **changed 와 무관하게 매번** 싣는다(안내는 AGENTS.md 가 안 바뀐 턴에도 나간다).
+  //  이미 읽은 행에서 나오므로 DB 왕복이 늘지 않는다. 모르는 경우(null)는 싣지 않아 훅이 종전 판정(pane env)으로 물러난다.
+  //  ⚠ 한계 — 프로젝트에 안 붙은 세션(위의 이른 return 들)은 행을 읽지 않으므로 이 값도 없다. 그 세션은 종전 판정 그대로다
+  //   (첫 실질 지시에 project-auto-bind 가 프로젝트를 붙이므로 드물다. 매 턴 모든 세션이 부르는 자리라 그쪽에 왕복을 더하지 않는다).
+  const namingOpen = rowRead ? agentNamingOpen(row, isExternalExecutionSessionId(id)) : null;
+  if (namingOpen !== null) base.naming_open = namingOpen;
   const nodeId = contextNodeId(nodeIdRaw, row);
   //  «세션이 그 프로젝트 폴더에서 돈다» 인 행의 dir — 훅이 제 env(TERMINAL_ROOT_SHARED)로 슬롯을 조립하지 않게
   //  (옛 루트가 env 에 남은 세션이 엉뚱한 폴더를 보던 것, #4135). 별도 필드라 슬롯 판정(folder_abs_path)은 안 흔든다.
