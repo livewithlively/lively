@@ -547,6 +547,11 @@ test("D12 배선(토글 · 홈 카드): 툴바 맨 앞 «초안» 스위치 · �
   assert.match(BOARD, /draftBtn\.onclick = \(e\) => \{ e\.stopPropagation\(\); setDraftsShown\(!draftsShown\(\)\); syncToggles\(\); render\(\); \};/);
   assert.match(BOARD, /draftBtn\.setAttribute\('aria-checked', String\(draftOn\)\);/);
   assert.match(BOARD, /draftBtn\.style\.display = pjvSidebarSel\.key === '__drafts__' \? 'none' : '';/);
+  //  ★토글 숨김은 스코프가 바뀌는 모든 길에서 맞춘다 — render() 첫머리 · 스코프 해소 뒤 · syncToggles(격리 리뷰: 클래식 selectArea 는 render 만 부른다)
+  const renderFn = BOARD.slice(BOARD.indexOf("  const render = () => {"), BOARD.indexOf("  const render = () => {") + 1500);
+  assert.match(renderFn, /syncScopeChip\(\);\n\s+syncDraftBtn\(\);/);
+  assert.match(BOARD, /syncCrumbs\(\); \/\/ 브레드크럼 재동기\(#1067\)[^\n]*\n\s+syncDraftBtn\(\);/);
+  assert.ok((BOARD.match(/syncDraftBtn\(\);/g) || []).length >= 3, "syncToggles · render · 스코프 해소 뒤 세 자리");
   assert.match(BOARD, /el\('div', \{ class: 'card-head-actions' \}, draftBtn, filterBtn, closedBtn,/);
   //  셸 사이드바 — 보드 액자에서 바뀐 토글을 storage 이벤트로 알고 다시 센다
   assert.match(SIDE, /if \(e\.key === DRAFTS_SHOWN_KEY && last && \(hooks\.section\?\.\(\) \|\| 'home'\) === 'proj'\) redraw\(\);/);
@@ -558,5 +563,8 @@ test("D12 배선(토글 · 홈 카드): 툴바 맨 앞 «초안» 스위치 · �
   assert.ok(!/class: 'v2-cnt'/.test(head), "카드 머리에 세션 수 칩이 없다");
   assert.ok(!/pj-draft-tag|DRAFT_LABEL|g\.draft/.test(head), "카드 머리에 «초안» 표시가 없다");
   assert.match(head, /세션 \$\{headN\}/, "수는 머리 툴팁에 남는다");
+  //  상태 점 옆 숫자도 없다 — 점 하나 + 툴팁
+  const sums = SIDE.slice(SIDE.indexOf("function grpSums("), SIDE.indexOf("\n}\n", SIDE.indexOf("function grpSums(")));
+  assert.ok(sums.length > 0 && !/String\(counts\[k\]\)/.test(sums) && /title: `\$\{SESS_STATES\[k\] \? SESS_STATES\[k\]\.label : k\} \$\{counts\[k\]\}`/.test(sums), "상태 점 옆에 숫자가 없고 수는 점의 툴팁에");
   assert.ok(!/draft\?: boolean/.test(SIDE.slice(SIDE.indexOf("interface ProjGrp"), SIDE.indexOf("interface ProjGrp") + 800)), "카드 재료에 초안 표식이 없다");
 });

@@ -766,20 +766,19 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
   return ordered;
 }
 
-/** 머리글 오른쪽의 상태 요약 — 트리의 v2-sums 와 같은 문법(점 + 개수), 볼 일 있는 것만.
- *  ⚠ **개수가 1이면 점만** 그린다. 실측(dev, 살아 있는 세션은 프로젝트마다 대개 하나)에서 머리글이
- *   「● 1  1」 처럼 1을 두 번 쓰고 있었다 — 같은 사실을 두 번 말하면 둘 다 안 읽힌다. */
+/** 머리글 오른쪽의 상태 요약 — 볼 일 있는 상태마다 **점 하나**. 몇 개인지는 점의 툴팁이 말한다.
+ *  #5522(상민 2026-11-16 «오른쪽에 세션 숫자 표시도 빼») — 종전엔 2개 이상이면 점 옆에 개수를 썼다(트리 v2-sums 와 같은 문법).
+ *   카드 머리 끝의 줄 수 칩과 함께 숫자를 모두 걷었다. 상태(작업 중 · 확인 필요 · 완료 · 오류)는 점의 색이 말한다. */
 function grpSums(g: ProjGrp): HTMLElement | null {
   const counts = g.counts;
   const part = (k: string, cls: string) => (counts[k] ? el('span', { class: 'v2-sum ' + cls, title: `${SESS_STATES[k] ? SESS_STATES[k].label : k} ${counts[k]}` },
-    el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), counts[k] > 1 ? String(counts[k]) : null) : null);
+    el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' })) : null);
   const w = part('waiting', 'wait'), d = part('done', 'done'), b = part('busy', 'busy');
   const x = part('error', 'err');   // #4783 — 비정상적으로 끝난 세션(꺼진 세션만 — views.ts stopDot)
   //  ★ 도는 게 하나도 없는 카드는 **속 빈 고리 하나**로 그 사실을 말한다(#3778) — 트리의 sumEl 이 같은 경우
   //   「지난 세션 n」을 그 자리에 세우는 그 규칙이다(#1808). 종전엔 이 머리글이 확인 필요·완료·작업 중만 세어서,
   //   **오늘 한 일이 전부 끝난 카드는 접혀 있는 동안 아무 말도 안 했다**(원준 2026-09-09: "구분이 안 된다").
-  //  ⚠ 개수는 안 쓴다 — 그 숫자는 바로 옆 `v2-cnt`(줄 수)와 **같은 값**이라 두 번 말하는 꼴이 된다
-  //   (위 part 의 "1이면 점만"과 같은 사유). 몇 개인지는 툴팁이 말한다.
+  //  개수는 쓰지 않는다(위 part 와 같다) — 몇 개인지는 툴팁이 말한다.
   const p = (!g.live && g.past)
     ? el('span', { class: 'v2-sum past', title: `지난 세션 ${g.past}` }, el('span', { class: 'v2-dot past', 'aria-hidden': 'true' }))
     : null;
@@ -804,8 +803,8 @@ function projGrpHead(g: ProjGrp): HTMLElement {
   //   ⇒ 신호를 **호버가 뺏어가지 않는 자리**로 옮긴다. 행이 이미 쓰는 언어(흐린 톤)를 카드에도 쓰는 것이라
   //    새 문법이 아니다. 고리는 그대로 두되(호버 전 두 번째 단서) 혼자 짊어지지는 않는다.
   const allPast = !g.live && g.past > 0;
-  //  줄이 하나도 안 선 카드(#3778 5판)는 `rows` 가 비어 있다 — 개수는 접힘 안 것을 쓴다.
-  //   안 그러면 툴팁이 «세션 0» 이라고 말하는데 바로 옆 개수 칩은 8 이라고 말하는, 서로 어긋나는 화면이 된다.
+  //  머리 툴팁의 세션 수 — 줄이 하나도 안 선 카드(#3778 5판)는 `rows` 가 비어 있으므로 접힘 안 것을 센다(안 그러면 «세션 0»).
+  //   #5522 부터 이 수는 툴팁에만 있다(머리 끝의 수 칩 · 상태 점 옆 숫자를 걷었다).
   const headN = g.rows.length || g.past;
   const head = el('div', { class: 'v2-pg-row' + (g.active && !g.open ? ' act' : '') + (g.pinned ? ' pinned' : '') + (allPast ? ' past' : '') },
     el('button', { class: 'v2-pg-t', type: 'button', 'aria-expanded': String(g.open),

@@ -375,6 +375,15 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   const draftBtn = el('button', { class: 'pjv-tb-btn pjv-tb-pill pjv-draft-toggle', type: 'button', role: 'switch', 'aria-label': '초안 보기' },
     el('span', { text: DRAFT_LABEL }), draftSw);
   draftBtn.onclick = (e) => { e.stopPropagation(); setDraftsShown(!draftsShown()); syncToggles(); render(); };
+  //  켜짐 표시 · 「초안」 스코프에서 숨기기 — syncToggles 뿐 아니라 render() · 스코프 해소 뒤에도 부른다(클래식 사이드바의 selectArea 는
+  //   render() 만 부르므로, 거기서만 맞추면 「초안」 줄을 눌러도 토글이 남았다 — 격리 리뷰 지적).
+  const syncDraftBtn = () => {
+    const draftOn = draftsShown();
+    draftBtn.setAttribute('aria-checked', String(draftOn));
+    draftSw.classList.toggle('on', draftOn);
+    draftBtn.title = draftOn ? '초안 보는 중 — 누르면 초안 프로젝트를 목록에서 숨깁니다' : '초안 숨김 — 누르면 초안 프로젝트도 함께 봅니다';
+    draftBtn.style.display = pjvSidebarSel.key === '__drafts__' ? 'none' : '';
+  };
   // '필터' — 필드 조건(상태·담당자·우선순위·태그·마감일·이름)으로 좁히기. 걸린 조건 수를 배지로.
   const filterBtn = iconBtn('pjv-filter-btn', '필터 — 조건으로 좁혀 보기', pjvTbIcon('filter'));
   const filterBadge = el('span', { class: 'pjv-tb-badge', 'aria-hidden': 'true' });
@@ -426,11 +435,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
     subtaskBtn.title = '하위 태스크 표시 — ' + PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
     closedBtn.classList.toggle('active', pjvProjClosedView.done || pjvClosedView.tasks);
-    const draftOn = draftsShown();
-    draftBtn.setAttribute('aria-checked', String(draftOn));
-    draftSw.classList.toggle('on', draftOn);
-    draftBtn.title = draftOn ? '초안 보는 중 — 누르면 초안 프로젝트를 목록에서 숨깁니다' : '초안 숨김 — 누르면 초안 프로젝트도 함께 봅니다';
-    draftBtn.style.display = pjvSidebarSel.key === '__drafts__' ? 'none' : '';
+    syncDraftBtn();
     const meOn = pjvMeModeOn();
     mineBtn.classList.toggle('active', meOn);
     mineBtn.setAttribute('aria-pressed', String(meOn));
@@ -605,6 +610,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     byStatus = pjvBoardView.byStatus;
     pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
     syncCrumbs(); // 브레드크럼 재동기(#1067) — render() 시점엔 sel 이 '__all__' 일 수 있어, 자동 해소된 실제 스코프로 다시 그린다
+    syncDraftBtn(); // 같은 이유로 「초안 보기」 토글도(자동 해소가 「초안」 으로 착지할 수 있다 — 초안만 있는 사람)
     (viewTabs as any)._sync(); // 뷰 탭도 재동기 — 위 pjvApplyView 가 스코프 저장뷰(칸반 등)로 갈아탔을 수 있다
     card.classList.toggle('pjv-sess-mode', !!pjvBoardView.sessions); // 같은 이유로 리스트(세션) 뷰 표식도(#4865 — render() 가 세운 값은 로드 전 것)
     // 필터·담당자 값 후보를 **이 스코프**로 재수집(#1067) — 전체 기준이면 "윤상민 216" 처럼 화면(59개)과 안 맞는
@@ -1258,6 +1264,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     pjvSyncGroupBtn(groupBtn, allGb, true, '__all__'); // 전체 보기 — 폴더 스코프가 아니라 '리스트로도 묶기'는 해당 없음
     const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
     syncScopeChip();
+    syncDraftBtn();   // #5522 「초안」 스코프에선 토글을 숨긴다(스코프가 바뀌는 모든 길이 render 를 지난다)
     syncCrumbs();   // 브레드크럼(#1067) — 현재 스코프를 위치로 표시
     (viewTabs as any)._sync();  // 뷰 탭 활성 표시(#1067) — 설정 팝오버로 바꿔도 탭이 따라온다
     // 테이블 껍데기는 CSS 모드 하나로 — 어느 렌더 경로로 가든 여기서 한 번만 정한다(다른 뷰로 나갈 때 확실히 벗겨진다).
