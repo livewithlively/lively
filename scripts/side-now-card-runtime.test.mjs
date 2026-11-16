@@ -11,7 +11,7 @@
 //  R1 「지금 볼 것」 아래엔 볼 일 있는 다섯 줄만 선다 — 조용한 줄은 한 줄도 없다
 //  R2 같은 프로젝트의 볼 일 둘은 **한 카드**에 묶인다(조각 카드는 프로젝트마다 하나) · 카드 순서는 가장 급한 줄 순서
 //  R3 조각 카드는 기본이 펴짐 — 올라온 줄 이름이 그대로 보인다(작업 중뿐인 카드도)
-//  R4 그 프로젝트의 나머지 줄은 날짜 묶음 아래 제 카드에 남는다(카드 · 개수 칩)
+//  R4 그 프로젝트의 나머지 줄은 날짜 묶음 아래 제 카드에 남는다(카드 · 개수 — #5522 부터 칩 없이 머리 툴팁)
 //  R5 볼 일이 없는 프로젝트는 종전 그대로 카드 하나(날짜 아래)
 //  R6 조각 카드 머리를 누르면 접힌다 · 다시 그려도 접힌 채 · 다시 누르면 펴진다 · 다른 카드의 펼침은 안 건드린다
 //  R7 ★ 조각 카드에서 압정을 누르면 **그 프로젝트**가 고정된다 — 카드 하나로 합쳐져 「고정」 아래에 서고 조각 카드는 없다
@@ -78,9 +78,13 @@ const PAGE = `<!doctype html><html data-theme="light"><meta charset="utf-8"><sty
         if (n.classList.contains('v2-app-group')) { cur = { label: n.textContent, cards: [] }; out.push(cur); continue; }
         if (!n.classList.contains('v2-pg')) continue;
         if (!cur) { cur = { label: '', cards: [] }; out.push(cur); }
-        const cnt = n.querySelector('.v2-pg-row .v2-cnt');
+        //  #5522 — 머리 끝의 개수 칩은 걷었다(상민 2026-11-16 «오른쪽에 세션 숫자 표시도 빼»). 수는 머리 툴팁에만 남는다 — 거기서 읽는다.
+        //   예전 칩과 같은 뜻으로 맞춘다: 2 이상일 때만 수, 아니면 null. 칩이 다시 서면 chip 이 그걸 잡는다.
+        const tt = (n.querySelector('.v2-pg-row .v2-pg-t') || { getAttribute: () => '' }).getAttribute('title') || '';
+        const tm = /(?:세션|작업|화면) ([0-9]+)/.exec(tt);
+        const cnt = tm && Number(tm[1]) > 1 ? tm[1] : null;
         cur.cards.push({ anch: n.getAttribute('data-anch'), open: n.classList.contains('open'),
-          name: (n.querySelector('.v2-pg-row .n') || {}).textContent || '', cnt: cnt ? cnt.textContent : null,
+          name: (n.querySelector('.v2-pg-row .n') || {}).textContent || '', cnt, chip: !!n.querySelector('.v2-pg-row .v2-cnt'),
           pin: !!n.querySelector('.v2-pg-row .v2-pinb'),
           rows: Array.from(n.querySelectorAll('.v2-app-inst-title')).map((x) => x.textContent) });
       }
@@ -139,6 +143,8 @@ check(now.cards.length === 4 && now.cards.every((c) => c.open) && now.cards[0].n
   "R3 조각 카드는 기본이 펴짐 — 올라온 줄이 그대로 보인다(작업 중뿐인 카드도)", j(now.cards.map((c) => [c.anch, c.open, c.name])));
 check(j(day.cards.map((c) => [c.anch, c.cnt])) === j([["p:1", "4"], ["p:2", null], ["p:3", "2"], ["p:0", null]]),
   "R4 ★★ 그 프로젝트의 나머지 줄은 날짜 묶음 아래 제 카드에 남는다(프로젝트 1 = 4줄 · 프로젝트 2 = 1줄)", j(day.cards.map((c) => [c.anch, c.cnt])));
+check(day.cards.length > 0 && day.cards.every((c) => !c.chip),
+  "R4b #5522 카드 머리 끝에 세션 수 칩이 없다(수는 머리 툴팁에만)", j(day.cards.map((c) => [c.anch, c.chip])));
 check(!!card(R.proj, "p:3") && !card(R.proj, "now:p:3"), "R5 볼 일이 없는 프로젝트는 종전 그대로 카드 하나", j(all(R.proj).map((c) => c.anch)));
 
 const c1 = card(R.closed, "now:p:1"), c1b = card(R.closedAgain, "now:p:1"), c1c = card(R.reopened, "now:p:1");

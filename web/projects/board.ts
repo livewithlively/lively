@@ -46,7 +46,7 @@ import { isMyProject } from '../lib/board-view.js';   // #4865 — '내 할당' 
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 바깥 셸이 알려 온 리스트 즐겨찾기 변경
 import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavListCacheSet, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
 import { openProjectV2Form } from './project-form.js';
-import { DRAFT_HINT, DRAFT_LABEL, DRAFT_TIP, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 한 벌(셸 사이드바 「초안」 줄과 같은 것을 센다)
+import { DRAFT_HINT, DRAFT_LABEL, DRAFT_TIP, draftsShown, isDraftProj, setDraftsShown, withDraftToggle } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 · 「초안 보기」 토글 한 벌
 import { pjvMySessionCounts, pjvPrefetchSessions, pjvSessGroupLabel, pjvSessGroupMenu, pjvSessionListView } from './session-list.js';   // #4865 「리스트」 뷰 = 스코프 안 프로젝트(줄마다 세션 요약)
 
 /** #5522 「초안」 스코프가 비었을 때 — 초안은 무언가를 남기면 풀려 제 리스트 · 「기타 (미분류)」로 간다. */
@@ -368,6 +368,22 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     personFace(meId, 'pjv-ava', '나'), el('span', { class: 'pjv-mine-btn-label', text: '내 항목' }));
   // '완료 표시' — 닫힌(완료) 프로젝트/태스크 노출 스위치 팝오버.
   const closedBtn = iconBtn('pjv-closed-btn', '완료된 항목 표시', pjvTbIcon('check'));
+  // '초안 보기'(#5522, 상민 2026-11-16 «위쪽에 토글 하나 두고 초안 안 볼지 볼지 고르게 · 디폴트는 초안 봄») — 글 + 작은 스위치.
+  //  끄면 초안이 이 보드의 모든 뷰 · 묶음 · 수에서 빠진다(셸 [프로젝트] 사이드바 수도 같은 값을 따른다 — lib/proj-draft).
+  //  「초안」 스코프에선 숨긴다 — 거기선 토글과 상관없이 초안을 본다.
+  const draftSw = el('span', { class: 'pjv-switch', 'aria-hidden': 'true' }, el('span', { class: 'pjv-switch-knob' }));
+  const draftBtn = el('button', { class: 'pjv-tb-btn pjv-tb-pill pjv-draft-toggle', type: 'button', role: 'switch', 'aria-label': '초안 보기' },
+    el('span', { text: DRAFT_LABEL }), draftSw);
+  draftBtn.onclick = (e) => { e.stopPropagation(); setDraftsShown(!draftsShown()); syncToggles(); render(); };
+  //  켜짐 표시 · 「초안」 스코프에서 숨기기 — syncToggles 뿐 아니라 render() · 스코프 해소 뒤에도 부른다(클래식 사이드바의 selectArea 는
+  //   render() 만 부르므로, 거기서만 맞추면 「초안」 줄을 눌러도 토글이 남았다 — 격리 리뷰 지적).
+  const syncDraftBtn = () => {
+    const draftOn = draftsShown();
+    draftBtn.setAttribute('aria-checked', String(draftOn));
+    draftSw.classList.toggle('on', draftOn);
+    draftBtn.title = draftOn ? '초안 보는 중 — 누르면 초안 프로젝트를 목록에서 숨깁니다' : '초안 숨김 — 누르면 초안 프로젝트도 함께 봅니다';
+    draftBtn.style.display = pjvSidebarSel.key === '__drafts__' ? 'none' : '';
+  };
   // '필터' — 필드 조건(상태·담당자·우선순위·태그·마감일·이름)으로 좁히기. 걸린 조건 수를 배지로.
   const filterBtn = iconBtn('pjv-filter-btn', '필터 — 조건으로 좁혀 보기', pjvTbIcon('filter'));
   const filterBadge = el('span', { class: 'pjv-tb-badge', 'aria-hidden': 'true' });
@@ -419,6 +435,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
     subtaskBtn.title = '하위 태스크 표시 — ' + PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
     closedBtn.classList.toggle('active', pjvProjClosedView.done || pjvClosedView.tasks);
+    syncDraftBtn();
     const meOn = pjvMeModeOn();
     mineBtn.classList.toggle('active', meOn);
     mineBtn.setAttribute('aria-pressed', String(meOn));
@@ -484,17 +501,18 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   //  noNav(#662) — 사이드바를 닫아도 고른 스코프(리스트/폴더)만 계속 보여줘야 하므로, 같은 본문을 nav 없이 렌더한다.
   //   이때 페이지크롬·툴바 배치는 사이드바-꺼짐 레이아웃(전폭 크롬 + card-head 툴바)을 따르므로 main 에 넣지 않는다.
   const renderArea = (byStatus, noNav?) => {
-    const groups = pjvBuildListGroups(projects, lists, mineIds, meId);
+    //  #5522 「초안 보기」 토글 — 끄면 초안이 묶음 · 수 · 본문 어디에도 없다(초안은 따로 묶지 않고 제 묶음에 선다).
+    const showDrafts = draftsShown();
+    const groups = pjvBuildListGroups(withDraftToggle<any>(projects, showDrafts), lists, mineIds, meId);
     // 좌측 사이드바 카운트/표시는 '보이는 것'과 일치 — 완료(done)는 Closed 토글일 때만(본문 필터·그룹 헤더 visibleCount 동형).
     const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
     const groupByList = new Map<number, any>();
     let unGroup: any = null;
     for (const g of groups) { if (g.list) groupByList.set(g.list.id, g); else unGroup = g; }
-    //  #5522 — 초안은 「기타 (미분류)」에 세지도 그리지도 않는다. 제 자리(「초안」 스코프 __drafts__ · 셸 사이드바 「초안」 줄)가 따로 있다.
-    //   초안은 리스트를 정하면 풀리므로(src/v6/project-draft.ts) 거의 모두 리스트 밖이지만, 옛 행을 위해 모든 묶음에서 모은다.
-    //   「전체」 · 리스트 스코프에서는 종전대로 맨 아래 접힌 「초안」 묶음에 선다(rows.ts pjvRenderStatusGroups).
-    const unReal: any[] = unGroup ? unGroup.projects.filter((p) => !isDraftProj(p)) : [];
-    const draftsAll: any[] = groups.flatMap((g) => g.projects).filter(isDraftProj);
+    //  초안만 모은 것 — 「초안」 스코프(__drafts__)와 클래식 사이드바 「초안」 줄이 쓴다. 토글과 상관없이 모으되 툴바 좁히기
+    //   (검색 · 필터 · 담당자 · 내 할당만)는 같이 걸린다. 초안은 리스트를 정하면 풀리지만(src/v6/project-draft.ts) 옛 행을 위해 모든 묶음에서 모은다.
+    const draftsAll: any[] = showDrafts ? groups.flatMap((g) => g.projects).filter(isDraftProj)
+      : pjvBuildListGroups(projects.filter(isDraftProj), lists, mineIds, meId).flatMap((g) => g.projects);
     // 트리 검색용 원본 프로젝트(#1154) — 사이드바 검색은 '어디로 갈지'를 찾는 내비게이션이라 툴바 좁히기
     //  (검색어·필터·담당자·'내 할당만')의 영향을 받으면 안 된다. groupByList 는 그 관문(pjvBuildListGroups → filterProj)을
     //  이미 지난 뒤라 검색 소스로 쓰면 두 검색이 조용히 AND 로 겹쳤다 — 툴바에 '결제'가 남아 있으면 트리에서 '온보딩'을
@@ -556,7 +574,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const kids = (foldersByParent.get(fid) || []).flatMap((c) => folderListsDeep(c.id));
       return [...own, ...kids];
     };
-    const showUn = visCount(unReal) > 0; // 미분류는 보일 게 있을 때만(초안 빼고 — 위 #5522)
+    const showUn = !!unGroup && visCount(unGroup.projects) > 0; // 미분류는 보일 게 있을 때만
 
     // 선택 해소(#473 후속: '전체' 제거) — 기본/사라진 대상이면 '트리 순서상 맨 위의 내용(보이는 프로젝트) 있는 폴더/리스트'.
     //  내용 있는 게 없으면 맨 위 후보(빈 폴더라도)로. sel: F<id> | L<id> | __none__.
@@ -592,6 +610,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     byStatus = pjvBoardView.byStatus;
     pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
     syncCrumbs(); // 브레드크럼 재동기(#1067) — render() 시점엔 sel 이 '__all__' 일 수 있어, 자동 해소된 실제 스코프로 다시 그린다
+    syncDraftBtn(); // 같은 이유로 「초안 보기」 토글도(자동 해소가 「초안」 으로 착지할 수 있다 — 초안만 있는 사람)
     (viewTabs as any)._sync(); // 뷰 탭도 재동기 — 위 pjvApplyView 가 스코프 저장뷰(칸반 등)로 갈아탔을 수 있다
     card.classList.toggle('pjv-sess-mode', !!pjvBoardView.sessions); // 같은 이유로 리스트(세션) 뷰 표식도(#4865 — render() 가 세운 값은 로드 전 것)
     // 필터·담당자 값 후보를 **이 스코프**로 재수집(#1067) — 전체 기준이면 "윤상민 216" 처럼 화면(59개)과 안 맞는
@@ -599,9 +618,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     //  (#4865) 이 원본 스코프 집합은 「리스트」(세션) 뷰의 재료이기도 하다 — 세션을 좁히는 것은 그 뷰의 줄과 검색이지 프로젝트 필터가 아니다.
     const inScope = sel[0] === 'F' ? new Set(folderListsDeep(Number(sel.slice(1))).map((l) => Number(l.id)))
       : sel[0] === 'L' ? new Set([Number(sel.slice(1))]) : null;
-    const scopeRaw = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
-      : sel === '__none__' ? projects.filter((p) => p.list_id == null && !isDraftProj(p))
+    const scopeAll = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
+      : sel === '__none__' ? projects.filter((p) => p.list_id == null)
       : sel === '__drafts__' ? projects.filter(isDraftProj) : projects;
+    //  #5522 「초안 보기」 토글을 끄면 초안이 빠진다(「초안」 스코프는 그대로). 숨긴 수는 「리스트」 뷰 개수 글이 말한다.
+    const scopeRaw = draftScope ? scopeAll : withDraftToggle<any>(scopeAll, showDrafts);
+    const hiddenDrafts = scopeAll.length - scopeRaw.length;
     pjvSetFilterUniverse(scopeRaw, lists);
     const selectArea = (key) => {
       // 스코프 전환 — URL push(뒤로가기 가능) + 인메모리 render(리페치 없음). 뷰 로드는 renderArea 재진입이 처리.
@@ -619,7 +641,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     if (sel === '__all__') shownProjects = groups.flatMap((g) => g.projects);
     else if (sel[0] === 'F') { const fid = sel.slice(1); shownProjects = folderListsDeep(Number(fid)).flatMap((l) => (groupByList.get(l.id)?.projects) || []); }
     else if (sel[0] === 'L') { selList = lists.find((l) => String(l.id) === sel.slice(1)); shownProjects = (groupByList.get(Number(sel.slice(1)))?.projects) || []; }
-    else if (sel === '__none__') shownProjects = unReal;
+    else if (sel === '__none__') shownProjects = unGroup ? unGroup.projects : [];
     else if (sel === '__drafts__') shownProjects = draftsAll;
     const listIdForAdd = selList ? selList.id : null; // 특정 리스트 선택 시 새 프로젝트는 그 리스트로
     const mineOnly = pjvBoardMineOnly.on;
@@ -697,7 +719,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
     if (pjvBoardView.sessions) {
       // 리스트(#4865) — 이 스코프 프로젝트들의 세션. 세션 목록 화면과 같은 열 · 프로젝트 표의 결.
-      main.append(pjvSessionListView({ projects: scopeRaw, scopeKey: sel, query: pjvBoardSearch.q, lists }));
+      main.append(pjvSessionListView({ projects: scopeRaw, scopeKey: sel, query: pjvBoardSearch.q, lists, hiddenDrafts }));
     } else if (pjvBoardView.overview && selFolder) {
       // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
       const isSpace = pjvFolderIsSpace(selFolder);
@@ -804,7 +826,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
       if (draftScope && !shownProjects.length) boardBox.append(el('div', { class: 'pjv-proj-empty', text: scopeRaw.length ? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS }));
       else pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort,
-        ...(draftScope ? { noAdd: true, draftScope: true } : {}) });
+        ...(draftScope ? { noAdd: true } : {}) });
     } else {
       boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null)); // #607/D 리스트별 필드 추가
       const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
@@ -1170,7 +1192,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       if (sideSearchActive() ? unSearchHit : showUn) {
         const unKey = '__none__';
         const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' },
-          pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(visCount(unReal)) }));
+          pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(unGroup ? visCount(unGroup.projects) : 0) }));
         uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
         pjvFolderDropTarget(uit, null, reload);
         treeWrap.append(uit);
@@ -1220,7 +1242,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   // 본문에 폴더별 접이식 구역을 인라인으로 쌓기(#455) — '상태로 나누기'의 폴더판. 사이드바(byArea)와 달리 모든 폴더를 한 화면에.
   //  byStatus 면 각 폴더를 상태로 다시 나눔(폴더 › 상태 중첩). 빈 폴더도 노출(추가·드롭 타깃). 각 폴더 헤더의 ⋯ 로 설정/삭제(#453).
   const renderByFolder = (byStatus) => {
-    const groups = pjvBuildListGroups(boardProjects(), boardLists(), mineIds, meId); // 아카이브 안 리스트는 제외(#1067)
+    const groups = pjvBuildListGroups(withDraftToggle<any>(boardProjects(), draftsShown()), boardLists(), mineIds, meId); // 아카이브 안 리스트는 제외(#1067) · 「초안 보기」 토글(#5522)
     const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
     // 실제 폴더는 비어도 노출(추가·드롭 타깃), '기타(미분류)'는 보일 게 있을 때만.
     const shown = groups.filter((g) => g.list || visCount(g.projects) > 0);
@@ -1242,6 +1264,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     pjvSyncGroupBtn(groupBtn, allGb, true, '__all__'); // 전체 보기 — 폴더 스코프가 아니라 '리스트로도 묶기'는 해당 없음
     const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
     syncScopeChip();
+    syncDraftBtn();   // #5522 「초안」 스코프에선 토글을 숨긴다(스코프가 바뀌는 모든 길이 render 를 지난다)
     syncCrumbs();   // 브레드크럼(#1067) — 현재 스코프를 위치로 표시
     (viewTabs as any)._sync();  // 뷰 탭 활성 표시(#1067) — 설정 팝오버로 바꿔도 탭이 따라온다
     // 테이블 껍데기는 CSS 모드 하나로 — 어느 렌더 경로로 가든 여기서 한 번만 정한다(다른 뷰로 나갈 때 확실히 벗겨진다).
@@ -1263,8 +1286,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     mainNo.append(headerStack);
     mainNo.append(body);
     shellHost.replaceChildren(mainNo);
-    const base = boardProjects(); // 아카이브 안(#1067)은 전체 보기에서 제외 — 아카이브 스코프로 들어가야 보인다
-    if (pjvBoardView.sessions) { body.replaceChildren(pjvSessionListView({ projects: base, scopeKey: '__all__', query: pjvBoardSearch.q, lists })); return; } // 리스트(#4865) — 세션
+    const baseAll = boardProjects(); // 아카이브 안(#1067)은 전체 보기에서 제외 — 아카이브 스코프로 들어가야 보인다
+    const base = withDraftToggle<any>(baseAll, draftsShown());   // #5522 「초안 보기」 토글
+    if (pjvBoardView.sessions) { body.replaceChildren(pjvSessionListView({ projects: base, scopeKey: '__all__', query: pjvBoardSearch.q, lists, hiddenDrafts: baseAll.length - base.length })); return; } // 리스트(#4865) — 세션
     if (byFolder) { renderByFolder(byStatus); return; }
     // 툴바 좁히기(#1067 필터·담당자·검색)는 '내 할당만' 과 같은 자리에서 한 번에 — 모든 하위 뷰가 같은 목록을 본다.
     const shown = pjvApplyToolbarFilters(pjvBoardMineOnly.on ? base.filter((p) => mineIds.has(p.id)) : base);
@@ -1473,7 +1497,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   //  좌(데이터 구조: 그룹·계층·열) / 우(데이터 좁히기 + 생성) 로 역할을 가른다.
   const toolbar = el('div', { class: 'card-head pjv-board-toolbar' },
     el('div', { class: 'pjv-tasks-head-left' }, groupBtn, subtaskBtn, colsBtn, scopeChip),
-    el('div', { class: 'card-head-actions' }, filterBtn, closedBtn, asgBtn, mineBtn, searchBox,
+    el('div', { class: 'card-head-actions' }, draftBtn, filterBtn, closedBtn, asgBtn, mineBtn, searchBox,
       el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }), gearBtn, savedViewBtn, addGroup));
   // 상단 헤더 스택 — ① 브레드크럼 ② 뷰 탭 ③ 툴바.
   //  뷰 탭은 rerenderScoped 로 전환한다(설정 팝오버의 '보기 방식'과 같은 경로 — 스코프별 뷰 영속 포함).

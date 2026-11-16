@@ -105,7 +105,8 @@ const BINS = read("web/v2/bins.ts"), OMNI = read("web/v2/omni.ts"), TABS = read(
 // ── Q1 홈 카드 머리 ──
 {
   const head = cut(SIDE, "function projGrpHead(", "\n}\n");
-  ok(/glyph\(g\.id \? 'proj' : g\.liv \? 'liv' : 'projNone', 'v2-pg-ic'\)/.test(head) && !/folder-open|glyph\('folder'/.test(head), "Q1 홈 프로젝트 카드 머리 = 과녁(펼침 · 닫힘 같은 그림), 「기타 (미분류)」 카드 = 점선 원, 「리브가 한 일」 카드 = 리브(#4551)");
+  //  #5522(상민 2026-11-16 «사이드바 프로젝트 그룹 왼쪽에 프로젝트 아이콘 빼. 너무 공간차지해») — 카드 머리는 꺾쇠와 이름만으로 선다.
+  ok(!/v2-pg-ic/.test(head) && !/glyph\(|icon\('/.test(head) && /class: 'v2-car'/.test(head), "Q1 홈 카드 머리에 그림이 없다(꺾쇠 + 이름) — 과녁 · 점선 원 · 리브 · 앱빌더 그림 모두 걷었다(#5522)");
 }
 
 // ── Q2 칩: 값으로 부르는 부품 ──

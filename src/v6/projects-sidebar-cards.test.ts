@@ -357,12 +357,15 @@ test("A10 ★착지: 즐겨찾기가 없다고 알면 「전체」 · 있으면 
 //   D2  draftN 은 그대로 오고(음수 · 없음 → 0) 전체 수(allN)에 더해지지 않는다
 //   D3  sel 'drafts' → 「초안」 줄만 켜진다(카드를 끌어당기지 않는다) · 다른 스코프는 종전 그대로
 //   D4  주소 판정: #/projects2/drafts(?…) → 'drafts' · 비슷한 이름(draftsx)은 아니다
-//   D5  배선(셸): 초안은 isDraftProj 로 리스트 · 기타보다 먼저 걸러 draftN 으로만 센다 · 줄은 받은 뒤(ready) · 초안이 있거나 보고 있을 때 · #/projects2/drafts
+//   D5  배선(셸): 「전체」 · 「기타」 · 리스트 수는 「초안 보기」 토글을 따른다(켜짐 = 초안도 센다) · draftN 은 늘 초안 전부 · 줄은 받은 뒤(ready) · 초안이 있거나 보고 있을 때 · #/projects2/drafts
 //   D6  배선(라우터 · 주소): /drafts → __drafts__ · __drafts__ → #/projects2/drafts
-//   D7  배선(보드): 「기타」 스코프 · 수는 초안을 빼고, 「초안」 스코프는 모든 묶음의 초안 · 비어도 다른 스코프로 안 옮기고 · 새 프로젝트 줄 없음
-//   D8  배선(목록): 상태 묶음은 초안 스코프에서 초안을 빼지 않는다 · 표 줄 · 칸반 카드 · 홈 카드에 «초안» 표시 · 같은 잣대(lib/proj-draft)
-//   D9  「리스트」 뷰 개수 글: 거르지 않았으면 «프로젝트 N개 · 초안 M개»(초안 0 이면 «프로젝트 N개») · 걸렀으면 «K개 표시 · 전체 N» · 초안 스코프는 «초안 N개»
+//   D7  배선(보드): 묶음 · 스코프 재료가 토글을 따른다(「초안」 스코프만 예외) · 「초안」은 모든 묶음의 초안 · 비어도 다른 스코프로 안 옮기고 · 새 프로젝트 줄 없음
+//   D8  배선(목록 · 상민 2026-11-16 «초안만 묶어놓는게 말도 안 된다»): 맨 아래 「초안」 묶음이 없다 · 표 줄 · 칸반 카드 · 「리스트」 줄에 «초안» 뱃지 · 같은 잣대(lib/proj-draft)
+//   D9  「리스트」 뷰 개수 글: 거르지 않았으면 «프로젝트 N개» · 걸렀으면 «K개 표시 · 전체 N» · 토글로 숨긴 초안이 있으면 « · 초안 M개 숨김» · 초안 스코프는 «초안 N개»
 //   D10 배선(격리 리뷰 반영): 클래식 보드 첫 착지 후보 맨 끝에 「초안」 · 클래식 사이드바 검색에서 초안은 「초안」 줄 밑 · 걸러서 빈 초안 스코프는 «조건에 맞는 초안이 없다»
+//   D11 「초안 보기」 토글 값: 기본 보임 · 끄면 '0' 하나만 남고 켜면 지운다 · 저장소가 없거나 던져도 기본값 · withDraftToggle 은 끄면 초안만 뺀다(완료한 초안은 남는다)
+//   D12 배선(토글 · 홈 카드): 툴바 맨 앞 «초안» 스위치(role=switch · aria-checked · 「초안」 스코프에선 숨김) · 셸 사이드바가 storage 이벤트로 다시 센다 ·
+//       홈 사이드바 카드 머리엔 그림 · 세션 수 칩 · «초안» 표시가 없다(상민 2026-11-16)
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let draftMod: any = null;
@@ -415,24 +418,23 @@ test("D4 ★주소 판정: #/projects2/drafts → 'drafts' · 비슷한 이름�
   assert.equal(scopeKeyOf("#/projects2/all"), "all");
 });
 
-test("D5 배선(셸): 초안은 리스트 · 기타보다 먼저 걸러 draftN 으로만 세고, 「초안」 줄은 받은 뒤 · 초안이 있거나 보고 있을 때 #/projects2/drafts 로", () => {
+test("D5 배선(셸): 수는 「초안 보기」 토글을 따르고 draftN 은 늘 초안 전부 · 「초안」 줄은 받은 뒤 · 초안이 있거나 보고 있을 때 #/projects2/drafts 로", () => {
   const a = SIDE.indexOf("function renderProjects(): void {");
   const body = SIDE.slice(a, SIDE.indexOf("\n}\n", a));
-  const skip = body.indexOf("if (isDraftProj(p)) { draftN++; continue; }");
+  assert.match(body, /const showDrafts = draftsShown\(\);/);
+  //  초안은 draftN 에 늘 들고, 토글이 꺼졌을 때만 리스트 · 기타 세기에서 빠진다
+  const skip = body.indexOf("if (isDraftProj(p)) { draftN++; if (!showDrafts) continue; }");
   const count = body.indexOf("if (p.list_id) openByList.set(");
-  assert.ok(skip > 0 && count > skip, "초안 거르기가 리스트 · 기타 세기보다 앞이다");
+  assert.ok(skip > 0 && count > skip, "초안 세기가 리스트 · 기타 세기보다 앞이고 토글이 꺼졌을 때만 건너뛴다");
   assert.match(body, /planProjCards\(\{ lists, folders, openByList, noneN, draftN, /);
   assert.match(body, /if \(ready && \(plan\.draftN \|\| plan\.onKey === 'drafts'\)\) \{/);
   assert.match(body, /href: '#\/projects2\/drafts'/);
   assert.match(body, /icon\('pencil', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: DRAFT_LABEL \}\), cnt\(plan\.draftN\)/);
-  //  「초안」 줄은 「기타」 줄 뒤에 선다
   assert.ok(body.indexOf("href: '#/projects2/drafts'") > body.indexOf("href: '#/projects2/none'"));
-  assert.match(SIDE, /import \{ DRAFT_HINT, DRAFT_LABEL, isDraftProj \} from '\.\.\/lib\/proj-draft\.js';/);
+  assert.match(SIDE, /import \{ DRAFT_HINT, DRAFT_LABEL, DRAFTS_SHOWN_KEY, draftsShown, isDraftProj \} from '\.\.\/lib\/proj-draft\.js';/);
   //  ★셸이 받은 프로젝트를 옮겨 담는 화이트리스트에 draft 가 있어야 한다 — 없으면 서버가 실어도 화면엔 없는 값이다(화면 확인에서 잡힌 것).
   const V2MAIN = readFileSync("web/v2/main.ts", "utf8");
   assert.match(V2MAIN, /draft: p\.draft === true,/);
-  //  홈 카드 머리의 «초안» 은 줄의 project.draft 에서 온다 — 줄을 만드는 두 길(side.ts 세션 줄 · main.ts projectPath) 모두 싣는다.
-  assert.match(V2MAIN, /return \{ id, name: \(p && p\.name\) \|\| `프로젝트 #\$\{id\}`, draft: isDraftProj\(p\) \};/);
 });
 
 test("D6 배선(라우터 · 주소): 클래식 라우터가 /drafts 를 __drafts__ 로 넘기고, 보드는 __drafts__ 를 #/projects2/drafts 로 적는다", () => {
@@ -442,51 +444,59 @@ test("D6 배선(라우터 · 주소): 클래식 라우터가 /drafts 를 __draft
   assert.match(STATE, /if \(key === '__drafts__'\) return '#\/projects2\/drafts';/);
 });
 
-test("D7 배선(보드): 「기타」는 초안을 빼고 세고 그리며, 「초안」은 모든 묶음의 초안 · 비어도 머물고 · 새 프로젝트 줄이 없다", () => {
+test("D7 배선(보드): 묶음 · 스코프 재료가 토글을 따르고(「초안」 스코프만 예외) · 「초안」은 모든 묶음의 초안 · 비어도 머물고 · 새 프로젝트 줄이 없다", () => {
   const BOARD = readFileSync("web/projects/board.ts", "utf8");
-  assert.match(BOARD, /const unReal: any\[\] = unGroup \? unGroup\.projects\.filter\(\(p\) => !isDraftProj\(p\)\) : \[\];/);
-  assert.match(BOARD, /const draftsAll: any\[\] = groups\.flatMap\(\(g\) => g\.projects\)\.filter\(isDraftProj\);/);
-  assert.match(BOARD, /const showUn = visCount\(unReal\) > 0;/);
-  assert.match(BOARD, /: sel === '__none__' \? projects\.filter\(\(p\) => p\.list_id == null && !isDraftProj\(p\)\)\n\s+: sel === '__drafts__' \? projects\.filter\(isDraftProj\) : projects;/);
-  assert.match(BOARD, /else if \(sel === '__none__'\) shownProjects = unReal;\n\s+else if \(sel === '__drafts__'\) shownProjects = draftsAll;/);
+  assert.match(BOARD, /const showDrafts = draftsShown\(\);\n\s+const groups = pjvBuildListGroups\(withDraftToggle<any>\(projects, showDrafts\), lists, mineIds, meId\);/);
+  assert.match(BOARD, /const draftsAll: any\[\] = showDrafts \? groups\.flatMap\(\(g\) => g\.projects\)\.filter\(isDraftProj\)\n\s+: pjvBuildListGroups\(projects\.filter\(isDraftProj\), lists, mineIds, meId\)\.flatMap\(\(g\) => g\.projects\);/);
+  assert.match(BOARD, /const showUn = !!unGroup && visCount\(unGroup\.projects\) > 0;/);
+  assert.match(BOARD, /const scopeRaw = draftScope \? scopeAll : withDraftToggle<any>\(scopeAll, showDrafts\);/);
+  assert.match(BOARD, /else if \(sel === '__none__'\) shownProjects = unGroup \? unGroup\.projects : \[\];\n\s+else if \(sel === '__drafts__'\) shownProjects = draftsAll;/);
+  //  셸 「전체」(평면 길) · 리스트로 나누기도 같은 토글
+  assert.match(BOARD, /const base = withDraftToggle<any>\(baseAll, draftsShown\(\)\);/);
+  assert.match(BOARD, /pjvBuildListGroups\(withDraftToggle<any>\(boardProjects\(\), draftsShown\(\)\), boardLists\(\), mineIds, meId\)/);
+  //  「리스트」 뷰에 숨긴 수를 넘긴다
+  assert.match(BOARD, /pjvSessionListView\(\{ projects: scopeRaw, scopeKey: sel, query: pjvBoardSearch\.q, lists, hiddenDrafts \}\)/);
+  assert.match(BOARD, /hiddenDrafts: baseAll\.length - base\.length/);
   //  비어도 다른 스코프로 옮기지 않는다 — 해소 규칙에 __drafts__ 가 없다
   const res = BOARD.slice(BOARD.indexOf("if (sel === '__all__') sel = defaultSel();"), BOARD.indexOf("pjvSidebarSel.key = sel;"));
   assert.ok(res.length > 0 && !res.includes("__drafts__"), "초안 스코프는 해소 대상이 아니다");
   assert.match(BOARD, /const draftScope = sel === '__drafts__';/);
   assert.match(BOARD, /if \(!mineOnly && !draftScope\) flatBody\.append\(pjvProjAddRow\(/);
-  assert.match(BOARD, /\.\.\.\(draftScope \? \{ noAdd: true, draftScope: true \} : \{\}\)/);
+  assert.match(BOARD, /\.\.\.\(draftScope \? \{ noAdd: true \} : \{\}\)/);
   assert.match(BOARD, /if \(key === '__drafts__'\) return DRAFT_LABEL;/);
 });
 
-test("D8 배선(목록): 초안 스코프에선 초안을 빼지 않고 · 표 줄 · 칸반 카드 · 홈 카드에 «초안» 표시 · 잣대는 lib/proj-draft 한 벌", () => {
+test("D8 배선(목록): 맨 아래 「초안」 묶음이 없다 · 표 줄 · 칸반 카드 · 「리스트」 줄에 «초안» 뱃지 · 잣대는 lib/proj-draft 한 벌", () => {
   const ROWS = readFileSync("web/projects/rows.ts", "utf8");
-  assert.match(ROWS, /const drafts = opts\.draftScope \? \[\] : shownProjects\.filter\(pjvIsDraft\);/);
+  //  #4170 의 접힌 「초안」 묶음 길을 걷었다 — 상태 묶음은 받은 그대로 나눈다
+  assert.ok(!/pjvRenderStatusGroupsInner|hasDrafts|pjv-tgroup-draft|pjv-draft-pill|'__draft__'/.test(ROWS), "초안만 모으는 묶음 길이 없다");
   assert.match(ROWS, /const pjvIsDraft = isDraftProj;/);
   assert.match(ROWS, /const draftTag = pjvIsDraft\(p\) \? el\('span', \{ class: 'pj-draft-tag'/);
   assert.match(ROWS, /caret, lead, title, draftTag,/);
   const BOARD = readFileSync("web/projects/board.ts", "utf8");
   assert.match(BOARD, /if \(isDraftProj\(p\)\) card\.append\(el\('span', \{ class: 'pj-draft-tag pjv-kb-draft'/);
-  assert.match(SIDE, /project: p \? \{ id: p\.id, name: p\.name, draft: isDraftProj\(p\) \} : null,/);
-  assert.match(SIDE, /g\.draft \? el\('span', \{ class: 'pj-draft-tag v2-pg-draft'/);
   const LIST = readFileSync("web/projects/session-list.ts", "utf8");
-  assert.match(LIST, /const isDraftScope = \(k: string\): boolean => k === '__drafts__';/);
-  assert.match(LIST, /tail: drafts\.length \? \{ label: DRAFT_LABEL, hint: DRAFT_HINT, rows: drafts,/);
+  assert.ok(!/tail:/.test(LIST) && !/draftOpen/.test(LIST), "「리스트」 뷰에도 맨 아래 묶음이 없다");
+  assert.match(LIST, /rowTag: \(it\) => !draftScope && isDraftProj\(it\.proj\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  const TABLE = readFileSync("web/v2/sess-table.ts", "utf8");
+  assert.ok(!/tail\?:/.test(TABLE), "표 부품에 따로 세우는 묶음(tail) 자리가 없다");
   //  잣대가 화면마다 따로 있지 않다
   for (const [name, src] of [["rows", ROWS], ["board", BOARD], ["side", SIDE], ["session-list", LIST]] as const) {
     assert.ok(!/p\.draft === true && p\.status !== 'done'/.test(src), name + " 에 따로 쓴 초안 잣대가 없다");
   }
 });
 
-test("D9 ★「리스트」 뷰 개수 글 — 초안을 따로 센다 · 걸렀으면 «K개 표시 · 전체 N» · 초안 스코프는 «초안 N개»", async () => {
+test("D9 ★「리스트」 뷰 개수 글 — «프로젝트 N개» · 걸렀으면 «K개 표시 · 전체 N» · 숨긴 초안은 « · 초안 M개 숨김» · 초안 스코프는 «초안 N개»", async () => {
   const { draftCountText } = await loadDraft();
-  assert.equal(draftCountText(6, 6, 3, "프로젝트"), "프로젝트 3개 · 초안 3개");
-  assert.equal(draftCountText(3, 3, 0, "프로젝트"), "프로젝트 3개");
+  assert.equal(draftCountText(6, 6, 0, "프로젝트"), "프로젝트 6개");
   assert.equal(draftCountText(0, 0, 0, "프로젝트"), "프로젝트 0개");
-  assert.equal(draftCountText(2, 6, 3, "프로젝트"), "2개 표시 · 전체 6");
+  assert.equal(draftCountText(2, 6, 0, "프로젝트"), "2개 표시 · 전체 6");
+  assert.equal(draftCountText(3, 3, 190, "프로젝트"), "프로젝트 3개 · 초안 190개 숨김");
+  assert.equal(draftCountText(1, 3, 2, "프로젝트"), "1개 표시 · 전체 3 · 초안 2개 숨김");
   assert.equal(draftCountText(3, 3, 0, "초안"), "초안 3개");
-  //  배선: 「리스트」 뷰가 이 함수를 쓰고, 초안을 따로 빼지 않는 스코프(초안)에서는 이름을 «초안» 으로 준다
+  //  배선: 「리스트」 뷰가 이 함수를 쓰고, 초안 스코프에서는 이름이 «초안» 이며 숨긴 수를 말하지 않는다
   const LIST = readFileSync("web/projects/session-list.ts", "utf8");
-  assert.match(LIST, /draftCountText\(vis\.length \+ drafts\.length, inScope\.length, inScopeDrafts, splitDrafts \? '프로젝트' : DRAFT_LABEL\)/);
+  assert.match(LIST, /draftCountText\(vis\.length, inScope\.length, draftScope \? 0 : Number\(ctx\.hiddenDrafts\) \|\| 0, draftScope \? DRAFT_LABEL : '프로젝트'\)/);
   assert.ok(!/function countText\(/.test(LIST), "개수 글은 lib/proj-draft 한 벌");
 });
 
@@ -500,4 +510,61 @@ test("D10 배선(격리 리뷰 반영): 첫 착지 후보 끝에 「초안」 ·
   assert.match(BOARD, /appendProjMatches\(searchDrafts, 1, dKey\);/);
   assert.match(BOARD, /text: scopeRaw\.length \? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS/);
   assert.match(BOARD, /text: draftScope \? \(scopeRaw\.length \? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS\) : mineOnly \?/);
+});
+
+test("D11 ★「초안 보기」 토글 값 — 기본 보임 · 끄면 '0' 하나만 · 켜면 지운다 · 저장소가 없거나 던져도 기본값 · 끄면 초안만 뺀다", async () => {
+  const m = await loadDraft();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  const saved = g.localStorage;
+  try {
+    const store = new Map<string, string>();
+    g.localStorage = { getItem: (k: string) => (store.has(k) ? store.get(k)! : null), setItem: (k: string, v: string) => { store.set(k, String(v)); }, removeItem: (k: string) => { store.delete(k); } };
+    assert.equal(m.DRAFTS_SHOWN_KEY, "pjv:showDrafts");
+    assert.equal(m.draftsShown(), true, "기본은 보임");
+    m.setDraftsShown(false);
+    assert.equal(store.get("pjv:showDrafts"), "0");
+    assert.equal(m.draftsShown(), false);
+    m.setDraftsShown(true);
+    assert.equal(store.has("pjv:showDrafts"), false, "켜면 키를 지운다 — 남는 것은 «숨김» 하나뿐");
+    assert.equal(m.draftsShown(), true);
+    store.set("pjv:showDrafts", "1");
+    assert.equal(m.draftsShown(), true, "'0' 이 아니면 보임");
+    g.localStorage = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => { throw new Error("blocked"); } };
+    assert.equal(m.draftsShown(), true, "읽다 던지면 기본값");
+    assert.doesNotThrow(() => m.setDraftsShown(false), "쓰다 던져도 조용히 넘어간다");
+    g.localStorage = undefined;
+    assert.equal(m.draftsShown(), true, "저장소가 없으면 기본값");
+  } finally { g.localStorage = saved; }
+  const rows = [{ id: 1, draft: true, status: "todo" }, { id: 2, draft: false, status: "todo" }, { id: 3, draft: true, status: "done" }, { id: 4 }];
+  assert.deepEqual(m.withDraftToggle(rows, true).map((r: { id: number }) => r.id), [1, 2, 3, 4]);
+  assert.deepEqual(m.withDraftToggle(rows, false).map((r: { id: number }) => r.id), [2, 3, 4], "끄면 초안만 뺀다 — 완료한 초안(초안 아님)은 남는다");
+  assert.notEqual(m.withDraftToggle(rows, true), rows, "새 배열을 준다(받은 배열을 건드리지 않는다)");
+});
+
+test("D12 배선(토글 · 홈 카드): 툴바 맨 앞 «초안» 스위치 · 「초안」 스코프에선 숨김 · 셸 사이드바가 storage 로 다시 센다 · 홈 카드 머리엔 그림 · 수 칩 · «초안» 표시가 없다", () => {
+  const BOARD = readFileSync("web/projects/board.ts", "utf8");
+  assert.match(BOARD, /const draftBtn = el\('button', \{ class: 'pjv-tb-btn pjv-tb-pill pjv-draft-toggle', type: 'button', role: 'switch', 'aria-label': '초안 보기' \},/);
+  assert.match(BOARD, /draftBtn\.onclick = \(e\) => \{ e\.stopPropagation\(\); setDraftsShown\(!draftsShown\(\)\); syncToggles\(\); render\(\); \};/);
+  assert.match(BOARD, /draftBtn\.setAttribute\('aria-checked', String\(draftOn\)\);/);
+  assert.match(BOARD, /draftBtn\.style\.display = pjvSidebarSel\.key === '__drafts__' \? 'none' : '';/);
+  //  ★토글 숨김은 스코프가 바뀌는 모든 길에서 맞춘다 — render() 첫머리 · 스코프 해소 뒤 · syncToggles(격리 리뷰: 클래식 selectArea 는 render 만 부른다)
+  const renderFn = BOARD.slice(BOARD.indexOf("  const render = () => {"), BOARD.indexOf("  const render = () => {") + 1500);
+  assert.match(renderFn, /syncScopeChip\(\);\n\s+syncDraftBtn\(\);/);
+  assert.match(BOARD, /syncCrumbs\(\); \/\/ 브레드크럼 재동기\(#1067\)[^\n]*\n\s+syncDraftBtn\(\);/);
+  assert.ok((BOARD.match(/syncDraftBtn\(\);/g) || []).length >= 3, "syncToggles · render · 스코프 해소 뒤 세 자리");
+  assert.match(BOARD, /el\('div', \{ class: 'card-head-actions' \}, draftBtn, filterBtn, closedBtn,/);
+  //  셸 사이드바 — 보드 액자에서 바뀐 토글을 storage 이벤트로 알고 다시 센다
+  assert.match(SIDE, /if \(e\.key === DRAFTS_SHOWN_KEY && last && \(hooks\.section\?\.\(\) \|\| 'home'\) === 'proj'\) redraw\(\);/);
+  assert.match(SIDE, /bindDraftToggle\(\);/);
+  //  홈 사이드바 카드 머리(상민 2026-11-16 «초안 태그 빼 · 프로젝트 아이콘 빼 · 오른쪽 세션 숫자 표시도 빼»)
+  const head = SIDE.slice(SIDE.indexOf("function projGrpHead("), SIDE.indexOf("\n}\n", SIDE.indexOf("function projGrpHead(")));
+  assert.ok(head.length > 0, "projGrpHead 가 있다");
+  assert.ok(!/v2-pg-ic|glyph\(|icon\('/.test(head), "카드 머리에 그림이 없다");
+  assert.ok(!/class: 'v2-cnt'/.test(head), "카드 머리에 세션 수 칩이 없다");
+  assert.ok(!/pj-draft-tag|DRAFT_LABEL|g\.draft/.test(head), "카드 머리에 «초안» 표시가 없다");
+  assert.match(head, /세션 \$\{headN\}/, "수는 머리 툴팁에 남는다");
+  //  상태 점 옆 숫자도 없다 — 점 하나 + 툴팁
+  const sums = SIDE.slice(SIDE.indexOf("function grpSums("), SIDE.indexOf("\n}\n", SIDE.indexOf("function grpSums(")));
+  assert.ok(sums.length > 0 && !/String\(counts\[k\]\)/.test(sums) && /title: `\$\{SESS_STATES\[k\] \? SESS_STATES\[k\]\.label : k\} \$\{counts\[k\]\}`/.test(sums), "상태 점 옆에 숫자가 없고 수는 점의 툴팁에");
+  assert.ok(!/draft\?: boolean/.test(SIDE.slice(SIDE.indexOf("interface ProjGrp"), SIDE.indexOf("interface ProjGrp") + 800)), "카드 재료에 초안 표식이 없다");
 });
