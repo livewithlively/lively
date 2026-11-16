@@ -3,7 +3,7 @@
   "_managedPaths": {
     "macos": "/Library/Application Support/ClaudeCode/managed-settings.json",
     "linux": "/etc/claude-code/managed-settings.json",
-    "windows": "C:\\ProgramData\\ClaudeCode\\managed-settings.json"
+    "windows": "C:\\Program Files\\ClaudeCode\\managed-settings.json"
   },
   "claudeMd": "# 조직 강제 규칙 (Managed Policy)\n\n(여기에 org/managed-policy.md 의 본문이 배포 시 주입됨)\n"
 }
