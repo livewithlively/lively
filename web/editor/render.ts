@@ -148,7 +148,7 @@ export function createRender(ctx: EditorCtx) {
       case 'raw': {
         (block as any)._raw = String(d.text || '');
         const view = el('div', { class: 'be-raw-view md-rendered', title: '클릭해서 마크다운 원문 편집' });
-        view.append(renderMarkdown((block as any)._raw));
+        view.append(renderMarkdown((block as any)._raw, { wikiLinks: ctx.opts.wikiLinks || null }));
         const chip = el('span', { class: 'be-raw-chip', text: 'MD' });
         const wrap = el('div', { class: 'be-raw', tabindex: '0' }, chip, view);
         view.addEventListener('click', () => openRawEditor(block, wrap));
@@ -315,7 +315,7 @@ export function createRender(ctx: EditorCtx) {
     const commit = () => {
       (block as any)._raw = ta.value;
       const view = el('div', { class: 'be-raw-view md-rendered', title: '클릭해서 마크다운 원문 편집' });
-      view.append(renderMarkdown(ta.value));
+      view.append(renderMarkdown(ta.value, { wikiLinks: ctx.opts.wikiLinks || null }));
       view.addEventListener('click', () => openRawEditor(block, wrap));
       ta.replaceWith(view);
       markDirty();

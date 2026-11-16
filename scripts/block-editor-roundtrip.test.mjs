@@ -225,6 +225,13 @@ assert.equal(inl(txt("~"), txt("~취소 아님")), "\\~~취소 아님");
 ok("⑥ 쪼개진 텍스트 노드는 이어 붙인 뒤 이스케이프(노드 경계에 걸친 ~~ 도 막힌다)");
 assert.equal(RE_WIKI_WEB.source, RE_WIKI.source, "웹 직렬화의 위키링크 문법이 서버 src/v6/wikilink.ts RE_WIKI 와 어긋났다 — 한쪽만 고치면 다시 링크가 끊긴다");
 ok("⑥ 웹 직렬화의 위키링크 문법 = 서버 RE_WIKI(드리프트 차단)");
+{
+  //  지식 화면이 [[제목처럼 적은 이름]] 을 서버와 같은 이름으로 풀려면 knSlug 가 서버 slugify 와 같아야 한다(lib/kn-links resolveWikiTarget).
+  const { slugify } = await import(join(root, "dist/v6/knowledge-common.js"));
+  const { knSlug } = await import(join(root, "public/app/lib/kn-links.js"));
+  for (const s of ["회의 메모 (10월)", "Foo_Bar  baz!", "--a--", "", "x".repeat(70) + "-y", "a".repeat(63) + " b"]) assert.equal(knSlug(s), slugify(s), `knSlug ≠ 서버 slugify: ${JSON.stringify(s)}`);
+  ok("⑥ 웹 knSlug = 서버 slugify(드리프트 차단)");
+}
 
 // 증상 그대로 — 편집기 DOM → 저장 md → 서버가 뽑는 링크 대상. 원문에 있던 링크가 저장 뒤에도 전부 잡혀야 한다.
 {

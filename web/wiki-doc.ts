@@ -445,7 +445,8 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
   };
 
   //  본문의 [[이름]] 을 지식 링크로 — 서버가 이 문서에서 이어 둔 이름(links.outgoing)으로 풀고, 못 푼 것은 «없는 링크» 로 표시한다.
-  const wikiLinks = { known: new Set<string>(((k.links && k.links.outgoing) || []).map((e: any) => String(e.name))) };
+  //  자기 이름은 넣어 둔다 — 서버는 자기 자신으로의 엣지를 만들지 않는다(knowledge-links resolveWikiLinkTargets).
+  const wikiLinks = { known: new Set<string>([k.name, ...((k.links && k.links.outgoing) || []).map((e: any) => String(e.name))]) };
   if (k.is_folder) {
     body.append(await knFolderChildrenBlock(k));
   } else if (editableDoc) {

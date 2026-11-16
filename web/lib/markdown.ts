@@ -227,7 +227,7 @@ function renderInline(text, opts?: { noAutolink?: boolean; wikiLinks?: WikiLinks
         const href = knHref(r.name);
         out.push(el('a', {
           class: 'md-link md-wikilink' + (r.missing ? ' md-wikilink-missing' : ''), href,
-          title: r.missing ? `'${r.name}' 지식을 찾지 못했습니다 — 없거나, 이름이 바뀌었거나, 볼 수 없는 지식입니다` : null,
+          title: r.missing ? `'${r.name}' 은 이 문서와 이어진 지식에 없습니다 — 없거나, 이름이 바뀌었거나, 볼 수 없거나, 방금 만들어 아직 이어지지 않은 지식입니다` : null,
           'data-wiki-raw': w.raw, 'data-wiki-target': w.target, 'data-wiki-label': w.label, 'data-wiki-href': href,
         }, document.createTextNode(w.label)));
         i += w.raw.length;
