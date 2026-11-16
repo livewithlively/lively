@@ -17,6 +17,7 @@ import {
 } from "../../v6/source-vis-policy.js";
 import { axisOn } from "../../v6/visibility-axes.js";
 import { effectiveViewer } from "../../v6/visibility.js";
+import { judgeBackfillRow, writesVisibility, type BackfillEditor, type BackfillVerdict } from "./source-vis-backfill.js";
 
 const MEMBERS = z.array(z.object({
   subject_kind: z.enum(["member", "team"]).optional(),
@@ -225,6 +226,18 @@ const deletePolicy: Capability = {
   },
 };
 
+/**
+ * 백필이 자료 한 건을 판정하는 데 읽는 칸 — 맨 앞에 한꺼번에 읽을 때와 쓰기 트랜잭션 안에서 다시 읽을 때 같은 문장을 쓴다
+ *  (읽는 칸이 갈리면 두 판정이 다른 것을 보게 된다). 뒤에 WHERE 를 붙여 쓴다.
+ */
+const BACKFILL_ROW_SQL = `
+  SELECT s.id, s.external_system, s.visibility,
+         s.fields->>'container_ref' AS c_ref, s.fields->>'container_name' AS c_name,
+         COALESCE((SELECT array_agg(sm.subject_kind || ':' || sm.member_id)
+                     FROM source_member sm WHERE sm.source_id = s.id), '{}') AS aud,
+         EXISTS(SELECT 1 FROM collect_unit_source us WHERE us.source_id = s.id AND us.audience) AS unit_owned
+    FROM source s`;
+
 const backfill: Capability = {
   name: "source_vis_policy_backfill",
   title: "자료 공개범위 정책 소급 적용",
@@ -264,12 +277,7 @@ const backfill: Capability = {
     const dry = input.dry_run !== false;   // 기본은 미리보기 — 대량 변경은 명시적으로만
 
     const { rows } = await itemsPool.query(
-      `SELECT s.id, s.external_system, s.visibility,
-              s.fields->>'container_ref' AS c_ref, s.fields->>'container_name' AS c_name,
-              COALESCE((SELECT array_agg(sm.subject_kind || ':' || sm.member_id)
-                          FROM source_member sm WHERE sm.source_id = s.id), '{}') AS aud,
-              EXISTS(SELECT 1 FROM collect_unit_source us WHERE us.source_id = s.id AND us.audience) AS unit_owned
-         FROM source s
+      `${BACKFILL_ROW_SQL}
         WHERE s.external_system = ANY($1::text[])
           AND ($3::text IS NULL OR s.fields->>'container_ref' = $3 OR s.fields->>'container_name' = $3)
         ORDER BY s.id DESC LIMIT $2`, [systems, limit + 1, input.channel ? String(input.channel) : null]);
@@ -278,52 +286,71 @@ const backfill: Capability = {
 
     //  이미 잠긴 자료를 넓히는 재적용은 정책 편집(setPolicy)과 같은 선을 지킨다 — 그 자료를 지금 볼 수 있는 사람이거나
     //   전체 긴급열람 중이어야 한다. 이 선이 없으면 «새 규칙을 만들고(넓힘 검사 없음) 백필» 로 못 보던 과거 자료를 열 수 있다.
-    const editor = user?.userId ?? "";
-    const privileged = (await effectiveViewer(editor)) === null;
-    const editorTeams = new Set((await itemsPool.query(
-      `SELECT team_id::text AS t FROM team_member WHERE member_id=$1`, [editor])).rows.map((x: any) => String(x.t)));
-    const seesNow = (aud: string[]): boolean => aud.some((k) =>
-      k === `member:${editor}` || (k.startsWith("team:") && editorTeams.has(k.slice(5))));
+    const editorId = user?.userId ?? "";
+    const editor: BackfillEditor = {
+      id: editorId,
+      privileged: (await effectiveViewer(editorId)) === null,
+      teams: new Set((await itemsPool.query(
+        `SELECT team_id::text AS t FROM team_member WHERE member_id=$1`, [editorId])).rows.map((x: any) => String(x.t))),
+    };
+    //  판정은 한 함수(judgeBackfillRow)다 — 미리보기 · 위에서 한꺼번에 읽은 값 · 쓰기 직전에 다시 읽은 값 모두.
+    const judge = (r: any): { verdict: BackfillVerdict; members: ReturnType<typeof pickRule>["members"] } => {
+      const picked = pickRule(rules, String(r.external_system), [r.c_ref, r.c_name]);
+      const verdict = judgeBackfillRow(
+        { visibility: String(r.visibility), aud: (r.aud ?? []).map(String), unitOwned: !!r.unit_owned }, picked, editor);
+      return { verdict, members: picked.members };
+    };
 
-    let toLock = 0, already = 0, noRule = 0, knowledgeNarrowed = 0, resynced = 0, resyncRefused = 0, unitManaged = 0, skippedEmpty = 0, lockBusy = 0;
+    const tally: Record<BackfillVerdict, number> = { no_rule: 0, already: 0, unit_managed: 0, skipped_empty: 0, resync_refused: 0, lock: 0, resync: 0 };
+    let knowledgeNarrowed = 0, lockBusy = 0;
     const samples: string[] = [];
     for (const r of rows as any[]) {
-      const picked = pickRule(rules, String(r.external_system), [r.c_ref, r.c_name]);
-      if (picked.visibility !== "members") { noRule++; continue; }
-      const cur: string[] = (r.aud ?? []).map(String);
-      const curSet = new Set(cur);
-      const want = new Set(picked.members.map((m) => `${m.subject_kind}:${m.member_id}`));
-      const widening = [...want].some((k) => !curSet.has(k));
-      const locked = r.visibility === "members";
-      if (locked && !widening && curSet.size === want.size) { already++; continue; }
-      if (locked && r.unit_owned) { unitManaged++; continue; }
-      //  대상 0 으로 잠그거나 다시 맞추면 그 자료로 만든 지식까지 대상 0 이 되고 지식은 되넓힐 수 없다. 규칙 저장이 빈 대상을
-      //   막지만 정책 행과 대상 행을 트랜잭션 없이 따로 쓰므로(setPolicy) 규칙 캐시가 그 사이를 읽거나 테이블을 직접 고친 판에 대비한다.
-      if (!want.size) { skippedEmpty++; continue; }
-      //  대상 0 으로 닫힌 자료(정책을 못 읽은 판의 fail-closed)는 아무도 «지금 보는 사람» 이 아니므로 전체 긴급열람으로만 채운다.
-      if (locked && widening && !privileged && !seesNow(cur)) { resyncRefused++; continue; }
-      if (!dry) {
-        //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다(자료 → 지식 순).
+      const id = Number(r.id);
+      let seen = r;                       // 판정에 쓴 행 — 실제 적용이면 트랜잭션 안에서 다시 읽은 것으로 바뀐다
+      let { verdict } = judge(r);
+      if (!dry && writesVisibility(verdict)) {
+        //  위에서 읽은 값은 «트랜잭션을 열 만한가» 까지만 정한다. 이 루프가 도는 사이(최대 5만 건) 수집 단위가 그 자료를
+        //   «단위 공개범위 ∩ 정책» 으로 좁히거나 대상이 바뀔 수 있다 — 옛 값대로 쓰면 좁혀진 자료가 정책 대상 전원에게 열리고,
+        //   넓힘 권한선도 옛 대상으로 통과한다. 그래서 행을 잡은 뒤 다시 읽어 **같은 함수로 다시 판정**하고 그 결과대로 쓰거나 건너뛴다.
+        //  잠금 순서는 자료 → 지식(derived-visibility.ts 머리말) — 자료는 한 트랜잭션에 한 건만 잡는다. 수집 단위 쪽
+        //   (applySourceAudience: 단위 → 자료 → 지식)과 같은 방향이고 단위 행은 잡지 않으므로 서로 기다리는 고리가 없다.
+        //  #4824 빈틈 ③ — 자료를 잠그는 트랜잭션에서 그 자료로 이미 만든 지식도 같은 범위로 맞춘다.
         //   withDerivedTx 는 잠금 대기 상한을 건다. 다른 작업이 쥔 자료는 건너뛰고(lock_busy) 다음 호출에서 다시 본다 —
         //   여기서 끊으면 id 역순으로 도는 다음 호출도 같은 자리에서 멈춘다.
+        let done: { row: any; verdict: BackfillVerdict; narrowed: number } | null;
         try {
-          knowledgeNarrowed += await withDerivedTx(async (c) => {
-            await applyVisibility(c, Number(r.id), picked.members);
-            return (await reconcileDerivedVisibility(c, { sourceIds: [Number(r.id)] }, wctx, "policy_backfill", enforced)).length;
+          done = await withDerivedTx(async (c) => {
+            //  잡는 문장과 읽는 문장을 나눈다 — 기다렸다 잡은 문장의 부속질의(대상 · 단위 연결)는 기다리기 **전** 스냅샷으로 읽혀
+            //   앞선 커밋을 못 본다(READ COMMITTED). FOR NO KEY UPDATE = 단위 쪽이 자료를 잡는 것과 같은 잠금.
+            const held = await c.query(`SELECT id FROM source WHERE id=$1 FOR NO KEY UPDATE`, [id]);
+            if (!held.rows.length) return null;
+            const row = (await c.query(`${BACKFILL_ROW_SQL} WHERE s.id=$1`, [id])).rows[0];
+            if (!row) return null;
+            const now = judge(row);
+            if (!writesVisibility(now.verdict)) return { row, verdict: now.verdict, narrowed: 0 };
+            await applyVisibility(c, id, now.members);
+            const narrowed = (await reconcileDerivedVisibility(c, { sourceIds: [id] }, wctx, "policy_backfill", enforced)).length;
+            return { row, verdict: now.verdict, narrowed };
           });
         } catch (e) {
           if (e instanceof HttpError && e.status === 503) { lockBusy++; continue; }
           throw e;
         }
+        if (!done) continue;              // 그 사이 지워진 자료 — 맞출 것이 없다(훑은 수에는 들어 있고 어느 갈래에도 세지 않는다)
+        ({ row: seen, verdict } = done);
+        knowledgeNarrowed += done.narrowed;
       }
-      if (locked) resynced++; else toLock++;
-      if (samples.length < 5) samples.push(`#${r.id} ${r.c_name || r.c_ref || ""}${locked ? " (대상 갱신)" : ""}`.trim());
+      tally[verdict]++;
+      if (writesVisibility(verdict) && samples.length < 5) {
+        samples.push(`#${id} ${seen.c_name || seen.c_ref || ""}${verdict === "resync" ? " (대상 갱신)" : ""}`.trim());
+      }
     }
     return {
       dry_run: dry, scanned: rows.length, truncated, systems,
-      locked: toLock, resynced, resync_refused: resyncRefused, unit_managed: unitManaged, skipped_empty: skippedEmpty,
+      locked: tally.lock, resynced: tally.resync, resync_refused: tally.resync_refused, unit_managed: tally.unit_managed,
+      skipped_empty: tally.skipped_empty,
       ...(dry ? {} : { lock_busy: lockBusy }),
-      already_locked: already, no_rule: noRule, samples,
+      already_locked: tally.already, no_rule: tally.no_rule, samples,
       ...(dry ? {} : { knowledge_narrowed: knowledgeNarrowed }),
       note: dry ? "미리보기입니다 — 실제로 적용하려면 dry_run:false 로 다시 부르세요." : undefined,
     };

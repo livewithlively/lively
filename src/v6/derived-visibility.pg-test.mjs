@@ -48,6 +48,10 @@
 //   R6 dry_run 은 세기만 한다
 //   R7 자료 대상이 팀이면 그 팀원은 넓힐 수 있고 팀 밖 사람은 못 넓힌다 · channel 로 그 채널 자료만 훑는다
 //   R8 규칙 대상이 비어 있으면 잠그지도 다시 맞추지도 않는다(대상 0 으로 덮지 않는다)
+//   R9 백필이 훑는 사이 단위가 그 자료를 좁힘(«모두»→«나만» · 단위가 새로 맡아 좁힘) → 정책 대상으로 덮어쓰지 않고 unit_managed 로 센다
+//   R10 백필이 훑는 사이 자료 대상이 바뀌어 부른 사람이 더는 대상이 아님 → 넓히지 않는다(resync_refused) · 그 자료 행을 쥔 쪽이 바꿔 커밋해도 같다
+//   R11 백필이 훑는 사이 자료가 지워짐 → 그 자료만 건너뛰고 나머지는 끝까지 간다
+//   R12 다른 트랜잭션이 자료를 오래 쥠 → lock_busy 로 세고 나머지는 계속 · 다시 부르면 그 자료를 맞춘다
 //   T1 프리셋 레인의 저장된 옛 문구는 글자 그대로 같을 때만 새 문구로 · 사람이 고친 줄은 그대로 · 두 번째는 0건
 import crypto from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -81,6 +85,7 @@ const SYS2 = `${TAG}pol`;             // 정책(잠금 규칙)이 걸린 externa
 const SYS3 = `${TAG}rs`;              // 대상 재적용(R) 전용 — 규칙을 바꿔 가며 쓴다
 const PROJ_SESSION = `box-${TAG}-9c0d1e2f`;
 const APP = `${TAG}app`;              // 수집 단위 앱 키
+const APP2 = `${TAG}rc`;              // 백필 경합(R9~R12) 전용 — 수집 단위 앱이자 정책이 걸린 external_system
 const JOB = `${TAG}-job`;
 const BATCH_SESSION = `box-${TAG}-1a2b3c4d`;
 const PLAIN_SESSION = `box-${TAG}-5e6f7a8b`;
@@ -147,9 +152,9 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM org_distiller WHERE key LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [`${TAG}-%`]);
   await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='knowledge' AND entity_key LIKE $1`, [`${TAG}-%`]);
-  await itemsPool.query(`DELETE FROM collect_unit WHERE app=$1`, [APP]);
+  await itemsPool.query(`DELETE FROM collect_unit WHERE app = ANY($1::text[])`, [[APP, APP2]]);
   await itemsPool.query(`DELETE FROM vis_break_glass WHERE member_id = ANY($1::text[])`, [MEMBERS]);
-  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[])`, [[SYS, APP, SYS2, SYS3]]);
+  await itemsPool.query(`DELETE FROM source WHERE external_system = ANY($1::text[])`, [[SYS, APP, APP2, SYS2, SYS3]]);
   await itemsPool.query(`DELETE FROM org_task WHERE requester_session LIKE $1`, [`cron:${JOB}%`]);
   await itemsPool.query(`DELETE FROM org_cron WHERE id=$1`, [JOB]);
   await itemsPool.query(`DELETE FROM project_list WHERE name LIKE $1`, [`${TAG}%`]);
@@ -709,6 +714,128 @@ try {
       r8.ok && r8.v.resynced === 0 && r8.v.locked === 0 && r8.v.skipped_empty === 4 && r8.v.unit_managed === 1
       && JSON.stringify(await srcAud(sR)) === JSON.stringify(sorted([`member:${B}`, `member:${C}`])) && oVis === "open",
       JSON.stringify({ r8, aud: await srcAud(sR), oVis }));
+  }
+
+  // ── R9~R12 백필이 훑는 사이(스냅샷 뒤 · 쓰기 전) 자료가 바뀜 ──
+  {
+    //  백필은 맨 앞 SELECT 한 번으로 판정 거리를 읽고, id 가 큰 자료부터 한 건씩 트랜잭션을 연다. 다른 커넥션 X 가 그 채널에서 id 가
+    //   가장 큰 자료(관문)를 쥐고 있으면 백필은 스냅샷을 읽은 뒤 관문에서 기다린다 — 그 사이 더 작은 id 의 자료를 바꿔 커밋하고
+    //   관문을 놓는다. 시험 전용 주입 지점 없이 «읽은 뒤 · 쓰기 전» 변경을 실제 잠금으로 만든다. 채널마다 한 판이라 집계가 안 섞인다.
+    const backfill = sourceVisPolicyCapabilities.find((c) => c.name === "source_vis_policy_backfill");
+    const run = (actor, channel) => attempt(() => backfill.handler({ system: APP2, channel, dry_run: false }, { userId: actor }, { actor, source: "web" }));
+    const inCh = async (ch, locked, subjects = []) => {
+      const id = await mkSource(locked, subjects, { system: APP2 });
+      await itemsPool.query(`UPDATE source SET fields = jsonb_build_object('container_ref', $2::text) WHERE id=$1`, [id, ch]);
+      return id;
+    };
+    const srcAud = async (sid) => (await itemsPool.query(
+      `SELECT subject_kind || ':' || member_id AS s FROM source_member WHERE source_id=$1 ORDER BY 1`, [sid])).rows.map((r) => r.s);
+    const visOf = async (sid) => (await itemsPool.query(`SELECT visibility FROM source WHERE id=$1`, [sid])).rows[0]?.visibility ?? null;
+    const AB = JSON.stringify([`member:${A}`, `member:${B}`].sort());
+    const gated = async (actor, ch, gate, mutate, o = {}) => {
+      const x = await itemsPool.connect();
+      const out = { blocked: false, r: null };
+      try {
+        await x.query("BEGIN");
+        const xpid = Number((await x.query(`SELECT pg_backend_pid() AS pid`)).rows[0].pid);
+        await x.query(`SELECT id FROM source WHERE id=$1 FOR UPDATE`, [gate]);
+        if (o.inX) await o.inX(x);                 // X 가 쥔 자료를 X 안에서 바꾼다(커밋 전에는 백필에 안 보인다)
+        const p = run(actor, ch);
+        for (let i = 0; i < 400 && !out.blocked; i++) {
+          const n = Number((await itemsPool.query(
+            `SELECT count(*)::int n FROM pg_stat_activity WHERE datname = current_database() AND $1::int = ANY(pg_blocking_pids(pid))`, [xpid])).rows[0].n);
+          if (n) out.blocked = true; else await new Promise((r) => setTimeout(r, 25));
+        }
+        if (mutate) await mutate();
+        if (o.holdUntilDone) out.r = await p;      // 관문을 쥔 채 백필이 끝나길 기다린다(잠금 대기 상한을 넘긴다)
+        await x.query(o.inX ? "COMMIT" : "ROLLBACK");
+        out.r ??= await p;
+      } finally {
+        await x.query("ROLLBACK").catch(() => {});
+        x.release();
+      }
+      return out;
+    };
+
+    //  R9 — «모두» 단위가 모은 자료(열림 · 단위가 공개범위를 정함)에 나중에 정책이 생겼다. 백필이 그 자료를 «잠글 것» 으로 읽은 뒤,
+    //   주인이 단위를 «나만» 으로 좁힌다(자료 = 주인 ∩ 정책 = A). 백필이 옛 판정대로 쓰면 «나만» 단위의 글이 정책 대상 전원(A·B)에게 열린다.
+    await store.recordUnitListing({ member: A, app: APP2, connector: "Dvpg", instance: "", items: [{ ref: "rcpub", kind: "channel", name: "#rcpub" }], verified: true });
+    const u9 = (await itemsPool.query(`SELECT * FROM collect_unit WHERE app=$1 AND instance='' AND ref='rcpub'`, [APP2])).rows[0];
+    await itemsPool.query(`UPDATE collect_unit SET state='active' WHERE id=$1`, [u9.id]);
+    await store.storeUnitItems(u9.id, [{ type: "message", provenance: { category: "messenger", system: APP2, instance: "", external_id: `${TAG}-r9` },
+      title: null, body: "공개 채널 글", occurred_at: "2026-10-16T04:00:00Z", fields: {} }], { member: A });
+    const s9 = Number((await itemsPool.query(`SELECT id FROM source WHERE external_system=$1 AND external_id=$2`, [APP2, `${TAG}-r9`])).rows[0].id);
+    const pol = (await itemsPool.query(
+      `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, priority, enabled, note) VALUES($1, NULL, 'members', 0, true, $2) RETURNING id`,
+      [APP2, `${TAG}-race`])).rows[0].id;
+    for (const m of [A, B]) await itemsPool.query(`INSERT INTO org_source_vis_policy_member(policy_id, subject_kind, member_id) VALUES($1,'member',$2)`, [pol, m]);
+    invalidateSourceVisRules();
+    const g9 = await inCh("rcpub", false);
+    chk("R9-0 배선 — «모두» 단위의 자료는 열려 있고 관문보다 id 가 작다", u9.visibility === "all" && (await visOf(s9)) === "open" && s9 < g9,
+      JSON.stringify({ vis: u9.visibility, s: await visOf(s9), s9, g9 }));
+    const r9 = await gated(C, "rcpub", g9, () => store.updateUnit(u9.id, { visibility: "me" }, { member: A, isAdmin: false }));
+    chk("R9-1 배선 — 백필이 스냅샷을 읽은 뒤 관문에서 막혔고 그 사이 단위가 자료를 A 만으로 좁혔다", r9.blocked && r9.r?.ok && r9.r.v.scanned === 2, JSON.stringify(r9));
+    chk("R9 ★훑는 사이 단위가 좁힌 자료는 정책 대상으로 덮어쓰지 않는다 — 자료는 A 만 · unit_managed 로 센다",
+      r9.r?.ok && JSON.stringify(await srcAud(s9)) === JSON.stringify([`member:${A}`]) && r9.r.v.unit_managed === 1 && r9.r.v.locked === 1,
+      JSON.stringify({ r: r9.r, aud: await srcAud(s9) }));
+    chk("R9b 관문이던 자료는 놓인 뒤 정책 대상으로 잠긴다", (await visOf(g9)) === "members" && JSON.stringify(await srcAud(g9)) === AB, JSON.stringify(await srcAud(g9)));
+
+    //  R9c — 읽을 때는 단위와 무관하던 열린 자료를, 그 사이 단위가 맡아(audience 연결) A 만으로 잠갔다. 단위 소유도 쓰기 직전에 다시 본다.
+    const s9c = await inCh("rctake", false), g9c = await inCh("rctake", false);
+    const r9c = await gated(C, "rctake", g9c, () => withTx(async (c) => {
+      await c.query(`SELECT id FROM source WHERE id=$1 FOR NO KEY UPDATE`, [s9c]);
+      const u = (await c.query(`INSERT INTO collect_unit(app, ref, kind, visibility) VALUES($1, 'rctake-u', 'other', 'viewers') RETURNING id`, [APP2])).rows[0].id;
+      await c.query(`INSERT INTO collect_unit_source(unit_id, source_id, audience) VALUES($1,$2,true)`, [u, s9c]);
+      await c.query(`UPDATE source SET visibility='members' WHERE id=$1`, [s9c]);
+      await c.query(`INSERT INTO source_member(source_id, subject_kind, member_id) VALUES($1,'member',$2)`, [s9c, A]);
+    }));
+    chk("R9c ★훑는 사이 단위가 맡아 좁힌 자료도 덮어쓰지 않는다 — 자료는 A 만 · unit_managed 로 센다",
+      r9c.blocked && r9c.r?.ok && JSON.stringify(await srcAud(s9c)) === JSON.stringify([`member:${A}`]) && r9c.r.v.unit_managed === 1 && r9c.r.v.locked === 1,
+      JSON.stringify({ r9c, aud: await srcAud(s9c) }));
+
+    //  R10 — A 만 보던 잠긴 자료를 A 가 A·B 로 넓히려 한다(읽을 때는 A 가 대상이라 통과). 그 사이 대상이 C 만으로 바뀌면 A 는 더는
+    //   그 자료를 못 본다 — 넓힘 권한선은 쓰기 직전의 대상으로 다시 재야 한다.
+    const s10 = await inCh("rcnarrow", true, [`member:${A}`]), g10 = await inCh("rcnarrow", false);
+    const r10 = await gated(A, "rcnarrow", g10, () => withTx(async (c) => {
+      await c.query(`SELECT id FROM source WHERE id=$1 FOR NO KEY UPDATE`, [s10]);
+      await c.query(`DELETE FROM source_member WHERE source_id=$1`, [s10]);
+      await c.query(`INSERT INTO source_member(source_id, subject_kind, member_id) VALUES($1,'member',$2)`, [s10, C]);
+    }));
+    chk("R10 ★훑는 사이 부른 사람이 대상에서 빠졌으면 넓히지 않는다(resync_refused) · 자료는 C 만",
+      r10.blocked && r10.r?.ok && r10.r.v.resync_refused === 1 && r10.r.v.resynced === 0 && r10.r.v.locked === 1
+      && JSON.stringify(await srcAud(s10)) === JSON.stringify([`member:${C}`]),
+      JSON.stringify({ r10, aud: await srcAud(s10) }));
+
+    //  R10b — 같은 판인데 바꾸는 쪽이 **그 자료 행을 쥔 채** 대상을 바꾸고, 백필이 그 행에서 기다리는 동안 커밋한다(관문 = 그 자료).
+    //   기다렸다 잡은 뒤의 대상(C 만)으로 판정해야 한다 — 기다리기 전에 읽은 대상(A 만)으로 판정하면 넓힘이 통과한다.
+    const s10b = await inCh("rcheld", true, [`member:${A}`]);
+    const r10b = await gated(A, "rcheld", s10b, null, { inX: async (x) => {
+      await x.query(`DELETE FROM source_member WHERE source_id=$1`, [s10b]);
+      await x.query(`INSERT INTO source_member(source_id, subject_kind, member_id) VALUES($1,'member',$2)`, [s10b, C]);
+    } });
+    chk("R10b ★그 자료를 쥔 쪽이 대상을 바꿔 커밋하면 기다린 백필은 바뀐 대상으로 판정한다 — 넓히지 않는다 · 자료는 C 만",
+      r10b.blocked && r10b.r?.ok && r10b.r.v.resync_refused === 1 && r10b.r.v.resynced === 0
+      && JSON.stringify(await srcAud(s10b)) === JSON.stringify([`member:${C}`]),
+      JSON.stringify({ r10b, aud: await srcAud(s10b) }));
+
+    //  R11 — 훑는 사이 지워진 자료는 건너뛴다. 그 한 건 때문에 나머지 적용이 끊기면 안 된다(관문 자료는 잠겨야 한다).
+    const s11 = await inCh("rcgone", false), g11 = await inCh("rcgone", false);
+    const r11 = await gated(C, "rcgone", g11, () => itemsPool.query(`DELETE FROM source WHERE id=$1`, [s11]));
+    chk("R11 ★훑는 사이 지워진 자료는 건너뛰고 끝까지 간다 — 잠근 것은 관문 1건",
+      r11.blocked && r11.r?.ok && r11.r.v.locked === 1 && r11.r.v.resynced === 0 && (await visOf(g11)) === "members"
+      && Number((await itemsPool.query(`SELECT count(*)::int n FROM source_member WHERE source_id=$1`, [s11])).rows[0].n) === 0,
+      JSON.stringify(r11));
+
+    //  R12 — 다른 트랜잭션이 자료를 잠금 대기 상한보다 오래 쥐면 그 자료는 lock_busy 로 세고 다음 자료로 간다(약 10초 걸린다).
+    const s12 = await inCh("rcbusy", false), g12 = await inCh("rcbusy", false);
+    const r12 = await gated(C, "rcbusy", g12, null, { holdUntilDone: true });
+    chk("R12 ★오래 쥔 자료는 lock_busy 로 세고 나머지는 계속 간다 — 쥔 자료는 열린 채 · 다른 자료는 잠김",
+      r12.blocked && r12.r?.ok && r12.r.v.lock_busy === 1 && r12.r.v.locked === 1 && (await visOf(g12)) === "open"
+      && (await visOf(s12)) === "members" && JSON.stringify(await srcAud(s12)) === AB,
+      JSON.stringify({ r12, g: await visOf(g12), s: await srcAud(s12) }));
+    const r12b = await run(C, "rcbusy");
+    chk("R12b 놓인 뒤 다시 부르면 그 자료를 맞춘다", r12b.ok && r12b.v.locked === 1 && r12b.v.lock_busy === 0 && r12b.v.already_locked === 1
+      && JSON.stringify(await srcAud(g12)) === AB, JSON.stringify(r12b));
   }
 
   // ── T1 프리셋 레인 문구 이관 ──
