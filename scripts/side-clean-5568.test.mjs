@@ -11,8 +11,10 @@
 //  T4 app-ctx + 레일 숨김(rail-hidden)           → 전폭 줄이 남는다(본문 y=42 · 검색 줄 보임 · ☰ 보임) — 다른 데로 가는 길이 그 줄뿐이다
 //  T5 경계: 사이드바가 펴진 화면(홈)              → 줄은 레일 + 사이드바 위 · 검색 줄 보임 · ☰ 보임 · 레일 [검색] 칸 없음 · 본문 y=0
 //  T6 경계: 사이드바를 접은 화면(side-closed)     → 종전 그대로(본문 y=0 · ☰ 보임 — 닫힌 사이드바를 되찾는 길)
-//  T7 데스크톱 앱(topbar-web 아님) + app-ctx      → 줄이 창 전폭 그대로(OS 타이틀바) · 본문 y=42
+//  T7 데스크톱 앱(topbar-web 아님) + app-ctx      → 줄이 창 전폭 그대로(OS 타이틀바) · 본문 y=42 · ☰ 만 안 보인다(누를 수 있는데 아무 일도 안 하는 단추가 되므로)
+//  T7b 데스크톱 앱 + app-ctx + 레일 숨김          → ☰ 가 보인다(레일을 되살리는 길)
 //  T8 좁은 폭(900) + app-ctx                     → 서랍 셸(flex) 그대로 — 줄이 화면을 가로지른다(이 변경이 건드리지 않는다)
+//  T10 태블릿 가로(1024 — 901~1180 은 열 폭만 다른 같은 그리드, 51-tablet.css) + app-ctx → T1 과 같다(본문 y=0 · 줄은 레일 칸뿐 · 검색 줄 없음)
 //  T9 레일 칸 자리 — app-ctx 와 홈에서 레일의 y 가 같다(화면을 오갈 때 레일 칸이 오르내리지 않는다)
 //  S1 사이드바 목록(.v2-side .v2-app-list) — 넘쳐도 막대가 폭을 안 먹는다(offsetWidth = clientWidth) · scrollbar-width: none · 굴릴 수는 있다
 //  S2 경계: 사이드바 밖의 같은 목록(.v2-app-list)은 건드리지 않는다
@@ -20,9 +22,9 @@
 //  A2 빌트인 패키지 셋이 있고 서버 매니페스트 파서를 통과한다(renderer 가 서버 목록 · 스키마 목록에 다 있다)
 //  A3 그림 이름 셋이 앱 아이콘 목록에 있고 색 토큰이 라이트 · 다크 두 블록에 있다
 //  D1 사이드바 코드에 발치 도크가 없다(dock('archive' …) 호출 0) · 라우터가 셋을 «연 앱» 으로 적는다
-//  D2 ☰ · ⌘B 는 사이드바 없는 앱에서 «닫힘» 기억을 뒤집지 않는다
+//  D2 ☰ · ⌘B · ⌘\ 는 사이드바 없는 앱에서 «닫힘» 기억을 뒤집지 않는다(⌘\ 는 우측만 접고 편다)
 //
-// fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles · apps 를 물린다(이 변경 전 origin/main 에서 T1~T3 · S1 · A1~A3 · D1 · D2 — 14건이 빨갛다).
+// fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles · apps 를 물린다(이 변경 전 origin/main 에서 T1~T3 · T7 · T10 · S1 · A1~A3 · D1 · D2 가 빨갛다).
 //  T4~T9 · S2 는 경계(이 변경이 건드리지 않는 자리)라 그 트리에서도 초록이다. ⚠ 헤드리스 크롬은 덮는 막대라 S1 의 폭 차(offsetWidth − clientWidth)는
 //   종전에도 0 이다 — 빨간불은 scrollbar-width 값(thin → none)이 낸다. 폭 단언은 막대가 자리를 먹는 환경에서 돌 때를 위한 것이다.
 import { existsSync, readFileSync } from "node:fs";
@@ -84,9 +86,17 @@ const THREE = [["connect", "외부 앱 연결", "link"], ["archive", "지난 세
   check(/noteAppUse\(page\);[\s\S]{0,400}renderPast\(/.test(main) && /noteAppUse\('connect'\)/.test(main)
     && /ensureSingletonAppInstance\(page, page === 'archive' \? '지난 세션' : '휴지통'\)/.test(main) && /ensureSingletonAppInstance\('connect', '외부 앱 연결'\)/.test(main),
   "D1b 라우터가 셋을 «연 앱» 으로 적고 인스턴스를 확보한다(최근 연 앱 줄에 선다)");
-  const fn = (/function toggleSideBar\(\): void \{[\s\S]*?\n\}/.exec(main) || [""])[0];
-  check(/classList\.contains\('app-ctx'\)/.test(fn) && /return;/.test(fn) && fn.indexOf("return;") < fn.indexOf("setSideClosed("),
-    "D2 ☰ · ⌘B — 사이드바 없는 앱에선 «닫힘» 기억을 뒤집기 전에 돌아간다", fn.slice(0, 200) || "함수를 못 찾았다");
+  //  잣대는 한 자리(hasSideToFold — app-ctx 이고 넓은 폭이면 접을 사이드바가 없다)이고, 기억을 뒤집는 두 길(☰ · ⌘B / ⌘\)이 둘 다 그것을 먼저 본다.
+  const body = (name) => (new RegExp(`function ${name}\\(\\): \\w+ \\{[\\s\\S]*?\\n\\}`).exec(main) || [""])[0];
+  const gate = body("hasSideToFold"), fn = body("toggleSideBar"), both = body("toggleBothSides");
+  check(/classList\.contains\('app-ctx'\)/.test(gate) && /matchMedia\(MOBILE_MQ\)/.test(gate), "D2a 접을 사이드바가 있나 — 사이드바 없는 앱의 넓은 폭이면 없다(좁은 폭 서랍은 그대로)", gate.slice(0, 200) || "함수를 못 찾았다");
+  check(/hasSideToFold\(\)/.test(fn) && fn.indexOf("return;") > 0 && fn.indexOf("return;") < fn.indexOf("setSideClosed("),
+    "D2b ☰ · ⌘B — 사이드바 없는 앱에선 «닫힘» 기억을 뒤집기 전에 돌아간다", fn.slice(0, 200) || "함수를 못 찾았다");
+  const sets = [...both.matchAll(/setSideClosed\((true|false)\)/g)];
+  //  두 자리 다 같은 문장 안에서 `left` 를 먼저 묻는다(`if (left && …) setSideClosed(true)` · `if (left) setSideClosed(false)`).
+  const guarded = (x) => /\bleft\b/.test(both.slice(both.lastIndexOf("if (", x.index), x.index));
+  check(/const left = hasSideToFold\(\);/.test(both) && sets.length === 2 && sets.every(guarded) && /if \(right\) v\?\.toggleSide\?\.\(\)/.test(both),
+    "D2c ⌘\\ — 왼쪽 «닫힘» 기억을 건드리는 두 자리가 다 그 잣대 뒤에 있다(우측은 그대로 접고 편다)", both.slice(0, 400) || "함수를 못 찾았다");
 }
 
 // ── T · S — 실제 크롬에서 잰 배치 ─────────────────────────────────────────────────────
@@ -132,6 +142,8 @@ async function PAGE(inner) {
   await probe("t5", 1280, WEB.trim());
   await probe("t6", 1280, WEB + "side-closed");
   await probe("t7", 1280, "has-topbar app-ctx");
+  await probe("t7b", 1280, "has-topbar app-ctx rail-hidden");
+  await probe("t10", 1024, WEB + "app-ctx");
   await probe("t8", 900, WEB + "app-ctx no-aside");
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
 }
@@ -160,8 +172,11 @@ check(R.t5.main.y === 0 && R.t5.tb.w === R.t5.rail.w + R.t5.side.w && R.t5.nav =
   "T5 경계 — 사이드바가 펴진 화면은 그대로(줄은 레일 + 사이드바 위 · 검색 줄 · ☰ · 레일 [검색] 없음)", brief(R.t5));
 check(R.t6.main.y === 0 && R.t6.tb.w === R.t6.rail.w && R.t6.nav === false && R.t6.menu === true && R.t6.rsearch === true,
   "T6 경계 — 사이드바를 접은 화면은 그대로(☰ 는 남는다 — 닫힌 사이드바를 되찾는 길)", brief(R.t6));
-check(R.t7.tb.w === 1280 && R.t7.main.y === 42 && R.t7.nav === true && R.t7.rsearch === false,
-  "T7 데스크톱 앱(창 맨 윗줄 = OS 타이틀바) — 앱 화면에서도 줄이 창 전폭 그대로", brief(R.t7));
+check(R.t7.tb.w === 1280 && R.t7.main.y === 42 && R.t7.nav === true && R.t7.rsearch === false && R.t7.menu === false,
+  "T7 데스크톱 앱(창 맨 윗줄 = OS 타이틀바) — 앱 화면에서도 줄이 창 전폭 그대로 · ☰ 만 안 보인다", brief(R.t7));
+check(R.t7b.tb.w === 1280 && R.t7b.menu === true && R.t7b.nav === true, "T7b 데스크톱 앱 + 레일 숨김 — ☰ 가 보인다(레일을 되살리는 길)", brief(R.t7b));
+check(R.t10.main.y === 0 && R.t10.aside.y === 0 && R.t10.tb.w === R.t10.rail.w && R.t10.nav === false && R.t10.menu === false && R.t10.rsearch === true && R.t10.side.w === 0,
+  "T10 태블릿 가로(1024) — 앱 화면은 같은 답(본문 y=0 · 줄은 레일 칸뿐 · 레일 [검색])", brief(R.t10));
 //  이 폭(641~900)은 태블릿 셸이다 — 레일이 왼쪽 여백(64)에 서고 줄은 그 옆에서 화면 끝까지 간다(51-tablet.css).
 check(R.t8.rootDisp === "flex" && R.t8.tbShown === true && R.t8.tb.x + R.t8.tb.w === 900 && R.t8.tb.w > 700 && R.t8.main.y === 42 && R.t8.nav === true,
   "T8 좁은 폭(900) — 서랍 셸 그대로(줄이 본문 위를 가로지르고 검색 줄이 그 안에 있다)", j({ d: R.t8.rootDisp, tb: R.t8.tb, main: R.t8.main, nav: R.t8.nav }));

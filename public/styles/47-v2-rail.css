@@ -908,6 +908,8 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   }
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-side-nav { display: none; }
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
+  /*  데스크톱 앱(창 맨 윗줄 = OS 타이틀바 — 줄 자체는 그대로 선다)에서도 그 화면의 ☰ 는 감춘다. 누를 수 있는데 아무 일도 안 하는 단추가 된다(main.ts toggleSideBar). */
+  #v2-root.has-topbar.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-side + .v2-split-x,
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-main,
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-main + .v2-split-x,

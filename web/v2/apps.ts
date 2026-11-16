@@ -86,7 +86,7 @@ export const APPS: AppDef[] = [
   //  앱빌더(#4632, 원준 2026-10-14). 셸이 직접 그리는 native 앱(web/v2/builder.ts). 내가 만든 앱 · 만들던 앱 · 새 앱 — 앱 만들기 여섯 단계가 이 안에 선다.
   { key: 'builder', title: '앱빌더', desc: '내가 만든 앱 고치기 · 만들던 앱 이어서 · 새 앱 만들기', route: 'builder', tab: null, icon: 'builder', kind: 'native', aka: ['앱 빌더', '앱 만들기', '새 앱', '앱 제작'] },
   //  외부 앱 연결 · 지난 세션 · 휴지통(#5568, 상민님 2026-11-16 «사이드바 하단 지난세션, 휴지통, 외부 앱 연결은 모두 앱 안에 넣고 사이드바에선 지워»).
-  //   종전엔 어느 구역에서나 사이드바 발치 도크 세 칸이 문이었다(side.ts secFoot). 이제 셋 다 셸이 직접 그리는 native 앱이고(화면은 그대로 —
+  //   종전엔 어느 구역에서나 사이드바 발치 도크 세 칸이 문이었다(side.ts 의 옛 secFoot). 이제 셋 다 셸이 직접 그리는 native 앱이고(화면은 그대로 —
   //   connect.ts · bins.ts), 문은 앱 찾기 · 통합검색 · 최근 연 앱이다. 주소(#/connect · #/archive · #/trash)는 그대로 정본이다.
   { key: 'connect', title: '외부 앱 연결', desc: '슬랙 · 노션 · 드라이브 같은 바깥 서비스를 AI 가 쓸 수 있게 잇기', route: 'connect', tab: null, icon: 'link', kind: 'native', aka: ['앱 연결', '연동', '커넥터'] },
   { key: 'archive', title: '지난 세션', desc: '멈춘 세션과 목록에서 치운 세션 · 그대로 이어서 열기', route: 'archive', tab: null, icon: 'archive', kind: 'native', aka: ['아카이브', '보관함', '치운 세션'] },

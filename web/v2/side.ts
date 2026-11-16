@@ -1272,7 +1272,7 @@ function secHead(title: string, count: number | null, ...acts: Array<HTMLElement
 }
 
 /** 레일을 숨겼을 때 사이드바 머리 한 줄(#2016 안 B) — [스택 타일 + 이름 ▾] … [지금 구역 ▾]. 레일이 보이면 그리지 않는다.
- *  왼쪽은 레일 맨 위의 그 문패(같은 팝오버), 오른쪽은 구역 드롭다운(여섯 행 + 레일 펼치기). 앱·나는 발치 한 줄로(secFoot · appFoot 의 footRow). */
+ *  왼쪽은 레일 맨 위의 그 문패(같은 팝오버), 오른쪽은 구역 드롭다운(여섯 행 + 레일 펼치기). 앱·나는 발치 한 줄로(appFoot 의 footRow). */
 function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
@@ -1300,20 +1300,12 @@ function footRow(): HTMLElement {
       el('span', { class: 'v2-me-name', text: name }), icon('gear', 'v2-me-ic')));
 }
 
-/** 구역 발치 — 데스크톱 업데이트 알림(#1838)과, 레일을 숨겼을 때 내려오는 [앱] · [나](footRow)만 선다.
- *  ★ 도크 셋(지난 세션 · 휴지통 · 외부 앱 연결)은 #5568(상민님 2026-11-16 «모두 앱 안에 넣고 사이드바에선 지워»)에서 걷었다 —
- *   셋 다 앱이 됐다(apps.ts APPS · apps/builtin/{archive,trash,connect}). 문은 앱 찾기(레일 [앱]) · 통합검색 · 최근 연 앱이고, 독에 고정할 수 있다.
- *   종전(원준 2026-08-26 «아래에 있었던 아카이브랑 휴지통 … 거기에 외부 앱 연결도»)엔 어느 구역에서나 발치에 세 칸이 섰다.
- *  이제 구역 발치와 앱 발치는 같은 틀이다(appFoot) — 보이는 게 없으면 발치 줄도 안 선다(47-v2-rail.css .v2-app-foot). */
-function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
-  return appFoot(...rows);
-}
-
-/** 제 사이드바를 그리는 앱(자료 · 분류체계 · 세션 이력 · 앱빌더)의 발치 — **그 앱의 것만** 선다(#4632).
- *  원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야» → 2026-10-19 자료 · 분류체계 · 세션 이력에 남아 있던 구역 발치 도크(지난 세션 · 휴지통 · 외부 앱 연결)도 뺀다(«ㅇㅇ»).
- *   도크는 구역의 것이다(secFoot) — 앱 사이드바에선 레일이 그 구역으로 가는 길이다.
- *  셸의 것 둘은 남는다: 데스크톱 업데이트 알림(#1838 — 어느 화면에서든 같은 자리) · 레일을 숨겼을 때 내려오는 [앱] · [나](footRow — 레일 그 자체다).
- *  rows = 그 앱의 문(세션 이력의 「세션 목록」 · 앱빌더의 「앱 찾기」). 다 비면 발치 줄도 안 선다(47-v2-rail.css .v2-app-foot). */
+/** 사이드바 발치 — 구역(홈 · 세션 목록 · 프로젝트 · 위키)과 제 사이드바를 그리는 앱(자료 · 분류체계 · 세션 이력 · 앱빌더)이 같은 틀을 쓴다.
+ *  서는 것: 데스크톱 업데이트 알림(#1838 — 어느 화면에서든 같은 자리) · 그 화면의 문(rows — 세션 목록의 「세션 이력」 · 세션 이력의 「세션 목록」 · 앱빌더의 「앱 찾기」) ·
+ *   레일을 숨겼을 때 내려오는 [앱] · [나](footRow — 레일 그 자체다). 다 비면 발치 줄도 안 선다(47-v2-rail.css .v2-app-foot).
+ *  ★ 도크 셋(지난 세션 · 휴지통 · 외부 앱 연결)은 없다 — 셋 다 앱이 됐고(apps.ts APPS · apps/builtin/{archive,trash,connect}) 문은 앱 찾기 · 통합검색 · 최근 연 앱이다.
+ *   걷은 차례: 2026-10-19 앱 사이드바에서(#4632, 원준 «사이드바 내용까지가 하나의 앱이야») → 2026-11-16 구역에서도(#5568, 상민님 «모두 앱 안에 넣고 사이드바에선 지워»).
+ *   그 전(원준 2026-08-26 «아래에 있었던 아카이브랑 휴지통 … 거기에 외부 앱 연결도»)엔 어느 구역에서나 발치에 세 칸이 섰다(구역 발치 함수 secFoot 도 그때 것 — 이 함수 하나로 합쳤다). */
 function appFoot(...rows: Array<HTMLElement | null>): HTMLElement {
   return el('footer', { class: 'v2-side-foot v2-app-foot' }, updateSlot(), ...rows, railIsHidden() ? footRow() : null);
 }
@@ -1599,7 +1591,7 @@ function renderHomeApps(): void {
   //   셋 다 '홈에서 늘 가는 곳'이고, 아이콘만 여섯 늘어선 도크에서는 무엇인지 읽히지 않았다.
   //   아카이브 · 휴지통은 [프로젝트] 구역 발치로, 모든 앱은 레일의 [앱]으로 갔다.
   //  #2016 2차 — 확인할 것·리브는 **레일**로 갔다(슬랙의 내 활동 자리). 홈 사이드바는 열린 앱 목록뿐이다.
-  //   아카이브·휴지통·외부 앱 연결은 어느 구역에서나 **발치 도크**(secFoot)에 있다.
+  //   지난 세션 · 휴지통 · 외부 앱 연결은 #5568 부터 앱 찾기의 앱이다(그 전엔 어느 구역에서나 발치 도크에 있었다).
   host.replaceChildren(
     ...topBits(navEl, navHost),
     el('section', { class: 'v2-app-space', 'aria-label': '앱' },
@@ -1611,7 +1603,7 @@ function renderHomeApps(): void {
         invitedBtn(),
         axisBtn()),
       listEl),
-    secFoot());
+    appFoot());
 
   listAfter(keep);
   bindSideKeys();
@@ -1853,7 +1845,7 @@ function renderSessions(): void {
           sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })))),
       el('nav', { class: 'v2-kviews', 'aria-label': '전체 세션' }, allRow),
       listEl),
-    secFoot(footLink('#/app/sessions', 'sess', '세션 이력')));   // #4233: 세션 이력 앱과 같은 그림(말풍선은 세션 하나의 그림이다)
+    appFoot(footLink('#/app/sessions', 'sess', '세션 이력')));   // #4233: 세션 이력 앱과 같은 그림(말풍선은 세션 하나의 그림이다)
 
   fitSessCards(listEl, plans.length, (fit) => {
     const p = planFor(fit);
@@ -2316,7 +2308,7 @@ function renderProjects(): void {
     if (isDraftProj(p)) { draftN++; if (!showDrafts) continue; }
     if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
   }
-  //  아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 사이드바에 없다 — 발치 도크 [아카이브]가 그 문이다(proj-cards 가 뺀다).
+  //  아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 사이드바에 없다 — 「지난 세션」 앱(#/archive)의 «보관한 프로젝트» 칩이 그 문이다(proj-cards 가 뺀다).
   const plan = planProjCards({ lists, folders, openByList, noneN, draftN, favIds: favLists, sel: projScopeKey(), closed: foldClosed, more: projMore });
   const lockIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-ptl-lock', 'aria-hidden': 'true' },
     sv('path', { d: 'M7 11V8a5 5 0 0 1 10 0v3' }), sv('rect', { x: '5', y: '11', width: '14', height: '10', rx: '2' }));
@@ -2468,7 +2460,7 @@ function renderProjects(): void {
       ...(newOpen && slot.at === 'top' ? [newProjRow()] : []),
       el('nav', { class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타 · 초안' }, ...fixed),
       listEl),
-    secFoot());
+    appFoot());
 
   fitWikiList(listEl, order, sizes, forced, build);
   listAfter(keep);
@@ -2711,7 +2703,7 @@ function renderWiki(): void {
         fixRow('#/knowledge', 'wiki', '전체 문서', total || null, onAll, '전체 문서 — 본문이 최근순으로 열립니다'),
         fixRow('#/knowledge?indexed=1', 'pin', '인덱스', wikiPins, onIdx, '인덱스 — 모든 대화 첫머리에 깔리는 핀')),
       listEl),
-    secFoot());
+    appFoot());
 
   fitWikiList(listEl, order, sizes, forced, build);
   listAfter(keep);
@@ -3313,7 +3305,7 @@ function renderTree(rowsIn?: Row[]): void {
   if (hiddenDone && (!splitting || allOpen)) kids.push(el('button', { class: 'v2-tree-more', type: 'button', text: `숨긴 완료 프로젝트 ${hiddenDone}개 보기`, onclick: () => { showDone = true; saveFlag(DONE_KEY, true); redraw(); } }));
   // 아카이브·휴지통(#1851) — 트리 맨 아래 두 행(필터 중에도 남는다: 치워 둔 것을 찾는 길이 렌즈에 가려지면 안 된다).
   //  발치에 고정해 두었으면 여기엔 없다(render() 가 트리 밖에 세운다).
-  //  #2016 — 새 셸(구역이 있는 쪽)에서는 발치 도크가 아카이브·휴지통을 든다. 트리 안에 또 세우면 같은 문이 둘이다.
+  //  #2016 — 새 셸(구역이 있는 쪽)에서는 트리 안에 세우지 않는다. 지난 세션 · 휴지통의 문은 앱 찾기다(#5568 — 그 전엔 발치 도크).
   if (!binsPinned && !hooks.section) kids.push(el('div', { class: 'v2-bins' }, ...binRows(last.data)));
   treeEl.replaceChildren(...kids);
 }
@@ -3326,7 +3318,7 @@ function binRows(data: V2Data): HTMLElement[] {
   const me = meId();
   // 휴지통 개수 = 통째로 버린 프로젝트(각 1) + **따로** 버린 내 세션(묶음 세션은 프로젝트 안에 든 것이라 안 센다). 세션은 소유자 단위.
   //  ＋ 서버가 센 나머지(자료·지식·옛 길로 지운 프로젝트, #3778) — 배지 = 휴지통 화면 네 탭의 합.
-  //  #3870 — 목록을 받기 전엔 숫자를 안 붙인다(secFoot 과 같은 판정).
+  //  #3870 — 목록을 받기 전엔 숫자를 안 붙인다.
   const trashedN = !sideTruthReady(data) ? 0 : trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
     + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length, trashExtraCounts());
   const ak = last ? last.activeKey() : '';
