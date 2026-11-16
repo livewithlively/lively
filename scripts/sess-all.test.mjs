@@ -301,9 +301,8 @@ if (lib) {
   ok(/onNew: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(paint2) && /onNewTask: \(\) => \{ tabsApi\?\.add\('#\/'\); \}/.test(MAIN),
     "W1h [＋ 새 세션]은 사이드바 ＋ 와 같은 동작(홈 새 탭)");
   //  W2 — #4233(원준 2026-09-26) 열 구성과 머리줄. 열 이름은 표 맨 위 한 줄뿐이고 붙어 있다(클릭업 리스트 뷰).
-  //  #5522 — 맨 아래 「초안」 묶음(tail)만 있어도 열 이름 한 줄은 선다(그 묶음 머리도 이름과 개수만 든다 · v2-sa-gh plain).
-  ok(/class: 'v2-sa-head'/.test(all2) && /if \(vis\.length \|\| tail\) list\.append\(tableHead\(\)\);/.test(all2)
-    && /class: 'v2-sa-gh plain'/.test(all2) && /class: 'v2-sa-gh plain v2-sa-tail'/.test(all2) && !/\.\.\.headCols\(\)/.test(all2),
+  ok(/class: 'v2-sa-head'/.test(all2) && /if \(vis\.length\) list\.append\(tableHead\(\)\);/.test(all2)
+    && /class: 'v2-sa-gh plain'/.test(all2) && !/\.\.\.headCols\(\)/.test(all2),
     "W2a ★열 이름은 표 맨 위 한 줄뿐 — 묶음 머리줄은 이름과 개수만 든다");
   ok(/hc\('made', '생성 시각'\)/.test(all2) && /hc\('seen', '마지막 활동'\)/.test(all2) && !/text: 'AI' \}/.test(all2) && /class: 'c-made' \}, madeCell\(Number\(s\.createdAt\)/.test(all2),
     "W2b ★「AI」 열은 없고 시각은 둘로 갈린다 — 생성 시각(절대) · 마지막 활동(상대)");

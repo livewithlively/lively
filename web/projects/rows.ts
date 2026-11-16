@@ -11,7 +11,7 @@
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
 import { api, busy, el, personFace, toast } from '../core.js';
-import { DRAFT_HINT, DRAFT_LABEL, DRAFT_TIP, isDraftProj } from '../lib/proj-draft.js';
+import { DRAFT_LABEL, DRAFT_TIP, isDraftProj } from '../lib/proj-draft.js';
 import { trashProjectFlow } from '../session-actions.js';   // #3778 — 프로젝트 삭제 = 휴지통으로(어느 화면이든 같은 길)
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import {
@@ -141,26 +141,12 @@ function pjvColSortCmp(sortSpec) {
 // 그룹 안 프로젝트 정렬 — 컬럼 정렬 지정 시 그것, 아니면 수동/기본 순서. (기존 rank/최신순을 대체 — ClickUp 파리티)
 function pjvSortProjects(arr, colSort) { return arr.slice().sort(pjvColSortCmp(colSort)); }
 
-// ── 초안(#4170, 상민·원준 2026-09-21 회의) — 세션 첫 지시로 기계가 막 만든 프로젝트는 목록 기본 뷰에서 따로 뺀다. ──
-//  GitHub 의 Draft PR 처럼: 제목이나 본문을 정리하면(사람이든 AI 든) 서버가 draft 를 내리고 그때 제 상태 그룹에 선다.
-//  그래서 상태·담당자·우선순위 어느 그룹바이든 초안은 **맨 아래 한 묶음**으로만 선다 — 그룹 안에 섞이면 따로 뺀 뜻이 없다.
-//  기본은 접힘: 수십 개가 쌓여도 목록을 밀어내지 않는다(펼침은 그룹 접힘과 같은 자리에 저장).
-//  #5522 — 초안은 만든 사람과 팀원만 본다. 지식 · 작업기록 · 파일을 남기거나 제목 · 본문을 정리하면 풀려 모두에게 보인다.
-//   잣대와 말은 lib/proj-draft.ts 한 벌이다 — 사이드바 「초안」 줄의 수 · 「리스트」 뷰의 초안 묶음과 같은 것을 센다.
+// ── 초안(#4170 · #5522) — 세션 첫 지시로 생긴 프로젝트. 목록에서 **따로 묶지 않는다**(상민 2026-11-16 «초안만 묶어놓는게 무슨 말도
+//  안되는 선택지야? 초안 뱃지 하나 두고 프로젝트랑 똑같이 보이게»). 제 상태 · 담당자 · 우선순위 묶음에 그대로 서고 이름 뒤 «초안»
+//  뱃지만 단다(pjvProjRow). 숨기는 것은 툴바의 「초안 보기」 토글이다(board.ts — 꺼지면 이 함수에 오기 전에 빠진다).
+//  종전 #4170 은 어느 묶기 기준이든 맨 아래 접힌 「초안」 묶음 하나로만 세웠다 — 그 길을 걷었다.
 const pjvIsDraft = isDraftProj;
-const PJV_DRAFT_HINT = DRAFT_TIP;
 function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
-  //  초안만 보는 스코프(#5522 사이드바 「초안」, opts.draftScope)에선 빼지 않는다 — 전부가 초안이라 접힌 한 묶음이 되면 펼치기만 하나 늘어난다.
-  const drafts = opts.draftScope ? [] : shownProjects.filter(pjvIsDraft);
-  if (!drafts.length) { pjvRenderStatusGroupsInner(main, shownProjects, selList, opts); return; }
-  pjvRenderStatusGroupsInner(main, shownProjects.filter((p) => !pjvIsDraft(p)), selList, { ...opts, hasDrafts: true });
-  const { reload, canDelete, fields, anchorId, meId, taskCtx } = opts;
-  // 컬럼 라벨은 첫 그룹 헤더에 붙는다(#470) — 위에서 아무 그룹도 안 섰으면(전부 초안) 이 묶음이 그 자리다.
-  const withCols = !main.querySelector('.pjv-tgroup-head-cols');
-  main.append(pjvProjGroup(DRAFT_LABEL, null, pjvSortProjects(drafts, opts.colSort), reload, null, canDelete, withCols,
-    fields, anchorId, meId, taskCtx, undefined, true, selList ? selList.id : null, undefined, { draft: true }));
-}
-function pjvRenderStatusGroupsInner(main, shownProjects, selList, opts) {
   const { reload, canDelete, fields, anchorId, meId, taskCtx, listIdForAdd } = opts;
   // 추가행을 뺄 조건 — '내 할당만'(예전부터) 또는 opts.noAdd(#req 폴더에서 리스트 그룹을 끈 경우:
   //  어느 리스트로 만들지 정할 수 없으니 만들기를 열어 두면 폴더 밖 '미분류'로 새는 프로젝트가 생긴다).
@@ -254,8 +240,7 @@ function pjvRenderFieldGroups(main, shownProjects, selList, opts, gb, sortArr, t
     return gb.dir === -1 ? -c : c;
   });
   if (!entries.length) {
-    // 전부 초안이면 아래 초안 묶음이 선다 — «아직 프로젝트가 없습니다» 는 틀린 말이다(#4170).
-    if (!opts.hasDrafts) main.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
+    main.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
     return;
   }
   for (const [, g] of entries) {
@@ -515,7 +500,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const subcountEl = canExpand ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico clickable', role: 'button', tabindex: '0', title: nTasks + '개 태스크 — 클릭하여 펼치기' },
     pjvSubtaskIcon(), el('span', { text: String(nTasks) })) : null;
   //  #5522 초안 표시 — 묶지 않는 표 · 상태 아닌 묶음에서도 초안이 한눈에 갈리게. 「초안」 묶음 안에서는 머리가 이미 말하므로 숨긴다(CSS).
-  const draftTag = pjvIsDraft(p) ? el('span', { class: 'pj-draft-tag', title: PJV_DRAFT_HINT, text: DRAFT_LABEL }) : null;
+  const draftTag = pjvIsDraft(p) ? el('span', { class: 'pj-draft-tag', title: DRAFT_TIP, text: DRAFT_LABEL }) : null;
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
     select ? null : pjvRowCheck('project', p, { reload }),
     caret, lead, title, draftTag,
@@ -656,8 +641,7 @@ function pjvProjTaskRow(projectId, t, members, reload, depth, boardFields) {
 }
 
 // 상태 그룹(진행 중/완료) — 헤더(점·라벨·개수·캐럿[, withCols 면 컬럼 라벨]) + 행들. 빈 그룹은 안내.
-function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCols, fields, anchorId, meId, taskCtx?: any, sepTasks?: any, noAdd?: boolean, listId?: any, statusDef?: any, extra?: { draft?: boolean }) {
-  const isDraft = !!(extra && extra.draft);
+function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCols, fields, anchorId, meId, taskCtx?: any, sepTasks?: any, noAdd?: boolean, listId?: any, statusDef?: any) {
   fields = fields || [];
   sepTasks = sepTasks || [];
   // statusKey=null(#541 그룹바이 — 담당자/우선순위 등 비상태 그룹): 상태 점 없이 라벨만, 추가행 없음(noAdd 전제).
@@ -676,8 +660,8 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   if (!select && cat !== 'done' && cat !== 'closed' && !noAdd) body.append(pjvProjAddRow(meta.key, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef));
 
   // 그룹 접힘 상태 — 리스트+그룹 단위로 localStorage 에 저장해 새로고침에도 유지(#req). 기본 펼침.
-  const gid = isDraft ? '__draft__' : (statusDef ? statusDef.key : (statusKey || label));
-  let gopen = pjvGrpOpenGet(listId, gid, !isDraft);   // 초안 묶음만 기본 접힘(#4170)
+  const gid = statusDef ? statusDef.key : (statusKey || label);
+  let gopen = pjvGrpOpenGet(listId, gid);
   body.hidden = !gopen;   // 저장된 상태가 접힘이면 로드 시점부터 접혀 보이게
   const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: gopen ? '▾' : '▸', 'aria-expanded': String(gopen) });
   gcaret.onclick = () => {
@@ -689,16 +673,12 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
     : statusKey ? pjvStatusIconStd(meta.key, 'sm')
     : el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }); // 비상태 그룹 — 점 없이 정렬만 유지
   // 상태 그룹 헤더 라벨 — 커스텀이든 기본(inherit)이든 같은 색 pill 로 통일(#670). 비상태 그룹(statusKey=null: 담당자·우선순위 등)만 밋밋 라벨.
-  const labelEl = isDraft
-    ? el('span', { class: 'pjv-tgroup-label pjv-status-pill pjv-draft-pill', title: PJV_DRAFT_HINT, text: label })
-    : statusDef
+  const labelEl = statusDef
     ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + statusDef.color, text: label })
     : statusKey
       ? el('span', { class: 'pjv-tgroup-label pjv-status-pill', style: '--sc:' + pjvNativeStatusColor(statusKey), text: label })
       : el('span', { class: 'pjv-tgroup-label', text: label });
 
-  // 초안 묶음 헤더의 한 줄 설명(#4170) — 왜 여기 따로 서 있고 언제 올라가는지. 접혀 있을 때도 보인다.
-  const hintEl = () => isDraft ? el('span', { class: 'pjv-draft-hint', text: DRAFT_HINT }) : null;
   // 그룹 전체선택 체크박스(#664) — 헤더 좌측(행 체크박스와 같은 16px 자리). 레거시 선택(select) 모드에선 스페이서 유지.
   const headCheck = () => select
     ? el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' })
@@ -706,7 +686,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   let head;
   if (withCols) {
     head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls },
-      el('div', { class: 'pjv-trow-title-cell' }, headCheck(), dot, labelEl, countEl, gcaret, hintEl(), pjvNameResizeHandle()),
+      el('div', { class: 'pjv-trow-title-cell' }, headCheck(), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()),
       pjvStdColHead('proj', 'team', '팀원'),
       pjvStdColHead('proj', 'due', '마감일'),
       pjvStdColHead('proj', 'start', '시작일'),
@@ -722,9 +702,9 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   } else {
     // 2번째+ 상태 그룹(non-cols) 헤더도 첫 그룹(withCols)·행과 동일하게 체크박스 자리(#664 전체선택)를 둬 상태점 가로 위치를 맞춘다
     //  (#613 후속 — 첫 그룹만 spacer 가 있어 그룹 간 상태 아이콘 들여쓰기가 어긋나 있었다).
-    head = el('div', { class: 'pjv-tgroup-head ' + meta.cls }, headCheck(), dot, labelEl, countEl, gcaret, hintEl());
+    head = el('div', { class: 'pjv-tgroup-head ' + meta.cls }, headCheck(), dot, labelEl, countEl, gcaret);
   }
-  return el('div', { class: 'pjv-tgroup' + (isDraft ? ' pjv-tgroup-draft' : '') }, head, body);
+  return el('div', { class: 'pjv-tgroup' }, head, body);
 }
 
 // 프로젝트 인라인 추가행(클릭업식) — 태스크 add row 와 동형. 클릭→입력칸, Enter=생성(연속 추가 위해 입력 유지·낙관적 삽입), Esc/빈 blur=접기.
