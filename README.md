@@ -209,6 +209,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions require signing a short [C
 
 Please report security vulnerabilities through the private channel in [SECURITY.md](SECURITY.md) rather than a public issue. For anything else, contact lively@lvly.io.
 
+<img width="1024" height="1024" alt="url_qrcodecreator com_18_34_35" src="https://github.com/user-attachments/assets/9cc965b9-4933-48ec-9bea-352888f89cea" />
+
+
 ---
 
 Copyright (c) 2026 윤상민 (Sangmin Yoon), 장원준 (Wonjoon Jang)
