@@ -13,7 +13,8 @@ import { appScopeKnowledgeWhere } from "./knowledge-common.js";   // #5100 앱 �
 import { enqueueExternalPush, closeNoteOf } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
 import { toVectorLiteral } from "./embedding-provider.js";
-import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
+import { releaseProjectDraft } from "./project-draft.js";
+import { projectVisFor, projectVisPredicate, canSeeProjectRow, invalidateVisibilityCache, PROJECT_VIS_ALL, type ProjectVis, type Viewer } from "./visibility.js";
 // 이름 걸쇠(#2031) — 순위표·다듬기 규칙은 순수 모듈에 두고 여기서는 집행만 한다(DB 무접촉 판정 = 표로 고정).
 import { type ProjectNameSource } from "./project-name.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
@@ -129,7 +130,7 @@ export async function listMyTasks(memberId: string, limit = 200, viewer?: Viewer
   const me = String(memberId || "").trim();
   if (!me) return [];
   // 이 쿼리는 이미 조상 프로젝트(pr)를 조인해 두었으므로 그 list_id 로 바로 판정한다(별도 서브쿼리 불요).
-  const visWhere = viewer === undefined ? "TRUE" : listIdPredicate("pr.list_id", await visibleListIds(viewer));
+  const visWhere = viewer === undefined ? "TRUE" : projectVisPredicate("pr.list_id", "pr.id", await projectVisFor(viewer));
   const cols = PROJECT_COLS.split(",").map((c) => "p." + c.trim()).join(", ");
   const { rows } = await itemsPool.query(`
     SELECT ${cols},
@@ -160,6 +161,7 @@ const EDGE_ROOT_JOIN = `
                                                   WHEN p.level='task'    THEN epar.id
                                                   ELSE p.id END`;
 const EDGE_ROOT_LIST = "COALESCE(eroot.list_id, p.list_id)";
+const EDGE_ROOT_ID = "COALESCE(eroot.id, p.id)";   // #5522 초안 판정용 — 같은 뿌리의 id
 
 // ── 타임라인(간트)용 하위 작업 벌크 조회(#1305) ───────────────────────────
 //  타임라인은 스코프 안 프로젝트 **전부**의 하위 작업을 한 화면에 계층(project▸task▸subtask)으로 그린다.
@@ -170,7 +172,7 @@ export interface ProjectTaskRow extends ProjectRow { project_id: number }
 export async function listTasksForProjects(projectIds: number[], viewerVis?: Viewer): Promise<ProjectTaskRow[]> {
   const ids = [...new Set(projectIds.map(Number))].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return [];
-  const visIds = viewerVis === undefined ? null : await visibleListIds(viewerVis);
+  const pv = viewerVis === undefined ? PROJECT_VIS_ALL : await projectVisFor(viewerVis);
   const cols = PROJECT_COLS.split(",").map((c) => "p." + c.trim()).join(", ");
   // ⚠ 요청 id 는 이미 목록에서 걸러진 것들이지만, 여기서도 가시성을 다시 건다 — 주소창에 남의 프로젝트 id 를
   //  적어 넣으면 잠긴 리스트의 태스크 제목이 그대로 새는 우회로가 되기 때문(#1291 과 같은 이유).
@@ -182,7 +184,7 @@ export async function listTasksForProjects(projectIds: number[], viewerVis?: Vie
                        AND root.level='project'
      WHERE p.level IN ('task','subtask')
        AND root.id = ANY($1)
-       AND ${listIdPredicate("root.list_id", visIds)}
+       AND ${projectVisPredicate("root.list_id", "root.id", pv)}
      ORDER BY p.sort, p.id`, [ids]) as Promise<ProjectTaskRow[]>;
 }
 
@@ -198,8 +200,8 @@ export async function getNodeRow(id: number): Promise<ProjectRow | undefined> {
 export async function listEdgesForNodes(nodeIds: number[], viewerVis?: Viewer, relation = "depends_on"): Promise<Array<{ from_id: number; to_id: number; relation: string }>> {
   const ids = [...new Set(nodeIds.map(Number))].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return [];
-  const visIds = viewerVis === undefined ? null : await visibleListIds(viewerVis);
-  const vis = (alias: string) => listIdPredicate(`COALESCE(${alias}root.list_id, ${alias}.list_id)`, visIds);
+  const pv = viewerVis === undefined ? PROJECT_VIS_ALL : await projectVisFor(viewerVis);
+  const vis = (alias: string) => projectVisPredicate(`COALESCE(${alias}root.list_id, ${alias}.list_id)`, `COALESCE(${alias}root.id, ${alias}.id)`, pv);
   const rootJoin = (alias: string) => `
        LEFT JOIN project ${alias}par ON ${alias}par.id = ${alias}.parent_id
        LEFT JOIN project ${alias}root ON ${alias}root.id = CASE WHEN ${alias}.level='subtask' THEN ${alias}par.parent_id
@@ -264,7 +266,7 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   let join = "";
   // 가시 리스트 집합을 **한 번** 계산해 세미조인으로 붙인다(#1291). 행마다 서브쿼리를 평가하는 대신
   //  수십 행짜리 리스트 테이블을 1회 훑는다 — 보드는 프로젝트 수백 행을 한 번에 그리므로 이 차이가 크다.
-  const visIds = filter.viewerVis === undefined ? null : await visibleListIds(filter.viewerVis);
+  const pv = filter.viewerVis === undefined ? PROJECT_VIS_ALL : await projectVisFor(filter.viewerVis);
   // 카테고리 필터 = 소속 리스트의 카테고리 상속(#541 후속 — project_category 대체). 프로젝트→리스트→카테고리.
   //  list_id NULL(미분류) 프로젝트는 카테고리가 없어 자연히 제외. (#1631 space 폐기 — 공간으로 좁히기는 함께 사라졌다.)
   if (filter.categoryId != null) {
@@ -289,7 +291,8 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   if (tr === "exclude") wh.push("p.trashed_at IS NULL");
   else if (tr === "only") wh.push("p.trashed_at IS NOT NULL");
   // 공개범위 시행(#475→#1291) — 안 보이는 리스트의 프로젝트는 뺀다. 미분류(list_id NULL)는 잠글 상위가 없어 전원 열람.
-  wh.push(listIdPredicate("p.list_id", visIds));
+  //  #5522 — 단 **남의 초안**은 뺀다(만든 사람 · 팀원만 본다). 판정은 리스트와 한 술어다.
+  wh.push(projectVisPredicate("p.list_id", "p.id", pv));
   const where = `WHERE ${wh.join(" AND ")}`;
   // DISTINCT — 다중 카테고리 매핑 시 조인 중복 제거. ORDER BY 컬럼은 SELECT DISTINCT 대상에 포함.
   //  members = facepile 용 스칼라 서브쿼리(org_member 표시명 조인, 정렬 보존).
@@ -327,8 +330,9 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
   const project: ProjectRow | undefined = await one(itemsPool,
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!project) return undefined;
-  const visIds = viewer === undefined ? null : await visibleListIds(viewer);
-  if (visIds && project.list_id != null && !visIds.has(Number(project.list_id))) return undefined;
+  // ⚠ 여기서 list_id 를 손으로 견주지 않는다 — 단건 판정의 SoT(canSeeProjectRow)가 리스트와 초안(#5522)을 함께 본다.
+  if (viewer !== undefined && !(await canSeeProjectRow(id, viewer))) return undefined;
+  const pv = viewer === undefined ? PROJECT_VIS_ALL : await projectVisFor(viewer);
 
   // 팀원(project_member) — 표시명은 org_member, 상태메시지는 (프로젝트,사람) 단위(pm.status_message)로 읽는다.
   //  프로젝트1의 상태가 프로젝트2에 그대로 보이지 않게 — 전역(org_member.status_message)이 아니라 이 프로젝트 행의 값.
@@ -403,13 +407,13 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
       `SELECT pe.relation, pe.to_project_id AS project_id, p.name AS project_name, p.status, p.level
        FROM project_edge pe JOIN project p ON p.id=pe.to_project_id ${EDGE_ROOT_JOIN}
        WHERE pe.from_project_id=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
-         AND ${listIdPredicate(EDGE_ROOT_LIST, visIds)}
+         AND ${projectVisPredicate(EDGE_ROOT_LIST, EDGE_ROOT_ID, pv)}
        ORDER BY pe.relation, lower(p.name)`, [id]),
     q(itemsPool,
       `SELECT pe.relation, pe.from_project_id AS project_id, p.name AS project_name, p.status, p.level
        FROM project_edge pe JOIN project p ON p.id=pe.from_project_id ${EDGE_ROOT_JOIN}
        WHERE pe.to_project_id=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
-         AND ${listIdPredicate(EDGE_ROOT_LIST, visIds)}
+         AND ${projectVisPredicate(EDGE_ROOT_LIST, EDGE_ROOT_ID, pv)}
        ORDER BY pe.relation, lower(p.name)`, [id]),
   ]);
   const edgeMap = (r: Record<string, unknown>) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, level: r.level, relation: r.relation });
@@ -492,6 +496,8 @@ export async function createProject(
   // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
   if (made.deduped) return made.row;
   const row = made.row;
+  // #5522 — 초안은 만든 사람과 팀원만 본다. 남의 «숨은 프로젝트» 캐시(15초)에 이 프로젝트가 아직 없으므로 버린다.
+  if (row.draft === true) invalidateVisibilityCache();
   // 팀원 초기 등록(project_member).
   //  ⚠ ON CONFLICT 에 tenant_id 를 넣지 마라 — 이 PK 는 (tenant_id, …) 로 **재작성되지 않는다**
   //   (project_id 가 project.id 대리키를 가리키는 FK 라 이미 전역 유일 — db/tenant-column.ts isNaturalKey ⓑ).
@@ -592,6 +598,7 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
        draft = CASE WHEN $2='done' THEN false ELSE draft END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
+  if (before.draft === true && after.draft !== true) invalidateVisibilityCache();   // #5522 초안이 풀렸다 — 곧바로 보이게
   // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
   await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   return after;
@@ -691,7 +698,9 @@ export async function updateProject(
   if (patch.due_date !== undefined) set("due_date", patch.due_date);
   // 초안(#4170) — 명시값이 있으면 그 값, 없으면 **제목이나 본문이 실제로 바뀔 때** 초안에서 나온다(사람이 고쳤든 AI 가
   //  project_update_v6 로 정리했든). 같은 글을 다시 저장하는 자동저장은 바뀐 게 없으니 초안 그대로다.
-  if (patch.draft !== undefined) set("draft", patch.draft);
+  // ⚠ #5522 — 명시값은 **false(공개하기)만** 받는다. 초안은 만든 사람과 팀원만 보는 상태라, true 를 받아 주면
+  //  아무나 남의 프로젝트를 초안으로 되돌려 모두에게서 숨길 수 있다(«한 번 올라가면 돌아가지 않는다» 도 깨진다).
+  if (patch.draft === false) set("draft", false);
   else if (changed.length) sets.push(`draft = CASE WHEN draft AND (${changed.join(" OR ")}) THEN false ELSE draft END`);
   if (!sets.length) return before; // 패치 비어있음 — no-op
   sets.push("updated_at=now()");
@@ -701,6 +710,7 @@ export async function updateProject(
   // 행은 있는데(before) UPDATE 가 못 잡았다 = 가드가 막았다. 같은 패치의 다른 키도 함께 안 쓰인다(반쪽 저장 없음).
   if (!after) throw new ProjectBodyConflictError(id);
   await auditProject(String(id), "update", before, after, ctx);
+  if (before.draft === true && after.draft !== true) invalidateVisibilityCache();   // #5522 초안이 풀렸다 — 곧바로 보이게
   await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — 필드 존재(patch)가 아니라 before↔after 값 비교. no-op·미변경 저장,
   //  잦은 웹 인라인편집·MCP·ClickUp writeback 이 텍스트를 그대로 실어보내도 헛임베딩 방지(임베딩 부하 = 실제 텍스트 변경 수). #624/#631
@@ -817,6 +827,7 @@ export async function setProjectMembers(projectId: number, memberIds: string[], 
     ids.push(memberId);
   }
   await auditProject(String(projectId), "set_members", before.map((r) => r.member_id), ids, ctx);
+  invalidateVisibilityCache();   // #5522 — 초안은 팀원이 곧 볼 수 있는 사람이다
   return ids;
 }
 
@@ -1061,6 +1072,8 @@ export async function linkProjectKnowledge(projectId: number, name: string, rela
      VALUES($1,$2,$3,now()) ON CONFLICT (project_id, name, relation) DO NOTHING`,
     [projectId, name, relation]);
   await auditProject(String(projectId), "link_knowledge", null, { name, relation }, ctx);
+  // #5522 — 산출지식이 붙었다 = 이 프로젝트가 무언가를 남겼다 → 초안이면 푼다(필요지식 연결은 정리지 산출이 아니라 세지 않는다).
+  if (relation === "produced") await releaseProjectDraft(projectId, "produced_knowledge", ctx);
 }
 
 // ── 관련 레포(project_repo, n:n) — 전체 교체 셋(웹 세부설정 멀티선택). repo 레지스트리 이름 참조. ──
@@ -1105,6 +1118,7 @@ export async function setProjectCategories(projectId: number, categoryIds: numbe
     if (listId != null) {
       await itemsPool.query(`UPDATE project SET list_id=$2, updated_at=now() WHERE id=$1`, [projectId, listId]);
       await auditProject(String(projectId), "set_list", { list_id: null }, { list_id: listId }, ctx);
+      await releaseProjectDraft(projectId, "list", ctx);   // #5522 — 분류가 정해졌다 = 정리된 프로젝트
     }
   }
 
@@ -1238,7 +1252,7 @@ const P_SEARCH_BASE = `p.folder IS DISTINCT FROM '__board_anchor__' AND p.trashe
                    WHERE tp.id = p.parent_id AND (tp.trashed_at IS NOT NULL OR tg.trashed_at IS NOT NULL))`;
 
 // 공통 WHERE(grep 매처 + 앵커 제외 + level/list_id/status 필터). params 에 push 하고 절 문자열 반환.
-function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], visIds?: Set<number> | null, raw?: string): string {
+function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unknown[], pv?: ProjectVis, raw?: string): string {
   //  **번호로도 찾는다**(2026-08-25 상민님). 사람은 프로젝트를 번호로 부른다(#1835) — 그런데 종전엔 이름·본문만 봐서,
   //   본문에 우연히 그 숫자가 없으면 자기 번호로 자기를 못 찾았다. 정확일치만 OR 로 얹는다(부분일치는 idEquals 주석 참고).
   //   공개범위·앵커 제외 같은 **기본 필터는 그대로 AND** 다 — 번호를 안다고 안 보이는 것이 보이면 안 된다.
@@ -1258,7 +1272,7 @@ function projectGrepWhere(plan: GrepPlan, opts: ProjectSearchOpts, params: unkno
   if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }
   // 공개범위(#1291) — 태스크/서브태스크는 자기 list_id 가 비어 있으므로 **조상 프로젝트**의 list_id 로 판정한다.
   //  (자기 행 기준으로 걸면 잠긴 프로젝트의 태스크가 'NULL=전원'으로 전부 새어나간다.)
-  if (visIds !== undefined) wh.push(listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds));
+  if (pv !== undefined) wh.push(projectVisPredicate(PROJECT_ROW_LIST_ID_SQL, PROJECT_ROW_ROOT_ID_SQL, pv));
   return wh.join(" AND ");
 }
 
@@ -1268,6 +1282,10 @@ const PROJECT_ROW_LIST_ID_SQL = `COALESCE(p.list_id, (
   SELECT pr2.list_id FROM project par2
     LEFT JOIN project pr2 ON pr2.id = CASE WHEN p.level='subtask' THEN par2.parent_id ELSE par2.id END
    WHERE par2.id = p.parent_id))`;
+// 행이 속한 **프로젝트의** id(#5522 초안 판정) — 위와 같은 조상 타기. 프로젝트 행은 자기 id.
+const PROJECT_ROW_ROOT_ID_SQL = `COALESCE((
+  SELECT CASE WHEN p.level='subtask' THEN par3.parent_id ELSE par3.id END FROM project par3
+   WHERE par3.id = p.parent_id), p.id)`;
 
 function toProjectRow(r: Record<string, unknown>): ProjectSearchRow {
   return {
@@ -1281,10 +1299,10 @@ function toProjectRow(r: Record<string, unknown>): ProjectSearchRow {
 
 // mode='count' — 매치 총건수만(페이징·존재확인용).
 export async function countProjectGrep(qstr: string, opts: ProjectSearchOpts = {}): Promise<number> {
-  const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
+  const pv = opts.viewer === undefined ? undefined : await projectVisFor(opts.viewer);
   const { result } = await grepExec(qstr, async (plan) => {
     const params: unknown[] = [];
-    const where = projectGrepWhere(plan, opts, params, visIds, qstr);
+    const where = projectGrepWhere(plan, opts, params, pv, qstr);
     const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM project p WHERE ${where}`, params);
     return Number(rows[0]?.n ?? 0);
   }, { plain: opts.plain });
@@ -1295,10 +1313,10 @@ export async function countProjectGrep(qstr: string, opts: ProjectSearchOpts = {
 export async function searchProjects(qstr: string, opts: ProjectSearchOpts = {}): Promise<ProjectSearchRow[]> {
   const withBody = opts.mode !== "names";
   const sel = withBody ? P_GREP_SEL : P_GREP_NAMES_SEL;
-  const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
+  const pv = opts.viewer === undefined ? undefined : await projectVisFor(opts.viewer);
   const { result: rows, plan } = await grepExec(qstr, async (p) => {
     const params: unknown[] = [];
-    const where = projectGrepWhere(p, opts, params, visIds, qstr);
+    const where = projectGrepWhere(p, opts, params, pv, qstr);
     const first = exactFirst("p.id", qstr, "id", params);   // 번호의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     const tf = titleFirst("p.name", p, params);              // 이름에 모든 낱말이 든 것이 본문만 스친 최근 것에 잘리지 않게(#4530)
     params.push(Math.min(opts.limit ?? 20, 100));
@@ -1328,8 +1346,8 @@ export async function hybridSearchProjects(qstr: string, opts: ProjectSearchOpts
   const qvec = (await embedQuery(qstr)).vec;
   if (!qvec) return searchProjects(qstr, opts);               // off · 쿼리 임베딩 실패 → 폴백
   try {
-    const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
-    return await rrfSearchProjects(qstr, qvec, opts, visIds);
+    const pv = opts.viewer === undefined ? undefined : await projectVisFor(opts.viewer);
+    return await rrfSearchProjects(qstr, qvec, opts, pv);
   } catch (e) {
     console.warn(`[embeddings] 프로젝트 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
     return searchProjects(qstr, opts);                        // pgvector 컬럼 부재 등 → 폴백
@@ -1338,7 +1356,7 @@ export async function hybridSearchProjects(qstr: string, opts: ProjectSearchOpts
 
 // RRF 융합 = SQL 한 방(쿼리 임베딩은 JS 에서 계산해 $n::vector 로 주입). lex/vec CTE 각 후보 → row_number rank → RRF 점수.
 //  knowledge rrfSearch 와 동일 골격(테이블·키·컬럼만 project). lex 채널은 최신순 랭크(knowledge 와 동일 — 렉시컬 상대순위 없음).
-async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSearchOpts, visIds?: Set<number> | null): Promise<ProjectSearchRow[]> {
+async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSearchOpts, pv?: ProjectVis): Promise<ProjectSearchRow[]> {
   const withBody = opts.mode !== "names";
   const sel = withBody ? P_GREP_SEL : P_GREP_NAMES_SEL;
   const limit = Math.min(opts.limit ?? 20, 100);
@@ -1379,7 +1397,7 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
     )
     SELECT ${sel}, ${P_PARENT_SEL}, f.score::float8 AS score
     FROM fused f JOIN project p ON p.id=f.id ${P_PARENT_JOIN}
-    WHERE ${listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds ?? null)}
+    WHERE ${projectVisPredicate(PROJECT_ROW_LIST_ID_SQL, PROJECT_ROW_ROOT_ID_SQL, pv ?? PROJECT_VIS_ALL)}
     ORDER BY ${first}f.score DESC LIMIT ${limP}`;
   const rows = await q(itemsPool, sql, params);
   return rows.map((r) => {
@@ -1407,12 +1425,12 @@ export interface ProjectSimilarOpts {
 }
 export async function findSimilarProjects(opts: ProjectSimilarOpts = {}, diag?: { embeddings?: "off"; degraded?: boolean }): Promise<ProjectSimilarRow[]> {
   // 1) 쿼리 벡터 리터럴 — id(저장된 벡터 재사용, 재임베딩 불요) 또는 text(즉시 임베딩).
-  const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
+  const pv = opts.viewer === undefined ? undefined : await projectVisFor(opts.viewer);
   let vecLiteral: string | null = null;
   if (opts.id != null) {
     // 기준 프로젝트도 볼 수 있어야 한다 — 안 보이는 프로젝트의 임베딩으로 이웃을 훑는 건 그 프로젝트를
     //  지렛대 삼아 "무엇에 대한 일인가"를 역추적하는 우회로다(knowledge similar 의 assertKnowledgeVisible 과 같은 이유).
-    const vis = visIds === undefined ? "TRUE" : listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds);
+    const vis = pv === undefined ? "TRUE" : projectVisPredicate(PROJECT_ROW_LIST_ID_SQL, PROJECT_ROW_ROOT_ID_SQL, pv);
     const r = await one(itemsPool, `SELECT p.embedding_vector::text AS v FROM project p WHERE p.id=$1 AND ${vis}`, [opts.id]);
     vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 미임베딩·비가시 → null → []
   } else if (opts.text && opts.text.trim()) {
@@ -1439,7 +1457,7 @@ export async function findSimilarProjects(opts: ProjectSimilarOpts = {}, diag?: 
     // ⚠ 공개범위 술어를 **후보 스캔(cand)에 넣지 않는다** — 이 스캔이 곧 HNSW 근사탐색(ORDER BY <=> … LIMIT)이라
     //  거기에 술어를 얹으면 탐색목록 안에서만 사후 필터돼 결과가 통째로 비는 리콜 붕괴가 난다(#1291 R2-#6, knowledge 와 동일).
     //  cand 가 level·parent_id·list_id 를 실어야 바깥 술어(PROJECT_ROW_LIST_ID_SQL, 별칭 p)가 그대로 붙는다.
-    const vis = visIds === undefined ? "TRUE" : listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds);
+    const vis = pv === undefined ? "TRUE" : projectVisPredicate(PROJECT_ROW_LIST_ID_SQL, PROJECT_ROW_ROOT_ID_SQL, pv);
     const sql = `
       WITH cand AS (
         SELECT ${P_GREP_SEL}, p.archived_at, p.draft, (1 - (p.embedding_vector <=> ${qp}))::float8 AS similarity

@@ -89,6 +89,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  provider off 면 설정 조회 후 no-op 이라 켜 두어도 비용이 없다.
   { key: "embedding-backfill", intervalMs: TEN_MIN_MS,
     run: () => import("../v6/embedding-backfill.js").then((m) => m.runAutoBackfillSweep()) },
+  // 초안 풀기(#5522) — 지식 · 작업기록 · 코멘트 · 파일 · 리스트를 남기고도 초안인 프로젝트를 푼다. 쓰는 자리의 풀기(releaseProjectDraft)가
+  //  놓친 것과 이 기능 이전에 쌓인 초안을 줍는다. 초안은 만든 사람과 팀원만 보므로, 안 주우면 일한 프로젝트가 동료에게 안 보인다.
+  //  멱등이고 풀 것이 없으면 조회 한 번이다. 셀프호스트도 같은 정의로 돈다(housekeeping — 부팅 2분 반 뒤 1회 + 10분마다).
+  { key: "draft-release", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../v6/project-draft.js").then((m) => m.sweepDraftReleases()) },
   // device-auth 리퍼(#880) — 만료 1h 지난 pending 정리(user_code 회수). 실측 2건 잔존.
   { key: "device-auth-reap", intervalMs: TEN_MIN_MS,
     run: () => import("../org/auth/device-auth.js").then((m) => m.reapDeviceAuth()) },

@@ -229,8 +229,8 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //   닫고 지울 수 있다. DB 행만 바꾼다(파괴적 동작 없음).
   //  #5458 — 워크스페이스 간 옮기기 배치 정리(transfer-housekeeping)가 테넌트 정비로 하나 늘었다. 배치 행이 그 워크스페이스 것이라(RLS) 그 컨텍스트
   //   안에서만 비우고 수습할 수 있고, 아무도 옮기기 화면을 다시 열지 않을 때 올린 파일을 비우는 길이 요청에 얹는 것뿐이다. DB 행만 바꾼다(파괴적 동작 없음).
-  assert.equal(perTenant.length, 24, "테넌트 정비 스물넷(옮기기 배치 정리 #5458 + background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 앱 서버 동기 부르기 기록)");
-  assert.equal(SWEEP_JOBS.length, 25, "전역 하나(task-dispatch)가 더 있다");
+  assert.equal(perTenant.length, 25, "테넌트 정비 스물다섯(초안 풀기 #5522 + 옮기기 배치 정리 #5458 + background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 앱 서버 동기 부르기 기록)");
+  assert.equal(SWEEP_JOBS.length, 26, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -241,6 +241,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "outbox": SWEEP_MIN_INTERVAL_MS,                 // 종전 회수 스윕 5분
     "awaiting-notify": AWAITING_SWEEP_INTERVAL_MS,   // 종전 알림 30초
     "embedding-backfill": TEN_MIN_MS,                // 종전 600_000
+    "draft-release": TEN_MIN_MS,                     // 새 정비(#5522) — 남긴 것이 있는 초안 풀기
     "device-auth-reap": TEN_MIN_MS,
     "oauth-reap": TEN_MIN_MS,
     "session-log-reap": SIX_HOURS_MS,                // 종전 6h
@@ -428,7 +429,7 @@ t("[I5] 테넌트가 둘이면 **각각** 시드된다 — 전역 디바운스�
 //  이 표는 셀프호스트 · registry 에서 무동작이다(maybeSweep) — 박스 위 작업(LIVELY_AGENT_JOBS=host)의 감시 · 보존 · 앱 AI 실행 정비가
 //   거기서 돌 길은 하우스키핑뿐이다(격리 리뷰 · 막을 것). 표시(housekeeping)와 하우스키핑의 배선을 함께 본다.
 t("[H1] 하우스키핑에도 거는 정비는 다섯 — 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비 · 앱 도구 부르기 정비(#5053) · 옮기기 배치 정리(#5458)", () => {
-  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "app-call-sweep", "job-record-prune", "transfer-housekeeping"]);
+  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "app-call-sweep", "draft-release", "job-record-prune", "transfer-housekeeping"]);
   for (const j of SWEEP_JOBS.filter((x) => x.housekeeping)) assert.equal(j.scope ?? "tenant", "tenant", `${j.key} 은 워크스페이스마다 돈다`);
 });
 

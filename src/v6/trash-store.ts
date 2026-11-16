@@ -25,6 +25,10 @@ export interface DeletedRow {
   //  **판정에 필요한 두 필드만** 꺼내 온다.
   visibility: string | null;   // knowledge · source
   list_id: number | null;      // project
+  // #5522 — 지운 것이 **초안**이었나와 만든 사람. 초안은 만든 사람과 팀원만 보던 것이라, 지웠다고 제목이 전원에게 보이면 안 된다.
+  //  팀원 행(project_member)은 삭제와 함께 사라져 스냅샷에 없다 — 지운 뒤에는 만든 사람만 근거가 남는다.
+  draft: boolean;              // project
+  created_by: string | null;   // project
   // #3778 — 휴지통 네 탭이 줄을 가르는 재료. 본문은 여기 싣지 않는다(위 #1291 과 같은 이유) — 본문은 getDeletePreview 가 게이트 뒤에서 준다.
   level: string | null;        // project — project|task|subtask (태스크 삭제도 entity='project' 로 쌓인다, #1850 F4)
   kind: string | null;         // source — slack·transcript·local_file …
@@ -65,6 +69,8 @@ export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity 
     actor_kind: r.actor_kind ?? null,
     visibility: (r.before?.visibility as string) ?? null,
     list_id: r.before?.list_id == null ? null : Number(r.before.list_id),
+    draft: r.entity === "project" && r.before?.draft === true,
+    created_by: r.entity === "project" ? ((r.before?.created_by as string | null) ?? null) : null,
     level: r.entity === "project" ? ((r.before?.level as string) ?? null) : null,
     kind: r.entity === "source" ? ((r.before?.kind as string) ?? null) : null,
     doc_type: r.entity === "knowledge" ? ((r.before?.type as string) ?? null) : null,
@@ -80,7 +86,9 @@ export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity 
  *  화면 상한과 맞추려고 종류마다 TRASH_COUNT_CAP 에서 자른다(탭은 500건까지만 받는다).
  */
 export const TRASH_COUNT_CAP = 500;
-export async function countDeleted(opts: { gate: boolean; visibleListIds: number[] | null }): Promise<{ knowledge: number; project: number; source: number }> {
+export async function countDeleted(opts: { gate: boolean; visibleListIds: number[] | null;
+  /** #5522 — 지운 초안은 만든 사람에게만 센다. null = 초안을 거르지 않는다(특권 · 프로젝트 축 꺼짐). */
+  draftViewer?: string | null }): Promise<{ knowledge: number; project: number; source: number }> {
   const rows = await q(itemsPool,
     `SELECT latest.entity, LEAST(count(*), $5)::int AS n
        FROM (
@@ -95,9 +103,12 @@ export async function countDeleted(opts: { gate: boolean; visibleListIds: number
         AND (NOT $3::boolean
              OR (latest.entity IN ('knowledge', 'source') AND COALESCE(latest.before->>'visibility', '') <> 'members')
              OR (latest.entity = 'project' AND ($4::int[] IS NULL OR latest.before->>'list_id' IS NULL
-                   OR CASE WHEN latest.before->>'list_id' ~ '^[0-9]+$' THEN (latest.before->>'list_id')::int = ANY($4) ELSE false END)))
+                   OR CASE WHEN latest.before->>'list_id' ~ '^[0-9]+$' THEN (latest.before->>'list_id')::int = ANY($4) ELSE false END)
+                 AND ($6::text IS NULL OR COALESCE(latest.before->>'draft', '') <> 'true'
+                   OR latest.before->>'created_by' IS NOT DISTINCT FROM $6::text)))
       GROUP BY latest.entity`,
-    [["knowledge", "project", "source"], TRASHABLE_SOURCE_SYSTEMS as unknown as string[], !!opts.gate, opts.visibleListIds, TRASH_COUNT_CAP]);
+    [["knowledge", "project", "source"], TRASHABLE_SOURCE_SYSTEMS as unknown as string[], !!opts.gate, opts.visibleListIds, TRASH_COUNT_CAP,
+     opts.draftViewer ?? null]);
   const out = { knowledge: 0, project: 0, source: 0 };
   for (const r of rows as Array<{ entity: string; n: number }>) if (r.entity in out) (out as Record<string, number>)[r.entity] = Number(r.n) || 0;
   return out;
