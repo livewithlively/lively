@@ -1436,7 +1436,9 @@ async function start(kind, opts) {
 
   lastRun = { kind, opts: opts || {} };   // '다시 시도' 가 쓸 값 — 렌더러가 argv 를 다시 만들지 않게 메인이 기억한다
   state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
-  progress = null;
+  // ★ 비운 것을 **화면에도 알린다** — 렌더러가 «새 실행» 을 알아야 지난 실행에서 답한 질문 id 기억을 비운다.
+  //  안 보내면 그 기억이 창이 살아 있는 내내 남아, 같은 id 로 오는 다음 실행의 질문 카드를 숨긴다(renderer answeredPrompts).
+  progress = null; send(IPC.PROGRESS, progress);
   running = { kind, handle: null };
   pushWebUpdate();   // '작업 중' 은 웹의 [다시 시작하여 반영하기] 도 잠근다 — 눌러 놓고 거절당하지 않게(#1838)
   const r = await runCli({

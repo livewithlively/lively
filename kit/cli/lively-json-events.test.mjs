@@ -195,6 +195,19 @@ function runPluginLogin(home, { noBrowser }) {
   check("D6-f 그래도 로그인은 실제로 완료됐다(배선 확인 — 토큰 파일)", existsSync(tokenFile) && readFileSync(tokenFile, "utf8").trim() === TOKEN,
     `exists=${existsSync(tokenFile)}`);
   check("D6-g 정상 종료(end.ok=true) + 스스로 종료", r.events[r.events.length - 1]?.ok === true && r.code === 0 && !r.killed, `exit=${r.code} killed=${r.killed}`);
+
+  // ★ D6-h — **다시 로그인해도** 신원확인 질문의 id 가 앞 실행과 겹치지 않는다.
+  //  앱은 답한 id 를 기억해 같은 id 를 다시 그리지 않는다. 실행마다 confirm-1 부터면 앱을 켠 채 두 번째 로그인에서
+  //  이 카드가 안 뜨고 CLI 는 답을 끝없이 기다린다(실측 2026-11-16: 승인·발급은 끝났는데 «승인을 기다리는 중» 에 멈춤).
+  approved = false;
+  const seen2 = [];
+  const r2 = await runCli(["login", "--gateway", GW, "--json-events"], {
+    home: join(BOX, "login-home-2"),
+    answers: (e) => { seen2.push(e); return e.kind === "confirm" ? true : undefined; },
+  });
+  const confirm2 = seen2.find((e) => e.kind === "confirm");
+  check("D6-h ★ 두 번째 실행의 신원확인 id 는 첫 실행과 다르다", !!confirm?.id && !!confirm2?.id && confirm.id !== confirm2.id && r2.code === 0,
+    `first=${confirm?.id} second=${confirm2?.id} exit=${r2.code}`);
 }
 
 // ── C4 통합 — 앱이 죽어 답이 안 오면 기본값 승인이 아니라 실패한다 ──────────

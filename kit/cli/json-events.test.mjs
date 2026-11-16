@@ -4,7 +4,7 @@
 // 실행: node kit/cli/json-events.test.mjs
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { EVENT_V, encodeEvent, parseAnswer, createEmitter, createPrompter, lineReader, stripAnsi } from "./lively.mjs";
+import { EVENT_V, encodeEvent, parseAnswer, createEmitter, createPrompter, lineReader, stripAnsi, promptId } from "./lively.mjs";
 const ESC = "\u001b";   // 소스엔 리터럴 제어문자를 넣지 않는다
 
 let pass = 0;
@@ -113,6 +113,15 @@ await ta("C1 확인 요청 → prompt 이벤트 1건, 같은 id 답이 오면 �
   assert.equal(h.out[0].label, "계속할까요?");
   h.feed('{"t":"answer","id":"confirm-1","value":false}');
   assert.equal(await got, false);
+});
+
+t("C1b ★ 질문 id 는 실행마다 다르다 — 번호만 붙이면 앱이 다음 실행의 첫 질문을 숨긴다", () => {
+  // 앱(renderer)은 답한 id 를 기억해 다시 그리지 않는다. 실행마다 confirm-1 부터면 두 번째 실행의 질문이 안 뜬다.
+  assert.notEqual(promptId("confirm", 1, "aaaa"), promptId("confirm", 1, "bbbb"), "실행이 다르면 같은 번호라도 달라야 한다");
+  assert.notEqual(promptId("confirm", 1, "aaaa"), promptId("confirm", 2, "aaaa"), "같은 실행 안에선 번호로 갈린다");
+  assert.notEqual(promptId("confirm", 1, "aaaa"), promptId("secret", 1, "aaaa"), "종류가 다르면 달라야 한다");
+  // 기본 꼬리표(이 프로세스의 것)는 비어 있지 않다 — 비면 예전처럼 confirm--1 로 실행마다 같아진다.
+  assert.match(promptId("confirm", 1), /^confirm-[0-9a-f]{8}-1$/);
 });
 
 await ta("C2 ★ 다른 id 의 답으로는 절대 풀리지 않는다", async () => {
