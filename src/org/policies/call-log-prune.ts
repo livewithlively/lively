@@ -43,13 +43,26 @@ export async function pruneCallLog(retentionDays: number, pool: QueryablePool = 
   return deleted;
 }
 
-/** 주기 기동 — 부팅 직후 1회 + SWEEP_MS 간격. 정책은 매 스윕마다 다시 읽는다(관리탭 변경 즉시 반영). */
-export function startCallLogPrune(loadPolicy: () => Promise<{ retention_days: number }>): void {
+/**
+ * 한 워크스페이스 정리 — 정책을 **지금 테넌트 컨텍스트 안에서** 읽고 그 기간으로 지운다.
+ *  ⚠ 정책 읽기와 DELETE 가 같은 컨텍스트에 있어야 한다. 보존기간은 워크스페이스마다 다르고(org_runtime_config 가
+ *   워크스페이스별 행), DELETE 가 그 워크스페이스 행만 건드리는 근거는 풀의 테넌트 바인딩 + 행 수준 보안이다.
+ */
+export async function pruneCallLogByPolicy(loadPolicy: () => Promise<{ retention_days: number }>): Promise<number> {
+  const p = await loadPolicy();
+  return pruneCallLog(p.retention_days);
+}
+
+/**
+ * 주기 기동 — 부팅 직후 1회 + SWEEP_MS 간격. 스윕 본문(정책 로드 포함)은 호출부가 준다 —
+ *  다중 워크스페이스 배포에서는 워크스페이스마다 돌려야 해서다(boot/housekeeping 의 perTenant 가 감싼다).
+ *  sweepOnce 는 매번 정책을 다시 읽어야 관리탭 변경이 다음 스윕에 먹는다 — pruneCallLogByPolicy 가 그렇게 한다.
+ */
+export function startCallLogPrune(sweepOnce: () => Promise<unknown>): void {
   if (timer) return;
   const sweep = async (): Promise<void> => {
     try {
-      const p = await loadPolicy();
-      await pruneCallLog(p.retention_days);
+      await sweepOnce();
     } catch (err) {
       // 실패해도 게이트웨이 동작엔 영향 없다(fail-open) — 다음 주기에 다시 시도한다.
       logger.warn({ err }, "mcp_call_log prune 스윕 실패");

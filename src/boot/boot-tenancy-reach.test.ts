@@ -28,6 +28,7 @@ const SRC = "src/boot/housekeeping.ts";
 const REACH: Record<string, { via: string; file: string; needle: string }> = {
   "seed-default-content":       { via: "CP 하우스키핑 틱", file: "src/web.ts", needle: "seedDefaultContent()" },
   "seed-builtin-apps":          { via: "요청 정비표",       file: "src/sessions/outbox-request-sweep.ts", needle: "seedBuiltinApps()" },
+  "call-log-prune":             { via: "CP 하우스키핑 틱", file: "src/web.ts", needle: "pruneCallLog(" },
   //  ↓ 아직 닿는 길이 없다. 지금은 데이터가 0이라 손해가 없지만(실측 2026-08-31:
   //   connector_run running 0건 · org_node_state 1건 · org_connector 0건), 데이터가 생기면 손해가 난다.
   //   **의도적으로 비워 두지 않는다** — 아래 시험이 이 셋을 «미해결»로 계속 세어 보여 준다.
@@ -122,6 +123,9 @@ const MUST_FANOUT = [
   //  #4530 — 세션 요약 카드(뜻으로 찾기의 재료)도 그 워크스페이스의 대화에서 만들어 그 워크스페이스 표에 담는다.
   //   primary 만 돌면 나머지 워크스페이스는 카드가 영영 안 생겨 뜻 검색이 조용히 죽는다.
   "session-card",
+  //  호출 감사로그 prune — 보존기간은 워크스페이스 설정이고 DELETE 는 그 워크스페이스 행만 본다(실 DB 증명:
+  //   src/org/policies/call-log-prune.pg-test.mjs). primary 만 돌면 나머지 워크스페이스의 기록이 기한 없이 쌓인다.
+  "call-log-prune",
 ];
 
 /** 순회하면 **안 되는** 것 — 이유가 각자 다르다. 하나로 뭉뚱그리면 다음 사람이 잘못 푼다. */
