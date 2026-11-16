@@ -225,6 +225,10 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
       check(`⑨ 호스트키 미등록(${n}) → known_hosts 안내 · 자격 안내가 아니다`,
         /known_hosts/.test(note) && note.includes("ssh -T git@git.example.com") && !/ssh-keygen/.test(note), note);
     }
+    const changed = authNote("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.", URL_SSH, "pc");
+    check("⑨ 바뀐 호스트키는 «처음 붙는 호스트» 로 안내하지 않는다(관리자 확인 후 ssh-keygen -R)",
+      /관리자에게/.test(changed) && changed.includes("ssh-keygen -R git.example.com") && !/yes 로 받아/.test(changed), changed);
+    check("⑨ 사용자 없는 scp 주소도 호스트를 안내에 쓴다", authNote(DENIED, "h.kr:o/r.git", "pc").includes("h.kr 계정"), "호스트 누락");
     check("⑨ ssh 포트가 있으면 확인 명령에 -p",
       authNote("Host key verification failed.", "ssh://git@h.kr:2222/o/r.git", "pc").includes("ssh -T -p 2222 git@h.kr"), "포트 누락");
   }
@@ -240,6 +244,10 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
       ["file:///srv/r.git", null],
       ["C:/repos/r", null],
       ["/srv/r.git", null],
+      ["git+ssh://git@h.kr/o/r.git", { user: "git", host: "h.kr", port: null }],
+      ["-oProxyCommand=x@h.kr:o/r", null],
+      ["$(id)@h.kr:o/r", null],
+      ["git@h.kr;rm:o", null],
       ["", null],
     ];
     for (const [u, want] of T) check(`⑩ sshTargetOf ${JSON.stringify(u)}`, JSON.stringify(sshTargetOf(u)) === JSON.stringify(want), JSON.stringify(sshTargetOf(u)));
@@ -256,6 +264,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
       [1, "Hi newbie! You've successfully authenticated, but GitHub does not provide shell access.", "ok"],
       [255, "Host key verification failed.", "hostkey"],
       [255, "git@h.kr: Permission denied (publickey).", "denied"],
+      [255, "@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nOffending ED25519 key in /u/.ssh/known_hosts:3\nHost key verification failed.", "hostkey-changed"],
       [255, "ssh: connect to host h.kr port 22: Operation timed out", null],
       [255, "ssh: Could not resolve hostname h.kr", null],
     ];

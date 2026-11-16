@@ -2527,7 +2527,7 @@ async function cmdStatus(opts) {
 //  키가 거부됐을 때 고치는 길은 자리마다 다르다 — 박스는 라이블리에 등록한 키, 내 PC 는 이 컴퓨터의 키(authNote 와 같은 갈래).
 function sshDeniedFix(place, t) {
   const box = `me_git_credential_get 으로 공개키를 보고 ${t.host} 계정 SSH 키에 등록(없으면 me_git_credential_set {kind:"ssh", host:"${t.host}"})`;
-  const pc = `이 컴퓨터의 공개키(~/.ssh/id_ed25519.pub, 없으면 ssh-keygen -t ed25519)를 ${t.host} 계정 SSH 키에 등록 후 ${t.cmd}`;
+  const pc = `이 컴퓨터의 공개키(~/.ssh/id_ed25519.pub, 없으면 ssh-keygen -t ed25519)를 ${t.host} 계정 SSH 키에 등록(키에 암호가 있으면 ssh-add, macOS 는 ssh-add --apple-use-keychain) 후 ${t.cmd}`;
   return place === "box" ? box : place === "pc" ? pc : `라이블리 박스면 ${box} · 내 PC 면 ${pc}`;
 }
 async function doctorGitSsh(chk) {
@@ -2537,21 +2537,27 @@ async function doctorGitSsh(chk) {
   for (const t of core.sshProbeTargets(repos)) {
     const r = nodeSpawnSync("ssh", ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ...(t.port ? ["-p", t.port] : []), `${t.user}@${t.host}`],
       { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
-    if (r.error) return;                                   // ssh 없음 — 다른 호스트도 같다
+    if (r.error && r.error.code === "ENOENT") return;      // ssh 없음 — 다른 호스트도 같다
+    if (r.error) continue;                                 // 타임아웃 등 — 이 호스트만 판정 못 함
     const kind = core.classifySshProbe(r.status, `${r.stdout || ""}\n${r.stderr || ""}`);
     if (!kind) continue;
+    //  advisory — 레포 목록은 조직 전체라 코드를 안 만지는 구성원에게도 뜬다. 보여 주되 «N건 문제» · exit 1 로 세지 않는다.
     chk(`git 접속 ${t.host}`, kind === "ok",
       kind === "ok" ? "ssh 인증 OK"
         : kind === "hostkey" ? "호스트키가 known_hosts 에 없습니다 — 클론이 지문 확인을 물을 수 없어 실패합니다"
-        : "ssh 키가 거부됐습니다 — 쓰고 있는 키의 공개키가 그 계정에 등록돼 있지 않습니다",
-      kind === "hostkey" ? `${t.cmd}  (지문을 대조하고 yes)` : sshDeniedFix(core.gitAuthPlace(t.host), t));
+        : kind === "hostkey-changed" ? "저장된 호스트키와 서버 키가 다릅니다 — 서버 키 교체이거나 중간자일 수 있습니다"
+        : "ssh 키가 거부됐습니다 — 공개키가 그 계정에 없거나, 키에 암호가 걸려 ssh-agent 에 안 올라가 있습니다",
+      kind === "hostkey" ? `${t.cmd}  (지문을 대조하고 yes)`
+        : kind === "hostkey-changed" ? `${t.host} 관리자에게 키 교체 여부를 확인한 뒤에만 ssh-keygen -R ${t.host} 후 ${t.cmd}`
+        : sshDeniedFix(core.gitAuthPlace(t.host), t),
+      { advisory: true });
   }
 }
 
 async function cmdDoctor(opts) {
   const st = await gatherStatus();
   const checks = [];
-  const chk = (name, pass, detail, fix) => checks.push({ name, pass, detail, fix: fix || null });
+  const chk = (name, pass, detail, fix, { advisory = false } = {}) => checks.push({ name, pass, detail, fix: fix || null, ...(advisory ? { advisory: true } : {}) });
 
   // 버전만이 아니라 **어느 런타임에서 도는지**를 말한다 — #1068 이 정확히 그 축에서 터졌고(시스템 구버전 node),
   //  전용 런타임이 실제로 쓰이고 있는지는 여기 말고는 확인할 데가 없다.
@@ -2738,10 +2744,10 @@ async function cmdDoctor(opts) {
   const w = Math.max(...checks.map((x) => cols(x.name)));
   for (const x of checks) {
     const pad = " ".repeat(Math.max(0, w - cols(x.name)));
-    say(`  ${x.pass ? green("✓") : red("✗")} ${x.name}${pad}   ${x.pass ? dim(x.detail) : x.detail}`);
+    say(`  ${x.pass ? green("✓") : x.advisory ? yellow("!") : red("✗")} ${x.name}${pad}   ${x.pass ? dim(x.detail) : x.detail}`);
     if (!x.pass && x.fix) say(`    ${dim("→ 해결: ")}${bold(x.fix)}`);
   }
-  const bad = checks.filter((x) => !x.pass);
+  const bad = checks.filter((x) => !x.pass && !x.advisory);
   say("");
   if (!bad.length) say(green("  모두 정상입니다."));
   else { say(yellow(`  ${bad.length}건 문제 — 위 '해결' 을 순서대로 실행하세요.`)); process.exitCode = 1; }

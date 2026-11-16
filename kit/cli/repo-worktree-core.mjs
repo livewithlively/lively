@@ -277,6 +277,9 @@ function gitFail(stderr) {
 const AUTH_FAIL_RE = /permission denied|could not read username|authentication failed|access denied|repository not found|invalid username or token/i;
 //  처음 붙는 ssh 호스트 — ssh 는 대화형 터미널에서만 지문을 묻는다. MCP·CLI 가 띄운 git 은 물을 수 없어 그대로 실패한다.
 const HOSTKEY_FAIL_RE = /host key verification failed|no \S*\s*host key is known/i;
+//  저장된 호스트키와 다른 키 — ssh 는 같은 «verification failed» 로 끝나지만 묻지도 않고, «처음 붙는 호스트» 로 안내하면
+//  서버 키 교체·중간자를 일상 절차 뒤에 숨긴다. 먼저 가른다.
+const HOSTKEY_CHANGED_RE = /remote host identification has changed|offending \S+ key in/i;
 export function gitHostOf(url) {          // export=테스트용·순수
   const s = String(url || "");
   const scp = s.match(/^[^/]+@([^:]+):/);                 // scp 형 git@host:path
@@ -289,10 +292,13 @@ export function sshTargetOf(url) {
   const s = String(url || "");
   //  scp 형 [user@]host:path — git 규칙대로 첫 ':' 앞에 '/' 가 없을 때만. 한 글자 host 는 윈도우 드라이브(C:/…)다.
   const scp = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? null : s.match(/^(?:([^@/:]+)@)?([^/:@]+):/);
-  if (scp && scp[2].length > 1) return { user: scp[1] || "git", host: scp[2], port: null };
-  const m = s.match(/^ssh:\/\/(?:([^@/]+)@)?([^/:]+)(?::(\d+))?\//i);
-  return m ? { user: m[1] || "git", host: m[2], port: m[3] || null } : null;
+  if (scp && scp[2].length > 1) return safeTarget({ user: scp[1] || "git", host: scp[2], port: null });
+  const m = s.match(/^(?:git\+)?ssh:\/\/(?:([^@/]+)@)?([^/:]+)(?::(\d+))?(?:\/|$)/i);
+  return m ? safeTarget({ user: m[1] || "git", host: m[2], port: m[3] || null }) : null;
 }
+//  user · host 는 ssh argv 로 넘어가고 복붙 명령으로도 찍힌다 — 이름 글자만 받는다('-' 로 시작하면 ssh 옵션이 된다).
+const SSH_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
+const safeTarget = (t) => (SSH_NAME_RE.test(t.user) && SSH_NAME_RE.test(t.host) ? t : null);
 const sshProbeCmd = (t) => `ssh -T ${t.port ? `-p ${t.port} ` : ""}${t.user}@${t.host}`;
 
 // 이 컴퓨터가 라이블리 박스인가 — 게이트웨이가 그 호스트 자격을 이 홈에 내려 줬으면(materialize 산출물) 박스다.
@@ -306,10 +312,14 @@ export function gitAuthPlace(host, { platform = process.platform, home = homedir
   return platform === "linux" ? "unknown" : "pc";
 }
 
-export function authNote(stderr, url, place = gitAuthPlace(gitHostOf(url))) {   // export=테스트용·순수(place 를 주면)
-  const host = gitHostOf(url);
-  const h = host || "그 호스트";
+export function authNote(stderr, url, place = gitAuthPlace(sshTargetOf(url)?.host || gitHostOf(url))) {   // export=테스트용·순수(place 를 주면)
   const ssh = sshTargetOf(url);
+  const host = ssh?.host || gitHostOf(url);
+  const h = host || "그 호스트";
+  if (HOSTKEY_CHANGED_RE.test(stderr || "")) {
+    return ` — ${h} 의 ssh 호스트키가 이 컴퓨터에 저장된 키와 다릅니다. 서버 키 교체이거나 중간자일 수 있습니다.`
+      + ` ${h} 관리자에게 키 교체 여부를 확인한 뒤에만 \`ssh-keygen -R ${h}\` 로 옛 키를 지우고 다시 붙으세요.`;
+  }
   if (HOSTKEY_FAIL_RE.test(stderr || "")) {
     return ` — 이 컴퓨터가 ${h} 의 ssh 호스트키를 아직 모릅니다(~/.ssh/known_hosts 에 없음). git 은 여기서 지문 확인을 물을 수 없어 멈췄습니다.`
       + ` 터미널에서 \`${ssh ? sshProbeCmd(ssh) : `ssh -T git@${h}`}\` 를 한 번 실행해 지문을 ${h} 관리자가 알려 준 값과 대조하고 yes 로 받아 두면 됩니다.`;
@@ -320,6 +330,7 @@ export function authNote(stderr, url, place = gitAuthPlace(gitHostOf(url))) {   
     + ` (셸에서 ssh-keygen 으로 직접 만들지 마세요 — 그 키는 라이블리가 모르니 회수·복원이 안 됩니다.)`;
   const pc = ssh
     ? ` 이 컴퓨터의 ssh 키를 씁니다 — 키가 없으면 \`ssh-keygen -t ed25519\` 로 만들고, 공개키(~/.ssh/id_ed25519.pub)를 ${h} 계정의 SSH 키에 등록한 뒤 \`${sshProbeCmd(ssh)}\` 로 확인하세요.`
+      + ` 이미 등록했는데도 거부되면 키에 암호가 걸려 ssh-agent 에 안 올라간 것입니다 — \`ssh-add\`(macOS 는 \`ssh-add --apple-use-keychain\`).`
     : ` 이 컴퓨터의 git 자격을 씁니다 — ${h} 개인 액세스 토큰을 git credential helper(macOS 는 키체인)에 저장하거나 ssh 주소로 클론하세요.`;
   const pcWhy = `내 PC 에서는 라이블리가 git 자격을 내려 주지 않습니다(me_git_credential_set 은 라이블리 박스 세션 전용 — 개인키가 박스 밖으로 나오지 않습니다).`;
   if (place === "box") return ` — 이 계정에 ${h} git 자격이 없어 보입니다.${box}`;
@@ -327,10 +338,11 @@ export function authNote(stderr, url, place = gitAuthPlace(gitHostOf(url))) {   
   return ` — 이 계정에 ${h} git 자격이 없어 보입니다. 라이블리 박스 세션이면${box} 내 PC 라면 ${pcWhy}${pc}`;
 }
 
-// ssh -T 시험 접속 결과 판정(lively doctor) — "ok" | "hostkey" | "denied" | null(판정 못 함: 네트워크·타임아웃 등).
+// ssh -T 시험 접속 결과 판정(lively doctor) — "ok" | "hostkey" | "hostkey-changed" | "denied" | null(판정 못 함: 네트워크·타임아웃 등).
 //  GitHub 는 인증에 성공해도 셸을 안 줘서 종료코드 1 이다 → 종료코드가 아니라 인사말로 본다. (export=테스트용·순수)
 export function classifySshProbe(code, output) {
   const o = String(output || "");
+  if (HOSTKEY_CHANGED_RE.test(o)) return "hostkey-changed";
   if (HOSTKEY_FAIL_RE.test(o)) return "hostkey";
   if (/permission denied|publickey/i.test(o)) return "denied";
   if (code === 0 || /welcome to gitlab|successfully authenticated|authenticated via ssh key|welcome to gitea|logged in as/i.test(o)) return "ok";
