@@ -15,14 +15,17 @@
 //
 //  앱이 받는 머리글(계약): x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(한글 id 도 실리게 · SDK livelyMember 가 푼다) ·
 //   x-lively-variant(pub | draft) · x-lively-identity(신원 원문 — SDK 가 게이트웨이 호출에 다시 싣는다) · x-lively-job(백그라운드 작업이면 그 작업 번호 —
-//   #4486 · 없으면 사람이 보낸 요청 · AI 도구 부르기) · x-lively-guard-key(#4487 자가호스팅 컨테이너만 — 검사 층을 거쳤다는 표지 · SDK livelyMember 가
-//   env 의 같은 값과 대조한다). 들어온 그 밖의 x-lively-* 는 지운다.
+//   #4486 · 없으면 사람이 보낸 요청 · AI 도구 부르기) · x-lively-job-source(6 판 — 작업이면 그 작업을 시작한 자리: app-ui 라이블리 화면 안의 앱 ·
+//   app-front 앱 주소로 연 앱 화면 · mcp MCP 도구 부르기(AI 세션 포함) · web REST · app-server 앱 서버 코드 · app-job 작업 안의 작업 · mcp-tool 앱이 선언한
+//   MCP 도구 — 게이트웨이 작업 행의 값(app-jobs actorSource) · 짧은 소문자 표지가 아니거나 없으면 싣지 않는다) · x-lively-guard-key(#4487 자가호스팅
+//   컨테이너만 — 검사 층을 거쳤다는 표지 · SDK livelyMember 가 env 의 같은 값과 대조한다). 들어온 x-lively-* 는 사람 요청의 신원 원문 말고는 모두 지운다
+//   (위 이름으로 들어온 것도 — 이 문이 검사한 값으로 다시 쓴다).
 //
 //  #4486 앱 v2-7 백그라운드 작업(결정 상민 2026-10-20 — 태스크 #4486 댓글 539):
 //   · 게이트웨이가 함수를 비동기로 부를 때 이벤트의 X-Lively-Identity 에 «부르기 신원»(lvjc1.<작업>.<한 번 쓰는 비밀>)을 싣는다. 이 문은 그것을 받으면
 //     앱 코드보다 먼저 게이트웨이(LIVELY_API_URL)에 «이 작업 시작»(POST /api/app-jobs/<작업>/claim · 함수의 앱 서버 토큰 + 그 비밀)을 확인받는다.
 //     게이트웨이는 부른 그 작업 · 그 비밀 · 아직 시작 안 함 · 취소 안 됨일 때만 한 번 넘긴다 — 아니면 앱에 닿기 전에 401 · 409(위조 · 재전송 · AWS 의 중복 전달).
-//   · 넘기면 «돌기 신원»(lvjr1.…)과 작업을 시작한 사람을 받아 앱에 넘긴다(사람 요청과 같은 머리글 + x-lively-job). 앱의 SDK 가 돌기 신원을 다시 실어
+//   · 넘기면 «돌기 신원»(lvjr1.…)과 작업을 시작한 사람을 받아 앱에 넘긴다(사람 요청과 같은 머리글 + x-lively-job · x-lively-job-source). 앱의 SDK 가 돌기 신원을 다시 실어
 //     게이트웨이를 부른다(그 사람 ∩ 그 사람의 앱 동의 · 작업이 도는 동안만).
 //   · 도는 동안 20초마다 박동(/tick — 취소를 알아챈다) · 작업 시간 상한에서 끊는다 · 앱이 답하면 상태 · 본문 앞 64KB 를 결과로 보고(/result)한 뒤에
 //     함수의 응답을 끝낸다(응답을 끝내면 Lambda 가 환경을 얼려 보고가 못 나간다). 이 응답은 비동기 호출이라 아무도 받지 않는다.
@@ -42,7 +45,7 @@ import { crc32 } from "../util/crc32.js";
 declare const require: (id: string) => unknown;   // guardMain 이 Lambda 안에서 CommonJS 로 돌 때의 require — 이 모듈(ESM) 자체는 부르지 않는다
 
 /** 문 판 — 레이어 설명에 들어간다(사람이 보는 표지 · 실제 같고 다름은 내용 지문으로 가른다). */
-export const GUARD_VERSION = 5;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토) · 4 = 백그라운드 작업 · 사람 요청 시간 끊기(#4486) · 5 = AI 도구 동기 부르기(#5053)
+export const GUARD_VERSION = 6;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토) · 4 = 백그라운드 작업 · 사람 요청 시간 끊기(#4486) · 5 = AI 도구 동기 부르기(#5053) · 6 = 작업을 시작한 자리(x-lively-job-source)
 /** 문이 받는 포트(웹 어댑터 AWS_LWA_PORT) — 앱은 $PORT(8080)에서 받는다. */
 export const GUARD_PORT = 8099;
 export const APP_PORT = 8080;
@@ -83,6 +86,8 @@ function guardMain(): void {
   const GUARD_KEY = String(env.LIVELY_GUARD_KEY || "");
   const JOB_CALL_RE = /^lvjc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
   const JOB_RESULT_MAX = 64 * 1024, JOB_BODY_MAX = 2 * 1024 * 1024;
+  //  작업을 시작한 자리(claim 의 source — app-ui · app-front · mcp · web · app-server · app-job · mcp-tool …) — 이 꼴일 때만 앱에 넘긴다(머리글에 아무 글이나 싣지 않게).
+  const JOB_SOURCE_RE = /^[a-z][a-z-]{0,31}$/;
   //  #5053 AI 도구 동기 부르기 — app-server-call-plan.ts 의 같은 값(CALL_PREFIX · CALL_BODY_MAX).
   const CALL_RE = /^lvsc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
   const CALL_BODY_MAX = 1024 * 1024;
@@ -356,6 +361,10 @@ function guardMain(): void {
     headers["x-lively-member-name"] = enc(String(j.member_name ?? ""));
     headers["x-lively-variant"] = j.variant === "draft" ? "draft" : "pub";
     headers["x-lively-job"] = String(id);
+    //  작업을 시작한 자리 — 게이트웨이가 적은 값만(들어온 x-lively-job-source 는 위에서 지웠다). 앱은 이것으로 «앱 화면에서 누른 작업만» 같은 라우트를 가른다.
+    //   옛 게이트웨이(claim 에 source 없음) · 꼴이 틀린 값이면 싣지 않는다 — 앱은 없음을 «화면이 아님» 으로 읽어야 한다.
+    const jobSource = typeof j.source === "string" ? j.source : "";
+    if (JOB_SOURCE_RE.test(jobSource)) headers["x-lively-job-source"] = jobSource;
     if (GUARD_KEY) headers["x-lively-guard-key"] = GUARD_KEY;
     headers["content-length"] = String(body.length);
     //  작업 시간 상한 — 함수 마감이 더 이르면(작업 시간 = 함수 시간 15분이 기본) 결과를 보고할 여유를 두고 그 앞에서 끊는다(격리 리뷰).

@@ -262,4 +262,11 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_account JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+  // ── org_runtime_config 확장: record_scope_policy — 조직 기록 범위(#5016 후속). {scope: work_folders|anywhere, exclude_roots: [경로]}.
+  //  허용 목록은 종전 work_roots 칸이 그대로 맡는다(설치 때 ~/.lively/work-roots 로도 나간다). 비면 '{}' = 작업 폴더에서만 · 제외 목록 없음
+  //  (= 이 칸이 생기기 전 동작). 구성원은 컴퓨터마다 목록만 덮어쓴다(org_member.local_scope_pref) — 방식은 못 바꾼다.
+  //  관리자 도구 org_record_scope_set 이 이 칸과 work_roots 만 쓴다(store/runtime-config.ts — «한 칸 전용 입구» 규약).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS record_scope_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
 }

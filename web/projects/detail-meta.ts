@@ -433,11 +433,12 @@ function pjvProjFactsStrip(p, members, reload) {
     el('div', { class: 'pjh-fact' + (empty ? ' empty' : '') + (extra ? ' ' + extra : '') }, glyph ? factGlyph(glyph) : null, label ? el('span', { class: 'pjh-fact-k', text: label }) : null, control);
   const has = (a: unknown[] | undefined) => !!(a && a.length);
   // 초안(#4170) — 세션 첫 지시로 기계가 막 만든 프로젝트. 목록 기본 뷰에서 따로 서 있다는 걸 여기서도 말하고, 제목·본문을
-  //  고치지 않고도 올릴 길(«목록에 올리기»)을 준다. 제목이나 본문을 고치면 서버가 저절로 내린다.
+  //  고치지 않고도 올릴 길(«공개하기»)을 준다. 제목이나 본문을 고치면 서버가 저절로 내린다.
+  //  #5522 — 초안은 만든 사람과 팀원만 본다. 그래서 단추 이름이 «목록에 올리기» 에서 «공개하기» 로 바뀌었다(누르면 모두에게 보인다).
   const draftChip = p.draft === true && p.status !== 'done'
-    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: '세션 첫 지시로 자동 생성된 프로젝트입니다. 제목이나 본문을 정리하면 목록에 올라갑니다.' },
+    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: '세션 첫 지시로 자동 생성된 프로젝트입니다. 나와 초대한 사람에게만 보이고, 작업을 남기거나 제목 · 본문을 정리하면 모두에게 공개됩니다.' },
       el('span', { class: 'pjh-draft-k', text: '초안' }),
-      el('button', { class: 'pjh-draft-up', type: 'button', text: '목록에 올리기', onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
+      el('button', { class: 'pjh-draft-up', type: 'button', text: '공개하기', title: '초안은 나와 초대한 사람만 봅니다. 누르면 모두에게 보이는 목록에 올라갑니다.', onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
     : null;
   return el('div', { class: 'pjh-facts' },
     chip(null, null, pjvProjStatusPill(p, reload)),

@@ -160,7 +160,7 @@ async function startApi(): Promise<{ url: string; calls: ApiCall[]; close: () =>
       const m = /^\/api\/app-jobs\/(\d+)\/(claim|tick|result)$/.exec(req.url ?? "");
       calls.push({ path: req.url ?? "", headers: req.headers, body: body ? JSON.parse(body) : null });
       if (!m) { res.writeHead(404).end(); return; }
-      const reply = m[2] === "claim" ? { job: Number(m[1]), run: jobCredential("run", Number(m[1]), "R".repeat(43)), member: "윤상민", member_name: "윤 상민", variant: "pub", timeout_s: 30, tick_s: 1 }
+      const reply = m[2] === "claim" ? { job: Number(m[1]), run: jobCredential("run", Number(m[1]), "R".repeat(43)), member: "윤상민", member_name: "윤 상민", variant: "pub", timeout_s: 30, tick_s: 1, source: "app-front" }
         : m[2] === "tick" ? { cancel: false } : { ok: true, status: "done" };
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(reply));
@@ -467,9 +467,9 @@ t("L14 비동기 부르기 — 곧바로 202 · 검사 층 작업 길(claim → 
     const res = api.calls.find((c) => c.path === "/api/app-jobs/7/result")!.body as { outcome: string; status_code: number; body_b64: string };
     assert.equal(res.outcome, "response");
     assert.equal(res.status_code, 200);
-    const seen = JSON.parse(Buffer.from(res.body_b64, "base64").toString("utf8")) as { url: string; member: { id: string; job: number }; headers: Record<string, string> };
+    const seen = JSON.parse(Buffer.from(res.body_b64, "base64").toString("utf8")) as { url: string; member: { id: string; job: number; jobSource: string | null }; headers: Record<string, string> };
     assert.equal(seen.url, "/slow?ms=1500&x=1");
-    assert.deepEqual([seen.member.id, seen.member.job], ["윤상민", 7], "앱은 작업을 시작한 사람으로 받는다");
+    assert.deepEqual([seen.member.id, seen.member.job, seen.member.jobSource], ["윤상민", 7, "app-front"], "앱은 작업을 시작한 사람 · 시작한 자리(SDK livelyMember — 검사 층 열쇠까지 맞을 때)로 받는다");
     assert.equal(api.calls.find((c) => c.path.endsWith("/claim"))!.headers.authorization, "Bearer app-token-1");
   } finally { await api.close(); }
 });

@@ -623,3 +623,50 @@
 .ob-up-btns{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
 .ob-up-btns .ob-btn{margin-top:0}
 .ob-up-stat:empty{display:none}
+
+/* ── 소개 영상(#5550) — 처음 설정 첫 장면 · 사용 가이드의 «소개 영상 보기» (web/v2/welcome-film.ts) ──────────────
+   영상은 늘 어두운 그림이다(테마와 무관) — 그래서 그 위의 조작줄은 테마 토큰이 아니라 흰 잉크(--on-fill)와 검은 스크림만 쓴다.
+   DS-EXCEPTION: 영상 바탕색(#060A13 — 영상 첫 프레임의 바탕과 같은 값)과 영상 위 스크림의 검정 · 흰 알파. 영상이 뜨기 전 · 레터박스에
+   다른 색이 비치면 테두리가 번쩍인다. 근거: ui-design-system-agent ▸ exception-policy §1 '외부 자산 위의 오버레이'. 2026-11-16, #5550 */
+.wf{position:relative; width:100%; aspect-ratio:16 / 9; border-radius:16px; overflow:hidden; isolation:isolate; background:#060A13; color:var(--on-fill);
+  box-shadow:0 26px 64px rgba(var(--shadow-ink), .30), 0 0 0 1px rgba(var(--shadow-ink), .14)}
+.wf-v{display:block; width:100%; height:100%; object-fit:cover; background:#060A13; cursor:pointer; outline:none}
+.wf-big{position:absolute; inset:0; margin:auto; width:76px; height:76px; border:0; border-radius:50%; display:grid; place-items:center; cursor:pointer;
+  background:rgba(255, 255, 255, .16); color:var(--on-fill); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+  box-shadow:0 10px 30px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .22); opacity:0; pointer-events:none; transform:scale(.92); transition:opacity .18s ease, transform .18s ease, background .12s ease}
+.wf:not(.is-playing) .wf-big{opacity:1; pointer-events:auto; transform:none}
+.wf-big:hover{background:rgba(255, 255, 255, .26)}
+.wf-big:focus-visible, .wf-btn:focus-visible, .wf-track:focus-visible, .wf-close:focus-visible{outline:2px solid var(--on-fill); outline-offset:2px}
+.wf-big-ic{width:30px; height:30px; margin-left:3px; fill:currentColor; stroke:currentColor; stroke-width:1.6; stroke-linejoin:round; stroke-linecap:round}
+.wf.is-ended .wf-big-ic{margin-left:0; fill:none; stroke-width:2}
+.wf-bar{position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; gap:8px; padding:30px 12px 9px;
+  background:linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, .58)); opacity:0; transition:opacity .18s ease}
+.wf:hover .wf-bar, .wf:focus-within .wf-bar, .wf:not(.is-playing) .wf-bar{opacity:1}
+.wf.is-idle .wf-bar{opacity:0}   /* 틀기 전에는 가운데 단추만 */
+.wf-btn{flex:none; width:32px; height:32px; border:0; border-radius:8px; display:grid; place-items:center; background:none; color:inherit; cursor:pointer}
+.wf-btn:hover{background:rgba(255, 255, 255, .16)}
+.wf-ic{width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round}
+.wf-track{position:relative; flex:1; min-width:0; height:20px; display:flex; align-items:center; cursor:pointer; touch-action:none}
+.wf-track::before{content:''; position:absolute; left:0; right:0; height:4px; border-radius:999px; background:rgba(255, 255, 255, .28)}
+.wf-fill{position:absolute; left:0; right:0; height:4px; border-radius:999px; background:var(--on-fill); transform:scaleX(0); transform-origin:0 50%}
+.wf-time{flex:none; padding:0 4px; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; opacity:.88}
+.wf:fullscreen{border-radius:0; aspect-ratio:auto; width:100vw; height:100vh}
+.wf:fullscreen .wf-v{object-fit:contain}
+@media (prefers-reduced-motion: reduce){ .wf-big, .wf-bar{transition:none} }
+
+/* 인사 장면 — 영상이 서면 칸을 넓히고(화면 높이가 낮으면 그만큼만), 글과 단추는 종전 폭으로 가운데에 둔다. */
+.ob-qcol.ob-has-film{width:min(880px, 94%, max(480px, calc((100vh - 360px) * 16 / 9))); padding-top:5vh}
+.ob-in-film{margin-bottom:30px}
+.ob-qcol.ob-has-film > :not(.ob-in-film){max-width:560px; margin-left:auto; margin-right:auto}
+@media (prefers-reduced-motion: no-preference){ .ob-in-film{animation:obInRise 250ms ease-out both} }
+@media (max-width: 640px){ .wf{border-radius:12px} .ob-in-film{margin-bottom:22px} .wf-time{display:none} }
+
+/* 다시 보기 창 */
+.wf-modal{position:fixed; inset:0; z-index:1200; display:grid; place-items:center; padding:56px 24px 24px; background:rgba(var(--shadow-ink), .66); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px)}
+.wf-modal-box{position:relative; width:min(1120px, 100%, calc((100vh - 110px) * 16 / 9))}
+.wf-close{position:absolute; right:0; top:-42px; width:34px; height:34px; border:0; border-radius:50%; display:grid; place-items:center; cursor:pointer; background:rgba(255, 255, 255, .16); color:var(--on-fill)}
+.wf-close:hover{background:rgba(255, 255, 255, .28)}
+.wf-note{margin:0; padding:40px 20px; text-align:center; font-size:14px; color:var(--on-fill)}
+@media (prefers-reduced-motion: no-preference){ .wf-modal{animation:wfFade .18s ease-out both} .wf-modal-box{animation:wfRise .26s cubic-bezier(.16, 1, .3, 1) both} }
+@keyframes wfFade{ from{opacity:0} to{opacity:1} }
+@keyframes wfRise{ from{opacity:0; transform:translateY(14px) scale(.985)} to{opacity:1; transform:none} }

@@ -42,6 +42,7 @@ async function openFileViewer(id, rel, name, reload, base, shareBase?) {
       name, size: undefined,
       fetchView: () => authFetch(url),
       fetchDownload: () => authFetch(url + '&download=1'),
+      streamUrl: apiUrl(url),   // #5480 — 영상·소리는 주소로(구간 응답 · 상한 없음)
       path: rel, fetchRel: (p) => authFetch(B + id + '/file?path=' + encodeURIComponent(p)),   // #4582 md 상대경로 그림
       // 기존 크기 규칙(14-files-upload.css .proj-file-*)을 보존하려고 화면 클래스를 함께 얹는다.
       cls: { img: 'proj-file-img', pdf: 'proj-file-pdf', html: 'proj-file-pdf', md: 'proj-file-md', code: 'proj-file-edit', msg: 'admin-hint' },

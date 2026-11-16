@@ -2,7 +2,8 @@
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
 import { z } from "zod";
-import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from "../v6/visibility.js";
+import { canSeeProjectRow, canSeeProjectRowVis, projectVisFor, visibleListIds, listVisible } from "../v6/visibility.js";
+import { releaseProjectDraft } from "../v6/project-draft.js";
 import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
@@ -743,16 +744,17 @@ const projectUpdateV6Input = {
   due_date: z.string().nullable().optional(),
   // #1308 — 날짜가 움직였으면 depends_on 후행 체인도 같은 Δ 로 민다. 명시 opt-in(간트가 켠다).
   reschedule_dependents: z.boolean().optional(),
-  // #4170 초안 — 보통 안 보낸다: 제목이나 본문을 실제로 고치면 저절로 초안에서 나온다. 웹의 «목록에 올리기» 가 false 를 보낸다.
+  // #4170 초안 — 보통 안 보낸다: 제목이나 본문을 실제로 고치면 저절로 초안에서 나온다. 웹의 «공개하기» 가 false 를 보낸다.
+  //  #5522 — 초안은 만든 사람과 팀원만 본다. true 는 받아도 아무 일도 없다(남의 프로젝트를 초안으로 되돌려 숨기는 길을 열지 않는다).
   draft: z.boolean()
-    .describe("초안 여부. 보통 생략한다 — 제목(name)이나 본문(description·append_description)을 실제로 고치면 저절로 초안에서 나온다. false = 고치지 않고 목록에 올리기.")
+    .describe("초안 여부. 보통 생략한다 — 초안(첫 지시로 자동 생성 · 만든 사람과 팀원만 본다)은 제목·본문을 실제로 고치거나 산출지식·작업기록·코멘트·파일을 남기면 저절로 풀려 공개된다. false = 고치지 않고 지금 공개하기. true 는 무시된다(한 번 공개된 프로젝트는 초안으로 돌아가지 않는다).")
     .optional(),
 };
 type ProjectUpdateV6Input = z.infer<z.ZodObject<typeof projectUpdateV6Input>>;
 const projectUpdateV6: Capability = {
   name: "project_update_v6",
   title: "프로젝트 수정(v6)",
-  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로. 첫 지시로 자동 생성된 '초안' 프로젝트는 이름이나 본문을 실제로 고치면 초안에서 나와 목록에 올라간다.",
+  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로. 첫 지시로 자동 생성된 '초안' 프로젝트는 만든 사람과 팀원만 보이고, 이름이나 본문을 실제로 고치면 초안에서 나와 모두에게 보이는 목록에 올라간다.",
   scope: "memory",
   input: projectUpdateV6Input,
   expose: {
@@ -1195,7 +1197,8 @@ const knowledgeProjectsV6: Capability = {
   handler: async (input: KnowledgeProjectsV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     //  #5100 — 앱 맥락 범위 밖 지식의 이름으로 연결 프로젝트를 훑지 못하게(공개범위로는 보이는데 범위 밖이면 거절 + 기록 · 그 밖은 종전 그대로).
     await assertKnowledgeInAppContext(input.name, ctx?.viewer ?? null, user, ctx, "knowledge_projects_v6");
-    return { projects: await projectsForKnowledge(input.name) };
+    //  #5522 — 프로젝트 이름이 나가는 조회다. 요청자에게 안 보이는 프로젝트(잠긴 리스트 · 남의 초안)는 뺀다.
+    return { projects: await projectsForKnowledge(input.name, ctx?.viewer ?? null) };
   },
 };
 
@@ -1237,6 +1240,8 @@ const taskCreateV6: Capability = {
     //   projectId 만 검사하면 "보이는 프로젝트 id + 안 보이는 부모 태스크" 조합으로 남의 프로젝트에 글을 심을 수 있다.
     await assertProjectVisible(input.parentTaskId ?? input.projectId, ctx);
     const task = await createTask(input, writeCtx);
+    // #5522 — 일부러 만든 태스크다(세션이 저절로 갖는 태스크는 session-task.ts 가 만들고 이 길을 안 지난다) → 초안이면 푼다.
+    await releaseProjectDraft(task.id, "task", writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task); // 하위태스크면 부모 task→프로젝트로 거슬러 해석.
     if (rootId) await regenAgents(rootId);              // 태스크/하위태스크 추가 → AGENTS.md 태스크 인덱스 갱신.
     // prior-art 앞단 표면화(#639) — task 이름+설명(의미) + 부모 프로젝트 카테고리(상속)로 기존 지식을 응답에.
@@ -1368,10 +1373,10 @@ const taskReorderV6: Capability = {
     // 이 capability 의 입력은 id 가 아니라 ids 배열이다 — 재정렬 대상 **전부**를 본다.
     //  최대 500개라 단건 헬퍼를 반복 호출하면 그만큼 조회가 나간다 → 가시 집합을 한 번 뽑아 대조한다.
     if (ctx?.viewer != null) {
-      const visIds = await visibleListIds(ctx.viewer);
+      // ⚠ 여기서 list_id 를 손으로 견주지 않는다 — 단건 판정의 SoT 가 리스트와 초안(#5522)을 함께 본다.
+      const pv = await projectVisFor(ctx.viewer);
       for (const id of (input.ids ?? [])) {
-        const listId = await projectRowListId(Number(id));
-        if (listId != null && visIds && !visIds.has(listId)) throw new HttpError(404, `태스크 #${id} 없음`);
+        if (!(await canSeeProjectRowVis(Number(id), pv))) throw new HttpError(404, `태스크 #${id} 없음`);
       }
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
@@ -1605,14 +1610,19 @@ const projectFindByOriginV6: Capability = {
         return { git_url: gitUrl };
       } }],
   },
-  handler: async (input: ProjectFindByOriginV6Input) => {
+  handler: async (input: ProjectFindByOriginV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
     const key = originKey(input.git_url);
     if (!key) {
       // fail-closed — 해석 못 한 URL 로 남의 프로젝트에 붙이지 않는다. 후보 0 이 '새로 만들라'는 뜻은 아니다.
       return { origin_key: null, candidates: [], total: 0, active_total: 0, discriminating: false,
         note: "git origin URL 을 해석할 수 없습니다 — 이 신원으로는 기존 프로젝트를 찾을 수 없습니다(후보 없음 ≠ 새로 만들어도 됨)." };
     }
-    const all = await findProjectsByOriginKey(key);
+    // #5522(격리 리뷰) — 후보는 프로젝트 번호 · 이름을 싣는다. 요청자에게 안 보이는 프로젝트(잠긴 리스트 · 남의 초안)는 후보가 아니다 —
+    //  거기 붙일 수도 없고(세션 붙이기가 같은 판정으로 막는다), 이름만 새어 나간다.
+    const found = await findProjectsByOriginKey(key);
+    const pv = ctx?.viewer != null ? await projectVisFor(ctx.viewer) : null;
+    const all: typeof found = [];
+    for (const c of found) if (!pv || (await canSeeProjectRowVis(c.project_id, pv))) all.push(c);
     const active = all.filter((c) => c.status !== "done");
     // ⚠ **origin 은 '멤버 간 합의 가능한 값'이지 '프로젝트를 특정하는 값'이 아니다** — 레포↔프로젝트는 N:M 이다.
     //  실측(2026-07-16, 라이블리 박스): `context-ontology` 한 레포에 프로젝트 156개(활성 37개)가 달려 있다(모노레포).
@@ -1676,6 +1686,7 @@ const projectBindFolderV6: Capability = {
   },
   handler: async (input: ProjectBindFolderV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     if (!(await getProjectRow(input.id))) throw new HttpError(404, `프로젝트 #${input.id} 가 없습니다`);
+    await assertProjectVisible(input.id, ctx);   // #5522 — 안 보이는 프로젝트는 없는 것과 같은 404(번호로 존재를 가늠하지 못하게)
     const me = ctx?.actor ?? user?.userId ?? null;
     if (!me) throw new HttpError(401, "바인딩은 인증된 멤버만 등록할 수 있습니다");
     await upsertProjectFolderBinding({
