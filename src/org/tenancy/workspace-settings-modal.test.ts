@@ -15,6 +15,9 @@
 //   E6 목록 응답의 face 가 slug 지도에 남는다       → 문패(행 객체 없이 그림)가 저장된 얼굴을 못 찾는다
 //   E7 primary 이름은 org 프로필로 간다             → workspace_update 로 보내면 서버가 400(조직 이름이므로)
 //   E8 이름·아바타 폼은 자격 없으면 disabled        → 눌렀더니 403 나는 문을 그리지 않는다
+//   E9 ★셀프호스트 primary 이름 저장은 표시명도 함께 → name 만 바꾸면 표시명이 있는 박스에선 아무 데도 안 바뀐다
+//      (#5524 신고 «저장 눌러도 그대로» — 제품의 조직 이름 규칙은 «표시명, 없으면 이름»). 매니지드는 name 만(CP 정본).
+//      등록부 primary 행이 따라가는 것은 primary-workspace-name.pg-test.mjs 가 실제 DB 로 잰다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -74,4 +77,14 @@ test("★ E7/E8 primary 이름은 org 프로필로, 자격 없으면 폼이 잠�
     "★primary 이름이 workspace_update 로 간다 — 서버가 400 을 낸다(조직 이름은 org 프로필)");
   assert.match(MODALC, /\.\.\.\(owner \? \{\} : \{ disabled: 'disabled' \}\)/, "자격 없는 사람에게 열린 폼을 그린다(눌렀더니 403)");
   //  떠나는 문 금지는 workspace-exit-ui.test.ts E9 가 잠근다(중복 단언을 두지 않는다).
+});
+
+test("★ E9 셀프호스트 primary 이름 저장은 표시명도 함께 보낸다 — 매니지드는 name 만 (#5524)", () => {
+  const at = MODALC.indexOf("if (primary && nameChanged) {");
+  assert.ok(at > 0, "primary 이름 저장 갈래가 없다");
+  const branch = MODALC.slice(at, MODALC.indexOf("\n      }", at));
+  assert.match(branch, /managedWorkspaces\(\) \? \{ name: newName \} : \{ name: newName, display_name: newName \}/,
+    "★셀프호스트에서 표시명을 함께 안 보낸다 — 표시명이 있는 박스는 저장해도 이름이 그대로다(«표시명, 없으면 이름»). 매니지드에서 보내면 CP 이름 변경이 가려진다");
+  assert.match(branch, /\/api\/ui\/org\/profile', \{ method: 'POST', body: JSON\.stringify\(body\) \}/,
+    "★갈래에서 고른 본문을 보내지 않는다");
 });

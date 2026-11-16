@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>라이블리 소개 영상 — 원본</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="film.css">
+</head>
+<body>
+<div id="fit">
+<div id="stage">
+
+  <!-- 바탕 — 영상 내내 깔린다 -->
+  <div id="bg">
+    <div class="glow g1" id="glow1"></div>
+    <div class="glow g2" id="glow2"></div>
+    <div class="grid"></div>
+    <div class="vig"></div>
+  </div>
+
+  <!-- A · 문패 -->
+  <section class="sc center" id="sA">
+    <div class="logo" id="logo">
+      <span class="dotwrap"><span class="ring" id="logoRing"></span><span class="dot" id="logoDot"></span></span>
+      <span class="wmclip"><span class="wm" id="logoWm">Lively</span></span>
+    </div>
+  </section>
+
+  <!-- A2 · 첫 문장 -->
+  <section class="sc center" id="sA2">
+    <h1 class="hl" id="hl1">AI는 이미 충분히 똑똑합니다.</h1>
+    <h1 class="hl soft" id="hl2">다만, <em>내 일</em>은 모릅니다.</h1>
+  </section>
+
+  <!-- B · 문제 — 맥락 없는 AI 와의 대화 -->
+  <section class="sc" id="sB">
+    <div class="chat" id="chat">
+      <div class="chat-top"><span class="chat-av">AI</span><span class="chat-nm">AI 어시스턴트</span><span class="chat-dots"><i></i><i></i><i></i></span></div>
+      <div class="chat-body">
+        <div class="bub me" id="bMe1">지난주 회의에서 정한 대로 제안서 고쳐 줘</div>
+        <div class="bub ai" id="bAiTyping"><span class="typing"><i></i><i></i><i></i></span></div>
+        <div class="bub ai" id="bAi1">어떤 회의를 말씀하시는 건가요?<br>정해진 내용과 제안서 파일을 먼저 알려 주세요.</div>
+        <div class="bub me ghost" id="bMe2">10월 9일 영업 회의였고, 참석자는…</div>
+        <div class="bub me ghost" id="bMe3">가격표는 3단계로 바꾸기로 했고…</div>
+        <div class="bub me ghost" id="bMe4">제안서 파일은 여기, 지난 버전은…</div>
+      </div>
+      <div class="chat-in" id="chatIn"><span class="tx"></span><span class="caret" id="caretB"></span><span class="chat-send"><i data-ic="send"></i></span></div>
+    </div>
+    <p class="under" id="capB">그래서 매번, 처음부터 다시 설명합니다.</p>
+  </section>
+
+  <!-- C · 전환 -->
+  <section class="sc center" id="sC">
+    <div class="eyebrow" id="eyeC"><span class="dot sm"></span>Lively</div>
+    <h1 class="hl" id="hl3">라이블리는 일의 맥락을 미리 모아</h1>
+    <h1 class="hl" id="hl4"><em>AI에게 대신</em> 전해 줍니다.</h1>
+  </section>
+
+  <!-- P · 수집 → 증류 → 전달 (한 판을 카메라가 옆으로 훑는다) -->
+  <section class="sc" id="sP">
+    <div id="world">
+      <svg id="wires" width="4000" height="1080" viewBox="0 0 4000 1080" fill="none"></svg>
+
+      <!-- ① 원천 -->
+      <div class="srcs" id="srcs">
+        <div class="src" data-y="120"><span class="src-nm">Slack</span><span class="tile"><i data-logo="slack"></i></span></div>
+        <div class="src" data-y="264"><span class="src-nm">Notion</span><span class="tile"><i data-logo="notion"></i></span></div>
+        <div class="src" data-y="408"><span class="src-nm">GitHub</span><span class="tile"><i data-logo="github"></i></span></div>
+        <div class="src" data-y="552"><span class="src-nm">Google Drive</span><span class="tile"><i data-logo="google-drive"></i></span></div>
+        <div class="src" data-y="696"><span class="src-nm">내 파일</span><span class="tile"><i data-ic="folder" class="ic-src"></i></span></div>
+      </div>
+
+      <!-- ① 자료함 -->
+      <div class="panel" id="pSrc">
+        <div class="p-head"><span class="p-ico c-src"><i data-ic="src"></i></span><b>자료</b><span class="p-cnt"><span id="cntSrc">0</span>건</span></div>
+        <div class="rows" id="rows">
+          <div class="row" data-from="0"><i data-logo="slack"></i><span class="r-t"><b>#영업</b> 10월 회의에서 정한 내용 공유드립니다</span><span class="r-m">대화</span></div>
+          <div class="row" data-from="1"><i data-logo="notion"></i><span class="r-t">제안서 v3 초안</span><span class="r-m">문서</span></div>
+          <div class="row" data-from="2"><i data-logo="github"></i><span class="r-t">PR #214 · 가격표 3단계로 변경</span><span class="r-m">코드</span></div>
+          <div class="row" data-from="3"><i data-logo="google-drive"></i><span class="r-t">하반기 가격 정책.pdf</span><span class="r-m">파일</span></div>
+          <div class="row" data-from="4"><i data-ic="doc" class="ic-doc"></i><span class="r-t">고객사 미팅 메모.docx</span><span class="r-m">파일</span></div>
+          <div class="row" data-from="0"><i data-logo="slack"></i><span class="r-t"><b>#제품</b> 도입 일정을 2주 앞당기기로 했어요</span><span class="r-m">대화</span></div>
+        </div>
+      </div>
+
+      <!-- ② 증류 -->
+      <div class="lens" id="lens">
+        <span class="lens-ring" id="lensRing"></span>
+        <span class="lens-core"><i data-ic="ctx"></i></span>
+        <span class="lens-pulse" id="lensPulse"></span>
+      </div>
+      <div class="lens-lb" id="lensLb">AI가 읽고 정리하는 중</div>
+
+      <!-- ② 지식 -->
+      <div class="kcards">
+        <div class="kcount" id="kCount"><span class="p-ico c-wiki"><i data-ic="wiki"></i></span><b>지식</b><span class="p-cnt"><span id="cntK">0</span>건</span></div>
+        <div class="kcard" id="k1" data-y="204">
+          <b>10월 영업 회의에서 정한 것</b>
+          <ul><li>가격표를 3단계로 개편한다</li><li>도입 일정을 2주 앞당긴다</li></ul>
+          <div class="k-foot"><span class="chip c-blue">결정</span><span class="chip">영업</span><span class="k-src"><i data-logo="slack"></i><i data-logo="notion"></i>출처 4건</span></div>
+        </div>
+        <div class="kcard" id="k2" data-y="430">
+          <b>제안서를 쓰는 원칙</b>
+          <ul><li>첫 장에 고객의 문제부터 적는다</li><li>가격은 표 하나로 보여 준다</li></ul>
+          <div class="k-foot"><span class="chip c-mint">원칙</span><span class="chip">제안</span><span class="k-src"><i data-logo="notion"></i><i data-logo="google-drive"></i>출처 3건</span></div>
+        </div>
+        <div class="kcard" id="k3" data-y="656">
+          <b>가격표 변경 이력</b>
+          <ul><li>PR #214에서 3단계 구조로 바꿈</li></ul>
+          <div class="k-foot"><span class="chip c-vio">이력</span><span class="chip">제품</span><span class="k-src"><i data-logo="github"></i>출처 2건</span></div>
+        </div>
+      </div>
+
+      <!-- ③ 세션 -->
+      <div class="panel sess" id="pSess">
+        <div class="p-head"><span class="p-ico c-chat"><i data-ic="chat"></i></span><b>새 세션</b><span class="p-live" id="sessLive"><span class="ldot"></span>라이블리 연결됨</span></div>
+        <div class="s-body">
+          <div class="bub me lt" id="sMe">지난주 회의에서 정한 대로 제안서 고쳐 줘</div>
+          <div class="s-found" id="sFound">
+            <span class="s-found-h"><span class="s-check"><i data-ic="check"></i></span>지식 3건을 찾았어요</span>
+            <div class="s-chips">
+              <span class="kchip" id="kc1"><i data-ic="wiki"></i>10월 영업 회의에서 정한 것</span>
+              <span class="kchip" id="kc2"><i data-ic="wiki"></i>제안서를 쓰는 원칙</span>
+              <span class="kchip" id="kc3"><i data-ic="wiki"></i>가격표 변경 이력</span>
+            </div>
+          </div>
+          <div class="s-ans" id="sAns">
+            <p id="sA1">10월 9일 회의에서 정한 대로 제안서를 고쳤습니다.</p>
+            <p class="li" id="sA2l"><span class="bl"></span>가격표를 3단계로 바꿨습니다</p>
+            <p class="li" id="sA3l"><span class="bl"></span>도입 일정을 2주 앞당겼습니다</p>
+            <span class="fchip" id="sFile"><i data-ic="doc"></i>제안서_v4.docx</span>
+          </div>
+        </div>
+        <div class="chat-in lt" id="sessIn"><span class="tx"></span><span class="caret" id="caretS"></span><span class="chat-send on"><i data-ic="send"></i></span></div>
+      </div>
+    </div>
+
+    <!-- 자막 — 화면에 붙는다 -->
+    <div class="cap" id="cap1"><span class="cap-n">01</span><b>수집</b><p>흩어진 대화와 문서, 코드를 한곳에 모읍니다.</p></div>
+    <div class="cap" id="cap2"><span class="cap-n">02</span><b>증류</b><p>AI가 읽고, 다시 쓸 수 있는 지식으로 정리합니다.</p></div>
+    <div class="cap" id="cap3"><span class="cap-n">03</span><b>전달</b><p>한 줄만 시키세요. 맥락은 라이블리가 넣습니다.</p></div>
+    <div class="steps" id="steps"><span id="st1">수집</span><i></i><span id="st2">증류</span><i></i><span id="st3">전달</span></div>
+  </section>
+
+  <!-- G · 화면 — 레일 둘 + 앱 찾기 -->
+  <section class="sc persp" id="sG">
+    <div class="win" id="win">
+      <div class="rail">
+        <span class="ws">L</span>
+        <span class="r-it on" id="rHome"><i data-ic="home"></i><b>홈</b></span>
+        <span class="r-it" id="rCtx"><i data-ic="ctx"></i><b>수집·증류</b></span>
+        <span class="r-hr"></span>
+        <span class="r-sp"></span>
+        <span class="r-it" id="rApps"><i data-ic="apps"></i><b>앱</b></span>
+        <span class="r-me">나</span>
+      </div>
+      <div class="main">
+        <div class="home">
+          <h2>좋은 아침이에요.</h2>
+          <p>무엇을 할까요?</p>
+          <div class="launch"><span class="ph">무엇이든 시키세요</span><span class="chat-send on"><i data-ic="send"></i></span></div>
+        </div>
+        <div class="win-dim" id="winDim"></div>
+        <div class="call" id="call1"><b>홈</b>일을 시키는 곳</div>
+        <div class="call" id="call2"><b>수집·증류</b>맥락이 쌓이는 곳</div>
+        <div class="pad" id="pad">
+          <div class="pad-field" id="padField"><i data-ic="search"></i>앱 찾기</div>
+          <div class="pad-grid">
+            <span class="pad-it"><span class="gi" style="--c:#2D6BF0"><i data-ic="chat"></i></span><b>세션 목록</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#6B5BE6"><i data-ic="proj"></i></span><b>프로젝트</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#2A9049"><i data-ic="wiki"></i></span><b>WIKI</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#B36E18"><i data-ic="src"></i></span><b>자료</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#D6457A"><i data-ic="tags"></i></span><b>분류체계</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#717F95"><i data-ic="sess"></i></span><b>세션 이력</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#D5541F"><i data-ic="learn"></i></span><b>사용 가이드</b></span>
+            <span class="pad-it"><span class="gi" style="--c:#8A3FD1"><i data-ic="builder"></i></span><b>앱빌더</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <svg class="cursor" id="cursor" width="44" height="44" viewBox="0 0 24 24"><path d="M5 3l14 8-6.2 1.6L10 19z" fill="#fff" stroke="#0B1220" stroke-width="1.3" stroke-linejoin="round"/></svg>
+    <span class="click" id="click"></span>
+    <p class="under" id="capG1">시작은 두 개면 충분합니다.</p>
+    <p class="under" id="capG2">나머지 앱은 필요할 때 꺼내 쓰세요.</p>
+  </section>
+
+  <!-- H · 맺음 -->
+  <section class="sc center" id="sH">
+    <div class="logo sm" id="logoH"><span class="dotwrap"><span class="ring" id="logoRingH"></span><span class="dot"></span></span><span class="wm">Lively</span></div>
+    <h1 class="hl" id="hl5">이제, <em>내 일을 아는 AI</em>와 일하세요.</h1>
+  </section>
+
+  <div id="grain"></div>
+</div>
+</div>
+
+<!-- 미리 보기 조작 — 굽는 쪽(?render)에서는 숨는다 -->
+<div id="hud"><button id="hudPlay">⏯</button><input id="hudBar" type="range" min="0" max="1000" value="0"><span id="hudT">0.00</span></div>
+<script type="module" src="film.js"></script>
+</body>
+</html>

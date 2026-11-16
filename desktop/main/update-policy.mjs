@@ -130,6 +130,17 @@ export function updateApplyReady(o) {
   return true;
 }
 
+// Squirrel.Mac 이 기존 앱을 교체하는 동안 옛 앱이 다시 실행되면 ShipIt 이
+// "App Still Running" 으로 설치를 취소한다. 실제 설치 지연을 넘길 만큼만
+// 재실행을 막고, 설치 실패 시에는 옛 앱을 다시 열 수 있게 기한을 둔다.
+export const MAC_UPDATE_HANDOFF_MS = 4 * 60_000;
+export function macUpdateHandoffAction(marker, currentVersion, nowMs = Date.now()) {
+  if (!marker || typeof marker.version !== "string" || !marker.version ||
+      !Number.isFinite(marker.startedAt) || nowMs < marker.startedAt ||
+      nowMs - marker.startedAt >= MAC_UPDATE_HANDOFF_MS || marker.version === currentVersion) return "clear";
+  return "exit";
+}
+
 /**
  * ①은 끝났고 ②가 도는 동안의 문구 — **사람이 할 일이 없는 구간**이라 배너는 안 띄우지만,
  *  트레이·마법사는 "받다 만 게 아니라 마무리 중" 임을 말해야 한다(침묵하면 그게 곧 고장으로 읽힌다).

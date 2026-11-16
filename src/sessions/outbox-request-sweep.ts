@@ -98,6 +98,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   // 지식 조각 임베딩(#5203) — 조각의 빈 벡터를 판마다 조금씩 채운다. 저장이 깨우지 않고 이 표로만 돈다(그 까닭은 embedding-backfill 의 절 머리말). 셀프호스트도 같다.
   { key: "knowledge-chunk-embed", intervalMs: TEN_MIN_MS, housekeeping: true,
     run: () => import("../v6/embedding-backfill.js").then((m) => m.sweepChunkEmbeddings()) },
+  // 초안 풀기(#5522) — 지식 · 작업기록 · 코멘트 · 파일 · 리스트를 남기고도 초안인 프로젝트를 푼다. 쓰는 자리의 풀기(releaseProjectDraft)가
+  //  놓친 것과 이 기능 이전에 쌓인 초안을 줍는다. 초안은 만든 사람과 팀원만 보므로, 안 주우면 일한 프로젝트가 동료에게 안 보인다.
+  //  멱등이고 풀 것이 없으면 조회 한 번이다. 셀프호스트도 같은 정의로 돈다(housekeeping — 부팅 2분 반 뒤 1회 + 10분마다).
+  { key: "draft-release", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../v6/project-draft.js").then((m) => m.sweepDraftReleases()) },
   // device-auth 리퍼(#880) — 만료 1h 지난 pending 정리(user_code 회수). 실측 2건 잔존.
   { key: "device-auth-reap", intervalMs: TEN_MIN_MS,
     run: () => import("../org/auth/device-auth.js").then((m) => m.reapDeviceAuth()) },
@@ -224,6 +229,12 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 세션 · 붙은 앱 · 맞춘 기록 전부 그 워크스페이스 것이고(RLS), 브로커 중계도 tenantSlug() 로 그 워크스페이스에 간다.
   { key: "app-folders", intervalMs: SWEEP_MIN_INTERVAL_MS,
     run: () => import("../apps/session-app-folders.js").then((m) => m.sweepAppFolders()) },
+  // 워크스페이스 간 옮기기 배치 정리(#5458) — 적용하지 않고 둔 미리보기의 파일 바이트(잠긴 파일이면 풀린 사본)를 하루 뒤 비우고,
+  //  멈춘 적용·되돌리기를 «일부만 들임» 으로 내린다. 옮기기 화면·API 를 열 때도 돌지만 아무도 다시 안 열면 올린 파일이 DB 에 남는다.
+  //  ⚠ 테넌트 스코프 — 배치 행이 그 워크스페이스 것이다(RLS). DB 행만 바꾼다(파괴적 동작 없음 — 들인 지식은 건드리지 않는다).
+  //  housekeeping 표시 — 셀프호스트 · registry 에서도 boot/housekeeping 이 같은 정의 · 같은 주기로 워크스페이스마다 돌린다(#5082).
+  { key: "transfer-housekeeping", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../transfer/apply.js").then((m) => m.transferHousekeeping()) },
 ];
 
 //  ⚠ 인메모리다. 게이트웨이가 재기동하면 비는데, **그게 맞다**: 재기동이야말로 배달 루프를 죽여

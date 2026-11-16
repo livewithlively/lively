@@ -32,6 +32,7 @@ import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
 import { registerNasDownloadRoute } from "./net/nas/nas-download-route.js";
+import { registerTransferRoutes } from "./transfer/routes.js";
 import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
 import { getProject as v6GetProject, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
@@ -53,6 +54,7 @@ import { logger } from "./log.js";
 import { shutdownGatewayWorkers } from "./apps/worker-service.js";
 import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
 import { freezeExecTopology } from "./exec-topology.js";   // #2599 T2 — 실행 토폴로지를 부팅 때 한 번 확정
+import { hostCredentialPresent } from "./browser/routes.js";   // #5470 — 브라우저 답 앞단과 routes.ts 가 같은 판정을 쓴다
 
 // ★ 실행 토폴로지 확정(#2599 T2) — 「이 세션이 어디서 도나」를 여기서 **한 번** 정하고, 그 뒤 어느 코드도
 //  env 를 직접 읽지 않는다. ⚠ 자리는 여기여야 한다: 위 `boot/tenancy-env.js` 가 부팅 중에
@@ -182,10 +184,17 @@ app.use("/api/ui/apps/save", express.json({ limit: "4mb" }));
 app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
 //  #4993 브라우저 답(데스크톱 앱 화면 → 게이트웨이) — 스크린샷(base64 JPEG)이 실린다. 보이는 영역 한 장은 수백 KB 지만
 //   큰 화면·고해상도에서 1MB 를 넘을 수 있어 이 경로만 올린다(전역보다 먼저 — 위 apps/install 과 같은 이유).
-//   ⚠ 인증보다 앞에서 파싱하므로 토큰 머리글이 없는 요청은 **읽기 전에** 돌려보낸다(익명 요청이 큰 본문을 파싱시키지 못하게 — #4993 격리 리뷰).
+//   ⚠ 인증보다 앞에서 파싱하므로 자격 표시(토큰 머리글 · 화면 표시 머리글)가 없는 요청은 **읽기 전에** 돌려보낸다(익명 요청이 큰 본문을 파싱시키지 못하게 — #4993 격리 리뷰).
 //   상한 4MB — 스크린샷 한 장은 긴 변 1568px JPEG 라 수백 KB 다(읽기·본문·JS 결과도 화면 쪽 상한이 그 아래다).
 app.use("/api/ui/browser/host/reply",
-  (req, res, next) => { if (/^Bearer\s+\S/i.test(String(req.headers.authorization || ""))) next(); else res.status(401).json({ error: "토큰 머리글(Authorization: Bearer)로만 답할 수 있습니다" }); },
+  //   계정 로그인(#5430) 화면은 토큰 없이 쿠키 세션 + 화면 표시 머리글로 답한다 — 판정은 routes.ts 와 같은 함수(#5470).
+  (req, res, next) => { if (hostCredentialPresent(req.headers)) next(); else res.status(401).json({ error: "토큰 머리글 또는 화면 표시 머리글로만 답할 수 있습니다" }); },
+  express.json({ limit: "4mb" }));
+//  #5458 워크스페이스 간 옮기기 — 내보내기(파일)·내보내기 미리보기는 하나씩 고른 지식 이름 목록(최대 2만 개)을 본문에 싣는다.
+//   전역 1MB 보다 먼저 4MB 로 파싱한다(위 apps/install 과 같은 이유 — 먼저 파싱한 쪽이 이긴다). 경로 접두라 /export/preview 도 덮는다.
+//   자격(토큰 머리글·세션 쿠키)이 없는 요청은 **읽기 전에** 돌려보낸다(익명 요청이 큰 본문을 파싱시키지 못하게 — browser/host/reply 와 같은 문).
+app.use("/api/ui/transfer/export",
+  (req, res, next) => { if (/^Bearer\s+\S/i.test(String(req.headers.authorization || "")) || req.headers.cookie) next(); else res.status(401).json({ error: "unauthenticated" }); },
   express.json({ limit: "4mb" }));
 app.use(express.json({ limit: "1mb" }));
 
@@ -335,6 +344,8 @@ registerProjectV6Routes(app, verifier, {
 registerSessionLogRoutes(app, verifier);
 // NAS 파일 내려받기 — 브라우저 세션 쿠키만 받는다(nas_find 링크의 본문은 사람만 연다).
 registerNasDownloadRoute(app);
+// 워크스페이스 간 옮기기(#5458) — 파일이 오가는 두 경로(묶음 내려받기 · 올리기). 관리자만. JSON 표면은 capabilities/transfer.ts.
+registerTransferRoutes(app, verifier);
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭의 "CSV 다운로드". capability(res.json 일괄)로는 담을 수
 //  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 ee/audit/export-routes.ts 머리주석).
 //  ★ #1601 로 Enterprise 로 갔다 — 화면 집계(3탭)는 코어에 그대로 있고, 증빙 반출만 EE 다.

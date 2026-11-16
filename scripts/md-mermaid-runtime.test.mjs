@@ -19,6 +19,9 @@
 //  R14 그리는 프레임이 다른 문서로 옮겨 가면 → 옮겨 간 문서는 다음 그림의 코드를 못 받는다 · 새 프레임이 그린다
 //  R15 에디터 미리보기에 빈 코드 → «코드를 적으면…» · 그림 없음 · onState(false)
 //  R16 자료·파일 md 뷰어(공용 파일 미리보기 buildFilePreview — 상대경로 그림 받는 법을 건 렌더)에서도 그림이 선다
+//  R17 글자 폭 측정이 한 번 0×0 으로 실패해도(mermaid «svg element not in render tree») 프레임이 다시 그려 그림이 선다
+//  R18 측정 실패가 계속되면 «문법 오류» 가 아니라 «이번에는 그리지 못해» 로 보이고 · 캐시하지 않는다(다시 렌더하면 다시 그린다)
+//      — 새 프레임의 첫 그리기에서 가끔 나던 실패(맥에서 이 시험 첫 그림이 10회 중 4회)를 도구에 실패를 심어 매번 재현한다
 //  B1~B6 본문 칸 폭 정책(경계): 칸이 넓으면 원래 폭 · 0.7배~원래 폭 사이면 칸에 맞춤 · 칸=ceil(0.7배)이면 그 값 ·
 //        더 좁으면 0.7배(가로로 민다) — 단 0.7배가 칸의 두 배를 넘으면(조각만 보인다) 칸에 맞춰 통째로 줄인다(경계: 정확히 두 배는 민다)
 //  E1  블록 에디터 — 그림이 서서 코드 칸이 접힌 채로도 저장 마크다운 = 원문(코드 칸을 숨기는 방식이 innerText 를 바꾸면 여기서 깨진다)
@@ -78,9 +81,21 @@ const srv = http.createServer((req, res) => {
     res.end(u === "/main.html" ? page(PAGE_MAIN, GOOD_URL) : page(PAGE_BAD, BAD_URL));
     return;
   }
+  //  R17·R18 — 앞의 N 번 그리기를 «svg element not in render tree» 로 실패시키는 도구를 싣는 장면. 판 표지(?v=flakyN)가
+  //   vendor 주소에 이어 붙는 것을 이용해, 그 페이지의 프레임만 실패를 심은 도구를 받아 가게 한다.
+  const flaky = /^\/flaky(\d+)\.html$/.exec(u);
+  if (flaky) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(page(PAGE_FLAKY, ORIGIN + `/app/lib/mermaid.js?v=flaky${flaky[1]}`));
+    return;
+  }
   if (u.split("?")[0] === "/app/vendor/mermaid/mermaid.min.js") {
+    const failN = Number((/[?&]v=flaky(\d+)/.exec(u) || [])[1] || 0);
     res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
-    res.end(VENDOR_JS);
+    res.end(failN ? Buffer.concat([VENDOR_JS, Buffer.from(
+      `\n;(function () { var m = window.mermaid, orig = m.render, n = 0;`
+      + ` m.render = function () { if (n++ < ${failN}) return Promise.reject(new Error("svg element not in render tree")); return orig.apply(this, arguments); }; })();\n`)])
+      : VENDOR_JS);
     return;
   }
   res.writeHead(404);
@@ -285,6 +300,29 @@ async function PAGE_BAD() {
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
 }
 
+//  R17·R18 — 측정이 흔들리는 도구를 받은 페이지. 그림 하나를 그리고, 같은 본문을 곧바로 다시 렌더해 캐시 여부를 본다.
+async function PAGE_FLAKY() {
+  const R = {};
+  const sleep = (ms) => new Promise((z) => setTimeout(z, ms));
+  globalThis.__MMD_URL__ = document.getElementById("mmdurl").textContent;
+  (0, eval)(document.getElementById("mdsrc").textContent);
+  const SRC = "```mermaid\ngraph LR\n  A[가] --> B[나]\n```";
+  try {
+    const root = window.MD.renderMarkdown(SRC);
+    document.getElementById("host").append(root);
+    const f = root.querySelector("figure.md-mermaid");
+    if (f) f.scrollIntoView();
+    const t0 = performance.now();
+    while (f && !/\bis-(ok|err)\b/.test(f.className) && performance.now() - t0 < 25000) await sleep(50);
+    R.cls = f ? f.className : null;
+    R.note = f ? f.querySelector(".md-mermaid-note").textContent : null;
+    R.img = !!(f && f.querySelector("img.md-mermaid-img"));
+    const g = window.MD.renderMarkdown(SRC).querySelector("figure.md-mermaid");
+    R.cachedNow = g ? (/\bis-ok\b/.test(g.className) ? "ok" : /\bis-err\b/.test(g.className) ? "err" : "wait") : null;
+  } catch (e) { R.err = String(e && e.stack || e); }
+  document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
+}
+
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const page = (main, url) => `<!doctype html><html><meta charset="utf-8"><style>${CSS}</style>
 <pre id="out">PENDING</pre><div id="toasts"></div><div id="host" style="width:760px"></div>
@@ -294,7 +332,7 @@ const page = (main, url) => `<!doctype html><html><meta charset="utf-8"><style>$
 <script type="text/plain" id="mdsrc">${bundle.replace(/<\/script/gi, "<\\/script")}</script>
 <script>(${main.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 
-let R, B, runErr = null;
+let R, B, F1, F2, runErr = null;
 const dir = mkdtempSync(path.join(tmpdir(), "md-mermaid-"));
 const child = spawn(chrome, [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
@@ -307,15 +345,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws = null;
 try {
   const pf = path.join(dir, "profile", "DevToolsActivePort");
-  for (let i = 0; i < 200 && !existsSync(pf); i++) await sleep(50);
+  //  기동 대기 30초 · 페이지 대상 대기 15초 — 크롬을 여럿 함께 띄우는 부하(병렬 시험)에선 4초 안에 페이지 대상이 안 서
+  //   `undefined.webSocketDebuggerUrl` 로 떨어졌다(2026-11-09 실측, 4개 동시 20회 중 1회). frame-scroll-keep(#1331)과 같은 상한이다.
+  for (let i = 0; i < 600 && !existsSync(pf); i++) await sleep(50);
   if (!existsSync(pf)) throw new Error("크롬 디버깅 포트가 안 열렸다");
   const port = readFileSync(pf, "utf8").split("\n")[0];
   let targets = [];
-  for (let i = 0; i < 40 && !targets.some((t) => t.type === "page"); i++) {
+  for (let i = 0; i < 150 && !targets.some((t) => t.type === "page"); i++) {
     targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
     if (!targets.some((t) => t.type === "page")) await sleep(100);
   }
-  ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
+  const pageTarget = targets.find((t) => t.type === "page");
+  if (!pageTarget) throw new Error("크롬 페이지 대상이 15초 안에 안 섰다");
+  ws = new WebSocket(pageTarget.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   let seq = 0;
   const pend = new Map();
@@ -338,6 +380,8 @@ try {
   };
   R = await run(ORIGIN + "/main.html", "본 장면");
   B = await run(ORIGIN + "/bad.html", "도구 없음 장면");
+  F1 = await run(ORIGIN + "/flaky1.html", "측정 한 번 실패 장면");
+  F2 = await run(ORIGIN + "/flaky99.html", "측정 계속 실패 장면");
 } catch (e) {
   runErr = e;
 } finally {
@@ -400,6 +444,13 @@ check(FV.fig && /\bis-ok\b/.test(FV.cls || "") && FV.svgHas, "R16 자료·파일
 const E1 = R.e1 || {};
 check(E1.collapsed && E1.wrapH === 0 && E1.fig && (E1.md || "").trim() === EDIT_MD.trim(),
   "E1 코드 칸이 접힌 채로도 저장 마크다운 = 원문", J({ ...E1, want: EDIT_MD }));
+
+check(served.some((u) => u === "/app/vendor/mermaid/mermaid.min.js?v=flaky1") && served.some((u) => u === "/app/vendor/mermaid/mermaid.min.js?v=flaky99"),
+  "W2 배선 — 측정 흔들림 장면이 실패를 심은 도구를 받아 갔다", J(served));
+check(/\bis-ok\b/.test(F1.cls || "") && F1.img && !F1.err, "R17 측정이 한 번 0×0 으로 실패해도 프레임이 다시 그려 그림이 선다", J(F1));
+check(/\bis-err\b/.test(F2.cls || "") && /이번에는 다이어그램을 그리지 못해/.test(F2.note || "") && !/문법/.test(F2.note || ""),
+  "R18 측정 실패가 계속되면 «문법 오류» 가 아니라 «이번에는 그리지 못해» 로 보인다", J(F2));
+check(F2.cachedNow === "wait", "R18 측정 실패는 캐시하지 않는다 — 다시 렌더하면 다시 그린다", J(F2));
 
 console.log(`\n${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

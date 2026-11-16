@@ -19,6 +19,7 @@
  */
 export function appReady(s) {
   const st = s || {};
+  if (st.accountLoggedIn) return true; // 계정 앱은 로컬 CLI·노드 설치와 독립적으로 웹 워크스페이스를 연다.
   return !!(st.cliFound && !st.cliOutdated && !st.cliBroken && st.loggedIn && st.kitInstalled && !st.tokenRejected);
 }
 

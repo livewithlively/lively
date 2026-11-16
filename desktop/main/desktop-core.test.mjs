@@ -17,7 +17,7 @@ import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from ".
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_INTERVAL_MS, UPDATE_RETRY_DELAYS_MS, UPDATE_CHECK_JITTER_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, macUpdateHandoffAction, MAC_UPDATE_HANDOFF_MS } from "./update-policy.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
@@ -1025,6 +1025,16 @@ t('U16 ★ 배선 — 인계 신호를 직접 듣고, 아직인 요청에 성공
   // W5 — 재확인 억제 기준은 '준비됨' 이 아니라 '받았음' 이다(인계를 기다리는 몇 분 사이 확인이 또 돌면 프록시가 겹친다)
   const ck = main.slice(main.indexOf('async function checkUpdates'), main.indexOf('async function checkUpdates') + 900);
   assert.match(ck, /if \(updateDownloaded\) return null;/, '재확인 억제 기준이 준비됨이다 — 인계 대기 중 확인이 또 돈다');
+});
+
+t('U18 맥 업데이트 교체 중 옛 앱 재실행을 막고, 성공·기한 만료 뒤에는 연다', () => {
+  const marker = { version: '0.1.411', startedAt: 1000 };
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 1000), 'exit');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 1000 + MAC_UPDATE_HANDOFF_MS - 1), 'exit');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.411', 1001), 'clear');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 1000 + MAC_UPDATE_HANDOFF_MS), 'clear');
+  assert.equal(macUpdateHandoffAction(marker, '0.1.410', 999), 'clear');
+  assert.equal(macUpdateHandoffAction(null, '0.1.410', 1000), 'clear');
 });
 
 // ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────
@@ -2076,6 +2086,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(appReady({ ...okState, cliOutdated: true }), false, "구 CLI 인데 준비됐다고 한다");
     assert.equal(appReady({ ...okState, cliBroken: "spawn EINVAL" }), false, "못 띄우는 CLI 인데 준비됐다고 한다");
     assert.equal(appReady({ ...okState, tokenRejected: true }), false, "게이트웨이가 토큰을 거부했는데 준비됐다고 한다");
+    assert.equal(appReady({ accountLoggedIn: true }), true, "계정 로그인만으로 앱의 웹 화면을 열 수 있어야 한다");
     assert.equal(appReady(null), false); assert.equal(appReady({}), false);
     // ★ 세 곳(메인·트레이·렌더러)이 각자 식을 적지 않는다 — 트레이는 appReady 를 import 하고, 렌더러는 state.ready 를 받는다
     const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
@@ -2220,7 +2231,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     //  하나 더 생겼고 그게 먼저 온다(게스트를 먼저 갈라 조기 return 해야 서피스가 안 죽는다 — browser-surface.test.mjs F1).
     //  indexOf 로 잡으면 게스트 쪽이 잡혀 여기 단언이 통째로 엉뚱한 코드를 본다 → 마지막 것을 잡는다.
     const seg = main.slice(main.lastIndexOf("setWindowOpenHandler"), main.lastIndexOf('wc.on("will-navigate"'));
-    assert.match(seg, /openTargetFor\(url, state\.gatewayUrl\)/, "핸들러가 openTargetFor 를 안 쓴다");
+    assert.match(seg, /openTargetFor\(url, selectedGatewayUrl \|\| state\.gatewayUrl\)/, "핸들러가 현재 앱 창의 출처를 쓰지 않는다");
     assert.match(seg, /shell\.openExternal\(url\); return \{ action: "deny" \}/, "외부 링크를 브라우저로 넘긴 뒤 거부하지 않는다");
     assert.match(seg, /preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true/, "자식 창에 같은 preload·격리를 안 준다");
   });
@@ -2244,7 +2255,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(main, /getLoginItemSettings\(\{ args: AUTOLAUNCH_ARGS \}\)\.openAtLogin/, "조회에 args 를 안 준다(Windows 에서 항상 꺼짐으로 읽힌다)");
     const boot = main.slice(main.indexOf("app.whenReady"), main.indexOf("app.whenReady") + 2500);
     assert.match(boot, /startupWindow\(\{ ready: state\.ready, startedHidden \}\)/, "시작 경로가 startupWindow 를 안 쓴다");
-    assert.match(boot, /if \(first === "setup"\) showWindow\(\); else if \(first === "app"\) showApp\(\);/, "판정대로 창을 안 연다");
+    assert.match(boot, /if \(first === "setup"\) showMain\(\); else if \(first === "app"\) showApp\(\);/, "계정 연결 기회를 주지 않는다");
     assert.match(main, /app\.on\("second-instance", \(\) => showMain\(\)\)/, "두 번째 실행이 갖춰진 뒤에도 마법사를 연다");
     assert.match(main, /app\.on\("activate", \(\) => showMain\(\)\)/, "dock 클릭이 갖춰진 뒤에도 마법사를 연다");
   });
@@ -2306,7 +2317,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(main, /frameless: framelessOn\(process\.platform\)/, "BOOT 가 frameless 를 안 준다 — preload 가 타이틀바를 언제 그릴지 모른다");
     const bootSeg = main.slice(main.indexOf("ipcMain.on(IPC_WEB.BOOT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"));
     assert.match(bootSeg, /fromGateway\(e\)/, "BOOT 가 보내는 프레임의 출처를 안 본다");
-    const lo = main.slice(main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT") + 400);
+    const lo = main.slice(main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"), main.indexOf("// 외부 링크는 메인만 연다"));
     assert.match(lo, /fromGateway\(e\)/); assert.match(lo, /start\("logout", \{\}\)/, "웹 로그아웃이 CLI 로그아웃으로 안 이어진다");
     // 웹 쪽 다리: core.ts logout 이 데스크톱 안이면 먼저 앱을 부른다(브라우저에선 없는 다리 — 그대로 지나간다)
     const core = readFileSync(fileURLToPath(new URL("../../web/core.ts", import.meta.url)), "utf8");
@@ -2318,8 +2329,8 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   t("H8 웹 창 배선 — 준비됐을 때만·/ui/·전용 preload·격리·주소/토큰 바뀌면 다시 싣기·실패는 마법사 카드로·닫아도 트레이", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const a = main.slice(main.indexOf("function showApp"), main.indexOf("function loadAppBounds"));
-    assert.match(a, /if \(!state\.ready\) return \{ ok: false/, "준비 안 됐는데 웹 창을 연다");
-    assert.match(a, /const url = webUiUrl\(state\.gatewayUrl\)/, "주소를 webUiUrl 로 안 만든다");
+    assert.match(a, /if \(!state\.ready && selectedGatewayUrl !== cloudUrl\(\)\) return \{ ok: false/, "계정 로그인 화면 이외의 미준비 웹 창을 연다");
+    assert.match(a, /webUiUrl\(displayGateway\)/, "선택한 워크스페이스 주소를 webUiUrl 로 안 만든다");
     assert.match(a, /preload: WEB_PRELOAD/, "웹 창이 마법사 preload 를 쓴다(원격 페이지에 CLI 통로가 열린다)");
     assert.match(a, /contextIsolation: true, nodeIntegration: false, sandbox: true/, "웹 창 격리가 빠졌다");
     assert.match(a, /if \(appLoaded\.url !== url \|\| appLoaded\.token !== token\)/, "재로그인·다른 게이트웨이에서 다시 싣지 않는다");
@@ -3019,7 +3030,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const snapAt = poll.indexOf("notifySnapshot = next;");
     assert.ok(genAt >= 0 && genAt < poll.indexOf("await fetch("), "폴이 떠날 때의 세대를 쥐지 않는다");
     assert.ok(guards.length >= 2 && guards.every((g) => g < snapAt), "기준선을 쓰기 전에 세대를 다시 보지 않는다(두 await 뒤 모두)");
-    assert.ok(/pollPersonFeed\(gw, token, gen\)/.test(poll), "사람 알림 폴에 세대를 넘기지 않는다");
+    assert.ok(/pollPersonFeed\(gw, auth\.headers, gen\)/.test(poll), "사람 알림 폴에 세대를 넘기지 않는다");
     assert.ok(/finally \{[\s\S]*?if \(gen !== notifyGen\) setTimeout\(\(\) => void pollNotifications\(\), 0\)/.test(poll),
       "옛 폴이 끝난 뒤 새 곳 폴을 다시 부르지 않는다 — 초기화가 부른 폴이 이 폴에 막혀 건너뛰었을 수 있다");
     const feed = main.slice(main.indexOf("async function pollPersonFeed("), main.indexOf("// ── 라이블리 화면 = 웹 UI 창"));
@@ -3181,9 +3192,35 @@ t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 
   assert.match(html, /id="gw"[^>]*>/, "시작 카드의 주소칸이 없다");
 });
 
+// ── #5520 — 준비 전 첫 화면이 클라우드 로그인으로 직행해 셀프호스팅 입구(주소 입력)가 사라졌던 것 ──────────
+// 실측(2026-11-11): #5430 뒤 앱을 처음 켜면 곧장 app.lvly.io/login 이 떴다 — «회사에 직접 설치했어요» 를 누를 화면이 없다.
+t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 계정 로그인은 버튼으로, 셀프호스팅 주소 입력은 그대로", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  // [1·2] 준비 전 = 마법사, 준비됨 = 웹 창. 클라우드 선택을 여기서 하지 않는다.
+  const smAt = main.indexOf("function showMain()");
+  assert.ok(smAt >= 0, "showMain 이 없다");
+  const sm = main.slice(smAt, main.indexOf("\n}\n", smAt));
+  assert.ok(!/selectedGatewayUrl\s*=/.test(sm), "준비 전 showMain 이 클라우드 로그인으로 직행한다 — 셀프호스팅 입구가 사라진다");
+  assert.match(sm, /if \(state\.ready\) return showApp\(\)\.ok \? appWin : showWindow\(\);\s*return showWindow\(\);/, "준비 전에 마법사를 안 연다");
+  // [3·6] 클라우드 버튼 → 계정 로그인 화면. env 형식 오류는 throw 대신 오류로 돌려준다.
+  const alAt = main.indexOf("function openAccountLogin()");
+  assert.ok(alAt >= 0, "클라우드 버튼이 부를 openAccountLogin 이 없다");
+  const al = main.slice(alAt, main.indexOf("\n}\n", alAt));
+  assert.match(al, /try \{ cloud = cloudUrl\(\); \} catch \(e\) \{ return \{ ok: false, error: e\.message \}; \}/, "cloudUrl 형식 오류가 IPC 를 throw 로 깬다");
+  assert.ok(al.indexOf("selectedGatewayUrl = cloud;") >= 0 && al.indexOf("selectedGatewayUrl = cloud;") < al.indexOf("showApp()"),
+    "계정 로그인 화면을 고르기 전에 앱 창을 연다(준비 전이면 showApp 이 거절한다)");
+  assert.match(main, /ipcMain\.handle\(IPC\.ACCOUNT_LOGIN, \(\) => openAccountLogin\(\)\)/, "계정 로그인 IPC 배선이 없다");
+  assert.equal(IPC.ACCOUNT_LOGIN, "lively:account-login");
+  // [4·5] 셀프호스팅 갈래 — 계정 미로그인일 때만 앞서 눌러 본 클라우드 선택을 지운다.
+  const obAt = main.indexOf("async function onboard(url)");
+  const ob = main.slice(obAt, main.indexOf("const c = await ensureCli", obAt));
+  assert.match(ob, /if \(selectedGatewayUrl === cloudUrl\(\) && !state\.accountLoggedIn\) selectedGatewayUrl = null;/, "셀프호스팅 설치 뒤에도 클라우드 로그인 화면이 열린다");
+});
+
 t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다 [E6·E7]", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
-  assert.match(app, /window\.lively\.run\("setup-cloud"\)/, "버튼이 아무것도 안 부른다");
+  // 시작 카드의 클라우드 버튼은 #5430 부터 앱 안 계정 로그인이다(CL12). setup-cloud 흐름은 워크스페이스 재바인딩이 쓴다.
+  assert.match(app, /\$\("cloud-go"\)[\s\S]{0,200}window\.lively\.accountLogin\(\)/, "버튼이 아무것도 안 부른다");
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
   // IPC 는 클라우드 경로를 **따로** 몰아야 한다 — 그냥 start() 로 보내면 CLI 가드에 걸린다(CL6).
   const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));

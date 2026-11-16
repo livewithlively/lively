@@ -35,7 +35,7 @@ import pg from "pg";
 import { itemsPool } from "../../db/client.js";
 import { IDENTITY_GLOBAL_TABLES, TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID, ensureTenantColumn } from "../../db/tenant-column.js";
 import { writeTenancyRuntime, readTenancyRuntimeSync, registryModeActive } from "./state.js";
-import { PRIMARY_SLUG, invalidateRegistryCache } from "./registry.js";
+import { PRIMARY_SLUG, invalidateRegistryCache, profileVisibleName } from "./registry.js";
 import { logger } from "../../log.js";
 
 /**
@@ -242,7 +242,9 @@ export async function activateWorkspaceRegistry(opts: {
   const pol = await ensureTenantPolicies(itemsPool);
 
   // ③ primary 등록부 시드 — 기존 박스 워크스페이스가 그대로 primary 가 된다.
-  const orgName = String((await itemsPool.query("SELECT name FROM org_profile WHERE id=1")).rows[0]?.name ?? "") || "우리 워크스페이스";
+  //  #5524 — 이름은 프로필의 **보이는 이름**(표시명 먼저)이다. 종전엔 name 만 봐서, 표시명만 채운 박스는 활성화 순간
+  //   «우리 워크스페이스» 로 굳었다. 활성화 뒤의 변경은 updateOrgProfile · 부팅 스텝 primary-workspace-name 이 따라간다.
+  const orgName = profileVisibleName((await itemsPool.query("SELECT name, display_name FROM org_profile WHERE id=1")).rows[0]) || "우리 워크스페이스";
   const seeded = (await itemsPool.query(
     `INSERT INTO gw_workspace(id, slug, name, kind, owner_member)
      VALUES($1, $2, $3, 'team', $4) ON CONFLICT (id) DO NOTHING`,

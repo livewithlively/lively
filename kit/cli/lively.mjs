@@ -1216,7 +1216,7 @@ export function launchNames(harnesses = []) {
  *  scope 가 없으면 아직 모른다(설치 시드가 못 닿음 · 구 게이트웨이) — 지금은 켜져 있어도 서버 기본값이 «작업 폴더에서만» 이라 첫 세션에
  *  사본을 받으면 일반 폴더가 꺼진다(record-scope.mjs 머리말). 그래서 단정하지 않는다. needsRoot 면 등록 명령을 함께 보여 준다. */
 export function launchNotice(label, { scope = null, roots = 0, hint = addHint() } = {}) {
-  if (scope === "anywhere") return { line: `이제 아무 폴더에서든 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
+  if (scope === "anywhere") return { line: `이제 아무 폴더에서든 ${label} 를 켜면 회사 맥락이 따라옵니다${roots > 0 ? `(제외 폴더 ${roots}개 빼고)` : ""}.`, needsRoot: false };
   if (!scope) return { line: `이제 ${label} 를 켜면 회사 맥락이 따라옵니다. 일반 폴더에서 꺼져 있으면 그 폴더에서 ${hint} 를 실행하세요.`, needsRoot: false };
   if (roots > 0) return { line: `이제 작업 폴더(${roots}개)에서 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
   return { line: `아직 작업 폴더가 없어, 일반 폴더에서는 ${label} 를 켜도 회사 맥락이 들어오지 않습니다.`, needsRoot: true };
@@ -1227,7 +1227,7 @@ export async function sayLaunchNotice(harnesses, out = say) {
   out(`  ${launch.line}`);
   if (!launch.needsRoot) return;
   out(`  쓰는 폴더에서 한 번 실행하세요: ${bold(addHint())}`);
-  out(dim("  (모든 폴더에서 켜려면: lively scope anywhere — 개인 폴더의 대화도 워크스페이스에 기록됩니다)"));
+  out(dim(`  (모든 폴더에서 켜는 «어디서나» 방식은 조직 관리자가 정합니다 — ${SCOPE_ADMIN_PLACE})`));
 }
 
 // ── WSL 안내(#5041) — 윈도우에 깐 라이블리는 WSL 안의 AI 가 쓰지 않는다 ─────────────────────────
@@ -2898,7 +2898,11 @@ async function cmdMode(rest) {
 }
 
 // ── 기록 범위(#5016) — `lively scope` · `lively work-root` ─────────────────────
-//  이 컴퓨터에서 라이블리를 «작업 폴더에서만(기본)» 켤지 «어디서나» 켤지, 그리고 작업 폴더 목록을 다룬다.
+//  이 컴퓨터에서 라이블리를 어느 폴더에서 켤지 다룬다. 방식은 조직(관리자)이 정한다 — «작업 폴더에서만(기본 꺼짐 · 허용 목록)» 이면
+//  허용 목록에 든 폴더만, «어디서나(기본 켜짐 · 제외 목록)» 면 제외 목록에 든 폴더만 빼고 켠다. 이 컴퓨터는 **목록만** 바꾼다.
+//  `work-root add|remove` 는 방식에 맞춰 «여기 켜기|끄기» 를 한다(/lively-connect·/lively-disconnect 가 부르는 것):
+//   작업 폴더에서만 — add = 허용 목록에 더함 · remove = 허용 목록에서 뺌.   어디서나 — add = 제외 목록에서 뺌 · remove = 제외 목록에 더함.
+//   조직 줄은 지울 수 없다 — 빼면 이 컴퓨터에서만 끄고, 끈 조직 줄을 다시 더하면 켠다(서버 src/org/store/record-scope.ts).
 //  판정·사본 파일 규칙은 hooks/record-scope.mjs 하나다(설치 자리 ~/.lively/hooks/ — 이 파일은 ~/.lively/lib/ 에서 ../hooks 로 찾는다).
 //  바꾸면 서버(정본)에 먼저 올리고, 못 닿으면 사본에 pending 으로 쌓는다 — 다음 세션 시작 훅이 올린다(lively mode 와 같은 규약).
 //  열려 있는 세션에도 바로 닿는다: MCP 프록시가 사본을 주기적으로 다시 읽고, 훅은 매번 사본을 읽는다.
@@ -2906,101 +2910,163 @@ async function loadRecordScope() {
   try { return await import(new URL("../hooks/record-scope.mjs", import.meta.url).href); }
   catch { die("이 설치엔 기록 범위 모듈이 없습니다 — `lively update` 로 키트를 최신으로 받으세요."); }
 }
-const SCOPE_LABEL = { work_folders: "작업 폴더에서만", anywhere: "어디서나" };
+const SCOPE_LABEL = { work_folders: "작업 폴더에서만", anywhere: "어디서나(제외 폴더 빼고)" };
+const SCOPE_ADMIN_PLACE = "웹 관리 ▸ AI 능력 ▸ 스킬 · 훅 ▸ 기록 범위";
 // 기록 범위 현황 — 설치 끝 안내·status·doctor 가 같은 값을 본다. 판정 모듈이 없는 옛 설치면 null 이다(진단은 여기서 죽으면 안 된다).
+//  roots = 지금 방식에서 쓰는 목록의 줄 수(작업 폴더에서만 → 작업 폴더 · 어디서나 → 제외 폴더).
 async function recordScopeState() {
   try {
     const rs = await import(new URL("../hooks/record-scope.mjs", import.meta.url).href);
     const settings = rs.effectiveSettings(LIVELY);
     const dir = sessionFolderOf(rs);
     const d = rs.decideRecordScope({ env: process.env, dir, lively: LIVELY });
-    return { scope: settings?.scope ?? null, roots: rs.workRootsOf(LIVELY, settings).length, dir, inScope: d.inScope, reason: d.reason };
+    const roots = settings?.scope === "anywhere"
+      ? (typeof rs.excludeRootsOf === "function" ? rs.excludeRootsOf(LIVELY, settings).length : 0)
+      : rs.workRootsOf(LIVELY, settings).length;
+    return { scope: settings?.scope ?? null, roots, dir, inScope: d.inScope, reason: d.reason };
   } catch { return null; }
 }
 // 사람이 읽는 한 줄 — 켜짐·꺼짐 표기만 표면마다 다르다(status 는 색, doctor 는 할 일까지).
-const scopeSummary = (sc, onOff) => `${SCOPE_LABEL[sc.scope]}${sc.scope === "work_folders" ? ` · 작업 폴더 ${sc.roots}개` : ""} · 지금 폴더 ${onOff(sc.inScope)}`;
+const scopeSummary = (sc, onOff) => `${SCOPE_LABEL[sc.scope]} · ${sc.scope === "anywhere" ? "제외 폴더" : "작업 폴더"} ${sc.roots}개 · 지금 폴더 ${onOff(sc.inScope)}`;
 // 등록·삭제 결과를 서버에 올렸는지 한 줄로 — 못 올렸으면 언제 다시 하는지까지 말한다.
 const syncNote = (synced) => synced ? "" : dim("\n  지금은 서버에 못 닿아 이 컴퓨터에만 저장했습니다 — 다음 세션 시작 때 서버(웹 설정)에도 올립니다.");
+const unsyncedNote = (s) => s ? "" : dim(" (서버에서 아직 받아 오지 않았습니다 — 지금은 종전처럼 어디서나 켜집니다)");
 
-// `lively scope [work-folders|anywhere]` — 이 컴퓨터의 기록 범위 조회/설정.
+// `lively scope` — 이 컴퓨터의 기록 범위 조회. 방식은 조직이 정한다 — 인자를 주면 어디서 바꾸는지 알려 주고 끝낸다.
 // «지금 폴더» 는 훅과 같은 함수로 정한다 — 갈리면 `work-root list` 의 켜짐/꺼짐이 실제 세션과 다르게 보인다.
 const sessionFolderOf = (rs) => rs.sessionDirOf({ env: process.env, cwd: process.cwd() });
 
 async function cmdScope(rest) {
   const rs = await loadRecordScope();
-  const arg = String(rest[0] || "").trim().toLowerCase().replace(/-/g, "_");
-  const s = rs.effectiveSettings(LIVELY);
-  if (!arg) {
-    say(`이 컴퓨터의 기록 범위: ${bold(SCOPE_LABEL[s?.scope || rs.DEFAULT_SCOPE])}${s ? "" : dim(" (서버에서 아직 받아 오지 않았습니다 — 지금은 종전처럼 어디서나 켜집니다)")}`);
-    say(dim("  변경: lively scope work-folders | anywhere   ·   작업 폴더 목록: lively work-root"));
-    return;
+  const arg = String(rest[0] || "").trim();
+  if (arg) {
+    die(`기록 방식(작업 폴더에서만 | 어디서나)은 조직 관리자가 정합니다 — ${SCOPE_ADMIN_PLACE}.\n`
+      + "  이 컴퓨터에서는 목록만 바꿀 수 있습니다: lively work-root add|remove [경로] (/lively-connect · /lively-disconnect)", 2);
   }
-  if (!rs.SCOPES.includes(arg)) die("기록 범위는 work-folders 또는 anywhere 중 하나여야 합니다.", 2);
-  const r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), scope: arg });
-  say(green(`기록 범위 → ${bold(SCOPE_LABEL[arg])}`) + dim(arg === "anywhere"
-    ? "  (어느 폴더에서 켠 AI 든 라이블리에 연결되고 대화도 워크스페이스에 기록됩니다)"
-    : "  (작업 폴더·라이블리 프로젝트 폴더에서 켠 AI 만 연결됩니다 — 목록: lively work-root)") + syncNote(r.synced));
+  return listScope(rs);
 }
 
-// `lively work-root [list | add [경로] | remove [경로]]` — 이 컴퓨터의 작업 폴더 목록. 경로를 빼면 지금 세션 폴더다.
-//  `/lively-connect`(클로드)·`/prompts:lively-connect`(코덱스)가 부르는 것이 `add` 다.
+// 목록 보기 — `lively scope` · `lively work-root list` 가 같은 화면이다. 지금 방식에서 쓰는 목록을 먼저, 줄마다 출처를 붙인다.
+function listScope(rs) {
+  const s = rs.effectiveSettings(LIVELY);
+  const mode = s?.scope || rs.DEFAULT_SCOPE;
+  say(`이 컴퓨터의 기록 범위: ${bold(SCOPE_LABEL[mode])}${s ? dim(" (조직이 정한 방식)") : unsyncedNote(s)}`);
+  const key = (p) => rs.rootKey(p, HOME);
+  const org = s?.org || { work_roots: [], exclude_roots: [] };
+  const off = (s?.off_roots || []).map(key);
+  const tag = (list) => (r) => list.some((x) => key(x) === key(r)) ? dim("  (조직)") : "";
+  if (mode === "anywhere") {
+    say("제외 폴더 — 이 폴더와 그 아래에서 연 AI 는 라이블리가 꺼집니다:");
+    const ex = s?.exclude_roots || [];
+    if (!ex.length) say(dim("  (없음 — 모든 폴더에서 켜집니다)"));
+    for (const r of ex) say(`  ${r}${tag(org.exclude_roots)(r)}`);
+    const offEx = org.exclude_roots.filter((r) => !ex.some((x) => key(x) === key(r)));
+    for (const r of offEx) say(dim(`  ${r}  (조직 · 이 컴퓨터에서 끔)`));
+    say(dim("  제외 폴더 안이어도 라이블리 프로젝트 폴더(.lively/project.json)와 라이블리가 띄운 세션은 켜집니다."));
+  } else {
+    const synced = s?.work_roots || [];
+    const legacy = rs.legacyRoots(LIVELY).filter((r) => !off.includes(key(r)) && !synced.some((x) => key(x) === key(r)));
+    say("작업 폴더 — 이 폴더와 그 아래에서 연 AI 만 라이블리에 연결됩니다:");
+    if (!synced.length && !legacy.length) say(dim("  (없음)"));
+    for (const r of synced) say(`  ${r}${tag(org.work_roots)(r)}`);
+    for (const r of legacy) say(`  ${r}${dim("  (~/.lively/work-roots 파일)")}`);
+    for (const r of org.work_roots.filter((x) => off.includes(key(x)))) say(dim(`  ${r}  (조직 · 이 컴퓨터에서 끔)`));
+    say(dim("  라이블리 프로젝트 폴더(.lively/project.json)와 라이블리가 띄운 세션은 등록하지 않아도 켜집니다."));
+  }
+  const here = sessionFolderOf(rs);
+  const d = rs.decideRecordScope({ env: process.env, dir: here, lively: LIVELY });
+  say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(` — 켜기: ${addHint()}`)}`);
+  say(dim(`  목록 바꾸기: lively work-root add|remove [경로] · 웹 «내 스킬 · 훅 ▸ 내 컴퓨터별 연결» · 방식은 ${SCOPE_ADMIN_PLACE}`));
+}
+
+// `lively work-root [list | add [경로] | remove [경로]]` — 이 폴더에서 라이블리 켜기·끄기(방식에 맞춰 목록을 바꾼다). 경로를 빼면 지금 세션 폴더다.
+//  `/lively-connect`(클로드)·`/prompts:lively-connect`(코덱스)가 부르는 것이 `add`, `/lively-disconnect` 가 부르는 것이 `remove` 다.
 async function cmdWorkRoot(rest) {
   const rs = await loadRecordScope();
   const sub = rest[0] || "list";
-  const s = rs.effectiveSettings(LIVELY);
-  const synced = s?.work_roots || [];
-  const legacy = rs.legacyRoots(LIVELY);
-  if (sub === "list") {
-    say(`이 컴퓨터의 기록 범위: ${bold(SCOPE_LABEL[s?.scope || rs.DEFAULT_SCOPE])}${s ? "" : dim(" (서버에서 아직 받아 오지 않았습니다 — 지금은 종전처럼 어디서나 켜집니다)")}`);
-    say("작업 폴더:");
-    if (!synced.length && !legacy.length) say(dim("  (없음)"));
-    for (const r of synced) say(`  ${r}`);
-    for (const r of legacy) say(`  ${r}${dim("  (~/.lively/work-roots 파일)")}`);
-    say(dim("  라이블리 프로젝트 폴더(.lively/project.json)와 라이블리가 띄운 세션은 등록하지 않아도 켜집니다."));
-    const here = sessionFolderOf(rs);
-    const d = rs.decideRecordScope({ env: process.env, dir: here, lively: LIVELY });
-    say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(` — 등록: ${addHint()}`)}`);
-    return;
-  }
+  if (sub === "list") return listScope(rs);
   if (sub !== "add" && sub !== "remove") die("사용법: lively work-root [list | add [경로] | remove [경로]]", 2);
+  const s = rs.effectiveSettings(LIVELY);
   const target = resolve(rest[1] ? rs.expandHome(String(rest[1]), HOME) : sessionFolderOf(rs));
   const key = (p) => rs.rootKey(p, HOME);
+  //  루트(/)나 홈 전체 — 작업 폴더로 넣으면 사실상 «어디서나» 고, 제외 폴더로 넣으면 사실상 «전부 끔» 이다. 조용히 받지 않는다.
+  const whole = key(target) === key("/") || key(target) === key(HOME) || /^[A-Za-z]:[\\/]?$/.test(target);
+  const change = (c) => rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), ...c });
+  //  조직 줄은 서버가 원래 글자(예: ~/company)로 견준다 — 이 컴퓨터에서 편 경로가 아니라 그 줄 그대로 보낸다.
+  const orgLine = (list) => (list || []).find((x) => key(x) === key(target));
+  if ((s?.scope || rs.DEFAULT_SCOPE) === "anywhere") return workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLine });
+
+  const synced = s?.work_roots || [];
+  const off = (s?.off_roots || []).map(key);
+  const legacy = rs.legacyRoots(LIVELY).filter((r) => !off.includes(key(r)));
   if (sub === "add") {
     if (!existsSync(target) || !statSync(target).isDirectory()) die(`폴더가 없습니다: ${target}`, 2);
-    //  루트(/)나 홈 전체를 등록하면 사실상 «어디서나» 다 — 조용히 받지 않고 그 설정을 쓰게 한다(개인 폴더가 홈 아래에 있다).
-    if (key(target) === key("/") || key(target) === key(HOME) || /^[A-Za-z]:[\\/]?$/.test(target)) {
-      die(`${target} 를 통째로 등록하면 그 아래 모든 폴더에서 라이블리가 켜집니다. 그걸 원하면 \`lively scope anywhere\` 를 쓰세요.`, 2);
-    }
+    if (whole) die(`${target} 를 통째로 등록하면 그 아래 모든 폴더에서 라이블리가 켜집니다. 그게 필요하면 조직 관리자에게 «어디서나» 방식을 요청하세요 — ${SCOPE_ADMIN_PLACE}.`, 2);
     if (synced.some((r) => key(r) === key(target)) || legacy.some((r) => key(r) === key(target))) {
       say(green(`이미 작업 폴더입니다: ${target}`));
       return;
     }
-    const r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), add: [target] });
-    say(green(`✓ 작업 폴더로 등록했습니다: ${bold(target)}`));
+    const offOrg = (s?.off_roots || []).find((x) => key(x) === key(target));   // 이 컴퓨터에서 끈 조직 줄이면 그 줄을 다시 켠다
+    const r = await change({ add: [offOrg || target] });
+    say(green(offOrg ? `✓ 조직 작업 폴더를 이 컴퓨터에서 다시 켰습니다: ${bold(offOrg)}` : `✓ 작업 폴더로 등록했습니다: ${bold(target)}`));
     say(dim("  이 폴더와 그 아래에서 연 AI 는 라이블리에 연결됩니다. 지금 열려 있는 세션은 다음 메시지부터 연결됩니다.") + syncNote(r.synced));
-    if ((r.settings?.scope || s?.scope) === "anywhere") say(dim("  (이 컴퓨터는 지금 «어디서나» 라서 다른 폴더에서도 이미 켜져 있습니다.)"));
     return;
   }
   // remove — 목록에 그 경로 그대로 있어야 지운다. 위 폴더 등록·프로젝트 표식으로 켜진 거라면 무엇 때문인지 알려 준다.
   const inSynced = synced.find((r) => key(r) === key(target));
   const inLegacy = legacy.find((r) => key(r) === key(target));
   if (!inSynced && !inLegacy) {
-    const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "" }, dir: target, lively: LIVELY });
+    const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: target, lively: LIVELY });
     if (d.reason === "work_root") say(yellow(`이 폴더는 등록된 ${bold(d.root)} 아래라서 켜져 있습니다 — 끄려면: lively work-root remove "${d.root}"`));
     else if (d.reason === "project") say(yellow(`이 폴더는 라이블리 프로젝트 폴더(${d.root})라서 켜져 있습니다 — 목록에서 뺄 것이 없습니다.`));
     else say(`작업 폴더 목록에 없습니다: ${target}`);
     return;
   }
   let r = { synced: true };
-  if (inSynced) r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), remove: [inSynced] });
+  const isOrg = !!orgLine(s?.org?.work_roots);
+  if (inSynced) r = await change({ remove: [inSynced] });
   if (inLegacy) {
     const file = join(LIVELY, "work-roots");
     const lines = readFileSync(file, "utf8").split(/\r?\n/).filter((l) => !(l.trim() && !l.trim().startsWith("#") && key(l.trim()) === key(inLegacy)));
     writeFileSync(file, lines.join("\n"));
   }
-  say(green(`✓ 작업 폴더에서 뺐습니다: ${bold(target)}`) + dim("\n  이 폴더에서 연 AI 는 이제 라이블리에 연결되지 않습니다(열려 있는 세션도 곧 도구가 내려갑니다).") + syncNote(r.synced));
-  //  ~/.lively/work-roots 의 줄은 설치·업데이트가 조직 목록에서 다시 채울 수 있다(seedWorkRoots — 빠진 줄을 더한다).
-  if (inLegacy) say(dim("  (~/.lively/work-roots 파일에서 뺀 줄입니다 — 조직 설정에서 온 줄이면 다음 업데이트 때 다시 들어올 수 있습니다. 그럴 땐 관리자에게 조직 목록에서 빼 달라고 하세요.)"));
+  say(green(isOrg ? `✓ 조직 작업 폴더를 이 컴퓨터에서 껐습니다: ${bold(target)}` : `✓ 작업 폴더에서 뺐습니다: ${bold(target)}`)
+    + dim("\n  이 폴더에서 연 AI 는 이제 라이블리에 연결되지 않습니다(열려 있는 세션도 곧 도구가 내려갑니다).") + syncNote(r.synced));
+  if (isOrg) say(dim("  (조직 목록에는 남아 있습니다 — 다른 컴퓨터·다른 사람은 그대로입니다. 다시 켜려면: lively work-root add)"));
+  //  서버에 없는 손 편집 줄(~/.lively/work-roots)은 이 컴퓨터 파일에서만 뺀다.
+  else if (inLegacy && !inSynced) say(dim("  (~/.lively/work-roots 파일에서 뺀 줄입니다.)"));
+}
+
+// «어디서나» 방식 — add = 제외 목록에서 빼기(켜기) · remove = 제외 목록에 넣기(끄기).
+async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLine }) {
+  const ex = s?.exclude_roots || [];
+  const inEx = ex.find((r) => key(r) === key(target));
+  if (sub === "add") {
+    if (inEx) {
+      const isOrg = !!orgLine(s?.org?.exclude_roots);
+      const r = await change({ exclude_remove: [inEx] });
+      say(green(isOrg ? `✓ 조직 제외 폴더를 이 컴퓨터에서 껐습니다(이제 켜집니다): ${bold(inEx)}` : `✓ 제외 목록에서 뺐습니다: ${bold(inEx)}`));
+      say(dim("  이 폴더와 그 아래에서 연 AI 는 라이블리에 연결됩니다. 지금 열려 있는 세션은 다음 메시지부터 연결됩니다.") + syncNote(r.synced));
+      return;
+    }
+    const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: target, lively: LIVELY });
+    if (d.reason === "excluded") {
+      say(yellow(`이 폴더는 제외 폴더 ${bold(d.root)} 아래라서 꺼져 있습니다 — 켜려면 그 폴더를 제외 목록에서 빼야 합니다(그 아래 전부가 켜집니다): lively work-root add "${d.root}"`));
+      return;
+    }
+    say(green(`이미 켜져 있습니다: ${target}`) + dim("\n  (이 컴퓨터는 «어디서나» 방식이라 제외 목록에 없는 폴더는 모두 켜집니다.)"));
+    return;
+  }
+  // remove — 이 폴더를 제외 목록에 넣는다.
+  if (whole) die(`${target} 를 통째로 제외하면 라이블리 프로젝트 폴더 말고는 모두 꺼집니다. 그게 필요하면 조직 관리자에게 «작업 폴더에서만» 방식을 요청하세요 — ${SCOPE_ADMIN_PLACE}.`, 2);
+  if (inEx) { say(green(`이미 제외 폴더입니다: ${target}`)); return; }
+  const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: target, lively: LIVELY });
+  if (d.reason === "excluded") { say(green(`이미 꺼져 있습니다 — 제외 폴더 ${bold(d.root)} 아래입니다.`)); return; }
+  const offOrg = (s?.org?.exclude_roots || []).find((x) => key(x) === key(target));   // 이 컴퓨터에서 끈 조직 제외 줄이면 그 줄을 다시 켠다
+  const r = await change({ exclude_add: [offOrg || target] });
+  say(green(offOrg ? `✓ 조직 제외 폴더를 이 컴퓨터에서 다시 켰습니다: ${bold(offOrg)}` : `✓ 제외 목록에 넣었습니다: ${bold(target)}`)
+    + dim("\n  이 폴더와 그 아래에서 연 AI 는 이제 라이블리에 연결되지 않습니다(열려 있는 세션도 곧 도구가 내려갑니다).") + syncNote(r.synced));
+  if (d.reason === "project") say(dim(`  (이 폴더는 라이블리 프로젝트 폴더(${d.root})라 제외해도 켜집니다.)`));
 }
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
@@ -3328,8 +3394,8 @@ ${bold("작업")}
       ${dim("레포를 못 가져와도(자격·네트워크 등) 세션은 그대로 시작하고, 무엇이 왜 실패했는지 사람·AI 에게 함께 알립니다.")}
       --require-repo     ${dim("반대로 레포 준비 실패 시 실행을 중단(자동화·프로비저닝 스크립트용)")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
-  scope [<work-folders|anywhere>]     이 컴퓨터의 기록 범위 조회/설정 ${dim("(기본 work-folders — 작업 폴더 밖에서 켠 AI 는 라이블리가 꺼짐)")}
-  work-root [list|add|remove] [경로]  작업 폴더 목록 조회·등록·삭제 ${dim("(경로 생략 = 지금 폴더 · /lively-connect 가 부르는 것)")}
+  scope                               이 컴퓨터의 기록 범위 조회 ${dim("(방식 — 작업 폴더에서만 | 어디서나 — 은 조직 관리자가 정함)")}
+  work-root [list|add|remove] [경로]  이 폴더에서 라이블리 켜기(add)·끄기(remove) — 방식에 맞춰 작업 폴더·제외 폴더 목록을 바꿈 ${dim("(경로 생략 = 지금 폴더 · /lively-connect·/lively-disconnect 가 부르는 것)")}
   workspace              지금 매여 있는 워크스페이스 + 이 PC 노드가 같은 곳을 보고 있는지
       switch             다른 워크스페이스로 옮기기 ${dim("(다시 로그인 — 노드·MCP 도 함께 따라갑니다)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}

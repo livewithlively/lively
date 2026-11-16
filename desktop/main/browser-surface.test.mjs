@@ -101,7 +101,7 @@ t("F1·F2 ★ 서피스(webview 게스트 + 그 팝업 창)가 웹 UI 이동 규
   assert.ok(hook >= 0, "web-contents-created 훅이 없다");
   const seg = MAIN.slice(hook);
   const guest = seg.indexOf("if (isSurfaceContents(wc))");
-  const webRule = seg.indexOf("openTargetFor(url, state.gatewayUrl)");
+  const webRule = seg.indexOf("openTargetFor(url, selectedGatewayUrl || state.gatewayUrl)");
   assert.ok(guest >= 0, "★ 서피스를 가르지 않는다 — 서피스·팝업이 첫 이동에서 시스템 브라우저로 튄다");
   assert.ok(webRule >= 0, "웹 UI 규칙이 사라졌다");
   assert.ok(guest < webRule, "★ F1 분기가 웹 UI 규칙보다 뒤에 있다 — 서피스가 죽는다");

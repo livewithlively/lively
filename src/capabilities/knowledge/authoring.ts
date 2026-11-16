@@ -23,6 +23,7 @@ import { canSeeSource } from "../../v6/source-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../../v6/knowledge-gate.js";
 import { denyLifecycleChange } from "./lifecycle-guard.js";
+import { denyMirrorContentWrite } from "./mirror-guard.js";
 import { proposeRevision, pendingStagedRevisionId } from "../../v6/knowledge-revision-store.js";
 import {
   assertKnowledgeWritable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo,
@@ -127,6 +128,7 @@ export const knowledgeSave: Capability = {
     "**edit 모드(#1531): 문서 '중간'을 고칠 땐 mode='edit' + edits=[{old,new}] 를 써라** — append 는 끝에만 붙으므로 타임라인 중간 삽입·표의 수치 교체·낡은 항목 갱신엔 못 쓴다. " +
     "그때 replace 로 전문을 되보내면 네가 4만 자를 받아쓰게 되고, 그 전사 중에 **손대지 말아야 할 문장이 깨진다**(실측: 무관한 쉼표가 여는 괄호로 바뀌어 괄호가 닫히지 않았다). " +
     "edit 는 old 를 정확일치로 찾아 그 자리만 바꾸므로 나머지는 문자 단위로 보존된다. old 는 공백·줄바꿈까지 원문 그대로여야 하고, **못 찾거나 여러 곳에서 찾으면 저장이 실패한다**(조용히 넘어가지 않는다 — 여러 곳이면 앞뒤를 더 붙여 유일하게 만들거나 replace_all: true). " +
+    "**외부 미러 지식(노션·위키 레포 등 외부 좌표가 있는 지식)은 어떤 모드로도 저장할 수 없다** — 재싱크가 원본으로 덮기 때문이다. 원본에서 고치고, 해석은 별도 지식으로 써서 knowledge_link 로 잇는다. " +
     "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다. " +
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
@@ -243,6 +245,10 @@ export const knowledgeSave: Capability = {
 
     // ── #783 인입 허용선 게이트 — 정책 규칙 0개면 create=auto·update=auto(현행과 100% 동일). ──
     const gate = await resolveKnowledgeGate(input, ctx);
+    //  외부 미러는 어떤 저장 모드든(replace 포함) 다음 재싱크가 덮는다 — 쓰기 전에 거절(mirror-guard.ts).
+    //   edit·append 의 provenance 가드보다 앞이라, 좌표가 있는 미러는 이 문구로 거절된다.
+    const mirrorDenied = denyMirrorContentWrite(gate.before, "save");
+    if (mirrorDenied) throw new HttpError(400, mirrorDenied);
 
     // ── #921 append — body_md('조각')를 기존 본문 끝에 붙인 **전문**으로 바꿔 아래 경로 전체가 종전처럼 전문만 다루게 한다. ──
     //  이 자리에서 한 번만 병합하는 게 핵심이다: 리비전 제안(next.body_md)에 조각이 들어가면 승인 시
@@ -564,7 +570,7 @@ export const knowledgeSetTitle: Capability = {
     "이 툴은 name+title 만 받으므로 본문을 컨텍스트에 실을 필요가 없다 — **knowledge_save 응답에 capped(제목이 잘렸다)가 왔을 때 쓰라고 만든 경로다**(#1442). " +
     "제목은 검색·주입에 나가는 내용이라 version 이 올라가고 임베딩도 다시 계산된다(뷰 설정 토글과 다른 클래스). " +
     "조직이 '에이전트 지식 검토'를 켜 두면 이 변경도 게이트를 탄다 — 응답 gate 가 결과를 알려준다(pending 제안 접수 / 반영 후 사후검토). " +
-    "제목을 아예 비우거나 본문·분류를 함께 고치려면 knowledge_save 를 쓰라.",
+    "제목을 아예 비우거나 본문·분류를 함께 고치려면 knowledge_save 를 쓰라. 외부 미러 지식(외부 좌표가 있는 지식)의 제목은 원본이 정하므로 거절된다.",
   scope: "memory",
   input: knowledgeSetTitleInput,
   expose: {
@@ -592,6 +598,8 @@ export const knowledgeSetTitle: Capability = {
     if (gate.isCreate || !gate.before) {
       throw new HttpError(404, `지식 '${input.name}' 없음 — 제목 갱신은 기존 지식에만 됩니다(신규는 knowledge_save).`);
     }
+    const mirrorDenied = denyMirrorContentWrite(gate.before, "title");
+    if (mirrorDenied) throw new HttpError(400, mirrorDenied);
     if (gate.update === "drop") {
       throw new HttpError(403, "인입 허용선 정책상 이 지식은 수정할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
     }

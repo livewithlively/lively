@@ -47,6 +47,7 @@ const NOTE_WAIT = '다이어그램을 그리고 있습니다…';
 const NOTE_LOAD = '다이어그램 도구를 불러오지 못해 코드로 보여 드립니다.';
 const NOTE_SYNTAX = '다이어그램 문법을 읽지 못했습니다. 코드를 확인해 주세요.';
 const NOTE_SLOW = '다이어그램을 그리는 데 너무 오래 걸려 멈췄습니다. 코드로 보여 드립니다.';
+const NOTE_MEASURE = '이번에는 다이어그램을 그리지 못해 코드로 보여 드립니다. 다시 열면 그릴 수 있습니다.';
 const NOTE_EMPTY = '코드를 적으면 여기에 그림이 그려집니다.';
 const NOTE_SHRUNK = '그림을 누르면 크게 볼 수 있습니다.';   // 칸에 맞추느라 MIN_SCALE 밑으로 줄였을 때만 — 글자가 작다
 
@@ -134,7 +135,18 @@ function frameMain(): void {
         startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
         theme: 'base', themeVariables: d.vars || {}, fontFamily: String(d.font || ''),
       });
-      const r = await M.render('mmd' + id, String(d.code || ''));
+      //  글자 폭을 0×0 으로 잰 그리기(mermaid 의 «svg element not in render tree»)는 코드 탓이 아니라 그 순간의 측정 실패다 —
+      //   새 프레임의 첫 그리기에서 가끔 난다(2026-11-09 실측: 런타임 시험 첫 그림이 10회 중 4회). 한 박자 쉬고 다시 그린다.
+      let r: any = null;
+      for (let attempt = 0; ; attempt++) {
+        try { r = await M.render('mmd' + id, String(d.code || '')); break; } catch (err: any) {
+          const msg = String((err && (err.message || err.str)) || err || '');
+          if (attempt >= 3 || msg.indexOf('not in render tree') < 0) throw err;
+          const junk = W.document.getElementById('dmmd' + id);
+          if (junk) junk.remove();
+          await new Promise((z) => setTimeout(z, 50 * (attempt + 1)));
+        }
+      }
       const svg = new DOMParser().parseFromString(String(r && r.svg || ''), 'text/html').querySelector('svg');
       if (!svg) throw new Error('그림이 비어 있습니다');
       const vb = String(svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
@@ -175,7 +187,7 @@ function frameHtml(src: string): string {
 
 /** 그린 결과 — 그림이거나, 못 그린 까닭. load(도구를 못 실음)는 다시 하면 될 수 있어 캐시하지 않는다.
  *  syntax(문법)·slow(시간 상한)는 같은 코드면 또 그렇다 — 캐시해서 같은 본문을 다시 열 때 또 멈추지 않게 한다. */
-type Drawn = Picture | { err: string; kind: 'syntax' | 'load' | 'slow' };
+type Drawn = Picture | { err: string; kind: 'syntax' | 'load' | 'slow' | 'measure' };
 const isPic = (d: Drawn | null): d is Picture => !!d && !('err' in d);
 
 let frame: HTMLIFrameElement | null = null;
@@ -210,9 +222,12 @@ function onPortMessage(e: MessageEvent): void {
   const d: any = e.data;
   if (!d || typeof d !== 'object' || d.op !== 'done' || !current || Number(d.id) !== current.id) return;
   const w = Number(d.w), h = Number(d.h);
+  const err = typeof d.err === 'string' && d.err ? d.err.slice(0, 600) : '그림을 받지 못했습니다';
   current.done(typeof d.svg === 'string' && d.svg.length <= SVG_MAX && w > 0 && h > 0 && w < 1e6 && h < 1e6
     ? { svg: d.svg, w, h, title: typeof d.title === 'string' ? d.title.trim().slice(0, 200) : '' }
-    : { err: typeof d.err === 'string' && d.err ? d.err.slice(0, 600) : '그림을 받지 못했습니다', kind: 'syntax' });
+    //  측정 실패(글자 폭 0×0)는 문법 오류가 아니다 — 'measure' 로 넘겨 캐시하지 않는다(다음에 열 때 다시 그린다).
+    //   'syntax' 로 두면 프레임 안에서 다시 그려도 안 된 그 한 번이 캐시에 박혀, 새로 고치기 전까지 같은 본문이 계속 «문법 오류» 로 보인다.
+    : { err, kind: err.indexOf('not in render tree') >= 0 ? 'measure' : 'syntax' });
 }
 
 /**
@@ -291,7 +306,7 @@ function drawCached(code: string, pal: Palette): Promise<Drawn> {
   if (!p) {
     p = draw(code, pal).then((d) => {
       inflight.delete(key);
-      if (!('err' in d && d.kind === 'load')) {
+      if (!('err' in d && (d.kind === 'load' || d.kind === 'measure'))) {   // 다시 하면 될 수 있는 것은 캐시하지 않는다
         cache.set(key, d);
         while (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string);
       }
@@ -322,6 +337,7 @@ function noteFor(d: Drawn): string {
   if (isPic(d)) return '';
   if (d.kind === 'load') return NOTE_LOAD;
   if (d.kind === 'slow') return NOTE_SLOW;
+  if (d.kind === 'measure') return NOTE_MEASURE;
   //  mermaid 의 문법 오류는 여러 줄이다 — «Parse error on line 3:» · 코드 발췌 · 화살표 줄 · «Expecting 'A', 'B', … got 'X'».
   //  발췌·화살표는 한 줄로 펴면 뜻이 없고 기대 토큰 목록은 열 개가 넘는다 — 어느 줄인지(첫 줄)와 무엇에 걸렸는지(got …)만 옮긴다.
   const lines = d.err.split('\n').map((l) => l.trim()).filter(Boolean);
