@@ -27,6 +27,7 @@ import { enterSession, openRouteRow } from './detail-hub-kit.js';
 import { pjvProjStatusMeta, pjvResolveProjStatus } from './status.js';
 import { pjvProjClosedView } from './state.js';
 import { pjvPopover } from './popover.js';
+import { DRAFT_HINT, DRAFT_LABEL, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안을 가려내는 잣대 한 벌(사이드바 수와 맞는다)
 
 const PAGE = SESS_TABLE_PAGE;
 // 세션 목록 화면과 같은 두 축(main.ts loadData) — 기록은 서버 상한(2000)까지 한 번에. 실측 384건 · 0.2MB.
@@ -54,6 +55,8 @@ const ui: SessTableUi & { period: PastPeriod; owner: string; state: string; by: 
   scopeKey: '',
   closed: new Set<string>(), openUntitled: new Set<string>(),
 };
+//  #5522 맨 아래 «초안» 묶음을 펼쳐 뒀나 — 기본은 접힘(목록 보기의 초안 묶음 #4170 과 같은 자). 페이지 수명 동안만 기억한다.
+let draftOpen = false;
 
 //  재료는 **보드 한 판 동안** 쥔다 — 보드 진입·다시 받기(pjvPrefetchSessions)만 새로 받는다. 검색 · 묶기 · 스코프 전환 같은 다시 그리기마다
 //  받으면 «불러오는 중» 이 번쩍이고 보던 자리를 잃는다(격리 리뷰 지적 — 종전엔 15초 수명이라 그 뒤 다시 그릴 때마다 받았다).
@@ -140,6 +143,8 @@ export interface SessListCtx {
   /** 리스트들 — 「리스트」 로 묶을 때 묶음 이름. */
   lists?: any[];
 }
+/** 초안만 보는 스코프(#5522 — 사이드바 «초안» 줄)인가. 거기선 초안을 따로 빼지 않는다(전부가 초안이다). */
+const isDraftScope = (k: string): boolean => k === '__drafts__';
 
 /** 리스트 뷰 한 장 — 세션을 받는 동안 «불러오는 중»을 세우고, 받으면 제자리에 그린다. 이 뷰 안의 조작(기간 · 정렬 · 접기)은 이 자리만 다시 그린다. */
 export function pjvSessionListView(ctx: SessListCtx): HTMLElement {
@@ -201,13 +206,19 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
   const q = { proj: null, group: null, period: ui.period, owner: ui.owner, state: '', now };
   const inScope = selectAllSess(items, { ...q, period: 'all', owner: '' });
   const needle = ctx.query.trim().toLowerCase();
-  const vis = selectAllSess(items, q).filter((it) => (!ui.state || it.mine.has(ui.state)) && (!needle || it.name.toLowerCase().includes(needle)));
+  const passed = selectAllSess(items, q).filter((it) => (!ui.state || it.mine.has(ui.state)) && (!needle || it.name.toLowerCase().includes(needle)));
+  //  #5522 — 초안은 묶는 기준과 상관없이 **맨 아래 한 묶음**에만 선다(#4170 규칙: 묶음 안에 섞이면 따로 뺀 뜻이 없다).
+  //   초안만 보는 스코프에선 빼지 않는다. 거르개(기간 · 사람 · 상태 · 검색)는 초안에도 똑같이 걸린다.
+  const splitDrafts = !isDraftScope(ctx.scopeKey);
+  const vis = splitDrafts ? passed.filter((it) => !isDraftProj(it.proj)) : passed;
+  const drafts = splitDrafts ? passed.filter((it) => isDraftProj(it.proj)) : [];
+  const inScopeDrafts = splitDrafts ? inScope.filter((it) => isDraftProj(it.proj)).length : 0;
   const byState = (k: string): number => inScope.filter((it) => it.mine.has(k)).length;
 
   //  거르개 줄 — [세션 목록] 앱 도구줄과 같은 부품(기간 · 사람 · 상태 칩) + 오른쪽에 개수.
   const picks = sessFilterPicks(ui, { owners: ownerCounts(items, q), ownerName, myStateCount: byState, repaint });
   const tools = el('div', { class: 'v2-sa-tools pjv-sl-tools' }, ...picks.filter((x): x is HTMLElement => !!x), el('span', { class: 'sp' }),
-    el('span', { class: 'pjv-sl-count', text: vis.length === inScope.length ? `프로젝트 ${inScope.length}개` : `${vis.length}개 표시 · 전체 ${inScope.length}` }));
+    el('span', { class: 'pjv-sl-count', text: countText(vis.length + drafts.length, inScope.length, inScopeDrafts, splitDrafts ? '프로젝트' : DRAFT_LABEL) }));
   const by = ui.by;
   const groupLabel = (key: string): string => by === 'list' ? (listName.get(Number(key)) || '리스트 없음')
     : by === 'owner' ? ownerName(key)
@@ -215,6 +226,7 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
     : key;
   const { list, more } = sessTable({
     vis, by, ui, now, cols: true, meId, projName: () => '', ownerName, groupLabel, repaint, nameHead: '프로젝트', projHead: '세션',
+    tail: drafts.length ? { label: DRAFT_LABEL, hint: DRAFT_HINT, rows: drafts, open: draftOpen, onToggle: () => { draftOpen = !draftOpen; repaint(); } } : undefined,
     open: () => { /* 세션 줄이 없다 */ },
     openProj: (it) => { location.hash = '#/projects2/p/' + it.pj!.id; },
     menuRows: (it) => [
@@ -223,5 +235,13 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
     ],
   });
   const empty = !inScope.length ? '이 범위에 프로젝트가 없습니다.' : '이 조건에 맞는 프로젝트가 없습니다. 기간 · 사람 · 상태 · 검색어를 바꿔 보세요.';
-  host.replaceChildren(...[tools, list, more, !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null].filter((x): x is HTMLElement => !!x));
+  host.replaceChildren(...[tools, list, more, !vis.length && !drafts.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null].filter((x): x is HTMLElement => !!x));
+}
+
+/** 오른쪽 위 개수 — 초안은 따로 센다(#5522). 거르개가 아무것도 안 걸렀으면 «프로젝트 N개 · 초안 M개», 걸렀으면 «K개 표시 · 전체 N».
+ *  초안만 보는 스코프에선 이름이 «초안 N개» 다(noun). */
+function countText(shown: number, all: number, drafts: number, noun: string): string {
+  const real = all - drafts;
+  if (shown === all) return drafts ? `${noun} ${real}개 · ${DRAFT_LABEL} ${drafts}개` : `${noun} ${all}개`;
+  return `${shown}개 표시 · 전체 ${all}`;
 }

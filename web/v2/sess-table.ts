@@ -115,6 +115,9 @@ export interface SessTableOpts<T extends SessTableItem> {
   /** 줄에 붙는 클래스 · 이름 뒤 꼬리표(예: 「치움」). */
   rowClass?: (it: T) => string;
   rowTag?: (it: T) => HTMLElement | null;
+  /** #5522 — 묶는 기준과 상관없이 **맨 아래 한 묶음**으로 따로 세울 줄(초안 프로젝트). 묶음 안에 섞이면 따로 뺀 뜻이 없다(#4170 규칙).
+   *  open = 펼쳐 있나(부르는 쪽이 쥔다 — 기본은 접힘) · hint = 머리줄의 한 줄 설명(접혀 있어도 보인다). */
+  tail?: { label: string; hint?: string; rows: T[]; open: boolean; onToggle: () => void };
   repaint: () => void;
 }
 
@@ -222,10 +225,11 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
     const un = g.rows.filter((it) => it.untitled).length;
     return n + (g.rows.length - un) + (ui.openUntitled.has(gk) ? un : 0);
   }, 0);
+  const tail = o.tail && o.tail.rows.length ? o.tail : null;
   let budget = ui.shown;
   let drawn = 0;
   //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
-  if (vis.length) list.append(tableHead());
+  if (vis.length || tail) list.append(tableHead());
   if (by === 'none' && vis.length) {
     for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); drawn++; }
   }
@@ -252,7 +256,22 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
       if (uOpen) for (const it of unnamed) { if (budget-- <= 0) break; list.append(rowOf(it)); drawn++; }
     }
   }
-  const left = Math.max(0, reachable - drawn);
+  //  #5522 맨 아래 묶음(초안) — 머리줄은 늘 선다(쪽수가 위 묶음에서 딱 떨어져도 이 묶음이 있다는 것을 잃지 않게).
+  //   줄은 펼쳐 있을 때 남은 쪽수만큼 · 못 그린 줄은 [더 보기]의 수에 든다. 접혀 있으면 머리줄만(그 수는 [더 보기]에 안 센다).
+  let tailLeft = 0;
+  if (tail) {
+    list.append(el('div', { class: 'v2-sa-gh plain v2-sa-tail' },
+      el('button', { class: 'l', type: 'button', 'aria-expanded': String(tail.open), title: tail.hint || '', onclick: () => tail.onToggle() },
+        el('span', { class: 'car' + (tail.open ? '' : ' shut') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
+        el('span', { class: 'pill', text: tail.label }), el('span', { class: 'n', text: String(tail.rows.length) }),
+        tail.hint ? el('span', { class: 'hint', text: tail.hint }) : null)));
+    if (tail.open) {
+      const rows = ordered(tail.rows);
+      for (const it of rows) { if (budget-- <= 0) break; list.append(rowOf(it)); drawn++; }
+      tailLeft = rows.length;
+    }
+  }
+  const left = Math.max(0, reachable + tailLeft - drawn);
   const more = left > 0 ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += SESS_TABLE_PAGE; o.repaint(); } }) : null;
   return { list, more };
 }

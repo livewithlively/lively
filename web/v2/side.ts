@@ -72,6 +72,7 @@ import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
+import { DRAFT_HINT, DRAFT_LABEL, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 — 「초안」 줄 · 홈 카드 표시가 보드와 같은 잣대로 센다
 import { screenLangOn, setScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — «EN» 알약은 #5319 에서 걷었다(켜 둔 채 남은 것만 끈다)
 import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
@@ -334,7 +335,7 @@ export interface SideInstance {
   state?: string;
   meta?: string;
   /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
-  project?: { id: number; name: string; self?: boolean } | null;
+  project?: { id: number; name: string; self?: boolean; draft?: boolean } | null;
   /** 이 행이 속한 묶음의 이름 — '지금 볼 것' 또는 날짜(오늘·어제·M월 D일). 목록은 이 순서로 나뉜다(#1954). */
   group?: string;
   /** 상태 점(#1954) — busy·waiting·done 만. 없으면 조용한 행이다. */
@@ -647,6 +648,8 @@ interface ProjGrp { key: string;
   pkey: string; now: boolean; fold: boolean;
   /** 「리브가 한 일」 묶음인가(#4551) — 프로젝트가 아니라 id 는 0 이다(압정 · ＋ · [→] 가 없다). */
   liv: boolean;
+  /** 초안 프로젝트의 카드인가(#5522) — 머리에 «초안» 표시. 나와 초대한 사람만 보는 프로젝트라는 것을 카드가 말한다. */
+  draft: boolean;
   id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
   /** 아직 안 끝난 줄 수 · 끝난 줄 수(#3778). 머리글이 «이 카드는 통째로 지난 것»을 말할 수 있어야 한다. */
   live: number; past: number;
@@ -705,6 +708,7 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
     //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 카드의 가장 급한 행이다.
     const first = c.rows[0];
     const g: ProjGrp = { key: c.key, pkey: c.pkey, now: c.now, fold: c.fold, liv: c.liv, id: c.id,
+      draft: !!c.id && !!(first.project && first.project.draft),
       name: c.id ? (first.project as { name: string }).name : c.liv ? LIV_BUCKET_NAME : NO_PROJECT_NAME,
       //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
       bucket: first.group || '', rows: c.rows, open: false, active: false, pinned: !!c.id && isPinned(c.pkey), counts: {}, live: 0, past: 0,
@@ -816,6 +820,8 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       //  #4233(원준 2026-10-04): 프로젝트 = 과녁. 펼침은 바로 앞의 꺾쇠가 말하므로 그림은 하나다. 「프로젝트 없음」은 점선 원.
       g.id && isBuilderProjectName(g.name) ? icon('builder', 'v2-pg-ic') : glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),   // #4632 앱빌더 묶음은 앱빌더 그림
       el('span', { class: 'n', text: g.name }),
+      //  #5522 초안 표시 — 이름 바로 뒤. 이름이 길면 이름이 줄고 표시는 남는다(CSS flex-shrink 0).
+      g.draft ? el('span', { class: 'pj-draft-tag v2-pg-draft', title: DRAFT_HINT, text: DRAFT_LABEL }) : null,
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
       g.open ? null : grpFacesEl(g),
@@ -1673,7 +1679,7 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     icon: mark ? 'liv' : bld ? 'buildsess' : 'chat',
     meta: bld ? '앱빌딩 세션' + (t.sub ? ' · ' + t.sub : '') : (t.sub || when(s.lastSeen)),
     ask: mark ? livWorkNote(mark) : lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
-    project: p ? { id: p.id, name: p.name } : null,
+    project: p ? { id: p.id, name: p.name, draft: isDraftProj(p) } : null,   // #5522 — 카드 머리의 «초안» 표시
     liv: isLooseLivWork(s),
     group,
     status: st ? { key: st, label: stLabel(st) } : null,
@@ -2256,11 +2262,12 @@ export function projLandingRoute(): string {
   return noFav ? '#/projects2/all' : '#/app/projects2';
 }
 
-/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none · /all). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
+/** 지금 보드가 선 스코프 — 주소에서 읽는다(#/projects2/l/<id> · /f/<id> · /none · /drafts · /all). 액자 안에서 일어난 이동은 여기 안 비친다(그건 그 화면의 일). */
 function projScopeKey(): string {
   const m = /^#\/projects2\/(l|f)\/(\d+)/.exec(location.hash);
   if (m) return (m[1] === 'l' ? 'L' : 'F') + m[2];
   if (/^#\/projects2\/none/.test(location.hash)) return 'none';
+  if (/^#\/projects2\/drafts(?:[/?]|$)/.test(location.hash)) return 'drafts';
   return /^#\/projects2\/all(?:[/?]|$)/.test(location.hash) ? 'all' : '';
 }
 
@@ -2318,12 +2325,15 @@ function renderProjects(): void {
   // 열린 프로젝트 수 — 보관·버림·완료는 빼고 센다. 매일 보는 숫자는 '남은 일'이다(완료까지 센 숫자는 보드의 Closed 토글이 말한다).
   const openByList = new Map<number, number>();
   let noneN = 0;
+  let draftN = 0;
   for (const p of data.projects) {
     if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;
+    //  #5522 — 초안은 「초안」 줄만 센다(전체 · 기타 · 리스트 수에 넣지 않는다). 보드의 「기타」 스코프도 초안을 빼고 그린다(projects/board.ts).
+    if (isDraftProj(p)) { draftN++; continue; }
     if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
   }
   //  아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 사이드바에 없다 — 발치 도크 [아카이브]가 그 문이다(proj-cards 가 뺀다).
-  const plan = planProjCards({ lists, folders, openByList, noneN, favIds: favLists, sel: projScopeKey(), closed: foldClosed, more: projMore });
+  const plan = planProjCards({ lists, folders, openByList, noneN, draftN, favIds: favLists, sel: projScopeKey(), closed: foldClosed, more: projMore });
   const lockIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-ptl-lock', 'aria-hidden': 'true' },
     sv('path', { d: 'M7 11V8a5 5 0 0 1 10 0v3' }), sv('rect', { x: '5', y: '11', width: '14', height: '10', rx: '2' }));
   const tip = (l: TreeList): string => l.name + (l.visibility === 'members' ? ' — 멤버만 보는 리스트' : '');
@@ -2371,6 +2381,14 @@ function renderProjects(): void {
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',
       title: '기타 — 아직 리스트에 넣지 않은 프로젝트', ...(on ? { 'aria-current': 'true' } : {}) },
       glyph('projNone', 'v2-ptl-ic'), el('span', { class: 'n', text: NO_PROJECT_NAME }), cnt(plan.noneN)));   // #4233 — 「프로젝트 없음」과 같은 점선 원
+  }
+  //  #5522 「초안」 — 세션 첫 지시로 생겨 아직 아무것도 남기지 않은 프로젝트. 나와 초대한 사람만 보므로 사람마다 수가 다르다.
+  //   초안이 있을 때만 선다(보고 있는 동안은 0 이어도 — 켜진 줄이 사라지면 지금 어디인지 잃는다).
+  if (ready && (plan.draftN || plan.onKey === 'drafts')) {
+    const on = plan.onKey === 'drafts';
+    fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--draft' + (on ? ' on' : ''), href: '#/projects2/drafts',
+      title: DRAFT_LABEL + ' — ' + DRAFT_HINT, ...(on ? { 'aria-current': 'true' } : {}) },
+      icon('pencil', 'v2-ptl-ic'), el('span', { class: 'n', text: DRAFT_LABEL }), cnt(plan.draftN)));
   }
 
   // ── 카드 — 하위 폴더 · 리스트 모음. 줄 나누기는 위키와 같은 fitWikiList.
@@ -2444,7 +2462,8 @@ function renderProjects(): void {
   const build = (alloc: Record<string, number>): HTMLElement[] => {
     //  「전체」는 늘 서므로 빈 안내는 즐겨찾기 · 기타 줄로 가른다(전체 한 줄만 있으면 아직 정리할 것이 없다는 뜻이다).
     if (!ready) return bootKids();
-    if (!plan.groups.length) return (plan.favs.length || plan.noneN) ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
+    //  #5522 — 「초안」 줄이 섰으면(초안만 있는 사람) 그 줄이 내용이다 — «아직 리스트가 없어요» 를 덧붙이지 않는다(기타 줄과 같은 규칙).
+    if (!plan.groups.length) return (plan.favs.length || plan.noneN || plan.draftN) ? [] : [el('p', { class: 'v2-empty', text: '아직 리스트가 없어요. 위 ＋ 에서 리스트를 만들면 여기 섭니다.' })];
     return plan.groups.flatMap((g) => [label(g),
       ...(newOpen && slot.at === 'label' && slot.folderId === g.folderId ? [newProjRow()] : []),
       ...g.cards.map((c) => card(c, alloc[c.key] ?? c.rows.length))]);
@@ -2463,7 +2482,7 @@ function renderProjects(): void {
     el('section', { class: 'v2-app-space', 'aria-label': '프로젝트' },
       secHead('프로젝트', null, newMenuBtn()),
       ...(newOpen && slot.at === 'top' ? [newProjRow()] : []),
-      el('nav', { class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타' }, ...fixed),
+      el('nav', { class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타 · 초안' }, ...fixed),
       listEl),
     secFoot());
 
