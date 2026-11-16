@@ -148,6 +148,7 @@ function pjvApplyView(v) {
 function pjvScopeHash(key) {
   if (!key || key === '__all__') return '#/projects2';
   if (key === '__none__') return '#/projects2/none';
+  if (key === '__drafts__') return '#/projects2/drafts';   // #5522 초안만 보는 스코프
   if (key[0] === 'L') return '#/projects2/l/' + key.slice(1);
   if (key[0] === 'F') return '#/projects2/f/' + key.slice(1);
   return '#/projects2';
@@ -228,7 +229,7 @@ async function pjvSidePrefsLoad() {
 //  dflt 는 '설정된 적 없을 때'의 기본값: 일반 폴더=펼침(true), 아카이브=접힘(false).
 function pjvIsFolderOpen(fid, dflt = true) { const n = Number(fid); return pjvFolderOpen.has(n) ? !!pjvFolderOpen.get(n) : dflt; }
 function pjvSetFolderOpen(fid, open) { pjvFolderOpen.set(Number(fid), !!open); pjvSidePrefsPush(); }
-// 영역 목록에서 선택된 영역 key('L'+id | '__none__' | '__all__'). 세션 유지.
+// 영역 목록에서 선택된 영역 key('L'+id | 'F'+id | '__none__' | '__drafts__' | '__all__'). 세션 유지.
 //  explicit(#662) — 사용자가 직접 고른 스코프인지(사이드바 클릭·딥링크). 자동 해소(defaultSel)면 false —
 //  사이드바를 닫을 때 explicit 스코프만 유지하고, 자동 선택이면 예전처럼 전체 보드로 돌아간다.
 const pjvSidebarSel: { key: string; explicit?: boolean } = { key: '__all__', explicit: false };

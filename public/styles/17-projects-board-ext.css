@@ -230,6 +230,11 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-tgroup-label.pjv-status-pill.pjv-draft-pill { padding: 1px 10px; border: 1px dashed var(--muted-2); background: transparent; color: var(--muted); }
 .pjv-draft-hint { min-width: 0; margin-left: 2px; overflow: hidden; font-size: 12px; font-weight: 500; color: var(--muted-2); white-space: nowrap; text-overflow: ellipsis; }
 @media (max-width: 600px) { .pjv-draft-hint { display: none; } }
+/* #5522 초안 표시 — 표 · 칸반 · 홈 사이드바 카드가 같은 꼴(초안 묶음 머리 .pjv-draft-pill 과 같은 점선 · 흐린 글자).
+   「초안」 묶음 안 · 「초안」 스코프에서는 머리와 자리가 이미 말하므로 숨긴다. */
+.pj-draft-tag { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border: 1px dashed var(--muted-2); border-radius: 999px; background: transparent; font-size: 11px; font-weight: 600; line-height: 1; color: var(--muted); white-space: nowrap; }
+.pjv-tgroup-draft .pj-draft-tag, .pjv-drafts-scope .pj-draft-tag { display: none; }
+.pjv-kb-draft { margin-bottom: 5px; }
 
 /* 리스트/폴더 설정 메뉴 */
 .pjv-listset-menu { min-width: 172px; }

@@ -162,9 +162,9 @@ test("W1 배선: renderProjects 가 카드 계획 · 줄 나누기 · 고정 줄
   const b = SIDE.indexOf("\n}\n", a);
   const body = a >= 0 && b > a ? SIDE.slice(a, b) : "";
   assert.ok(body.length > 0, "renderProjects 가 있다");
-  assert.match(body, /planProjCards\(\{ lists, folders, openByList, noneN, favIds: favLists, sel: projScopeKey\(\), closed: foldClosed, more: projMore \}\)/);
+  assert.match(body, /planProjCards\(\{ lists, folders, openByList, noneN, draftN, favIds: favLists, sel: projScopeKey\(\), closed: foldClosed, more: projMore \}\)/);
   assert.match(body, /fitWikiList\(listEl, order, sizes, forced, build\)/);
-  assert.match(body, /el\('nav', \{ class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타' \}, \.\.\.fixed\)/);
+  assert.match(body, /el\('nav', \{ class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타 · 초안' \}, \.\.\.fixed\)/);
   assert.match(body, /class: 'v2-app-group v2-kgroup v2-pgroup'/);
   assert.match(body, /class: 'v2-ksp v2-pcard'/);
   assert.match(body, /saveSet\(FOLD_CLOSED_STORE, foldClosed\)/);
@@ -303,7 +303,7 @@ test("A7 배선(셸): 「전체」 줄이 고정 줄 맨 앞에 서고, #/projec
   //  #3870 — 수와 즐겨찾기 줄은 목록의 정본을 받은 뒤(ready)에만 선다(lib/side-boot). 「전체」 줄 자신은 받기 전에도 맨 앞에 선다.
   assert.match(body, /icon\('proj', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '전체' \}\), ready \? cnt\(plan\.allN\) : null\)/);
   assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.\(ready \? plan\.favs\.map\(favRow\) : \[\]\)\];/);
-  assert.match(body, /if \(!plan\.groups\.length\) return \(plan\.favs\.length \|\| plan\.noneN\) \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
+  assert.match(body, /if \(!plan\.groups\.length\) return \(plan\.favs\.length \|\| plan\.noneN \|\| plan\.draftN\) \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
 });
 
 test("A8 배선(보드 주소): 클래식 라우터가 /all 을 전체 스코프(__all__)로 넘긴다", () => {
@@ -347,4 +347,130 @@ test("A10 ★착지: 즐겨찾기가 없다고 알면 「전체」 · 있으면 
   assert.equal(landingOf({ favLists: null, lists: L }), "#/app/projects2", "즐겨찾기를 모른다");
   assert.equal(landingOf({ favLists: new Set([5]), lists: null }), "#/app/projects2", "리스트를 모른다 — 한쪽만 온 순간");
   assert.equal(landingOf({ favLists: null, lists: null, cache: "7" }), "#/projects2/l/7", "모를 때는 지난번 착지(캐시)");
+});
+
+// ── #5522 「초안」 고정 줄(상민 2026-11-16 «화면단 수정도 함? 프로젝트 목록 뷰라던지 등등. 초안 구분되게») ──
+//  초안 = 세션 첫 지시로 생겨 아직 아무것도 남기지 않은 프로젝트(만든 사람과 팀원만 본다). 「전체」 · 「기타」 · 리스트 수에 세지 않고
+//  「기타 (미분류)」 아래 「초안 N」 줄이 따로 센다. 누르면 보드의 초안 스코프(#/projects2/drafts → __drafts__).
+//  엣지 표:
+//   D1  isDraftProj: draft=true · 완료 아님 → 초안 / 완료 → 아님 / draft false · null · 없음 · 문자열 'true' → 아님 / null · undefined → 아님
+//   D2  draftN 은 그대로 오고(음수 · 없음 → 0) 전체 수(allN)에 더해지지 않는다
+//   D3  sel 'drafts' → 「초안」 줄만 켜진다(카드를 끌어당기지 않는다) · 다른 스코프는 종전 그대로
+//   D4  주소 판정: #/projects2/drafts(?…) → 'drafts' · 비슷한 이름(draftsx)은 아니다
+//   D5  배선(셸): 초안은 isDraftProj 로 리스트 · 기타보다 먼저 걸러 draftN 으로만 센다 · 줄은 받은 뒤(ready) · 초안이 있거나 보고 있을 때 · #/projects2/drafts
+//   D6  배선(라우터 · 주소): /drafts → __drafts__ · __drafts__ → #/projects2/drafts
+//   D7  배선(보드): 「기타」 스코프 · 수는 초안을 빼고, 「초안」 스코프는 모든 묶음의 초안 · 비어도 다른 스코프로 안 옮기고 · 새 프로젝트 줄 없음
+//   D8  배선(목록): 상태 묶음은 초안 스코프에서 초안을 빼지 않는다 · 표 줄 · 칸반 카드 · 홈 카드에 «초안» 표시 · 같은 잣대(lib/proj-draft)
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let draftMod: any = null;
+async function loadDraft() {
+  if (draftMod) return draftMod;
+  const js = ts.transpileModule(readFileSync("web/lib/proj-draft.ts", "utf8"),
+    { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+  draftMod = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+  return draftMod;
+}
+
+test("D1 isDraftProj: 초안이고 완료가 아니면 초안 — 완료 · false · null · 없음 · 문자열은 아니다 · 빈 값에 던지지 않는다", async () => {
+  const { isDraftProj } = await loadDraft();
+  assert.equal(isDraftProj({ draft: true, status: "todo" }), true);
+  assert.equal(isDraftProj({ draft: true, status: "in_progress" }), true);
+  assert.equal(isDraftProj({ draft: true }), true);
+  assert.equal(isDraftProj({ draft: true, status: "done" }), false);
+  assert.equal(isDraftProj({ draft: false, status: "todo" }), false);
+  assert.equal(isDraftProj({ draft: null, status: "todo" }), false);
+  assert.equal(isDraftProj({ status: "todo" }), false);
+  assert.equal(isDraftProj({ draft: "true" as unknown as boolean }), false);
+  assert.equal(isDraftProj(null), false);
+  assert.equal(isDraftProj(undefined), false);
+});
+
+test("D2 draftN 은 그대로 오고(음수 · 없음 → 0) 전체 수에 더해지지 않는다", async () => {
+  const p = await plan({ draftN: 5 });
+  assert.equal(p.draftN, 5);
+  assert.equal(p.allN, 19);   // A1 과 같은 수 — 초안 5 는 「초안」 줄만 센다
+  assert.equal(p.noneN, 3);
+  assert.equal((await plan()).draftN, 0);
+  assert.equal((await plan({ draftN: -2 })).draftN, 0);
+});
+
+test("D3 ★sel 'drafts' 이면 「초안」 줄만 켜진다 — 카드를 끌어당기지 않는다 · 다른 스코프는 종전 그대로", async () => {
+  const p = await plan({ sel: "drafts", draftN: 2, closed: new Set(["12"]) });
+  assert.equal(p.onKey, "drafts");
+  const c = cardOf(p, "12");
+  assert.equal(c.open, false);
+  assert.equal(c.forced, 0);
+  assert.equal((await plan({ sel: "none", draftN: 2 })).onKey, "none");
+  assert.equal((await plan({ sel: "all", draftN: 2 })).onKey, "all");
+});
+
+test("D4 ★주소 판정: #/projects2/drafts → 'drafts' · 비슷한 이름은 아니다 · 다른 주소는 종전 그대로", () => {
+  assert.equal(scopeKeyOf("#/projects2/drafts"), "drafts");
+  assert.equal(scopeKeyOf("#/projects2/drafts?x=1"), "drafts");
+  assert.equal(scopeKeyOf("#/projects2/draftsx"), "");
+  assert.equal(scopeKeyOf("#/projects2/none"), "none");
+  assert.equal(scopeKeyOf("#/projects2/all"), "all");
+});
+
+test("D5 배선(셸): 초안은 리스트 · 기타보다 먼저 걸러 draftN 으로만 세고, 「초안」 줄은 받은 뒤 · 초안이 있거나 보고 있을 때 #/projects2/drafts 로", () => {
+  const a = SIDE.indexOf("function renderProjects(): void {");
+  const body = SIDE.slice(a, SIDE.indexOf("\n}\n", a));
+  const skip = body.indexOf("if (isDraftProj(p)) { draftN++; continue; }");
+  const count = body.indexOf("if (p.list_id) openByList.set(");
+  assert.ok(skip > 0 && count > skip, "초안 거르기가 리스트 · 기타 세기보다 앞이다");
+  assert.match(body, /planProjCards\(\{ lists, folders, openByList, noneN, draftN, /);
+  assert.match(body, /if \(ready && \(plan\.draftN \|\| plan\.onKey === 'drafts'\)\) \{/);
+  assert.match(body, /href: '#\/projects2\/drafts'/);
+  assert.match(body, /icon\('pencil', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: DRAFT_LABEL \}\), cnt\(plan\.draftN\)/);
+  //  「초안」 줄은 「기타」 줄 뒤에 선다
+  assert.ok(body.indexOf("href: '#/projects2/drafts'") > body.indexOf("href: '#/projects2/none'"));
+  assert.match(SIDE, /import \{ DRAFT_HINT, DRAFT_LABEL, isDraftProj \} from '\.\.\/lib\/proj-draft\.js';/);
+  //  ★셸이 받은 프로젝트를 옮겨 담는 화이트리스트에 draft 가 있어야 한다 — 없으면 서버가 실어도 화면엔 없는 값이다(화면 확인에서 잡힌 것).
+  const V2MAIN = readFileSync("web/v2/main.ts", "utf8");
+  assert.match(V2MAIN, /draft: p\.draft === true,/);
+  //  홈 카드 머리의 «초안» 은 줄의 project.draft 에서 온다 — 줄을 만드는 두 길(side.ts 세션 줄 · main.ts projectPath) 모두 싣는다.
+  assert.match(V2MAIN, /return \{ id, name: \(p && p\.name\) \|\| `프로젝트 #\$\{id\}`, draft: isDraftProj\(p\) \};/);
+});
+
+test("D6 배선(라우터 · 주소): 클래식 라우터가 /drafts 를 __drafts__ 로 넘기고, 보드는 __drafts__ 를 #/projects2/drafts 로 적는다", () => {
+  const MAIN = readFileSync("web/main.ts", "utf8");
+  assert.match(MAIN, /else if \(sub2 === 'drafts'\) scopeKey = '__drafts__';/);
+  const STATE = readFileSync("web/projects/state.ts", "utf8");
+  assert.match(STATE, /if \(key === '__drafts__'\) return '#\/projects2\/drafts';/);
+});
+
+test("D7 배선(보드): 「기타」는 초안을 빼고 세고 그리며, 「초안」은 모든 묶음의 초안 · 비어도 머물고 · 새 프로젝트 줄이 없다", () => {
+  const BOARD = readFileSync("web/projects/board.ts", "utf8");
+  assert.match(BOARD, /const unReal: any\[\] = unGroup \? unGroup\.projects\.filter\(\(p\) => !isDraftProj\(p\)\) : \[\];/);
+  assert.match(BOARD, /const draftsAll: any\[\] = groups\.flatMap\(\(g\) => g\.projects\)\.filter\(isDraftProj\);/);
+  assert.match(BOARD, /const showUn = visCount\(unReal\) > 0;/);
+  assert.match(BOARD, /: sel === '__none__' \? projects\.filter\(\(p\) => p\.list_id == null && !isDraftProj\(p\)\)\n\s+: sel === '__drafts__' \? projects\.filter\(isDraftProj\) : projects;/);
+  assert.match(BOARD, /else if \(sel === '__none__'\) shownProjects = unReal;\n\s+else if \(sel === '__drafts__'\) shownProjects = draftsAll;/);
+  //  비어도 다른 스코프로 옮기지 않는다 — 해소 규칙에 __drafts__ 가 없다
+  const res = BOARD.slice(BOARD.indexOf("if (sel === '__all__') sel = defaultSel();"), BOARD.indexOf("pjvSidebarSel.key = sel;"));
+  assert.ok(res.length > 0 && !res.includes("__drafts__"), "초안 스코프는 해소 대상이 아니다");
+  assert.match(BOARD, /const draftScope = sel === '__drafts__';/);
+  assert.match(BOARD, /if \(!mineOnly && !draftScope\) flatBody\.append\(pjvProjAddRow\(/);
+  assert.match(BOARD, /\.\.\.\(draftScope \? \{ noAdd: true, draftScope: true \} : \{\}\)/);
+  assert.match(BOARD, /if \(key === '__drafts__'\) return DRAFT_LABEL;/);
+});
+
+test("D8 배선(목록): 초안 스코프에선 초안을 빼지 않고 · 표 줄 · 칸반 카드 · 홈 카드에 «초안» 표시 · 잣대는 lib/proj-draft 한 벌", () => {
+  const ROWS = readFileSync("web/projects/rows.ts", "utf8");
+  assert.match(ROWS, /const drafts = opts\.draftScope \? \[\] : shownProjects\.filter\(pjvIsDraft\);/);
+  assert.match(ROWS, /const pjvIsDraft = isDraftProj;/);
+  assert.match(ROWS, /const draftTag = pjvIsDraft\(p\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  assert.match(ROWS, /caret, lead, title, draftTag,/);
+  const BOARD = readFileSync("web/projects/board.ts", "utf8");
+  assert.match(BOARD, /if \(isDraftProj\(p\)\) card\.append\(el\('span', \{ class: 'pj-draft-tag pjv-kb-draft'/);
+  assert.match(SIDE, /project: p \? \{ id: p\.id, name: p\.name, draft: isDraftProj\(p\) \} : null,/);
+  assert.match(SIDE, /g\.draft \? el\('span', \{ class: 'pj-draft-tag v2-pg-draft'/);
+  const LIST = readFileSync("web/projects/session-list.ts", "utf8");
+  assert.match(LIST, /const isDraftScope = \(k: string\): boolean => k === '__drafts__';/);
+  assert.match(LIST, /tail: drafts\.length \? \{ label: DRAFT_LABEL, hint: DRAFT_HINT, rows: drafts,/);
+  //  잣대가 화면마다 따로 있지 않다
+  for (const [name, src] of [["rows", ROWS], ["board", BOARD], ["side", SIDE], ["session-list", LIST]] as const) {
+    assert.ok(!/p\.draft === true && p\.status !== 'done'/.test(src), name + " 에 따로 쓴 초안 잣대가 없다");
+  }
 });
