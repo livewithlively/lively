@@ -822,6 +822,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/delivery/seed-sort-migrate.pg-test.mjs
+      # ⑤-x 셀프호스트 기본 워크스페이스 이름(#5524) — 목으로는 못 보는 것: 레일·목록이 읽는 등록부 primary 행이 조직 프로필
+      #    저장을 따라가나(모달 · 관리탭 · MCP 가 한 길로 지난다) · 다른 워크스페이스 컨텍스트·단일 모드에선 안 건드리나 ·
+      #    이미 어긋난 박스를 부팅 스텝이 한 번 맞추고 두 번째엔 쓰지 않나(updated_at 을 마이크로초로 대조).
+      - name: 기본 워크스페이스 이름 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/tenancy/primary-workspace-name.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

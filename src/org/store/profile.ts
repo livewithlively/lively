@@ -54,5 +54,7 @@ export async function updateOrgProfile(
   invalidateOrgTimezone(); // #778: 다음 cron 틱·세션 생성이 새 시간대를 즉시 쓰게(TTL 대기 없이).
   const after = await getOrgProfile();
   await audit("org_profile", "1", "update", before, after, actor, source);
+  //  #5524 — 기본 워크스페이스(primary) 등록부 이름 맞추기는 여기가 아니라 org_update_profile 처리기가 한다.
+  //   이 파일은 노드 에이전트 번들에 실린다(«DB 없음» 계약 — 등록부 모듈을 끌어오면 빌드 가드가 막는다).
   return after;
 }
