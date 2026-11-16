@@ -1489,7 +1489,8 @@ function applyTabChrome(tab: ShellTab): void {
   paintAsidePanes(tab.aside as AsideHost);
   root!.classList.toggle('no-aside', tab.noAside && !shown);
   //  ★ 사이드바가 없는 앱(#4632, 원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야 … 없을 때에는 사이드바 영역만큼도 다 그 앱이 쓰는게 디폴트») —
-  //   그 앱에 있는 동안 사이드바 열을 0 으로 접고, 맨 윗줄을 창 전폭으로 편다. 레일은 남는다(구역 · 다른 앱으로 가는 길).
+  //   그 앱에 있는 동안 사이드바 열을 0 으로 접는다. 레일은 남는다(구역 · 다른 앱으로 가는 길).
+  //   맨 윗줄은 서지 않는다(#5568 상민님 2026-11-16 «상단 한줄 아예 안보이게» — 종전엔 [‹][›][검색] 줄이 창 전폭으로 섰다). 검색은 레일 맨 위 칸이 맡는다(47-v2-rail.css).
   //   누가 사이드바를 갖나는 lib/side-owner 의 표 한 자리가 정한다 — 맥락 관리(#3830) · 사용 가이드 · 앱 화면(#/i · #732) · 설정(제 왼쪽 목록이 그 앱의 사이드바) ·
   //   리브 · 확인할 것 · 외부 앱 연결 · 대시보드처럼 표에 없는 앱은 다 «없음» 이다.
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이 한 칸씩 밀려 본문이 0px 열에 앉는다.
@@ -1772,13 +1773,22 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
         .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
     } else if (page === 'archive' || page === 'trash') {
-      // 아카이브·휴지통(#1851) — 사이드바 발치의 두 행이 여는 화면. ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
+      // 지난 세션 · 휴지통(#1851) — 앱 찾기의 두 앱이 여는 화면(#5568 전엔 사이드바 발치 도크의 두 칸). ⚠ 'trash' 는 클래식 표(CLASSIC_PAGES)에도 있어
       //  이 분기가 그보다 **앞에** 서야 한다(뒤에 두면 WIKI 앱 프레임의 옛 휴지통이 열린다 — 그쪽은 화면 안 링크로 간다).
       markActive(page);
+      //  #5568 — 둘 다 앱이다(apps.ts APPS · apps/builtin/{archive,trash}). 문이 사이드바 발치 도크에서 앱 찾기로 옮겨 왔으니 연 앱은 최근 줄에 선다.
+      noteAppUse(page);
       if (page === 'archive') renderPast(tab.center, data, binHooks, tab.aside); else renderTrash(tab.center, data, binHooks, tab.aside);
+      void ensureSingletonAppInstance(page, page === 'archive' ? '지난 세션' : '휴지통')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
     } else if (page === 'connect') {
       markActive('connect');
+      noteAppUse('connect');   // #5568 — 외부 앱 연결도 앱이다(위 지난 세션 · 휴지통과 같은 이유)
       tab.aside.replaceChildren();
+      void ensureSingletonAppInstance('connect', '외부 앱 연결')
+        .then((inst) => { if (inst && seq === tab.seq) setTabAppInstance(tab, inst.id, inst.app_id); })
+        .catch(() => { /* 앱이 아직 안 깔린 게이트웨이. 화면은 그대로 선다 */ });
       // 목록과 앱 상세는 같은 라우트의 두 깊이 — seq 로 늦은 응답을 버린다(빠르게 오가면 옛 화면이 덮는다).
       //  #2556 — 밑줄로 시작하는 두 자리(_git·_db)는 앱이 아니라 «코드와 데이터»다. 앱 키가 될 수 없는 모양이라
       //   언젠가 같은 이름의 커넥터가 생겨도 서로 가리지 않는다.
@@ -2968,16 +2978,26 @@ function toggleDock(): void {
   syncRailBtn();
 }
 /** #5319 ☰ · ⌘B — 왼쪽 사이드바를 접고 편다. 레일까지 숨어 있으면 펼 때 레일은 그대로 둔다(사이드바 머리의 구역 드롭다운이 레일을 되살린다). */
-function toggleSideBar(): void { setSideClosed(!sideIsClosed()); }
+/** 지금 화면에 접고 펼 왼쪽 사이드바가 있나 — 사이드바가 없는 앱(app-ctx)의 넓은 폭엔 없다(#5568). 좁은 폭은 서랍이라 이 물음 밖이다. */
+function hasSideToFold(): boolean { return !(root?.classList.contains('app-ctx') && !window.matchMedia(MOBILE_MQ).matches); }
+function toggleSideBar(): void {
+  //  #5568 — 사이드바가 없는 앱(app-ctx)에는 접고 펼 사이드바가 없다. 종전엔 여기서도 «닫힘» 기억을 뒤집어, 화면은 맨 윗줄만 바뀌고
+  //   홈으로 돌아가면 사이드바가 닫혀 있었다. 이제 그 화면에선 ☰ 가 서지 않고(47-v2-rail.css — 브라우저 · 데스크톱 앱 둘 다) 단축키(⌘B)도 같은 답을 한다.
+  //   레일까지 숨겨 둔 사람에겐 ☰ 가 남는다(다른 데로 가는 길이 그것뿐이다) — 그 ☰ 는 레일을 되살린다.
+  if (!hasSideToFold()) { if (railIsHidden()) { toggleRail(); syncRailBtn(); } return; }
+  setSideClosed(!sideIsClosed());
+}
 /** #5319 ⌘⌥B — 지금 탭의 우측 사이드바(칸 셸 곁칸)를 접고 편다. 칸 셸이 아닌 화면(홈 · 앱)엔 곁칸이 없어 아무 일도 안 한다. */
 function toggleRightSide(): void { const t = tabsApi?.current(); const v = t ? projViews.get(t) : null; v?.toggleSide?.(); }
 /** #5319 ⌘\ — 양쪽 다. 하나라도 열려 있으면 둘 다 접고, 둘 다 접혀 있으면 둘 다 편다(맥 앱들의 «사이드바 모두 가리기»). */
 function toggleBothSides(): void {
   const t = tabsApi?.current(); const v = t ? projViews.get(t) : null;
   const right = !!t && !!v && !!t.center.querySelector('.pn-body:not(.no-side)');
-  const anyOpen = !sideIsClosed() || right;
-  if (anyOpen) { if (!sideIsClosed()) setSideClosed(true); if (right) v?.toggleSide?.(); return; }
-  setSideClosed(false);
+  //  #5568 — 사이드바가 없는 앱 화면에선 왼쪽은 세지도 뒤집지도 않는다(위 toggleSideBar 와 같은 이유 — 홈으로 돌아가면 사이드바가 닫혀 있었다). 우측만 접고 편다.
+  const left = hasSideToFold();
+  const anyOpen = (left && !sideIsClosed()) || right;
+  if (anyOpen) { if (left && !sideIsClosed()) setSideClosed(true); if (right) v?.toggleSide?.(); return; }
+  if (left) setSideClosed(false);
   if (v && t?.center.querySelector('.pn-body.no-side')) v.toggleSide?.();
 }
 

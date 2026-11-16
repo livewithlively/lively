@@ -53,9 +53,11 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   builder: { kind: "app", appId: "builder", note: "앱빌더(#4632). 내가 만든 앱 · 만들던 앱 · 새 앱 — 앱 만들기 여섯 단계(app-studio)가 이 안에 선다. project=global·single 빌트인. 딥링크 #/builder · #/builder/new · #/builder/s/<세션> · #/builder/app/<앱> 이 정본. 앱빌더 프로젝트(#/p/<id>)로 가는 길도 여기로 온다." },
   inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력(#1891 → #4180: 세션 대기·완료는 빠지고 댓글·언급·리브의 답·앱 알림만). 입구는 홈 머리줄의 종(notify-bell.ts). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
   liv: { kind: "todo", plan: "리브 — 대화하는 화면이라 가장 앱다운 축에 든다. session subject 를 갖는 builtin 후보." },
-  archive: { kind: "todo", plan: "아카이브 — 콘텐츠 목록. trash 와 한 앱(보관함)으로 묶을지 둘로 둘지 이식 때 정한다." },
-  trash: { kind: "todo", plan: "휴지통 — 위와 같음. ⚠ 클래식 표에도 'trash' 가 있어 라우터에서 이 분기가 먼저 서야 한다(WIKI 옛 휴지통과 다르다)." },
-  connect: { kind: "todo", plan: "외부 앱 연결 — 조직 자격·권한 중개라 OS 로 남길 여지가 있다. 이식 때 판정하고, OS 로 정하면 why 를 적어 os 로 옮긴다." },
+  //  #5568(상민님 2026-11-16 «사이드바 하단 지난세션, 휴지통, 외부 앱 연결은 모두 앱 안에 넣고 사이드바에선 지워») — 셋을 앱으로 옮겼다. 종전엔 앱화 대상(todo)이었고 문은 사이드바 발치 도크였다.
+  //   셋을 한 앱(보관함)으로 묶지 않았다 — 사람이 찾는 이름이 셋이고(지난 세션 · 휴지통 · 외부 앱 연결) 주소도 이미 셋이다. 화면은 종전 그대로 셸이 직접 그린다(bins.ts · connect.ts).
+  archive: { kind: "app", appId: "archive", note: "지난 세션(#1851 → #3778) — 멈춘 세션과 목록에서 치운 세션을 프로젝트로 묶어 보고 그대로 이어서 연다. project=global·single 빌트인. 딥링크 #/archive 가 정본이다." },
+  trash: { kind: "app", appId: "trash", note: "휴지통(#1851 → #3778) — 버린 세션 · 프로젝트 · 자료 · 지식을 되돌리거나 완전히 지운다. project=global·single 빌트인. 딥링크 #/trash 가 정본이다. ⚠ 클래식 표에도 'trash' 가 있어 라우터에서 이 분기가 먼저 서야 한다(WIKI 옛 휴지통과 다르다)." },
+  connect: { kind: "app", appId: "connect", note: "외부 앱 연결 — 슬랙 · 노션 · 드라이브 같은 바깥 서비스를 잇는 현황판과 앱마다의 연결 화면. project=global·single 빌트인. 딥링크 #/connect · 앱 하나 #/connect/<앱> · 코드와 데이터 #/connect/_git · #/connect/_db 가 정본이다(서버가 만드는 연결 주소도 이 꼴 — capabilities/connect-status). 자격 · 권한 중개 자체는 서버(OS) 몫이고, 앱인 것은 그 화면이다." },
 };
 
 /**

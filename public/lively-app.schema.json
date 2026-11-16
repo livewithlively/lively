@@ -323,7 +323,10 @@
                 "sources",
                 "taxonomy",
                 "learn",
-                "builder"
+                "builder",
+                "connect",
+                "archive",
+                "trash"
               ]
             },
             "route": {

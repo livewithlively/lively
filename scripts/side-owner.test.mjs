@@ -20,8 +20,10 @@ const all = (pairs, want) => pairs.map(([ak, page]) => [ak, page, O.sideOwnerOf(
 // ── A. 사이드바 주인 ──
 let bad = all([["home"], ["s:box-1"], ["p:3"]], "section");
 check(bad.length === 0, "A1 홈 · 세션 · 프로젝트는 구역 목록(구역은 세션을 여는 자리)", bad);
-bad = all([["archive"], ["trash"]], "section");
-check(bad.length === 0, "A2 지난 세션 · 휴지통(구역 발치 도크)은 구역 목록", bad);
+//  #5568(상민님 2026-11-16 «지난세션, 휴지통, 외부 앱 연결은 모두 앱 안에 넣고 사이드바에선 지워») — 셋 다 앱이 됐다. 앱의 기본은 «사이드바 없음» 이다.
+//   종전엔 지난 세션 · 휴지통이 구역 발치 도크가 여는 화면이라 구역 목록(대개 홈)이 그대로 섰다.
+bad = all([["archive"], ["trash"], ["connect"]], "none");
+check(bad.length === 0, "A2 지난 세션 · 휴지통 · 외부 앱 연결은 앱 — 사이드바 없음(구역 목록이 남지 않는다)", bad);
 bad = all([["app:terminal"], ["app:projects2"], ["app:knowledge"]], "section");
 check(bad.length === 0, "A3 구역과 같은 문(세션 목록 · 프로젝트 · 위키 화면)은 구역 목록", bad);
 check(O.sideOwnerOf("sources") === "sources" && O.sideOwnerOf("taxonomy") === "taxonomy" && O.sideOwnerOf("app:sessions") === "sessions" && O.sideOwnerOf("builder") === "builder",
@@ -44,7 +46,7 @@ check(sh("s:x", "wiki") === "home" && sh("home", "wiki") === "home" && sh("p:3",
   "B2 세션이 사는 화면에 위키를 기억하고 있으면 홈", [sh("s:x", "wiki"), sh("home", "wiki"), sh("p:3", "wiki")]);
 check(sh("s:x", "proj") === "proj" && sh("s:x", "sess") === "sess" && sh("home", "home") === "home",
   "B3 그 밖엔 기억한 구역 그대로(홈 목록에서 세션을 열어도 목록이 남는다 · #2016)", [sh("s:x", "proj"), sh("s:x", "sess"), sh("home", "home")]);
-check(sh("archive", "wiki") === "wiki" && sh("trash", "proj") === "proj", "B4 지난 세션 · 휴지통은 어느 구역 발치에도 있으니 기억 그대로", [sh("archive", "wiki"), sh("trash", "proj")]);
+check(sh("archive", "wiki") === "wiki" && sh("trash", "proj") === "proj", "B4 지난 세션 · 휴지통은 앱 화면 — 구역 기억은 그대로 둔다(B5 와 같다)", [sh("archive", "wiki"), sh("trash", "proj")]);
 check(sh("builder", "wiki") === "wiki" && sh("", "sess") === "sess", "B5 앱 화면 · 빈 키는 기억 그대로(구역 목록은 폰 서랍에만 쓰인다)", [sh("builder", "wiki"), sh("", "sess")]);
 
 // ── C. 실제 주소 → 활성 키 → 주인 (activeKeyOfRoute · sideOwnerOfRoute — 셸이 이 함수를 쓴다) ──
@@ -59,15 +61,14 @@ check(sh("builder", "wiki") === "wiki" && sh("", "sess") === "sess", "B5 앱 화
     //  화면 대장의 첫 칸마다 — 그 화면의 사이드바 주인(이유는 lib/side-owner 머리말).
     const EXPECT = {
       "": "section", dashboard: "section", welcome: "section", "app-open": "section", "app-grant": "section", p: "section", s: "section", open: "section",   // #4769 설치한 앱의 문(경유지) — 구역 사이드바 그대로
-      archive: "section", trash: "section",
-      i: "none", full: "none", app: "none", learn: "none", inbox: "none", liv: "none", connect: "none",
+      i: "none", full: "none", app: "none", learn: "none", inbox: "none", liv: "none", connect: "none", archive: "none", trash: "none",   // #5568 지난 세션 · 휴지통도 앱
       taxonomy: "taxonomy", sources: "sources", f: "sources", builder: "builder",
     };
     const unknown = Object.keys(SHELL_SURFACES).filter((k) => !(k in EXPECT));
     check(unknown.length === 0, "C1 화면 대장의 모든 첫 칸에 사이드바 주인이 정해져 있다(새 화면은 여기서 고른다)", unknown);
     const wrong = Object.keys(SHELL_SURFACES).filter((k) => k in EXPECT).map((k) => ["#/" + k + (k ? "/x1" : ""), EXPECT[k]]).map(([h, w]) => [h, w, O.sideOwnerOfRoute(h)]).filter((x) => x[1] !== x[2]);
     check(wrong.length === 0, "C2 화면 대장 — 실제 주소의 주인이 표와 같다", wrong);
-    const CEXP = { dashboard: "section", terminal: "section", projects2: "section", projects: "section", knowledge: "section", k: "section", "k-edit": "section", trash: "section",
+    const CEXP = { dashboard: "section", terminal: "section", projects2: "section", projects: "section", knowledge: "section", k: "section", "k-edit": "section", trash: "none",   // #5568 — #/trash 는 셸의 휴지통 앱이다(클래식 표의 trash 는 WIKI 옛 휴지통 주소였다 · 라우터에서 셸 갈래가 먼저 선다)
       context: "none", system: "none", start: "none", onboarding: "none", install: "none", sessions: "sessions", activate: "none" };
     const cun = Object.keys(CLASSIC_PAGES).filter((k) => !(k in CEXP));
     check(cun.length === 0, "C3 클래식 표의 모든 첫 칸에 사이드바 주인이 정해져 있다", cun);

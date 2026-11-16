@@ -1,0 +1,19 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "connect",
+  "title": "외부 앱 연결",
+  "version": "0.1.0",
+  "publisher": { "name": "Lively" },
+  "instances": {
+    "project": "global",
+    "multiplicity": "single"
+  },
+  "system": {
+    "renderer": "connect",
+    "route": "#/connect"
+  },
+  "permissions": {
+    "scopes": [],
+    "tools": []
+  }
+}

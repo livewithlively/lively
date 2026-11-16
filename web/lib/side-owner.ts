@@ -7,7 +7,7 @@
 //
 //  그래서 화면마다 사이드바의 주인을 셋 중 하나로 정한다 — 누가 사이드바를 갖나는 이 표 한 자리가 정한다(main.ts 의 열 접기 · side.ts 의 갈래 · rail.ts 의 켜짐이 읽는다.
 //   제 사이드바를 그리는 앱을 늘리면 OWN 과 side.ts render() 의 갈래 · wsHead 의 이름표를 함께 늘린다):
-//   · 'section' — 구역(홈 · 세션 목록 · 프로젝트 · 위키)의 목록. 구역의 화면과 그 구역에서 여는 것(세션 · 프로젝트 · 지난 세션 · 휴지통)이다.
+//   · 'section' — 구역(홈 · 세션 목록 · 프로젝트 · 위키)의 목록. 구역의 화면과 그 구역에서 여는 것(세션 · 프로젝트)이다.
 //   · 앱 이름 — 그 앱이 제 사이드바를 그린다(자료 · 분류체계 · 세션 이력 · 앱빌더).
 //   · 'none' — 사이드바가 없는 앱. 사이드바 열을 접고 그 자리까지 앱이 쓴다(레일은 남는다 — 다른 앱 · 구역으로 가는 길).
 //     표에 없는 앱은 여기로 온다: 앱의 기본은 «사이드바 없음» 이다. 앱 안에 제 왼쪽 목록이 있으면(설정) 그것이 그 앱의 사이드바다.
@@ -15,7 +15,7 @@
 //  ⚠ 좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 로 여는 서랍이다. ☰ 도 그 앱의 사이드바만 연다: 사이드바가 없는 앱에선 ☰ 를 걷는다
 //   (원준 2026-10-19 «아니 각자 앱 사이드바로» — 종전엔 구역 목록이 대신 열렸다. mobile.ts setSide). 다른 데로 가는 길은 태블릿은 레일, 폰은 아래 탭 바다.
 //   폰 탭 바로 구역을 고르면 그 구역의 목록이 선다 — 사람이 그 구역(구역도 제 사이드바를 가진 화면이다)을 고른 것이다(main.ts owner 훅 · mobile.ts sheetSection).
-//  ⚠ 발치도 그 앱의 것이다 — 구역 발치 도크(지난 세션 · 휴지통 · 외부 앱 연결)는 구역 목록에만 선다(side.ts secFoot · appFoot).
+//  ⚠ 발치도 그 앱의 것이다(side.ts appFoot). 구역 발치 도크(지난 세션 · 휴지통 · 외부 앱 연결)는 #5568 에서 걷었다 — 셋 다 앱이 됐고 문은 앱 찾기다.
 import { CLASSIC_PAGES } from './classic-pages.js';
 import { builderSeeing } from './builder-flow.js';
 
@@ -38,7 +38,9 @@ const isSessionScreen = (ak: string): boolean => ak === 'home' || ak.startsWith(
 export function sideOwnerOf(ak: string, page = ''): SideOwner {
   const own = OWN[ak];
   if (own) return own;
-  if (isSessionScreen(ak) || ak === 'archive' || ak === 'trash' || DOOR[ak]) return 'section';
+  //  #5568 — 지난 세션 · 휴지통은 앱이 됐다(상민님 2026-11-16 «모두 앱 안에 넣고 사이드바에선 지워»). 종전엔 구역 발치 도크가 여는 화면이라 구역 목록이 그대로 섰다.
+  //   앱의 기본은 «사이드바 없음» 이라(위) 아래 'none' 으로 떨어진다 — 외부 앱 연결과 같다.
+  if (isSessionScreen(ak) || DOOR[ak]) return 'section';
   //  'app:' — 앱 인스턴스(#/i/…)와 크게 보기(#/full/…)는 앱이 화면 가득. 처음 설정(#/welcome)은 제 단계에서 사이드바를 여닫고(ob-bare),
   //   모르는 주소는 셸이 홈을 그린다 — 둘 다 구역 그대로.
   if (ak === 'app:' || ak === '') return page === 'i' || page === 'full' ? 'none' : 'section';
