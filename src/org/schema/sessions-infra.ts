@@ -30,6 +30,7 @@ export const CRON_ACTION_ALLOWLIST = [
   "agent_inject", "agent_headless",
   "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
   "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
+  "project_gc",            // 자동 생성 프로젝트 정리(방치·장기 미활동)
 ] as const;
 
 /**

@@ -505,7 +505,10 @@ const projectSetStatusV6: Capability = {
   handler: async (input: ProjectSetStatusV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: input.reason ?? null };
     await assertProjectVisible(input.id, ctx);
-    const project = await updateProjectStatus(input.id, input.status, writeCtx, input.status_raw ?? null);
+    //  크론이 닫는 것(ctx.source='cron' — 자동 생성 프로젝트 정리)은 초안을 풀지 않는다. 완료가 초안을 푸는 것은 사람이나 세션이
+    //   «끝냈다» 고 한 것이기 때문인데, 방치돼서 기계가 닫는 것은 그 뜻이 아니다 — 풀면 만든 사람만 보던 첫 지시가 전원에게 보인다.
+    //   ⚠ 입력이 아니라 호출 경로로 가린다: source 는 어댑터가 글자로 박는 값이라(MCP 'mcp' · REST 'web') 밖에서 'cron' 을 만들 수 없다.
+    const project = await updateProjectStatus(input.id, input.status, writeCtx, input.status_raw ?? null, { keepDraft: ctx?.source === "cron" });
     await regenAgents(input.id);
     return { project };
   },

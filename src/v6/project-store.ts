@@ -584,19 +584,27 @@ export async function restoreProject(before: Record<string, unknown>, ctx?: Writ
   return after;
 }
 
-export async function updateProjectStatus(id: number, status: string, ctx?: WriteCtx, statusRaw?: string | null): Promise<ProjectRow> {
+/**
+ * opts.keepDraft — 완료로 바꿔도 초안 표시를 그대로 둔다. **서버 안의 자동 정리 전용**이다(scheduler/actions/project-gc.ts).
+ *  완료가 초안을 푸는 까닭은 «사람이나 세션이 그 일을 끝냈다» 는 뜻이기 때문이다. 방치돼서 기계가 닫는 것은 그 뜻이 아니고,
+ *  초안은 만든 사람과 팀원만 보는 상태(본문에 첫 지시 원문이 있다 — v6/visibility.ts)라 거기서 풀면 정리가 곧 전원 공개가 된다.
+ *  ⚠ 이 값은 입력 스키마(MCP · REST)에 없다 — 부르는 사람이 고르는 값이 아니다. 핸들러가 호출 경로를 보고 넘긴다.
+ */
+export async function updateProjectStatus(id: number, status: string, ctx?: WriteCtx, statusRaw?: string | null,
+  opts: { keepDraft?: boolean } = {}): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
-  // done → 완료시각 기록, active 복귀 → 완료시각 해제. 완료는 초안(#4170)도 끝낸다 — 끝난 일은 정리할 껍데기가 아니다.
+  // done → 완료시각 기록, active 복귀 → 완료시각 해제. 완료는 초안(#4170)도 끝낸다 — 끝난 일은 정리할 껍데기가 아니다
+  //  (keepDraft 는 예외 — 위 머리말).
   // status_raw = 리스트 커스텀 상태명(개방 어휘, #475). undefined=무변경(기존 보존), null=해제, 그 외=설정.
   const rawGiven = statusRaw !== undefined;
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET status=$2, status_category=$3,
        status_raw = CASE WHEN $5::bool THEN $4 ELSE status_raw END,
        completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END,
-       draft = CASE WHEN $2='done' THEN false ELSE draft END, updated_at=now()
-     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
+       draft = CASE WHEN $2='done' AND NOT $6::bool THEN false ELSE draft END, updated_at=now()
+     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven, opts.keepDraft === true]);
   await auditProject(String(id), "set_status", before, after, ctx);
   if (before.draft === true && after.draft !== true) invalidateVisibilityCache();   // #5522 초안이 풀렸다 — 곧바로 보이게
   // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
