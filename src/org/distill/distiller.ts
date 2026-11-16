@@ -208,9 +208,18 @@ export function prefilterThresholds(level: number, rules?: Record<string, unknow
 // 정규식 메타문자 이스케이프 — 사람이 넣은 키워드가 패턴으로 오작동하지 않게(그리고 주입 표면이 되지 않게).
 const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// 스레드 스코어 술어. 통과 조건이 하나도 없으면(레버 0) null 을 돌려 호출부가 절을 아예 안 붙이게 한다.
+// 스레드 스코어 판정. 통과 조건이 하나도 없으면(레버 0) null 을 돌려 호출부가 절을 아예 안 붙이게 한다.
 //  ⚠ 자료 자체가 아니라 **그 자료가 속한 스레드**의 집계를 본다 — 같은 스레드는 통째로 통과하거나 통째로 걸러진다.
-export function prefilterSql(d: DistillerRow, p: Params, alias = "s"): string | null {
+//  돌려주는 것은 «통과한 스레드 키(_ch, _tid) 목록» 서브쿼리다. threads 는 후보를 스레드로 묶은 CTE 이름이고,
+//   호출부가 그 CTE 와 이 목록을 조인한다 — 판정은 판정 기록까지 거른 남은 스레드에만, 스레드마다 한 번 한다.
+//   자료 줄마다 걸면 같은 스레드의 집계를 메시지 수만큼 되풀이한다(2026-11-07 운영 사례: 15,275번).
+//  ⚠ **source 와의 조인이어야 한다(스레드마다 도는 상관 서브쿼리 금지).** 게이트웨이는 앱 역할로 돌아 source 에
+//   행 수준 보안(tenant_isolation)이 걸린다. 그러면 leakproof 가 아닌 jsonb `->>` 가 든 키 비교를 보안 조건보다 먼저
+//   평가할 수 없어 표현식 인덱스를 못 쓰고, 상관 서브쿼리는 스레드마다 source 전체를 읽는다
+//   (2026-11-07 운영 앱 역할 실측: 스레드 195개 × 전체 스캔, 버퍼 읽기 448만, 21초 — 소유자 역할로 재면 0.8초라 안 보였다).
+//   조인이면 RLS 를 거친 source 를 한 번 훑어 해시로 맞춘다. 측정은 반드시 앱 역할(SET ROLE)로 한다.
+//  스레드 키 = (채널, threadIdSql) — 양쪽이 **같은 표현식**이어야 같은 스레드로 맞물린다(한쪽만 폴백을 주면 전량 탈락).
+export function prefilterSql(d: DistillerRow, p: Params, threads: string): string | null {
   const th = prefilterThresholds(d.prefilter_level ?? 0, d.prefilter_rules as Record<string, unknown> | null);
   const kwRe = th.keywords.map(reEscape).join("|");
   // 집계식을 처음부터 HAVING 형태로 만든다(문자열 치환으로 뒤바꾸지 않는다 — 치환은 컬럼명이 겹치면 조용히 깨진다).
@@ -221,17 +230,12 @@ export function prefilterSql(d: DistillerRow, p: Params, alias = "s"): string | 
   if (th.min_decisive > 0) conds.push(`count(*) FILTER (WHERE x.body_md ~ ${p.add(kwRe)}) >= ${p.add(th.min_decisive)}`);
   if (!conds.length) return null;   // 레버 0 = 필터 끔
   const join = th.match === "any" ? " OR " : " AND ";
-  // ⚠ **비상관(uncorrelated) 서브쿼리여야 한다.** 처음엔 바깥 행(s)을 참조하는 EXISTS 로 썼는데, 그러면 자료 한 건마다
-  //  source 전체를 다시 스캔한다(O(n×m)) — 310건짜리 작은 채널에서도 statement timeout 이 났다(실측 2026-07-31).
-  //  s 를 참조하지 않는 형태면 Postgres 가 **스레드 집계를 한 번만** 하고 해시로 조인한다.
-  //  스레드 키 = (채널, threadIdSql) — 양쪽이 **같은 표현식**이어야 튜플 IN 이 성립한다(한쪽만 폴백을 주면 전량 탈락).
-  return `(COALESCE(${alias}.fields->>'container_name',''), ${threadIdSql(alias)}) IN (
-      SELECT COALESCE(x.fields->>'container_name',''), ${threadIdSql("x")}
-      FROM source x
-      WHERE x.lifecycle='active'
-      GROUP BY 1, 2
-      HAVING ${conds.join(join)}
-    )`;
+  return `SELECT t._ch, t._tid FROM ${threads} t
+      JOIN source x ON x.lifecycle='active'
+        AND COALESCE(x.fields->>'container_name','') = t._ch
+        AND ${threadIdSql("x")} = t._tid
+      GROUP BY t._ch, t._tid
+      HAVING ${conds.join(join)}`;
 }
 
 // 스레드 식별자 — thread_ts 가 없으면 자기 ts(단독 메시지 = 1건짜리 스레드), **그것도 없으면 자기 id**.
@@ -310,36 +314,42 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
   let visWhere = "TRUE";
   if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
   const where = distillerExclusiveSql(d, higherThan(d, all), p);
-  const pre = prefilterSql(d, p);
+  const pre = prefilterSql(d, p, "th");
   const nThreads = Math.min(Math.max(1, limitThreads ?? d.batch_size ?? 3), 200);
   const maxMsgs = Math.min(Math.max(1, d.batch_max_msgs ?? 20), 2000);
-  const cand = `SELECT ${INBOX_SEL},
+  //  cand 는 스레드를 고르는 데 필요한 열만 담는다 — 본문(body_md)까지 담으면 후보가 큰 레인에서 CTE 가 디스크로 넘친다
+  //   (2026-11-07 운영 사례: 후보 2.2만 행 레인에서 CTE 17MB 가 디스크로 넘쳤다). 본문은 고른 스레드의 행에서만 다시 읽는다.
+  const cand = `SELECT s.id, s.occurred_at, s.updated_at,
              COALESCE(s.fields->>'container_name','') AS _ch,
              ${threadIdSql("s")} AS _tid
         FROM source s
         WHERE s.lifecycle='active'
           AND ${unprocessedSql(d, p)}
           AND ${visWhere}
-          AND ${where}${pre ? "\n          AND " + pre : ""}`;
+          AND ${where}`;
   // 스레드를 최근 활동순으로 누적하다 스레드 상한·메시지 상한 중 먼저 걸리는 데서 멈춘다.
   //  `rn = 1` 예외가 핵심 — 첫 스레드는 메시지 상한을 넘어도 담는다(스레드를 자르면 대화가 끊겨 증류가 안 된다).
+  //  사전필터는 후보를 스레드로 묶은 뒤, 그 스레드 목록과 source 의 조인으로 한 번에 판정한다(왜 = prefilterSql 머리말).
+  //   MATERIALIZED 는 묶은 스레드 목록을 한 번만 계산해 판정과 순위 매기기가 같이 쓰게 하는 울타리다.
+  //   모양은 단위테스트 F13(distiller.test.ts)이, 실행계획은 prefilter-thread-index.pg-test.mjs 가 지킨다.
   const sql = `WITH cand AS (${cand}),
-     th AS (
+     th AS MATERIALIZED (
        SELECT _ch, _tid, count(*)::int AS n, max(COALESCE(occurred_at, updated_at)) AS last_at
-       FROM cand GROUP BY _ch, _tid),
+       FROM cand GROUP BY _ch, _tid)${pre ? `,
+     thp AS (SELECT g.* FROM th g JOIN (${pre}) ok ON ok._ch = g._ch AND ok._tid = g._tid)` : ""},
      ranked AS (
        SELECT _ch, _tid, n,
               row_number() OVER (ORDER BY last_at DESC) AS rn,
               sum(n) OVER (ORDER BY last_at DESC ROWS UNBOUNDED PRECEDING) AS cum
-       FROM th),
+       FROM ${pre ? "thp" : "th"}),
      picked AS (
        SELECT _ch, _tid FROM ranked
        WHERE rn <= ${p.add(nThreads)} AND (cum <= ${p.add(maxMsgs)} OR rn = 1))
-     SELECT c.id, c.name, c.kind, c.title, c.provenance, c.external_system, c.external_url,
-            c.occurred_at, c.updated_at, c.fields, c.parent_external_id, c.body_md, c.visibility,
+     SELECT ${INBOX_SEL},
             -- #4824 대상 열쇠(oneAudienceGroup) — 후보 전부가 아니라 고른 행에만 잰다(잠긴 행마다 상관 질의라 후보가 큰 레인에서 비싸다).
-            (SELECT ${AUD_KEY_SQL} FROM source s WHERE s.id = c.id) AS aud_key
+            ${AUD_KEY_SQL} AS aud_key
      FROM cand c JOIN picked pk ON pk._ch = c._ch AND pk._tid = c._tid
+     JOIN source s ON s.id = c.id
      ORDER BY c._tid, COALESCE(c.occurred_at, c.updated_at)`;
   return { sql, values: p.values };
 }
@@ -660,11 +670,19 @@ export async function requeueDistillerSeen(sel: RequeueSelection, dryRun: boolea
 export function buildBacklogQuery(d: DistillerRow, all: DistillerRow[], withPrefilter = true): { sql: string; values: unknown[] } {
   const p = new Params();
   const where = distillerExclusiveSql(d, higherThan(d, all), p);
-  const pre = withPrefilter ? prefilterSql(d, p) : null;
-  const sql = `SELECT count(*)::int AS n FROM source s
+  const pre = withPrefilter ? prefilterSql(d, p, "g") : null;
+  const base = `FROM source s
       WHERE s.lifecycle='active'
         AND ${unprocessedSql(d, p)}
-        AND ${where}${pre ? "\n        AND " + pre : ""}`;
+        AND ${where}`;
+  //  사전필터는 인박스와 같이 스레드로 묶은 뒤 건다(왜 = prefilterSql 머리말 · MATERIALIZED = buildInboxQuery 주석).
+  const sql = pre
+    ? `WITH g AS MATERIALIZED (
+        SELECT COALESCE(s.fields->>'container_name','') AS _ch, ${threadIdSql("s")} AS _tid, count(*)::int AS n
+        ${base}
+        GROUP BY 1, 2)
+      SELECT COALESCE(sum(g.n), 0)::int AS n FROM g JOIN (${pre}) ok ON ok._ch = g._ch AND ok._tid = g._tid`
+    : `SELECT count(*)::int AS n ${base}`;
   return { sql, values: p.values };
 }
 
