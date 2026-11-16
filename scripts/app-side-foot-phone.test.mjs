@@ -8,7 +8,7 @@
 //
 // 엣지 표(스크래치패드 spec-side-foot-phone.md):
 //  F1~F4 자료 · 분류체계 · 세션 이력 · 앱빌더 — 구역 도크 없음(세션 이력 「세션 목록」 · 앱빌더 「앱 찾기」 는 그 앱의 문이라 남는다)
-//  F5 구역 넷 — 도크 셋 그대로(경계) · F6 레일 숨김 — 앱 사이드바에 [앱] · [나] 줄 · 도크 없음 · F7 보이는 게 없는 발치는 자리를 안 차지한다
+//  F5 구역 넷 — 도크 없음(#5568 · 종전엔 도크 셋 그대로) · F6 레일 숨김 — 앱 사이드바에 [앱] · [나] 줄 · 도크 없음 · F7 보이는 게 없는 발치는 자리를 안 차지한다
 //  P1~P8 좁은 폭 ☰ — 사이드바 없는 앱은 ☰ 없음 · 어떤 길로도 서랍 안 열림 · 넓은 폭 단추는 그대로 · 문턱 넘나들기 · 열린 서랍 닫기 · 폰 탭 바 · setSide 부재
 //  W 셸 배선 — main.ts 가 사이드바 주인으로 setSide 를 부른다
 //
@@ -215,14 +215,15 @@ same(S.sources && [S.sources.sec, S.sources.dock], ["sources", []], "F1 자료 �
 same(S.taxonomy && [S.taxonomy.sec, S.taxonomy.dock], ["taxonomy", []], "F2 분류체계 사이드바 — 구역 도크가 없다");
 same(S.sessions && [S.sessions.sec, S.sessions.dock, S.sessions.links], ["sessions", [], ["세션 목록"]], "F3 세션 이력 사이드바 — 구역 도크 없이 그 앱의 문 「세션 목록」 만");
 same(S.builder && [S.builder.sec, S.builder.dock, S.builder.links], ["builder", [], ["앱 찾기"]], "F4 앱빌더 사이드바 — 구역 도크 없이 「앱 찾기」");
-const DOCK = ["지난 세션", "휴지통", "외부 앱 연결"];
+//  #5568(상민님 2026-11-16 «사이드바 하단 지난세션, 휴지통, 외부 앱 연결은 모두 앱 안에 넣고 사이드바에선 지워») — 구역 발치의 도크 셋도 걷었다. 셋은 앱 찾기의 앱이다.
+const DOCK = [];
 const secs = ["home", "sess", "proj", "wiki"];
-same(secs.map((k) => S[k] && [S[k].sec, S[k].dock]), secs.map((k) => [k, DOCK]), "F5 구역 넷(홈 · 세션 목록 · 프로젝트 · 위키) — 도크 셋은 그대로(구역의 것)");
+same(secs.map((k) => S[k] && [S[k].sec, S[k].dock]), secs.map((k) => [k, DOCK]), "F5 구역 넷(홈 · 세션 목록 · 프로젝트 · 위키) — 도크 셋이 없다(#5568 — 셋 다 앱이 됐다)");
 check(F.railHidden === true, "F6 배선 — 레일이 실제로 숨었다(이게 아니면 아래 F6 은 아무것도 안 잰다)", String(F.railHidden));
 const apps = ["sources", "taxonomy", "sessions", "builder"];
 same(apps.map((k) => H[k] && [H[k].row, H[k].dock.length]), apps.map(() => [true, 0]), "F6 레일을 숨기면 앱 사이드바 발치에 [앱] · [나] 줄(레일 그 자체) — 도크는 여전히 없다");
 same(H.builder && H.builder.links, [], "F6 레일을 숨긴 앱빌더 — 「앱 찾기」 대신 [앱] 하나(같은 일이 둘 서지 않는다)");
-same(secs.map((k) => H[k] && [H[k].row, H[k].dock.length]), secs.map(() => [true, 3]), "F6 레일을 숨긴 구역 — [앱] · [나] 줄과 도크 셋(경계)");
+same(secs.map((k) => H[k] && [H[k].row, H[k].dock.length]), secs.map(() => [true, 0]), "F6 레일을 숨긴 구역 — [앱] · [나] 줄만(도크 없음 · #5568)");
 check(S.sources && (S.sources.footH === 0 || S.sources.footH === null) && S.taxonomy && (S.taxonomy.footH === 0 || S.taxonomy.footH === null),
   "F7 보이는 게 없는 발치(자료 · 분류체계, 레일 보임)는 줄(위 선 · 여백)도 안 선다", JSON.stringify([S.sources && S.sources.footH, S.taxonomy && S.taxonomy.footH]));
 check(S.sessions && S.sessions.footH > 0, "F7 문이 있는 발치(세션 이력)는 선다(경계)", String(S.sessions && S.sessions.footH));

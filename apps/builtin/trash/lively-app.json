@@ -1,0 +1,19 @@
+{
+  "$schema": "https://dev.lvly.io/ui/lively-app.schema.json",
+  "id": "trash",
+  "title": "휴지통",
+  "version": "0.1.0",
+  "publisher": { "name": "Lively" },
+  "instances": {
+    "project": "global",
+    "multiplicity": "single"
+  },
+  "system": {
+    "renderer": "trash",
+    "route": "#/trash"
+  },
+  "permissions": {
+    "scopes": [],
+    "tools": []
+  }
+}
