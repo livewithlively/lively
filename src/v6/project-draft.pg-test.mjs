@@ -16,7 +16,7 @@
 //   D5 description 교체(다른 글) → false
 //   D6 가드 저장(description_base)으로 다른 글 → false · 같은 글 → 그대로
 //   D7 name 변경 → false · 같은 이름 → 그대로
-//   D8 draft:false 명시 → false(본문 그대로) · draft:true → true
+//   D8 draft:false 명시 → false(본문 그대로) · draft:true → 무시(#5522 — 다시 초안이 되지 않는다)
 //   D9 상태 done → false · in_progress → 그대로
 //   D10 초안 아닌(false) 프로젝트는 무엇을 고쳐도 false · NULL(구 행)은 NULL 그대로
 //   D11 백필: 표식+꼬리 없음+rule → true · 꼬리 있음/done/human/표식 없음 → false
@@ -109,7 +109,8 @@ try {
     const after = (await itemsPool.query(`SELECT description FROM project WHERE id=$1`, [id])).rows[0].description;
     chk("D8 «목록에 올리기»(draft:false) — 본문은 그대로 두고 초안에서 나온다", (await draftOf(id)) === false && before === after, JSON.stringify({ draft: await draftOf(id) }));
     await ps.updateProject(id, { draft: true }, ctx);
-    chk("D8b draft:true 면 다시 초안", (await draftOf(id)) === true, String(await draftOf(id)));
+    chk("D8b ★draft:true 는 무시된다 — 한 번 공개된 프로젝트는 초안으로 돌아가지 않는다(#5522: 초안은 만든 사람과 팀원만 봐서, 받아 주면 남의 프로젝트를 숨기는 길이 된다)",
+      (await draftOf(id)) === false, String(await draftOf(id)));
   }
 
   // ── D9 ──

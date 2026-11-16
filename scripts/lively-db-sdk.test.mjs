@@ -227,9 +227,9 @@ test("S10b generateDrizzleSchema — 글자 칸을 가리키는 외래키(refere
 test("S11 livelyMember — 검사 층이 퍼센트 인코딩해 붙인 사람 머리글을 풀어 준다(한글 id · 이름) · 판 · 없으면 null · 깨진 인코딩은 그대로", () => {
   const h = (o) => ({ headers: o });
   assert.deepEqual(livelyMember(h({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" })),
-    { id: "윤상민", name: "윤 상민", variant: "draft", job: null });
-  assert.deepEqual(livelyMember(h({ "x-lively-member": "sangmin-yoon" })), { id: "sangmin-yoon", name: "", variant: "pub", job: null }, "ASCII id · 이름 없음 · 판 기본 pub");
-  assert.deepEqual(livelyMember(h({ "x-lively-member": ["a%20b", "x"], "x-lively-variant": "weird" })), { id: "a b", name: "", variant: "pub", job: null }, "배열은 첫 값 · 모르는 판은 pub");
+    { id: "윤상민", name: "윤 상민", variant: "draft", job: null, jobSource: null });
+  assert.deepEqual(livelyMember(h({ "x-lively-member": "sangmin-yoon" })), { id: "sangmin-yoon", name: "", variant: "pub", job: null, jobSource: null }, "ASCII id · 이름 없음 · 판 기본 pub");
+  assert.deepEqual(livelyMember(h({ "x-lively-member": ["a%20b", "x"], "x-lively-variant": "weird" })), { id: "a b", name: "", variant: "pub", job: null, jobSource: null }, "배열은 첫 값 · 모르는 판은 pub");
   assert.equal(livelyMember(h({ "x-lively-member": "%E0%A4%A" })).id, "%E0%A4%A", "깨진 인코딩은 던지지 않고 그대로");
   assert.equal(livelyMember(h({})), null);
   assert.equal(livelyMember(h({ "x-lively-member": "" })), null);
@@ -238,9 +238,9 @@ test("S11 livelyMember — 검사 층이 퍼센트 인코딩해 붙인 사람 �
 
 test("S12 livelyMember — Fetch API 의 Headers(Next 앱 라우터 · Hono)도 같은 결과", () => {
   const headers = new Headers({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" });
-  assert.deepEqual(livelyMember({ headers }), { id: "윤상민", name: "윤 상민", variant: "draft", job: null });
+  assert.deepEqual(livelyMember({ headers }), { id: "윤상민", name: "윤 상민", variant: "draft", job: null, jobSource: null });
   assert.equal(livelyMember({ headers: new Headers() }), null);
-  assert.deepEqual(livelyMember(new Request("https://a.example/", { headers: { "x-lively-member": "m-1" } })), { id: "m-1", name: "", variant: "pub", job: null }, "Request 그대로");
+  assert.deepEqual(livelyMember(new Request("https://a.example/", { headers: { "x-lively-member": "m-1" } })), { id: "m-1", name: "", variant: "pub", job: null, jobSource: null }, "Request 그대로");
 });
 
 test("S13 livelyMember — 백그라운드 작업이면 job(작업 번호 · #4486) · 숫자가 아니거나 0 이하면 null", () => {
@@ -248,6 +248,19 @@ test("S13 livelyMember — 백그라운드 작업이면 job(작업 번호 · #44
   assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "42" })).job, 42);
   assert.equal(livelyMember({ headers: new Headers({ "x-lively-member": "m", "x-lively-job": "7" }) }).job, 7, "Fetch Headers");
   for (const bad of ["0", "-3", "1.5", "abc", "", "99999999999999999999"]) assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": bad })).job, null, `x-lively-job ${bad}`);
+});
+
+test("S13b livelyMember — 작업이면 jobSource(작업을 시작한 자리 · x-lively-job-source · 검사 층 6 판) · 작업이 아니거나 · 머리글이 없거나 · 꼴이 틀리면 null", () => {
+  const h = (o) => ({ headers: o });
+  assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "42", "x-lively-job-source": "app-ui" })).jobSource, "app-ui");
+  assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "42", "x-lively-job-source": "mcp-tool" })).jobSource, "mcp-tool");
+  assert.equal(livelyMember({ headers: new Headers({ "x-lively-member": "m", "x-lively-job": "7", "x-lively-job-source": "app-front" }) }).jobSource, "app-front", "Fetch Headers");
+  assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job-source": "app-ui" })).jobSource, null, "작업이 아니면(작업 번호 없음) 머리글이 있어도 null");
+  assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "0", "x-lively-job-source": "app-ui" })).jobSource, null, "작업 번호가 틀려도 null");
+  assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "42" })).jobSource, null, "옛 검사 층(머리글 없음)");
+  for (const bad of ["", "App-UI", "app_ui", "app ui", "1mcp", "-mcp", "a".repeat(33)]) {
+    assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "42", "x-lively-job-source": bad })).jobSource, null, `x-lively-job-source ${JSON.stringify(bad)}`);
+  }
 });
 
 test("S15 · 4487-K3 livelyMember — 검사 층 열쇠(#4487 자가호스팅): env 열쇠 없음 → 종전대로 · 있음+맞음 → 사람 · 틀림 · 길이 다름 · 없음 → null", () => {

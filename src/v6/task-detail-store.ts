@@ -5,6 +5,7 @@
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { type WriteCtx } from "./content-audit.js";
+import { releaseProjectDraft } from "./project-draft.js";
 import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
 
 // status_raw/status_category·external_* = 커넥터 이관 무손실 컬럼(#541) — 네이티브 행은 NULL(프론트가 있을 때만 노출).
@@ -291,6 +292,7 @@ export async function postComment(taskId: number, text: string, ctx?: WriteCtx, 
   const ins = await itemsPool.query(
     `INSERT INTO task_comment(task_id, author, body, reply_to, created_at) VALUES($1, $2, $3, $4, now()) RETURNING id`,
     [taskId, ctx?.actor ?? null, body, parent]);
+  await releaseProjectDraft(taskId, "comment", ctx);   // #5522 — 코멘트가 달렸다 = 남긴 것이 있다(뿌리 프로젝트가 초안이면 푼다)
   //  #4180 — 댓글이 써진 그 자리에서 받는 사람(언급·참여자)에게 「확인할 것」 알림을 남긴다. 응답을 막지 않는다(best-effort).
   const cid = Number((ins.rows[0] as { id?: unknown } | undefined)?.id) || null;
   void import("./comment-notify.js").then((m) => m.notifyTaskComment(taskId, { author: ctx?.actor ?? null, body }, cid))

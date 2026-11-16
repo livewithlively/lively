@@ -36,6 +36,15 @@ export interface RawItem {
   level?: "project" | "task" | "subtask"; // 위계 레벨 — 커넥터가 소스 위계(예: ClickUp Task 깊이)를 우리 level 로 매핑. 부재 시 connector-mirror 가 parent 유무로 폴백(no-parent=project).
   title?: string;
   body?: string;
+  /**
+   * 새 지식으로 태어날 때 쓸 이름 제안 — 커넥터가 안정적인 이름 규칙을 가질 때(domain-wiki 경로 모드).
+   *  외부 좌표 미러(mirrorKnowledgeV6)가 **신규 삽입에만** 쓴다(재싱크는 기존 행 이름 그대로). 지식 이름 규칙
+   *  (slugify 고정점)에 안 맞으면 무시하고 unitName 을 쓴다. 기본 unitName 은 64자에서 자르고 한글을 지워서,
+   *  경로처럼 길거나 한글인 external_id 끼리 이름이 겹친다(PK 충돌로 그 항목이 적재되지 않는다).
+   */
+  name_hint?: string;
+  /** 원본 안의 위치(예: 레포 상대경로) — 수집기 산출 규칙(output_config.category_rules)이 이 값에 맞춰 분류를 고른다. */
+  path?: string;
   occurred_at?: string; // ISO8601
   updated_at?: string;
   fields?: Record<string, unknown>;

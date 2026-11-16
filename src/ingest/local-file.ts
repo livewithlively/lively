@@ -17,6 +17,8 @@ import type { LivelyUser } from "../context.js";
 import { mirrorSourceV6 } from "../v6/mirror/mirror-source.js";
 import { normalizeExternalInstance } from "../org/ingest/external-identity.js";
 import { getProjectRow } from "../v6/project-store.js";
+import { releaseProjectDraft } from "../v6/project-draft.js";
+import { ENTRY_GENERATED } from "../v6/source-group.js";
 import { projectStorage } from "../project/project-storage.js";   // #4064 — 프로젝트 파일의 자리·실행 주체
 import { isGitRepoRoot } from "../project/project-manifest.js";
 import { extractOoxml, ooxmlKindFromName, printableRatio } from "../connectors/ooxml.js";
@@ -182,6 +184,7 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
     if (pname) item.fields = { ...item.fields, project_name: pname };
   }
 
+  let finalEntry: string | null = null;
   const id = await withTx(async (client) => {
     //  들어온 길은 처음 한 번 정해진다(#4233): 사람이 올린 파일을 AI 가 고쳐 다시 올려도 「올린 자료」에 남는다.
     //   mirror 의 upsert 는 fields 를 통째로 바꾸므로 기존 값을 먼저 읽어 이어 준다.
@@ -189,7 +192,9 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
       `SELECT fields->>'entry' AS entry, fields->>'entry_session' AS entry_session FROM source
         WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
       [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), extId]);
-    item.fields = { ...item.fields, ...entryFields(keepEntry(prev.rows[0] as { entry?: unknown; entry_session?: unknown } | undefined, u.entry)) };
+    const entry = entryFields(keepEntry(prev.rows[0] as { entry?: unknown; entry_session?: unknown } | undefined, u.entry));
+    finalEntry = entry.entry;
+    item.fields = { ...item.fields, ...entry };
     await mirrorSourceV6(client, item, LOCAL_SYSTEM, extId);
     const r = await client.query(
       `SELECT id, lifecycle FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
@@ -212,6 +217,12 @@ export async function ingestLocalUpload(u: LocalUploadInput): Promise<LocalInges
   });
   // 자료가 생겼으면 그걸 지식으로 만들 증류기가 있어야 한다 — 없으면 꺼진 채로 만들어 둔다(승인 때 켠다). 실패해도 자료 등록엔 무관.
   void ensureLocalFilesDistillerOnce(u.uploader.id);
+  // #5522 — **세션이 만든 파일**이 프로젝트 폴더에 들어왔다 = 그 프로젝트가 산출물을 남겼다 → 초안이면 푼다.
+  //  사람이 올린 파일(upload)은 세지 않는다: 첫 지시에 붙인 첨부가 프로젝트 폴더로 옮겨지는 것(attach-relocate)이
+  //  세션 첫 턴에 저절로 일어나, 그걸 세면 첨부가 있는 세션의 초안이 생기자마자 풀린다.
+  if (u.root.kind === "project" && finalEntry === ENTRY_GENERATED) {
+    await releaseProjectDraft(u.root.id, "file", { actor: u.uploader.id, source: "upload" });
+  }
   return { ingested: true, kind: built.kind, reason: built.reason, source_id: id, external_id: extId };
 }
 
