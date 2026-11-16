@@ -403,6 +403,110 @@ okP("scope-grant-1: grant 보유자는 CTE 안 파생도 통과",
 okMy("scope-grant-2: grant 보유자는 서브쿼리 안 조건도 통과 (mysql)",
   "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')", granted);
 
+// ══════════ age 스타일 — 생년월일은 «월 첫날 기준 만나이» 파생만 허용 ══════════
+//  생일·기준일을 모두 월 첫날로 묶어 두면 기준일을 바꿔 가며 조회해도 드러나는 건 출생 연·월까지다(일 단위 생일 역산 차단).
+const agePolicy = (): SourcePolicy => ({
+  ...withMask("users.birth_date", "users.phone"),
+  ageCols: new Set(["users.birth_date"]),
+});
+const AGE_HINT = /TIMESTAMPDIFF\(YEAR/;
+const BIRTH_YM = "DATE_FORMAT(u.birth_date, '%Y-%m-01')";
+okMy("age-1: 과거 기준일 컬럼을 월 첫날로 내린 만나이",
+  `SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE_FORMAT(c.cutoff, '%Y-%m-01')) AS age FROM users u JOIN contracts c ON c.user_id = u.id`,
+  agePolicy(), (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("age-2b: 쌍따옴표 날짜 리터럴도 같은 값이라 허용(의도)",
+  'SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, "%Y-%m-01"), "2024-03-01") AS age FROM users', agePolicy());
+rejMy("age-x16: 월 자리가 00 인 형식 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-00-01'), '2024-03-01') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x17: 월 자리가 13 인 형식 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), DATE_FORMAT(now(), '%Y-13-01')) FROM users", AGE_HINT, agePolicy());
+for (const [n, sql] of [
+  ["허용 꼴 그대로", "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users"],
+  ["pg 식 age()", "SELECT date_part('year', age('2024-03-01', birth_date)) FROM users"],
+  ["조건", "SELECT id FROM users WHERE birth_date < '1990-03-01'"],
+] as const) rejectsP(`age-pg-${n}: pg 에서는 age 컬럼의 어떤 파생도 불허`, sql, agePolicy(), /최상위 SELECT 투영|Unparseable/);
+//  안내 문구는 그 소스에서 되는 것만 말한다 — pg 소스에 없는 TIMESTAMPDIFF 파생을 권하지 않는다.
+assert.throws(() => assertSafeSelect("SELECT id FROM users WHERE birth_date < '1990-03-15'", agePolicy(), { dialect: "postgresql" }),
+  (e: Error) => /MySQL 소스에서만/.test(e.message) && !/TIMESTAMPDIFF/.test(e.message), "age-pg-안내");
+pass++; console.log("ok  age-pg-안내: pg 소스의 거부 문구는 TIMESTAMPDIFF 를 권하지 않는다");
+//  안쪽 범위에서 같은 이름을 VALUES 별칭으로 다시 쓰면 그 수식이 무엇을 가리키는지 알 수 없다(바깥의 users 인지 VALUES 인지).
+//   허용 쪽 판정(isAgeCol)도 isSensitive 처럼 이름으로 본다 — 같은 이름의 마스킹 컬럼이 전부 age 일 때만 허용 파생이다.
+//   틀렸을 때: 바깥 별칭의 바인딩만 보고 «age 컬럼» 으로 쳐서, 다른 스타일로 가린 같은 이름 컬럼의 파생이 통과한다.
+{
+  const mixed = (): SourcePolicy => { const p = agePolicy(); p.maskedCols.add("pets.birth_date"); return p; };
+  const D = "TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), '2024-03-01')";
+  rejMy("age-unresolved-1: 해석 불가 별칭 + 같은 이름의 다른 스타일 컬럼 → 허용 파생으로 치지 않는다",
+    `SELECT (SELECT ${D} FROM (VALUES ROW(1)) AS u LIMIT 1) FROM users u JOIN pets p ON true`, /최상위 SELECT 투영/, mixed());
+  okMy("age-unresolved-2: 별칭이 해석되면(바깥 users) 같은 정책에서도 허용 파생", `SELECT ${D} FROM users u JOIN pets p ON true`, mixed());
+  okMy("age-unresolved-3: 해석 불가 별칭이어도 같은 이름 마스킹 컬럼이 전부 age 면 허용",
+    `SELECT (SELECT ${D} FROM (VALUES ROW(1)) AS u LIMIT 1) FROM users u JOIN contracts c ON true`, agePolicy());
+}
+okP("age-pg-투영: pg 에서도 원본 직접 투영은 통과(게이트2 가 만나이로 마스킹)", "SELECT birth_date FROM users", agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okMy("age-2: 월 첫날 날짜 리터럴 기준 + 미수식 컬럼",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') AS age FROM users", agePolicy());
+okMy("age-3: 소문자 함수·단위 + 연 첫날 형식",
+  "SELECT timestampdiff(year, date_format(u.birth_date, '%Y-%m-01'), date_format(now(), '%Y-01-01')) FROM users u", agePolicy());
+okMy("age-4: 만나이 조건 필터(값이 만나이뿐이라 투영과 정보량 같음)",
+  `SELECT u.id FROM users u WHERE TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') >= 19`, agePolicy());
+okMy("age-5: 원본 직접 투영은 통과 + 게이트2 마스킹 대상", "SELECT birth_date FROM users", agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+rejMy("age-x0: 생일 쪽을 월 첫날로 안 묶으면 거부(1일생 여부가 드러남)",
+  "SELECT TIMESTAMPDIFF(YEAR, u.birth_date, '2024-03-01') FROM users u", AGE_HINT, agePolicy());
+rejMy("age-x1: 기준일이 일 단위(DATE(cutoff))면 거부",
+  `SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE(c.cutoff)) AS age FROM users u JOIN contracts c ON c.user_id = u.id`, AGE_HINT, agePolicy());
+rejMy("age-x2: 월 중간 날짜 리터럴 기준 거부", `SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-15') FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x3: 단위 DAY 거부", `SELECT TIMESTAMPDIFF(DAY, ${BIRTH_YM}, '2024-03-01') FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x4: 단위 MONTH 거부", `SELECT TIMESTAMPDIFF(MONTH, ${BIRTH_YM}, '2024-03-01') FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x5: 인자 순서 뒤집기 거부", `SELECT TIMESTAMPDIFF(YEAR, '2024-03-01', ${BIRTH_YM}) FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x6: DATEDIFF 거부", "SELECT DATEDIFF('2024-03-01', birth_date) FROM users", AGE_HINT, agePolicy());
+rejMy("age-x7: 월 추출 거부", "SELECT MONTH(birth_date) FROM users", AGE_HINT, agePolicy());
+rejMy("age-x8: 일 추출 거부", "SELECT DAY(u.birth_date) FROM users u", AGE_HINT, agePolicy());
+rejMy("age-x9: 월·일 포맷 거부", "SELECT DATE_FORMAT(birth_date, '%m-%d') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x9b: 연·월 포맷만 따로 꺼내기 거부", "SELECT DATE_FORMAT(birth_date, '%Y-%m-01') FROM users", AGE_HINT, agePolicy());
+rejMy("age-x10: 비교 조건으로 생일 탐색 거부", "SELECT id FROM users WHERE birth_date < '1990-03-15'", AGE_HINT, agePolicy());
+rejMy("age-x11: 원본으로 정렬 거부", "SELECT id FROM users ORDER BY birth_date", AGE_HINT, agePolicy());
+rejMy("age-x12: 기준일 식 안에 원본을 넣는 우회 거부",
+  `SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE_FORMAT(u.birth_date, '%Y-%m-01')) FROM users u`, AGE_HINT, agePolicy());
+rejMy("age-x13: 다른 스타일(partial) 컬럼은 같은 형태라도 종전대로 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(phone, '%Y-%m-01'), '2024-03-01') FROM users", /최상위 SELECT 투영/, agePolicy());
+rejMy("age-x14: age 지정 없는 마스킹 생년월일은 종전대로 거부",
+  "SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users", /최상위 SELECT 투영/, withMask("users.birth_date"));
+rejMy("age-x15: 스키마 수식 함수(저장 함수 호출)는 내장 함수로 보지 않는다",
+  "SELECT s.timestampdiff(YEAR, DATE_FORMAT(birth_date, '%Y-%m-01'), '2024-03-01') FROM users", AGE_HINT, agePolicy());
+okMy("age-ok: ageCols 없는 기존 정책은 동작 무변경(마스킹 없는 컬럼 자유)",
+  "SELECT TIMESTAMPDIFF(YEAR, created_at, '2024-03-15') FROM users", withMask("users.birth_date"));
+
+// age 파생은 CTE·서브쿼리 안에서도 같은 별칭 해석으로 판정한다(그 밖의 파생은 범위와 무관하게 막힌다).
+okMy("age-scope-1: CTE 안 만나이 파생 허용",
+  `WITH c AS (SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') AS age FROM users u) SELECT id FROM c WHERE age >= 19`, agePolicy());
+// CTE 가 내보내는 age 는 이미 만나이 정수다 — 바깥에서 그대로 투영해도 원본·일 정보가 없어 마스킹이 필요 없다.
+okMy("age-scope-2: CTE 가 만나이 결과 별칭을 내보내 바깥에서 그대로 SELECT",
+  `WITH c AS (SELECT u.id, TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') AS age FROM users u) SELECT id, age FROM c`, agePolicy(),
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("age-scope-3: 파생 테이블 안 만나이 + 바깥 별칭 섀도잉",
+  `SELECT t.age FROM (SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, '2024-03-01') AS age FROM users u) t JOIN orders u ON u.id = 1`, agePolicy());
+rejMy("age-scope-x1: CTE 안 일 단위 파생 거부",
+  "WITH c AS (SELECT u.id, DAY(u.birth_date) AS d FROM users u) SELECT id, d FROM c", AGE_HINT, agePolicy());
+rejMy("age-scope-x2: CTE 안 기준일이 일 단위면 거부",
+  `WITH c AS (SELECT TIMESTAMPDIFF(YEAR, ${BIRTH_YM}, DATE(o.cutoff)) AS age FROM users u JOIN orders o ON o.user_id = u.id) SELECT age FROM c`, AGE_HINT, agePolicy());
+rejMy("age-scope-x3: CTE 가 연·월만 꺼내 바깥에서 나이 계산하는 우회 거부",
+  "WITH c AS (SELECT DATE_FORMAT(u.birth_date, '%Y-%m-01') AS ym FROM users u) SELECT TIMESTAMPDIFF(YEAR, DATE_FORMAT(ym, '%Y-%m-01'), '2024-03-01') FROM c", AGE_HINT, agePolicy());
+rejMy("age-scope-x4: 같은 별칭이 age 테이블과 다른 스타일 테이블에 겹치면 허용하지 않는다",
+  "SELECT u.id FROM users u WHERE EXISTS (SELECT 1 FROM people u WHERE TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), '2024-03-01') > 1)",
+  /최상위 SELECT 투영/, { ...withMask("users.birth_date", "people.birth_date"), ageCols: new Set(["users.birth_date"]) });
+
+// 실사용 꼴 — 기준일이 CTE 의 DATETIME 컬럼, 생년월일은 LEFT JOIN 한 사용자 상세 테이블.
+okMy("age-usage: 코호트 CTE 기준일 + LEFT JOIN 생년월일",
+  "WITH cohort AS (SELECT a.id AS apply_id, a.user_id, a.created_at AS cutoff FROM loan_applications a WHERE a.status = 'done') " +
+  "SELECT c.apply_id, TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), DATE_FORMAT(c.cutoff, '%Y-%m-01')) AS age " +
+  "FROM cohort c JOIN loan_applications a ON a.id = c.apply_id LEFT JOIN users u ON u.id = a.user_id",
+  agePolicy(), (p) => assert.equal(p.minMaskedOutputs, 0));
+rejMy("age-usage-x: 같은 꼴에서 기준일을 일 단위(DATE(c.cutoff))로 두면 거부",
+  "WITH cohort AS (SELECT a.id AS apply_id, a.user_id, a.created_at AS cutoff FROM loan_applications a) " +
+  "SELECT c.apply_id, TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), DATE(c.cutoff)) AS age " +
+  "FROM cohort c JOIN loan_applications a ON a.id = c.apply_id LEFT JOIN users u ON u.id = a.user_id", AGE_HINT, agePolicy());
+
 // ══════════ 괄호로 묶은 조인 — 안쪽 테이블도 테이블 게이트·마스킹 규칙·감사 기록을 받는다 ══════════
 //  파서의 tableList 는 괄호 조인 안의 테이블을 싣지 않는다. 테이블 집합은 AST 에서 직접 모은 것과 합친다.
 const sortedTables = (p: ReturnType<typeof assertSafeSelect>): string[] => [...(p.tables ?? [])].sort();

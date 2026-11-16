@@ -119,7 +119,7 @@ export interface DbColumnMaskRow {
   source: string;
   table_name: string;
   column_name: string;
-  style: "full" | "partial" | "email" | "hash" | "null";
+  style: "full" | "partial" | "email" | "hash" | "null" | "age";
   note: string | null;
   updated_at: string | null;
   updated_by: string | null;

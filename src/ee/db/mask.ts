@@ -12,6 +12,7 @@ import type { MaskStyle, FieldMeta, MaskTarget } from "../../db/mask.js";
 // 값 하나를 style 로 마스킹. null/undefined 는 그대로(빈값은 가릴 것이 없음).
 export function maskValue(v: unknown, style: MaskStyle): unknown {
   if (v === null || v === undefined) return v;
+  if (style === "age") return ageAtMonthStart(v, new Date());
   const s = typeof v === "string" ? v : String(v);
   switch (style) {
     case "null":
@@ -26,6 +27,29 @@ export function maskValue(v: unknown, style: MaskStyle): unknown {
     default:
       return "***";
   }
+}
+
+// 생년월일 → 출생월 1일부터 기준 시각이 속한 달 1일까지의 만 나이. 양쪽을 월 첫날로 묶는 이유: 날마다 조회해 나이가
+//  바뀌는 날을 찾으면 생일(일)이 드러난다. 기준일만 묶으면 «1일생인가» 1비트가 남으므로 생일 쪽도 묶는다 —
+//  드러나는 건 출생 연·월까지다. 게이트1 이 허용하는 SQL 파생(firewall.ts ageDerivationRef)과 같은 산식이어야 한다
+//  (둘이 다르면 그 차이가 또 하나의 비트가 된다).
+//  Date(드라이버가 DATE 를 로컬 자정 Date 로 준다) · 'YYYY-MM-DD[ 시각]' · 'YYYYMMDD' 를 받고, 그 외·없는 날짜·미래는 null.
+//  기준월은 게이트웨이 프로세스 로컬 시각이고, Date 값은 드라이버가 로컬 자정 Date 를 준다는 전제다 — TIMESTAMPTZ 생년월일은 하루 밀릴 수 있다.
+export function ageAtMonthStart(v: unknown, now: Date): number | null {
+  let y: number, m: number, d: number;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    y = v.getFullYear(); m = v.getMonth() + 1; d = v.getDate();
+  } else {
+    const hit = /^(\d{4})-?(\d{2})-?(\d{2})(?:$|[ T])/.exec(String(v).trim());
+    if (!hit) return null;
+    y = Number(hit[1]); m = Number(hit[2]); d = Number(hit[3]);
+    const probe = new Date(y, m - 1, d);
+    if (probe.getFullYear() !== y || probe.getMonth() !== m - 1 || probe.getDate() !== d) return null; // 1990-02-30 류
+  }
+  const ry = now.getFullYear(), rm = now.getMonth() + 1; // 기준일 = 이번 달 1일
+  const age = ry - y - (rm < m ? 1 : 0);
+  return age >= 0 ? age : null;
 }
 
 // 이메일 로컬부 마스킹 — a***@domain 유지(도메인은 노출, 개인식별 로컬부만 가림). @ 없으면 partial 폴백.
