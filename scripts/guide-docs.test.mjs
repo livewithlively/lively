@@ -76,10 +76,11 @@ emit("web/lib/ctx-names.ts");
 emit("web/lib/icon-paths.ts");
 const docs = await load(emit("web/docs-content.ts"));
 const icons = await load(join(tmp, "lib/icon-paths.js"));
-writeFileSync(join(tmp, "stub.js"), "const n = () => null;\nexport const el = n, renderMarkdown = n, replaceKids = n, sv = n, copyButton = n, guideFigure = n, guideIcon = n;\n");
+writeFileSync(join(tmp, "stub.js"), "const n = () => null;\nexport const el = n, renderMarkdown = n, replaceKids = n, sv = n, copyButton = n, guideFigure = n, guideIcon = n, openWelcomeFilm = n;\nexport const WELCOME_FILM = { src: '', poster: '', label: '' };\n");
 const stubImports = (s) => s
   .replace(/from '\.\.\/core\.js'/g, "from '../stub.js'").replace(/from '\.\.\/ui-primitives\.js'/g, "from '../stub.js'")
-  .replace(/from '\.\/figures\.js'/g, "from '../stub.js'").replace(/from '\.\/icon\.js'/g, "from '../stub.js'");
+  .replace(/from '\.\/figures\.js'/g, "from '../stub.js'").replace(/from '\.\/icon\.js'/g, "from '../stub.js'")
+  .replace(/from '\.\.\/v2\/welcome-film\.js'/g, "from '../stub.js'");   // #5550 첫 화면의 «소개 영상 보기» — 주소 잣대와 무관하다
 const render = await load(emit("web/guide/render.ts", stubImports));
 const search = await load(emit("web/guide/search.ts"));
 const app = await load(emit("web/guide/app.ts", stubImports));
@@ -283,7 +284,7 @@ const secsOf = (p) => render.splitGuideSections(bodyOf(p)).filter((s) => s.title
     //  본문 그리기는 흉내다. 절 둘을 돌려준다(목차 · 절로 가기가 읽는다).
     renderGuideDoc: () => ({ body: fel("div", { class: "gd-doc" }, fel("h2", { id: "gd-a", class: "gd-h2", text: "가" }), fel("h2", { id: "gd-b", class: "gd-h2", text: "나" })), secs: [{ id: "a", title: "가" }, { id: "b", title: "나" }] }),
   };
-  writeFileSync(join(tmp, "fakedom.js"), "const f = globalThis.__guideFake;\nexport const el = f.el, replaceKids = f.replaceKids, guideIcon = f.guideIcon, renderGuideDoc = f.renderGuideDoc;\n");
+  writeFileSync(join(tmp, "fakedom.js"), "const f = globalThis.__guideFake;\nexport const el = f.el, replaceKids = f.replaceKids, guideIcon = f.guideIcon, renderGuideDoc = f.renderGuideDoc;\nexport const openWelcomeFilm = () => {}, WELCOME_FILM = { src: 'media/welcome-film.mp4', poster: 'media/welcome-film-poster.jpg', label: '' };\n");
   const winListeners = {};
   const replaced = [];
   globalThis.window = { addEventListener: (t, f) => { (winListeners[t] ||= []).push(f); } };
@@ -293,6 +294,7 @@ const secsOf = (p) => render.splitGuideSections(bodyOf(p)).filter((s) => s.title
   globalThis.cancelAnimationFrame = () => {};
   const fakeImports = (src) => src
     .replace(/from '\.\.\/core\.js'/g, "from '../fakedom.js'").replace(/from '\.\/icon\.js'/g, "from '../fakedom.js'")
+    .replace(/from '\.\.\/v2\/welcome-film\.js'/g, "from '../fakedom.js'")
     .replace(/import \{ renderGuideDoc, type GuideSec \} from '\.\/render\.js';/, "import { renderGuideDoc } from '../fakedom.js';\nimport type { GuideSec } from './render.js';");
   const liveFile = emit("web/guide/app.ts", fakeImports).replace(/app\.js$/, "app-live.js");
   writeFileSync(liveFile, readFileSync(join(tmp, "guide/app.js"), "utf8"));
