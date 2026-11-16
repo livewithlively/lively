@@ -28,3 +28,15 @@ export const DRAFT_HINT = '나와 초대한 사람만 봅니다 · 작업을 남
 
 /** 표시에 올렸을 때의 긴 설명(title). */
 export const DRAFT_TIP = '세션 첫 지시로 자동 생성된 프로젝트입니다. 나와 초대한 사람에게만 보이고, 작업을 남기거나 제목 · 본문을 정리하면 모두에게 공개됩니다.';
+
+/**
+ * 「리스트」 뷰 오른쪽 위 개수 글(#5522) — 초안은 따로 센다.
+ *  거르개(기간 · 사람 · 상태 · 검색)가 아무것도 안 걸렀으면(shown === all) «<noun> N개 · 초안 M개»(초안이 없으면 «<noun> N개»),
+ *  걸렀으면 «K개 표시 · 전체 N». 초안만 보는 스코프는 noun 을 «초안» 으로 주고 drafts 를 0 으로 준다(따로 빼지 않으므로).
+ * @param shown 지금 그린 줄 수(초안 묶음 포함) · @param all 이 스코프의 전체 수(초안 포함) · @param drafts 그중 초안 수
+ */
+export function draftCountText(shown: number, all: number, drafts: number, noun: string): string {
+  const real = all - drafts;
+  if (shown === all) return drafts ? `${noun} ${real}개 · ${DRAFT_LABEL} ${drafts}개` : `${noun} ${all}개`;
+  return `${shown}개 표시 · 전체 ${all}`;
+}

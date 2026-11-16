@@ -361,6 +361,8 @@ test("A10 ★착지: 즐겨찾기가 없다고 알면 「전체」 · 있으면 
 //   D6  배선(라우터 · 주소): /drafts → __drafts__ · __drafts__ → #/projects2/drafts
 //   D7  배선(보드): 「기타」 스코프 · 수는 초안을 빼고, 「초안」 스코프는 모든 묶음의 초안 · 비어도 다른 스코프로 안 옮기고 · 새 프로젝트 줄 없음
 //   D8  배선(목록): 상태 묶음은 초안 스코프에서 초안을 빼지 않는다 · 표 줄 · 칸반 카드 · 홈 카드에 «초안» 표시 · 같은 잣대(lib/proj-draft)
+//   D9  「리스트」 뷰 개수 글: 거르지 않았으면 «프로젝트 N개 · 초안 M개»(초안 0 이면 «프로젝트 N개») · 걸렀으면 «K개 표시 · 전체 N» · 초안 스코프는 «초안 N개»
+//   D10 배선(격리 리뷰 반영): 클래식 보드 첫 착지 후보 맨 끝에 「초안」 · 클래식 사이드바 검색에서 초안은 「초안」 줄 밑 · 걸러서 빈 초안 스코프는 «조건에 맞는 초안이 없다»
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let draftMod: any = null;
@@ -473,4 +475,29 @@ test("D8 배선(목록): 초안 스코프에선 초안을 빼지 않고 · 표 �
   for (const [name, src] of [["rows", ROWS], ["board", BOARD], ["side", SIDE], ["session-list", LIST]] as const) {
     assert.ok(!/p\.draft === true && p\.status !== 'done'/.test(src), name + " 에 따로 쓴 초안 잣대가 없다");
   }
+});
+
+test("D9 ★「리스트」 뷰 개수 글 — 초안을 따로 센다 · 걸렀으면 «K개 표시 · 전체 N» · 초안 스코프는 «초안 N개»", async () => {
+  const { draftCountText } = await loadDraft();
+  assert.equal(draftCountText(6, 6, 3, "프로젝트"), "프로젝트 3개 · 초안 3개");
+  assert.equal(draftCountText(3, 3, 0, "프로젝트"), "프로젝트 3개");
+  assert.equal(draftCountText(0, 0, 0, "프로젝트"), "프로젝트 0개");
+  assert.equal(draftCountText(2, 6, 3, "프로젝트"), "2개 표시 · 전체 6");
+  assert.equal(draftCountText(3, 3, 0, "초안"), "초안 3개");
+  //  배선: 「리스트」 뷰가 이 함수를 쓰고, 초안을 따로 빼지 않는 스코프(초안)에서는 이름을 «초안» 으로 준다
+  const LIST = readFileSync("web/projects/session-list.ts", "utf8");
+  assert.match(LIST, /draftCountText\(vis\.length \+ drafts\.length, inScope\.length, inScopeDrafts, splitDrafts \? '프로젝트' : DRAFT_LABEL\)/);
+  assert.ok(!/function countText\(/.test(LIST), "개수 글은 lib/proj-draft 한 벌");
+});
+
+test("D10 배선(격리 리뷰 반영): 첫 착지 후보 끝에 「초안」 · 클래식 사이드바 검색의 초안은 「초안」 줄 밑 · 걸러서 빈 초안 스코프 문구", () => {
+  const BOARD = readFileSync("web/projects/board.ts", "utf8");
+  const cands = BOARD.slice(BOARD.indexOf("const selCandidates = ["), BOARD.indexOf("];", BOARD.indexOf("const selCandidates = [")));
+  assert.ok(cands.indexOf("'__drafts__'") > cands.indexOf("'__none__'"), "「초안」 은 「기타」 뒤 맨 끝 후보");
+  assert.match(cands, /\.\.\.\(draftsAll\.length \? \[\{ key: '__drafts__', has: true \}\] : \[\]\),/);
+  assert.match(BOARD, /const searchUnReal = searchProjsUn\.filter\(\(p\) => !isDraftProj\(p\)\);/);
+  assert.match(BOARD, /appendProjMatches\(searchUnReal, 1, '__none__'\);/);
+  assert.match(BOARD, /appendProjMatches\(searchDrafts, 1, dKey\);/);
+  assert.match(BOARD, /text: scopeRaw\.length \? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS/);
+  assert.match(BOARD, /text: draftScope \? \(scopeRaw\.length \? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS\) : mineOnly \?/);
 });
