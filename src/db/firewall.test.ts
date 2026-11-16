@@ -41,6 +41,25 @@ rejects("다중 문 거부", "SELECT 1; SELECT 2");
 rejects("DDL(DROP) 거부", "DROP TABLE t");
 rejects("pg_sleep 거부", "SELECT pg_sleep(10)");
 rejects("pg_read_file 거부", "SELECT pg_read_file('/etc/passwd')");
+// SQL·테이블 이름을 문자열 인자로 받아 실행하는 함수 — 그 안의 테이블은 AST 에 남지 않아 테이블 게이트가 못 본다.
+//  틀렸을 때: 시스템 차단 테이블 · 마스킹 컬럼이 문자열 한 겹으로 그대로 나간다(tables=[] 로 통과).
+for (const [name, sql] of [
+  ["query_to_xml", "SELECT query_to_xml('select * from s', true, false, '')"],
+  ["query_to_xml 스키마 수식", "SELECT pg_catalog.query_to_xml('select * from s', true, false, '')"],
+  ["query_to_xml FROM 자리", "SELECT x FROM query_to_xml('select * from s', true, false, '') AS x"],
+  ["query_to_xml 서브쿼리 안", "SELECT id FROM t WHERE id IN (SELECT 1 WHERE query_to_xml('select 1', true, false, '') IS NOT NULL)"],
+  ["query_to_xml_and_xmlschema", "SELECT query_to_xml_and_xmlschema('select * from s', true, false, '')"],
+  ["table_to_xml", "SELECT table_to_xml('s', true, false, '')"],
+  ["schema_to_xml", "SELECT schema_to_xml('public', true, false, '')"],
+  ["database_to_xml", "SELECT database_to_xml(true, false, '')"],
+  ["ts_stat", "SELECT word FROM ts_stat('select to_tsvector(body) from s')"],
+  ["dblink_exec", "SELECT dblink_exec('dbname=x', 'select 1')"],
+  ["pg_read_binary_file", "SELECT pg_read_binary_file('/etc/passwd')"],
+  ["lo_get", "SELECT lo_get(16400)"],
+] as const) rejects(`${name} 거부`, sql, /Blocked function/);
+ok("이름이 비슷한 일반 함수는 통과(to_tsvector · ts_rank · ts_headline)", () => {
+  assertSafeSelect("SELECT ts_rank(to_tsvector(body), plainto_tsquery('x')), ts_headline(body, plainto_tsquery('x')) FROM t");
+});
 
 // ══════════ 소스 정책(#186) — 테이블 게이트 + 게이트1(마스킹-파생 차단) ══════════
 const policy = (over: Partial<SourcePolicy> = {}): SourcePolicy => ({

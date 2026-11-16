@@ -74,6 +74,18 @@ const FORBIDDEN_FUNCTIONS = new Set([
   "lo_export",
   "pg_sleep",
   "dblink",
+  // SQL 문장이나 테이블 이름을 **인자(문자열)** 로 받아 실행하는 함수 — 그 안에서 읽는 테이블은 AST 에 테이블로 남지 않아
+  //  테이블 게이트·마스킹 규칙이 닿지 않는다. 목록은 «아는 것» 일 뿐이다(확장이 더한 같은 부류는 못 막는다) —
+  //  db_query 실행 역할의 권한이 마지막 선이다.
+  "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema",
+  "cursor_to_xml", "cursor_to_xmlschema",
+  "table_to_xml", "table_to_xmlschema", "table_to_xml_and_xmlschema",
+  "schema_to_xml", "schema_to_xmlschema", "schema_to_xml_and_xmlschema",
+  "database_to_xml", "database_to_xmlschema", "database_to_xml_and_xmlschema",
+  "ts_stat", "ts_rewrite",
+  "dblink_exec", "dblink_connect", "dblink_connect_u", "dblink_open", "dblink_fetch", "dblink_send_query", "dblink_get_result",
+  // 서버 파일·대형 객체 읽기(pg_read_file 과 같은 부류)
+  "pg_read_binary_file", "pg_stat_file", "pg_ls_logdir", "pg_ls_waldir", "pg_ls_tmpdir", "lo_get", "loread",
 ]);
 // mysql AST 함수 차단(#715) — 주석 삽입(`SLEEP/**/(1)`) 등 정규식 우회 대비 2차 방어선.
 const MYSQL_FORBIDDEN_FUNCTIONS = new Set([
