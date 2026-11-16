@@ -2932,8 +2932,6 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
      --ink → --muted 한 단계만으로 이미 ΔL* 30 이라 갈린다(세션 줄의 --ink-sub → --muted 는 7 이라 흐림이 필요했다).
    호버·선택 때는 제 색을 되찾는다 — 손을 얹으면 «살아 있고 누를 수 있다» 가 먼저다. */
 .v2-pg-row.past .v2-pg-t .n { color: var(--muted); }
-/* #5522 홈 사이드바 카드 머리의 «초안» — 머리줄(13px 글자)에 맞춰 조금 작게. 이름이 길면 이름이 줄고 표시는 남는다(.pj-draft-tag flex:none). */
-.v2-pg-t .v2-pg-draft { height: 16px; padding: 0 5px; font-size: 10.5px; }
 .v2-pg-row.past:hover .v2-pg-t .n, .v2-pg-row.past.act .v2-pg-t .n { color: var(--ink); }
 .v2-pg.open > .v2-pg-row .v2-car { transform: rotate(90deg); }
 .v2-pg-row .v2-sums { min-width: 0; margin-left: 4px; }

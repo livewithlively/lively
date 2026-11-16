@@ -89,7 +89,6 @@ import { refreshUnread, startNotificationBanners, startUnreadWatch } from './not
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
 import { startBrowserHost } from './browser-host.js';   // #4993 AI 와 사람이 같이 쓰는 브라우저 — 게이트웨이 명령을 받는 자리
 import { NO_PROJECT_NAME, isSpentLoginSess, isCollectSessRow } from '../lib/proj-none.js';
-import { isDraftProj } from '../lib/proj-draft.js';   // #5522 — 사이드 줄의 프로젝트에 초안 표시를 싣는다(홈 카드 머리 «초안»)
 import { isLooseLivWork, livWorkName, livWorkNote, placeLivWork, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
@@ -2203,10 +2202,10 @@ function projectIdForRoute(route: string): number {
 }
 
 /** 소속 프로젝트 — **이름 하나**. 스페이스 › 리스트 계층은 좁은 줄에서 뒤가 잘려 읽히지 않아 걷었다(#1954). */
-function projectPath(id: number): { id: number; name: string; draft?: boolean } | null {
+function projectPath(id: number): { id: number; name: string } | null {
   if (!(id > 0)) return null;
   const p = data.projects.find((x) => Number(x.id) === id);
-  return { id, name: (p && p.name) || `프로젝트 #${id}`, draft: isDraftProj(p) };
+  return { id, name: (p && p.name) || `프로젝트 #${id}` };
 }
 
 /** 좌측 목록의 행 키 — 창·인스턴스·세션 중 무엇에서 왔든 **같은 대상이면 같은 한 행**으로 접힌다(#1883). */

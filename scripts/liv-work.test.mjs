@@ -132,8 +132,9 @@ ok(/if \(s && s\.task\) \{ icon = 'liv'; ask = livWorkNote\(s\.task\); livTitle 
   "W2 홈 줄 얼굴 — 워커는 리브 그림 · 이름 · 둘째 줄 · 묶음 표식을 싣는다");
 ok(/const sid = sideProjectId\(s\);\s*const p = sid \? last!\.data\.projects\.find\(\(x\) => x\.id === sid\) : null;/.test(SIDE) && /title: mark \? livWorkName\(s\.label, mark\) : t\.main,/.test(SIDE) && /icon: mark \? 'liv' : (bld \? 'buildsess' : )?'chat',/.test(SIDE) && /liv: isLooseLivWork\(s\),/.test(SIDE),
   "W3 카드 접힘 안의 줄(sessAsInst)도 같은 얼굴이다 — 홈 줄과 접힌 줄이 다른 말을 하지 않는다");
-ok(/c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME/.test(SIDE) && /g\.id \? undefined : \(s\) => isLooseLivWork\(s\) === g\.liv\)/.test(SIDE) && /glyph\(g\.id \? 'proj' : g\.liv \? 'liv' : 'projNone', 'v2-pg-ic'\)/.test(SIDE),
-  "W4 ★ 카드 — 리브 묶음 이름 · 리브 그림 · 접힘 재료를 둘로 가른다(프로젝트 카드는 거르지 않는다)");
+//  #5522(상민 2026-11-16) — 카드 머리 그림을 걷었다(«프로젝트 아이콘 빼. 너무 공간차지해»). 리브 묶음은 이름이 말한다.
+ok(/c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME/.test(SIDE) && /g\.id \? undefined : \(s\) => isLooseLivWork\(s\) === g\.liv\)/.test(SIDE) && !/'v2-pg-ic'/.test(SIDE),
+  "W4 ★ 카드 — 리브 묶음 이름 · 접힘 재료를 둘로 가른다(프로젝트 카드는 거르지 않는다) · 카드 머리엔 그림이 없다(#5522)");
 
 // ───────────────────────── R. 런타임 — 실제 side.ts 를 크롬에서 ─────────────────────────
 //   R1 프로젝트 없는 워커 줄은 「리브가 한 일」 카드에, 사람 세션은 「기타 (미분류)」 카드에 선다
@@ -198,8 +199,8 @@ else {
     ok(!!R.liv && R.liv.pin === false && R.liv.plus === false && R.liv.go === false && !!R.p5 && R.p5.pin === true && R.p5.go === true,
       "R2 리브 카드엔 압정 · ＋ · [→] 가 없다(프로젝트 카드엔 있다)", JSON.stringify([R.liv && [R.liv.pin, R.liv.plus, R.liv.go], R.p5 && [R.p5.pin, R.p5.go]]));
     const w1 = R.liv && R.liv.rows.find((r) => r[0] === "ROW-w1"), h1 = R.none && R.none.rows.find((r) => r[0] === "ROW-h1");
-    ok(!!w1 && !!h1 && !!w1[1] && w1[1] !== h1[1] && !!R.liv.headIc && R.liv.headIc !== R.none.headIc && R.liv.headIc !== R.p5.headIc,
-      "R3 워커 줄 · 리브 카드 머리는 다른 줄 · 다른 카드와 다른 그림(리브)이다");
+    ok(!!w1 && !!h1 && !!w1[1] && w1[1] !== h1[1] && !R.liv.headIc && !R.none.headIc && !R.p5.headIc,
+      "R3 워커 줄은 다른 줄과 다른 그림(리브)이다 · 카드 머리엔 그림이 없다(#5522 — 리브 카드는 이름이 말한다)");
     ok(!!R.liv && ["리브 작업 #9"].every((n) => names(R.liv).filter((x) => x === n).length === 2) && !names(R.liv).includes("PAST-ph1")
       && !!R.none && names(R.none).includes("PAST-ph1") && !names(R.none).some((n) => /리브 작업/.test(n)),
       "R4 ★★ 접힘 — 끝난 워커는 리브 카드에만(«리브 작업 #N» 이름으로), 끝난 사람 세션은 「기타」 카드에만", JSON.stringify([names(R.liv), names(R.none)]));

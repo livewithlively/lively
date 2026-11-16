@@ -538,10 +538,6 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-gh .pill { height: 26px; padding: 0 10px; border-radius: 999px; background: var(--bg-tint-2); display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
 .v2-sa-gh .n { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .v2-sa-gh .hc { font-size: 12.5px; font-weight: 600; color: var(--muted); }
-/* #5522 맨 아래 「초안」 묶음 — 목록 보기의 초안 묶음(.pjv-draft-pill · .pjv-draft-hint)과 같은 꼴 */
-.v2-sa-tail .pill { border: 1px dashed var(--muted-2); background: transparent; color: var(--muted); }
-.v2-sa-tail .hint { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 500; color: var(--muted-2); white-space: nowrap; text-overflow: ellipsis; }
-@media (max-width: 600px) { .v2-sa-tail .hint { display: none; } }
 /* 셸 [프로젝트] 사이드바 「초안」 줄 — 「기타 (미분류)」와 같은 흐린 톤 */
 .v2-ptl--draft { color: var(--muted); }
 .v2-sa-gh.flat { margin-top: 4px; }

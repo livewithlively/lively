@@ -72,7 +72,7 @@ import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
-import { DRAFT_HINT, DRAFT_LABEL, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 — 「초안」 줄 · 홈 카드 표시가 보드와 같은 잣대로 센다
+import { DRAFT_HINT, DRAFT_LABEL, DRAFTS_SHOWN_KEY, draftsShown, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 — 「초안」 줄 · 「초안 보기」 토글이 보드와 같은 잣대로 센다
 import { screenLangOn, setScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — «EN» 알약은 #5319 에서 걷었다(켜 둔 채 남은 것만 끈다)
 import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
@@ -335,7 +335,7 @@ export interface SideInstance {
   state?: string;
   meta?: string;
   /** 소속 프로젝트 — 이름 하나만. 스페이스 › 리스트 계층은 좁은 줄에서 읽히지 않아 걷었다(#1954). self=이 화면이 그 프로젝트다. */
-  project?: { id: number; name: string; self?: boolean; draft?: boolean } | null;
+  project?: { id: number; name: string; self?: boolean } | null;
   /** 이 행이 속한 묶음의 이름 — '지금 볼 것' 또는 날짜(오늘·어제·M월 D일). 목록은 이 순서로 나뉜다(#1954). */
   group?: string;
   /** 상태 점(#1954) — busy·waiting·done 만. 없으면 조용한 행이다. */
@@ -648,8 +648,6 @@ interface ProjGrp { key: string;
   pkey: string; now: boolean; fold: boolean;
   /** 「리브가 한 일」 묶음인가(#4551) — 프로젝트가 아니라 id 는 0 이다(압정 · ＋ · [→] 가 없다). */
   liv: boolean;
-  /** 초안 프로젝트의 카드인가(#5522) — 머리에 «초안» 표시. 나와 초대한 사람만 보는 프로젝트라는 것을 카드가 말한다. */
-  draft: boolean;
   id: number; name: string; bucket: string; rows: SideInstance[]; open: boolean; active: boolean; pinned: boolean; counts: Record<string, number>;
   /** 아직 안 끝난 줄 수 · 끝난 줄 수(#3778). 머리글이 «이 카드는 통째로 지난 것»을 말할 수 있어야 한다. */
   live: number; past: number;
@@ -708,7 +706,6 @@ function projGroups(rest: SideInstance[], searching: boolean, hold = true): Proj
     //  묶음 이름 = **첫 행의 묶음**. 목록이 이미 정렬돼 있으므로 첫 행이 곧 그 카드의 가장 급한 행이다.
     const first = c.rows[0];
     const g: ProjGrp = { key: c.key, pkey: c.pkey, now: c.now, fold: c.fold, liv: c.liv, id: c.id,
-      draft: !!c.id && !!(first.project && first.project.draft),
       name: c.id ? (first.project as { name: string }).name : c.liv ? LIV_BUCKET_NAME : NO_PROJECT_NAME,
       //  압정은 트리와 **같은 통**(PIN_KEY · 'p:<id>')을 본다 — 한 프로젝트에 압정 하나(#3778).
       bucket: first.group || '', rows: c.rows, open: false, active: false, pinned: !!c.id && isPinned(c.pkey), counts: {}, live: 0, past: 0,
@@ -817,19 +814,15 @@ function projGrpHead(g: ProjGrp): HTMLElement {
       //   접힘 상태가 편집 도중에 뒤집힌다. 첫 클릭의 접기는 그대로 둔다(단일 클릭 문법은 안 건드린다 — #2579 와 같은 처방).
       onclick: (e: MouseEvent) => { if (e.detail >= 2) return; toggleGrp(g.key, g.open, allPast); } },
       el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '\u203a' }),
-      //  #4233(원준 2026-10-04): 프로젝트 = 과녁. 펼침은 바로 앞의 꺾쇠가 말하므로 그림은 하나다. 「프로젝트 없음」은 점선 원.
-      g.id && isBuilderProjectName(g.name) ? icon('builder', 'v2-pg-ic') : glyph(g.id ? 'proj' : g.liv ? 'liv' : 'projNone', 'v2-pg-ic'),   // #4632 앱빌더 묶음은 앱빌더 그림
+      //  #5522(상민 2026-11-16 «사이드바 프로젝트 그룹 왼쪽에 프로젝트 아이콘 빼. 너무 공간차지해») — 머리 그림을 걷었다.
+      //   카드는 꺾쇠와 이름만으로 선다(#4233 의 과녁 · 「프로젝트 없음」 점선 원 · 리브 · 앱빌더 그림 모두). 초안 표시도 사이드바엔 없다.
       el('span', { class: 'n', text: g.name }),
-      //  #5522 초안 표시 — 이름 바로 뒤. 이름이 길면 이름이 줄고 표시는 남는다(CSS flex-shrink 0).
-      g.draft ? el('span', { class: 'pj-draft-tag v2-pg-draft', title: DRAFT_HINT, text: DRAFT_LABEL }) : null,
       //  ★접힌 카드에만 얼굴 합집합(#3778) — 펴면 줄이 제 얼굴을 들고 있으므로 여기선 걷는다(grpFaces 머리말).
       //   최대 셋까지 겹쳐 쌓고 그 위는 +N — 넷째부터는 얼굴보다 숫자가 빠르다.
       g.open ? null : grpFacesEl(g),
-      grpSums(g),
-      //  세션이 하나뿐인 묶음은 개수를 안 쓴다 — 접힌 줄 하나가 곧 그 하나다(위 grpSums 주석과 같은 사유).
-      //  ★ 줄이 하나도 안 선 카드(#3778 5판)는 **접힘 안 개수**를 대신 쓴다 — 그 카드의 내용이 그것뿐이라
-      //   여기 숫자가 없으면 «세션이 몇 개 있는지» 를 펴 봐야만 알 수 있다(원준 2026-09-12: "개수로라도 보여야").
-      headN > 1 ? el('span', { class: 'v2-cnt', text: String(headN) }) : null),
+      grpSums(g)),
+      //  #5522(상민 2026-11-16 «오른쪽에 세션 숫자 표시도 빼») — 머리 끝의 세션 수 칩을 걷었다. 수는 머리 툴팁(«세션 N»)에만 남는다.
+      //   (종전 #3778 5판 원준 2026-09-12 «개수로라도 보여야» — 줄이 하나도 안 선 카드의 접힘 안 개수 — 도 같이 걷혔다.)
     //  ★고정(#3778) — 카드째 맨 위로. 「프로젝트 없음」 묶음은 고정할 프로젝트가 없으므로 압정도 없다(트리와 같은 규율).
     g.id ? pinBtn(g.pkey, '위에 고정 — 이 프로젝트와 그 안의 세션을 통째로 맨 위로 올려 둡니다') : null,
     g.id ? newSessBtn(g.id) : null,
@@ -1679,7 +1672,7 @@ function sessAsInst(s: Sess, pastRow: boolean, group: string): SideInstance {
     icon: mark ? 'liv' : bld ? 'buildsess' : 'chat',
     meta: bld ? '앱빌딩 세션' + (t.sub ? ' · ' + t.sub : '') : (t.sub || when(s.lastSeen)),
     ask: mark ? livWorkNote(mark) : lastAsk(s),   // 둘째 줄 = 내 마지막 말(#2016 6차) — 홈 행과 같은 붓(appRowEl)이 그린다
-    project: p ? { id: p.id, name: p.name, draft: isDraftProj(p) } : null,   // #5522 — 카드 머리의 «초안» 표시
+    project: p ? { id: p.id, name: p.name } : null,
     liv: isLooseLivWork(s),
     group,
     status: st ? { key: st, label: stLabel(st) } : null,
@@ -2310,6 +2303,16 @@ function bindProjResize(): void {
   });
 }
 
+//  #5522 「초안 보기」 토글은 보드 액자 안에서 바뀐다 — 같은 출처라 storage 이벤트로 알고 수를 다시 센다.
+let draftToggleBound = false;
+function bindDraftToggle(): void {
+  if (draftToggleBound) return;
+  draftToggleBound = true;
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key === DRAFTS_SHOWN_KEY && last && (hooks.section?.() || 'home') === 'proj') redraw();
+  });
+}
+
 function renderProjects(): void {
   if (!last) return;
   const { host, data } = last;
@@ -2318,6 +2321,7 @@ function renderProjects(): void {
   if (navHost) { navHost.querySelector('.v2-side-nav')?.remove(); navHost.prepend(navEl); }
   loadFavLists();
   bindProjResize();
+  bindDraftToggle();
 
   const lists = (data.lists || []) as unknown as TreeList[];
   const folders = (data.folders || []) as unknown as TreeFolder[];
@@ -2326,10 +2330,11 @@ function renderProjects(): void {
   const openByList = new Map<number, number>();
   let noneN = 0;
   let draftN = 0;
+  //  #5522 — 「전체」 · 「기타」 · 리스트 수는 보드의 「초안 보기」 토글을 따른다(켜짐 = 초안도 센다, 기본). 「초안」 줄은 늘 초안 전부를 센다.
+  const showDrafts = draftsShown();
   for (const p of data.projects) {
     if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;
-    //  #5522 — 초안은 「초안」 줄만 센다(전체 · 기타 · 리스트 수에 넣지 않는다). 보드의 「기타」 스코프도 초안을 빼고 그린다(projects/board.ts).
-    if (isDraftProj(p)) { draftN++; continue; }
+    if (isDraftProj(p)) { draftN++; if (!showDrafts) continue; }
     if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
   }
   //  아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 사이드바에 없다 — 발치 도크 [아카이브]가 그 문이다(proj-cards 가 뺀다).
