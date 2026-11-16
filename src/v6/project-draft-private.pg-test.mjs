@@ -18,6 +18,7 @@
 //   V8  프로젝트 축을 끄면 초안도 전원에게 보인다
 //   V9  뷰어 id 에 따옴표 · 역슬래시가 있어도 판정이 깨지지 않는다(술어에 글자로 들어간다)
 //   V10 남의 초안의 태스크가 내게 배정돼 있어도 «내 할 일» 에 안 뜬다(배정은 열람 근거가 아니다)
+//   V11 지식 → «연결된 프로젝트» 역조회에 남의 초안(과 그 태스크)이 안 나온다
 //   R1  산출지식 연결 → 풀림 · 필요지식 연결 → 그대로
 //   R2  작업기록(프로젝트 · 태스크에 단 것) → 풀림 · 수집해 온 기록(external_id) → 그대로
 //   R3  코멘트(태스크에 단 것) → 뿌리 프로젝트가 풀림
@@ -174,6 +175,15 @@ try {
     await itemsPool.query(`INSERT INTO knowledge(name, title, body_md) VALUES($1,$1,'x') ON CONFLICT DO NOTHING`, [`${TAG}k1`]);
     await ps.linkProjectKnowledge(id, `${TAG}k1`, "required", ctxA);
     chk("R1 필요지식 연결은 초안 그대로(정리지 산출이 아니다)", (await draftOf(id)) === true);
+    {
+      // ★ 필요지식만 이은 초안은 풀리지 않는다 — 그 지식에서 «연결된 프로젝트» 를 거꾸로 훑어도 남에게 초안 제목이 나가면 안 된다(격리 리뷰).
+      const ids = async (viewer) => (await ps.projectsForKnowledge(`${TAG}k1`, viewer)).map((r) => r.project_id);
+      chk("V11 ★지식 → 연결된 프로젝트: 남에게는 초안이 안 나온다", !(await ids(B)).includes(id), JSON.stringify(await ids(B)));
+      chk("V11b 만든 사람 · 특권 · 뷰어 미지정에게는 나온다(판정이 공허하지 않다)", (await ids(A)).includes(id) && (await ids(null)).includes(id) && (await ids(undefined)).includes(id));
+      const tk = (await ps.createTask({ projectId: id, name: `${TAG} 세션 태스크`, name_source: "session" }, ctxA)).id;
+      await ps.linkProjectKnowledge(tk, `${TAG}k1`, "required", ctxA);
+      chk("V11c ★초안의 태스크에 이은 지식으로도 남에게 안 나온다(뿌리 프로젝트로 판정)", !(await ids(B)).includes(tk) && (await ids(A)).includes(tk));
+    }
     await ps.linkProjectKnowledge(id, `${TAG}k1`, "produced", ctxA);
     chk("R1b ★산출지식 연결 → 풀린다", (await draftOf(id)) === false);
     chk("R10 풀리면 곧바로 남에게 보인다 — 단건 · «숨은 프로젝트» 에서 빠짐", (await vis.canSeeProjectRow(id, B)) && !(await vis.hiddenProjects(B)).ids.has(id));

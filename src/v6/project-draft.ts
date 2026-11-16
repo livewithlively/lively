@@ -76,7 +76,7 @@ const SUBSTANTIVE_DRAFTS_SQL = `
   files AS (
     SELECT DISTINCT split_part(split_part(external_id, '/', 1), ':', 2) AS pid
       FROM source
-     WHERE external_system = 'local' AND external_id LIKE 'project:%/%'
+     WHERE kind = 'local_file' AND external_system = 'local' AND external_id LIKE 'project:%/%'
        AND fields->>'entry' = '${ENTRY_GENERATED}'
   )
   SELECT p.id AS root FROM project p JOIN d ON d.id = p.id WHERE p.list_id IS NOT NULL
