@@ -1166,11 +1166,16 @@ export async function unlinkProjectEdge(fromId: number, toId: number, relation: 
 
 // 역방향 조회 — 이 지식을 필요(required)/산출(produced)로 연결한 프로젝트 목록(위키 상세 '연결된 프로젝트').
 //  보드 앵커(__board_anchor__) 숨김 프로젝트는 제외. relation·이름 순.
-export async function projectsForKnowledge(name: string): Promise<{ project_id: number; project_name: string; status: string; relation: string }[]> {
+//  ⚠ viewer(#5522 격리 리뷰) — 이 조회는 프로젝트 **이름**을 돌려준다. 공개범위를 안 걸면 지식 이름 하나로 잠긴 리스트의 프로젝트와
+//   남의 초안(필요지식만 이은 초안은 풀리지 않는다)의 제목이 그대로 나간다. 연결은 태스크에도 걸리므로 뿌리 프로젝트로 판정한다.
+//   undefined = 필터 없음(내부 경로) · 그 밖은 그 신원으로 건다(#1291 규약).
+export async function projectsForKnowledge(name: string, viewer?: Viewer): Promise<{ project_id: number; project_name: string; status: string; relation: string }[]> {
+  const pv = viewer === undefined ? PROJECT_VIS_ALL : await projectVisFor(viewer);
   const rows = await q(itemsPool,
     `SELECT pk.project_id, pk.relation, p.name AS project_name, p.status
      FROM project_knowledge pk JOIN project p ON p.id=pk.project_id
      WHERE pk.name=$1 AND p.folder IS DISTINCT FROM '__board_anchor__'
+       AND ${projectVisPredicate(PROJECT_ROW_LIST_ID_SQL, PROJECT_ROW_ROOT_ID_SQL, pv)}
      ORDER BY pk.relation, lower(p.name)`, [name]);
   return rows.map((r) => ({ project_id: Number(r.project_id), project_name: r.project_name, status: r.status, relation: r.relation }));
 }

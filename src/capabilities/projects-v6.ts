@@ -1197,7 +1197,8 @@ const knowledgeProjectsV6: Capability = {
   handler: async (input: KnowledgeProjectsV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     //  #5100 — 앱 맥락 범위 밖 지식의 이름으로 연결 프로젝트를 훑지 못하게(공개범위로는 보이는데 범위 밖이면 거절 + 기록 · 그 밖은 종전 그대로).
     await assertKnowledgeInAppContext(input.name, ctx?.viewer ?? null, user, ctx, "knowledge_projects_v6");
-    return { projects: await projectsForKnowledge(input.name) };
+    //  #5522 — 프로젝트 이름이 나가는 조회다. 요청자에게 안 보이는 프로젝트(잠긴 리스트 · 남의 초안)는 뺀다.
+    return { projects: await projectsForKnowledge(input.name, ctx?.viewer ?? null) };
   },
 };
 
@@ -1609,14 +1610,19 @@ const projectFindByOriginV6: Capability = {
         return { git_url: gitUrl };
       } }],
   },
-  handler: async (input: ProjectFindByOriginV6Input) => {
+  handler: async (input: ProjectFindByOriginV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
     const key = originKey(input.git_url);
     if (!key) {
       // fail-closed — 해석 못 한 URL 로 남의 프로젝트에 붙이지 않는다. 후보 0 이 '새로 만들라'는 뜻은 아니다.
       return { origin_key: null, candidates: [], total: 0, active_total: 0, discriminating: false,
         note: "git origin URL 을 해석할 수 없습니다 — 이 신원으로는 기존 프로젝트를 찾을 수 없습니다(후보 없음 ≠ 새로 만들어도 됨)." };
     }
-    const all = await findProjectsByOriginKey(key);
+    // #5522(격리 리뷰) — 후보는 프로젝트 번호 · 이름을 싣는다. 요청자에게 안 보이는 프로젝트(잠긴 리스트 · 남의 초안)는 후보가 아니다 —
+    //  거기 붙일 수도 없고(세션 붙이기가 같은 판정으로 막는다), 이름만 새어 나간다.
+    const found = await findProjectsByOriginKey(key);
+    const pv = ctx?.viewer != null ? await projectVisFor(ctx.viewer) : null;
+    const all: typeof found = [];
+    for (const c of found) if (!pv || (await canSeeProjectRowVis(c.project_id, pv))) all.push(c);
     const active = all.filter((c) => c.status !== "done");
     // ⚠ **origin 은 '멤버 간 합의 가능한 값'이지 '프로젝트를 특정하는 값'이 아니다** — 레포↔프로젝트는 N:M 이다.
     //  실측(2026-07-16, 라이블리 박스): `context-ontology` 한 레포에 프로젝트 156개(활성 37개)가 달려 있다(모노레포).
@@ -1680,6 +1686,7 @@ const projectBindFolderV6: Capability = {
   },
   handler: async (input: ProjectBindFolderV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     if (!(await getProjectRow(input.id))) throw new HttpError(404, `프로젝트 #${input.id} 가 없습니다`);
+    await assertProjectVisible(input.id, ctx);   // #5522 — 안 보이는 프로젝트는 없는 것과 같은 404(번호로 존재를 가늠하지 못하게)
     const me = ctx?.actor ?? user?.userId ?? null;
     if (!me) throw new HttpError(401, "바인딩은 인증된 멤버만 등록할 수 있습니다");
     await upsertProjectFolderBinding({
