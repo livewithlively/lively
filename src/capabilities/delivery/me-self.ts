@@ -240,9 +240,11 @@ export const meSelfCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const { getHarnessSnapshots, getHarnessLocalPref, getHarnessMachineAlias, getLocalModePreferences, getLocalScopePreferences, DEFAULT_RECORD_SCOPE } = await import("../../org/store.js");
-      const [assets, hooks, prefs, snaps, localPref, aliases, modePrefs, scopePrefs] = await Promise.all([
+      const { getHarnessSnapshots, getHarnessLocalPref, getHarnessMachineAlias, getLocalModePreferences, getLocalScopePreferences, getOrgRecordScope, localScopeView } = await import("../../org/store.js");
+      const [assets, hooks, prefs, snaps, localPref, aliases, modePrefs, scopePrefs, orgScope] = await Promise.all([
         listOrgHarnessAssets().then(effectiveAssets), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId), getHarnessMachineAlias(userId), getLocalModePreferences(userId), getLocalScopePreferences(userId),
+        //  조직 기록 범위를 못 읽어도 이 화면(스킬·훅)은 떠야 한다 — 그땐 기록 범위 칸만 «못 읽음» 으로 둔다.
+        getOrgRecordScope().catch(() => null),
       ]);
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
@@ -267,8 +269,8 @@ export const meSelfCapabilities: Capability[] = [
           }));
           return { machine_id: machineId, host: snap.host ?? null, alias: aliases[machineId] ?? null, harness: snap.harness ?? null, at: snap.at ?? null,
             default_mode: snap.default_mode ?? "normal", mode_pref: modePrefs[machineId] ?? null,
-            // #5016 기록 범위 — 저장이 없는 머신은 기본값(작업 폴더에서만 · 빈 목록)으로 보여 준다(그게 실제로 그 컴퓨터가 받는 값이다).
-            scope_pref: scopePrefs[machineId] ?? { scope: DEFAULT_RECORD_SCOPE, work_roots: [], updated_at: "" }, assets: list };
+            // #5016 기록 범위 — 그 컴퓨터가 실제로 받는 유효 값(조직 값 위에 이 컴퓨터 오버라이드). 줄마다 출처(조직·이 컴퓨터)와 켜짐이 붙는다.
+            scope_pref: orgScope ? localScopeView(orgScope, scopePrefs[machineId] ?? null) : null, assets: list };
         })
         .sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")); // 최근 관측 머신 먼저
       return { lively, machines };
@@ -287,35 +289,37 @@ export const meSelfCapabilities: Capability[] = [
     },
     false, { machine_id: z.string() }),
 
-  // ── 기록 범위(#5016) — 컴퓨터별 «작업 폴더에서만(기본) | 어디서나» + 작업 폴더 목록 ──
+  // ── 기록 범위(#5016) — 방식은 조직(관리자)이 정하고, 컴퓨터마다 목록만 덮어쓴다 ──
   //  세션 시작 훅이 매 세션 GET 으로 받아 ~/.lively/record-scope.json 에 굳힌다(작업 폴더 밖 세션도 이 조회는 한다 —
   //  세션 id·폴더·대화는 안 싣는다). kit_version 을 함께 주는 건 범위 밖 세션도 키트 자가 업데이트를 띄우게 하려는 것이다.
+  //  preference 는 **유효 값**이다(store/record-scope.ts localScopeView) — scope·work_roots 는 옛 키트가 읽는 이름 그대로 둔다.
   restRead("me_local_scope_get", "이 컴퓨터의 기록 범위 조회",
-    "이 머신의 기록 범위(work_folders=작업 폴더에서만 · anywhere=어디서나)와 작업 폴더 목록. 저장이 없으면 기본값(work_folders · 빈 목록). 세션 시작 훅이 매 세션 당겨 로컬 사본으로 굳힌다.",
+    "이 머신의 유효 기록 범위 — 방식(scope: work_folders=작업 폴더에서만·기본 꺼짐 / anywhere=어디서나·기본 켜짐, 조직이 정함)과 " +
+    "유효 허용 목록(work_roots)·유효 제외 목록(exclude_roots), 줄마다 출처(조직·이 컴퓨터)와 켜짐(entries). 세션 시작 훅이 매 세션 당겨 로컬 사본으로 굳힌다.",
     [{ method: "GET", paths: ["/api/ui/me/local-scope"], parse: (req) => ({ machine_id: req.query?.machine_id }) }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const machineId = str(input.machine_id ?? "", "machine_id", 64).trim();
       if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
-      const { getLocalScopePreference } = await import("../../org/store.js");
+      const { getLocalScopePreference, getOrgRecordScope, localScopeView } = await import("../../org/store.js");
       const { kitVersion } = await import("../../org/delivery/publish.js");
-      const [preference, kv] = await Promise.all([getLocalScopePreference(userId, machineId), kitVersion().catch(() => null)]);
-      return { machine_id: machineId, preference, kit_version: kv };
+      const [pref, org, kv] = await Promise.all([getLocalScopePreference(userId, machineId), getOrgRecordScope(), kitVersion().catch(() => null)]);
+      return { machine_id: machineId, preference: localScopeView(org, pref), kit_version: kv };
     },
     false, { machine_id: z.string() }),
 
-  restRead("me_local_scope_set", "이 컴퓨터의 기록 범위 설정",
-    "웹·`lively scope`·`lively work-root`(·/lively-connect)가 특정 머신의 기록 범위와 작업 폴더를 바꾼다. scope(work_folders|anywhere)·work_roots(통째 교체)·add·remove(낱개) 중 필요한 것만. 열려 있는 세션은 그 컴퓨터의 다음 세션 시작 때 받아 간다(CLI 로 바꾸면 그 컴퓨터엔 즉시).",
+  restRead("me_local_scope_set", "이 컴퓨터의 기록 범위 목록 바꾸기",
+    "웹·`lively work-root`(·/lively-connect·/lively-disconnect)가 특정 머신의 목록을 바꾼다 — 방식(scope)은 조직 관리자가 정해 여기서 못 바꾼다(보내도 무시). " +
+    "허용 목록: work_roots(이 컴퓨터 줄 통째 교체)·add·remove · 제외 목록: exclude_roots·exclude_add·exclude_remove. " +
+    "조직 줄을 remove 하면 이 컴퓨터에서만 끄고, 끈 조직 줄을 add 하면 다시 켠다. 열려 있는 세션은 그 컴퓨터의 다음 세션 시작 때 받아 간다(CLI 로 바꾸면 그 컴퓨터엔 즉시).",
     [{ method: "POST", paths: ["/api/ui/me/local-scope"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const machineId = str(input.machine_id ?? "", "machine_id", 64).trim();
       if (!machineId) throw new HttpError(400, "machine_id 가 필요합니다");
-      const { updateLocalScopePreference, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN } = await import("../../org/store.js");
-      const scope = input.scope === undefined ? undefined : str(input.scope, "scope", 16).trim();
-      if (scope !== undefined && scope !== "work_folders" && scope !== "anywhere") throw new HttpError(400, "scope 는 work_folders|anywhere 만 허용됩니다");
+      const { updateLocalScopePreference, getOrgRecordScope, localScopeView, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN } = await import("../../org/store.js");
       const list = (k: string): string[] | undefined => {
         const v = input[k];
         if (v === undefined) return undefined;
@@ -323,10 +327,26 @@ export const meSelfCapabilities: Capability[] = [
         if (v.length > MAX_WORK_ROOTS) throw new HttpError(400, `${k} 는 ${MAX_WORK_ROOTS}개까지입니다`);
         return v.map((x, i) => str(x, `${k}[${i}]`, MAX_WORK_ROOT_LEN).trim()).filter(Boolean);
       };
-      const change = { scope: scope as "work_folders" | "anywhere" | undefined, work_roots: list("work_roots"), add: list("add"), remove: list("remove") };
-      if (change.scope === undefined && !change.work_roots && !change.add && !change.remove) throw new HttpError(400, "바꿀 값(scope·work_roots·add·remove)이 없습니다");
-      try { return { machine_id: machineId, preference: await updateLocalScopePreference(userId, machineId, change) }; }
+      //  scope 는 받고 버린다 — 옛 키트(`lively scope anywhere`)가 남긴 못 올린 변경에 실려 올 수 있다. 400 으로 거절하면
+      //   같은 묶음의 폴더 변경까지 영영 못 올라간다(키트는 묶음째 다시 보낸다). 무시했다는 사실은 응답에 남긴다.
+      const scopeIgnored = input.scope !== undefined;
+      const change = {
+        work_roots: list("work_roots"), add: list("add"), remove: list("remove"),
+        exclude_roots: list("exclude_roots"), exclude_add: list("exclude_add"), exclude_remove: list("exclude_remove"),
+      };
+      const org = await getOrgRecordScope();
+      if (!Object.values(change).some((v) => v !== undefined)) {
+        //  scope 만 온 것(옛 키트의 pending)도 200 으로 지금 값을 돌려준다 — 그래야 그 키트가 pending 을 걷는다(안 그러면 매 세션 다시 보낸다).
+        if (scopeIgnored) {
+          const { getLocalScopePreference } = await import("../../org/store.js");
+          return { machine_id: machineId, preference: localScopeView(org, await getLocalScopePreference(userId, machineId)), scope_ignored: true };
+        }
+        throw new HttpError(400, "바꿀 값(work_roots·add·remove·exclude_roots·exclude_add·exclude_remove)이 없습니다");
+      }
+      let pref;
+      try { pref = await updateLocalScopePreference(userId, machineId, change, org); }
       catch (e) { throw new HttpError(400, (e as Error).message); }
+      return { machine_id: machineId, preference: localScopeView(org, pref), ...(scopeIgnored ? { scope_ignored: true } : {}) };
     }),
 
   restRead("me_local_mode_set", "이 컴퓨터의 라이블리 연결 기본값 설정",

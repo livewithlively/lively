@@ -101,7 +101,13 @@ export function openWsSettings(w: WsRowLike): void {
     try {
       if (primary && nameChanged) {
         //  primary 이름 = 조직 이름. 워크스페이스 축이 아니라 조직 프로필이 정본이다(admin 전용).
-        await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ name: newName }) });
+        //  #5524 — 표시명(display_name)도 함께 바꾼다. 제품이 조직을 부르는 이름은 «표시명, 없으면 이름» 이라
+        //   (레일 · 대화 머리말 · 알림 · 등록부 primary 행이 모두 이 규칙), name 만 바꾸면 표시명이 있는 박스에선
+        //   저장해도 아무 데도 안 바뀐다(신고 2026-11-11 «저장 눌러도 그대로»). 등록부 행은 서버가 따라 맞춘다.
+        //  ⚠ 셀프호스트에서만 — 매니지드는 CP 가 이름의 정본이고 name 으로만 맞춘다(provisioner · renameWorkspace).
+        //   거기서 표시명을 박아 두면 이후 CP 이름 변경이 표시명에 가려 영영 안 보인다.
+        const body = managedWorkspaces() ? { name: newName } : { name: newName, display_name: newName };
+        await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify(body) });
       }
       if ((!primary && nameChanged) || faceChanged) {
         await saveWorkspaceSettings(w.slug, {

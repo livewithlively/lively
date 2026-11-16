@@ -37,8 +37,9 @@ export declare function createLivelyDb<TSchema extends Record<string, unknown> =
 
 /** Express·Connect 미들웨어 — 그 요청 안의 DB 호출이 들어온 사람 신원(X-Lively-Identity)을 싣는다. */
 export declare function livelyIdentity(): (req: { headers: Record<string, string | string[] | undefined> }, res: unknown, next: () => void) => void;
-/** 이 요청의 사람(앱 서버 함수 앞 검사 층이 붙인 머리글을 풀어서) — 없으면 null. 라이블리 앱 서버 함수 안에서만 믿을 수 있다. */
-export declare function livelyMember(req: { headers: Record<string, string | string[] | undefined> | { get(name: string): string | null } }): { id: string; name: string; variant: "pub" | "draft"; job: number | null } | null;
+/** 이 요청의 사람(앱 서버 함수 앞 검사 층이 붙인 머리글을 풀어서) — 없으면 null. 라이블리 앱 서버 함수 안에서만 믿을 수 있다.
+ *  job = 백그라운드 작업이면 그 작업 번호 · jobSource = 그 작업을 시작한 자리(app-ui · app-front · mcp · web · app-server · app-job · mcp-tool — 작업이 아니거나 옛 검사 층이면 null). */
+export declare function livelyMember(req: { headers: Record<string, string | string[] | undefined> | { get(name: string): string | null } }): { id: string; name: string; variant: "pub" | "draft"; job: number | null; jobSource: string | null } | null;
 
 /** 백그라운드 작업 하나(#4486) — 끝 상태 done(라우트가 2xx) · failed · canceled. result 는 라우트 응답의 앞 64KB. */
 export interface LivelyJob {

@@ -17,6 +17,9 @@ export const IPC = {
   APPLY_UPDATE: "lively:apply-update", // 받아 둔 업데이트를 지금 적용 — 앱이 스스로 닫고·설치하고·다시 뜬다(update-policy 머리말)
   CLEANUP_STALE: "lively:cleanup-stale", // Windows: 다른 자리에 남은 옛 설치본 제거 + 바로가기·자동시작을 이 버전으로(win-stale-install.mjs)
   OPEN_APP: "lively:open-app",         // 라이블리 화면(웹 UI 창)을 연다 — 마법사의 '라이블리 열기'. 준비 안 됐으면 메인이 거절한다
+  // 시작 카드의 [라이블리 클라우드로 로그인](#5430·#5520) — 앱 창에 계정 로그인 화면을 싣는다. 인자 없음.
+  //  셀프호스팅 갈래(SET_GATEWAY)와 나란히 있어야 한다: 시작하자마자 클라우드 로그인으로 직행하면 주소 입력 입구가 사라진다.
+  ACCOUNT_LOGIN: "lively:account-login",
   // 주소칸을 **타이핑하는 동안** 메인이 되비쳐 주는 값(#2044) — { url, cmd, error, hint }. 문자열 하나를 받아
   //  문자열들을 돌려줄 뿐 아무것도 실행하지 않는다. 렌더러가 정규화 규칙을 따로 적으면 정본이 둘이 되고,
   //  그 순간 "미리보기엔 되는데 [연결]은 안 되는" 상태가 생긴다 — 판단은 메인에만 둔다.

@@ -897,10 +897,21 @@ async function pollPersonFeed(gw, headers, gen) {
 // 게이트웨이가 서빙하는 /ui/ 를 **그대로** 싣는다 — 화면 코드를 앱에 두지 않는다. 앱이 보태는 건 토큰 주입(preload/web.cjs)·
 //  창 열기 규칙(같은 출처=앱 안 새 창, 바깥=브라우저)·401 감지(토큰 거부→마법사) 셋뿐이다.
 /** 사람이 '창 열기' 를 눌렀을 때 — 갖춰졌으면 라이블리 화면, 아니면 마법사(할 일이 있다). */
+//  ★ 준비 전이면 **마법사의 시작 카드**다(#5520). #5430 이 여기서 곧장 클라우드 계정 로그인 화면을 띄웠더니
+//   시작 카드의 «회사에 직접 설치했어요 — 주소 입력» 갈래가 화면에서 사라져 셀프호스팅 사용자가 로그인할 길이 없어졌다.
+//   클라우드 계정 로그인은 시작 카드의 [라이블리 클라우드로 로그인](openAccountLogin)이 연다 — 두 갈래를 나란히 둔다.
 function showMain() {
   if (state.ready) return showApp().ok ? appWin : showWindow();
-  selectedGatewayUrl = cloudUrl();
-  return showApp().ok ? appWin : showWindow();
+  return showWindow();
+}
+/** 시작 카드의 클라우드 갈래 — 앱 창에 계정 로그인 화면(cloud /login)을 싣는다. 로그인 뒤 흐름은 #5430 그대로. */
+function openAccountLogin() {
+  let cloud;
+  try { cloud = cloudUrl(); } catch (e) { return { ok: false, error: e.message }; }   // 개발용 덮어쓰기(env)의 형식 오류
+  selectedGatewayUrl = cloud;
+  const r = showApp();
+  if (r.ok && win && !win.isDestroyed()) win.hide();   // 창 두 개를 겹쳐 두지 않는다(마법사는 트레이에서 다시 열린다)
+  return r;
 }
 function showApp() {
   if (!state.ready && selectedGatewayUrl !== cloudUrl()) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
@@ -1537,6 +1548,10 @@ async function onboard(url) {
   if (advice.error) return { ok: false, error: advice.error };
   try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
   const gw = advice.url;
+  // 셀프호스팅 갈래를 골랐다 — 앞서 클라우드 갈래를 눌러 봤어도 앱 창은 이 게이트웨이를 싣는다(#5520).
+  //  안 지우면 설치를 마친 뒤 '라이블리 열기' 가 이 회사 주소가 아니라 클라우드 로그인 화면을 연다.
+  //  (클라우드 계정에 이미 로그인돼 있으면 refreshState 가 종전대로 계정 화면을 다시 고른다.)
+  if (selectedGatewayUrl === cloudUrl() && !state.accountLoggedIn) selectedGatewayUrl = null;
 
   const c = await ensureCli({ url: gw, cloud: false });
   if (!c.ok) return c;
@@ -1625,6 +1640,7 @@ ipcMain.handle(IPC.CHECK_UPDATE, async () => { await checkUpdates(); return { ok
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
 ipcMain.handle(IPC.OPEN_APP, () => showApp());
+ipcMain.handle(IPC.ACCOUNT_LOGIN, () => openAccountLogin());
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // ── 웹 UI 창 채널(IPC_WEB) — 원격 페이지 쪽 다리. 보내는 프레임이 **게이트웨이 출처**일 때만 답한다(다른 사이트가 이 창에
 //  실렸다면 토큰도, 로그아웃도 주지 않는다). preload/web.cjs 도 출처를 한 번 더 본다(양쪽 방어).

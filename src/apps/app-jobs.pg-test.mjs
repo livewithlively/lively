@@ -3,7 +3,7 @@
 //
 // 왜 이 계층인가: 이 설계의 약속 — 한 번만 시작(claim) · 끝은 한 번 · 동시 상한 안에서만 부름 · 대기 · 하루 상한을 동시에 와도 넘지 않음 ·
 //  돌기 신원은 도는 동안만 · 다시 부르면 옛 비밀은 못 씀 — 이 전부 **SQL 한 문장의 조건**이다. 가짜 저장소로는 조건을 지워도 초록이다.
-//  사양 엣지 표 C(spec-4486.md) C1~C16. Lambda 는 메모리 속 가짜(invokeAsync 를 적는다)다.
+//  사양 엣지 표 C(spec-4486.md) C1~C16 · S1~S2 작업을 시작한 자리(source — 검사 층이 x-lively-job-source 로 넘긴다). Lambda 는 메모리 속 가짜(invokeAsync 를 적는다)다.
 import "../../scripts/test-apps-root.mjs";
 import pg from "pg";
 
@@ -110,8 +110,8 @@ try {
   // ── C2 시작 확인 왕복 ──
   const c2 = await claimOf(j1.id);
   const r2 = await jobRow(j1.id);
-  chk("C2 시작 확인 — running · 돌기 신원 · 사람(이름) · 판 · 시간 · 박동 간격", c2.job === j1.id && parseJobCredential(c2.run)?.kind === "run" && c2.member === "pgt-alice" && c2.member_name === "앨리스"
-    && c2.variant === "pub" && c2.timeout_s === 900 && c2.tick_s === 20 && r2.status === "running" && r2.claimed_at && r2.run_hash, JSON.stringify(c2));
+  chk("C2 시작 확인 — running · 돌기 신원 · 사람(이름) · 판 · 시간 · 박동 간격 · 시작한 자리(앱 서버가 시작 — app-server)", c2.job === j1.id && parseJobCredential(c2.run)?.kind === "run" && c2.member === "pgt-alice" && c2.member_name === "앨리스"
+    && c2.variant === "pub" && c2.timeout_s === 900 && c2.tick_s === 20 && c2.source === "app-server" && r2.status === "running" && r2.claimed_at && r2.run_hash, JSON.stringify(c2));
   const again = await errOf(claimOf(j1.id));
   chk("C2b 같은 비밀로 다시(재전송 · AWS 중복 전달) → 409 claimed", again?.status === 409 && again?.body?.reason === "claimed", `${again?.status} ${JSON.stringify(again?.body)}`);
   const forged = await errOf(svc.onJobClaim(j1.id, svc.jobCallerOf(tokUser("notes")), "x".repeat(43)));
@@ -554,6 +554,41 @@ try {
   }
   chk("U3 칸이 없을 때 — 표시 읽기 false · 작업 안의 다음 작업은 된다 · 표시를 달 작업만 42703 · 행 없음", rollRead === false && rollChild?.id > 0 && rollMarked?.code === "42703" && rollN === 0,
     JSON.stringify({ rollRead, rollChild, code: rollMarked?.code, rollN }));
+
+  // ── S 작업을 시작한 자리(source) — 화면 두 입구가 적는 값(진짜 입구로) · 시작 확인이 행의 값을 그대로 돌려준다(검사 층이 앱에 x-lively-job-source 로 넘긴다) ──
+  await resetJobs();
+  const { appToolCallCapabilities } = await import(`${D}/capabilities/app-tool-call.js`);
+  const { handleAppFrontApi } = await import(`${D}/apps/app-front-api.js`);
+  const { appFrontLiveDepsForTest } = await import(`${D}/apps/app-front-routes.js`);
+  const { getApp } = await import(`${D}/org/store/apps.js`);
+  const { getMember } = await import(`${D}/org/store/members.js`);
+  //  라이블리 화면 안의 앱 — lively.jobs.start → 호스트 다리 → POST /api/ui/apps/notes/tool-call(org_app_tool_call → runAppTool «app-ui»).
+  const bridge = appToolCallCapabilities.find((c) => c.name === "org_app_tool_call");
+  const sUi = (await bridge.handler({ app_id: "notes", name: "app_job_start", arguments: { route: "/api/jobs/run", body: { s: 1 } } }, person()))?.result;
+  //  앱 주소로 연 앱 화면 — lively.jobs.start(맨몸 SDK → POST /_lively/tools/app_job_start) · POST /_lively/jobs → runAppTool «app-front».
+  const frontIn = { act: { var: "pub" }, tenant: { slug: "ws" }, member: await getMember("pgt-alice"), app: await getApp("notes"), method: "POST", env: process.env };
+  const sFrontTool = await handleAppFrontApi({ ...frontIn, rawPath: "/tools/app_job_start", body: { route: "/api/jobs/run", body: { s: 2 } } }, appFrontLiveDepsForTest().api);
+  const sFrontJobs = await handleAppFrontApi({ ...frontIn, rawPath: "/jobs", body: { route: "/api/jobs/run", body: { s: 3 } } }, appFrontLiveDepsForTest().api);
+  const srcOf = async (id) => (id ? (await jobRow(id))?.source : undefined);
+  chk("S1 화면 두 입구의 작업 행 — 라이블리 화면 안(다리) app-ui · 앱 주소(/_lively/tools · /_lively/jobs) app-front",
+    (await srcOf(sUi?.id)) === "app-ui" && sFrontTool.status === 200 && (await srcOf(sFrontTool.json?.id)) === "app-front"
+      && sFrontJobs.status === 200 && (await srcOf(sFrontJobs.json?.id)) === "app-front",
+    JSON.stringify({ sUi, sFrontTool, sFrontJobs }).slice(0, 800));
+  //  시작 확인은 행의 값을 그대로 — 한 작업씩(받기 → 가짜 부르기 → 시작 확인 → 끝). 옛 행(source 없음)은 null.
+  await resetJobs();
+  const claimedSrc = {};
+  for (const [label, user, ctx] of [["app-ui", uiUser("notes"), {}], ["app-front", uiUser("notes"), { source: "app-front" }], ["mcp", person(), { source: "mcp" }], ["web", person(), { source: "web" }]]) {
+    const j = await svc.startAppJob({ app_id: "notes", route: "/api/jobs/run" }, user, ctx, deps);
+    const c = await claimOf(j.id);
+    claimedSrc[label] = c.source;
+    await finish(j.id, undefined, c.run);
+  }
+  const oldRow = await svc.startAppJob({ app_id: "notes", route: "/api/jobs/run" }, person(), { source: "mcp" }, deps);
+  await q(`UPDATE org_app_job SET source = NULL WHERE id=$1`, [oldRow.id]);
+  const cOld = await claimOf(oldRow.id);
+  chk("S2 시작 확인의 source = 작업 행의 값(app-ui · app-front · mcp · web) · 옛 행(source 없음)은 null(칸은 있다)",
+    JSON.stringify(claimedSrc) === JSON.stringify({ "app-ui": "app-ui", "app-front": "app-front", mcp: "mcp", web: "web" }) && "source" in cOld && cOld.source === null,
+    JSON.stringify({ claimedSrc, old: cOld }));
 } catch (e) {
   fail++;
   console.error("시험 도중 예외:", e);
