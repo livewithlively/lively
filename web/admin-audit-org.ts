@@ -19,11 +19,13 @@ const OA_ENTITY_LABELS: any = {
   org_runtime_config: '런타임 설정', org_connector: '자료 가져오기(레거시)', org_collector: '수집기', org_mcp_server: '외부 도구 서버(MCP)',
   org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
   org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
+  org_transfer: '워크스페이스 옮기기',
 };
 
 // op=revoke 는 auth_token 만 쓴다(org/store.ts) — 그래서 '접속 해제'로 못박는다. 언마스크 권한 철회는
 //  op=update 로 감사되므로 이 라벨과 섞이지 않는다(#859).
-const OA_OP_LABELS: any = { insert: '생성', update: '수정', delete: '삭제', revoke: '접속 해제', mint: '발급', reorder: '순서변경' };
+const OA_OP_LABELS: any = { insert: '생성', update: '수정', delete: '삭제', revoke: '접속 해제', mint: '발급', reorder: '순서변경',
+  export: '내보내기', import_plan: '가져오기 미리보기', import_apply: '가져오기 적용', import_undo: '가져오기 되돌리기' };
 
 const OA_CHANNEL_LABELS: any = { mcp: '에이전트(MCP)', web: '웹 관리탭', connector: '자료 수집기', cli: 'CLI', migration: '마이그레이션', unknown: '미상' };
 

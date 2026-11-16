@@ -71,6 +71,8 @@ export const ADMIN_AUDIT_ENTITIES = [
   "org_member", "auth_token", "org_profile", "org_section",
   "org_runtime_config", "org_connector", "org_collector", "org_collector_preset", "org_classifier", "org_manager", "org_mcp_server", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref",
   "org_db_source", "org_db_table_policy", "org_db_column_mask",
+  // #5458 워크스페이스 간 옮기기 — 누가 무엇을 내보내고 들였는지(지식이 워크스페이스 밖으로 나가는 경로라 관리 감사에 둔다).
+  "org_transfer",
 ] as const;
 
 export interface ContentAuditRow {

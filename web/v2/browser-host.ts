@@ -7,7 +7,7 @@
 //   알림 스트림(live-sync)처럼 숨으면 끊는 규칙을 여기 쓰면 창을 닫는 순간 AI 의 브라우저가 사라진다.
 //   실측: 숨은 창·최소화한 창에서도 webview 의 스크린샷·클릭·입력이 된다(2026-10-25, Electron 43.8.3).
 //  ⚠ 끼워 넣은 판(?embed=1)·팝아웃(?solo=1)·브라우저에서 연 웹 UI 에서는 켜지 않는다(main.ts 가 거른다).
-import { TOKEN_KEY, api, apiUrl, toast } from '../core.js';
+import { TOKEN_KEY, apiUrl, toast } from '../core.js';
 import { currentWorkspace } from '../lib/net.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
 import { normWebUrl } from './web-url.js';
@@ -57,18 +57,36 @@ export function startBrowserHost(): void {
 
 // ── 연결 ────────────────────────────────────────────────────────────────────
 
+/** 게이트웨이가 쿠키 세션 화면을 받는 표시(src/browser/routes.ts BROWSER_HOST_HEADER) — 스트림·답·상태·표시 요청에 늘 싣는다(#5470).
+ *  계정 로그인(#5430)으로 들어온 앱 창은 토큰 없이 쿠키 세션뿐이라, 이게 없으면 게이트웨이에 화면이 영영 붙지 않는다. */
+const HOST_HEADER = { 'x-lively-browser-host': '1' } as const;
+
 function headers(): Record<string, string> {
-  const h: Record<string, string> = {};
+  const h: Record<string, string> = { ...HOST_HEADER };
   try { const t = localStorage.getItem(TOKEN_KEY); if (t) h.Authorization = 'Bearer ' + t; } catch { /* noop */ }
   const ws = currentWorkspace();
   if (ws && ws !== 'primary') h['x-lively-workspace'] = ws;
   return h;
 }
 
+/**
+ * 화면 → 게이트웨이 POST(상태·답·표시). api() 를 쓰지 않는다 — api() 는 401 이면 토큰을 지우고 **앱 전체를 로그인 게이트로** 보낸다.
+ *  이 표면은 화면 뒤에서 도는 부속이라, 여기서의 거절이 사람을 로그아웃시키면 안 된다(#5470 2차 사고: 답 경로 401 → 앱 화면이 로그인 창으로 튕겼다).
+ *  401 은 다른 실패처럼 던지기만 한다 — 진짜 세션 만료는 사람 화면의 다음 api() 가 알아서 게이트를 띄운다.
+ */
+async function hostPost(path: string, body: unknown): Promise<any> {
+  const res = await fetch(apiUrl(path), { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let data: any = null;
+  try { data = await res.json(); } catch { /* 빈 바디 */ }
+  if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+  return data;
+}
+
 async function connect(): Promise<void> {
   if (dead || ctl) return;
   const h = headers();
-  if (!h.Authorization) { scheduleRetry(); return; }   // 아직 로그인 전 — 곧 다시 본다
+  //  토큰이 없어도 붙어 본다 — 계정 로그인(#5430) 화면은 쿠키 세션으로만 들어와 있다. 로그인 전이면 401 이 오고 아래에서 다시 본다.
+  const bearer = !!h.Authorization;
   const mine = new AbortController();
   ctl = mine;
   let openedAt = 0;
@@ -79,7 +97,9 @@ async function connect(): Promise<void> {
     const res = await fetch(apiUrl('/api/ui/browser/host/stream' + q), {
       headers: { ...h, Accept: 'text/event-stream' }, signal: mine.signal,
     });
-    if (res.status === 401) { dead = true; return; }   // 죽은 토큰 — 로그인 게이트는 api() 가 띄운다. 다시 붙어도 같은 답이다.
+    //  토큰으로 401 = 죽은 토큰 — 로그인 게이트는 api() 가 띄운다. 다시 붙어도 같은 답이다.
+    //  토큰 없이 401 = 아직 로그인 전(쿠키 세션 없음) — 백오프로 다시 본다(로그인하면 붙는다).
+    if (res.status === 401) { if (bearer) dead = true; return; }
     if (!res.ok || !res.body) return;                   // 구 게이트웨이(404) · 재시작 중 — 백오프로 다시 두드린다
     openedAt = Date.now();
     scheduleState(true);
@@ -121,19 +141,16 @@ function scheduleState(active = false): void {
     stateTimer = 0;
     if (!ctl) return;
     const sessions = [...new Set(allTabs().map((t) => sessionOfKey(t.key)))];
-    void api('/api/ui/browser/host/state', {
-      method: 'POST',
-      body: JSON.stringify({ host: hostId, focused: document.hasFocus() && document.visibilityState === 'visible', active_at: lastActive, sessions }),
-    }).catch(() => { /* 다음 보고에서 맞는다 */ });
+    void hostPost('/api/ui/browser/host/state', { host: hostId, focused: document.hasFocus() && document.visibilityState === 'visible', active_at: lastActive, sessions }).catch(() => { /* 다음 보고에서 맞는다 */ });
   }, 400);
 }
 
 async function reply(id: string, ok: boolean, payload: unknown): Promise<void> {
   const body = ok ? { host: hostId, id, ok: true, result: payload } : { host: hostId, id, ok: false, error: String(payload || '실패') };
-  try { await api('/api/ui/browser/host/reply', { method: 'POST', body: JSON.stringify(body) }); }
+  try { await hostPost('/api/ui/browser/host/reply', body); }
   catch (e) {
     // 결과가 너무 크거나(413) 잠깐 끊겼다 — 실패로라도 한 번 더 알린다(AI 가 시간 초과까지 기다리지 않게).
-    if (ok) { try { await api('/api/ui/browser/host/reply', { method: 'POST', body: JSON.stringify({ host: hostId, id, ok: false, error: '결과를 돌려보내지 못했습니다: ' + ((e as Error)?.message || e) }) }); } catch { /* 포기 */ } }
+    if (ok) { try { await hostPost('/api/ui/browser/host/reply', { host: hostId, id, ok: false, error: '결과를 돌려보내지 못했습니다: ' + ((e as Error)?.message || e) }); } catch { /* 포기 */ } }
   }
 }
 
@@ -243,9 +260,7 @@ function reveal(t: BTab): void {
   const session = sessionOfKey(t.key);
   const tab = tabNoOfKey(t.key);
   if (session === SESSIONLESS || !session || !tab) return;
-  void api('/api/ui/browser/host/reveal', {
-    method: 'POST', body: JSON.stringify({ session, tab }),
-  }).catch(() => { /* 표시 힌트가 끊겨도 실제 브라우저 명령은 계속한다 */ });
+  void hostPost('/api/ui/browser/host/reveal', { session, tab }).catch(() => { /* 표시 힌트가 끊겨도 실제 브라우저 명령은 계속한다 */ });
 }
 
 function summary(t: BTab): Record<string, unknown> {

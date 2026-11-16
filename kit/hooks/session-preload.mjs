@@ -695,7 +695,7 @@ const PLUGIN_INSTALL = (() => {
   try { return existsSync(join(dirname(dirname(fileURLToPath(import.meta.url))), ".claude-plugin", "plugin.json")); } catch { return false; }
 })();
 
-// 기록 범위(#5016) — 작업 폴더 밖에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
+// 기록 범위(#5016) — 범위 밖(작업 폴더 밖 · 제외 폴더 안)에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
 //  여기서만 하는 일 둘: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
 //  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다.
 //  키트 자가 업데이트는 기록이 아니라서 범위 밖에서도 띄운다 — 안 그러면 이 기능의 고침도 그 컴퓨터에 영영 안 닿는다.
@@ -712,7 +712,7 @@ async function scopeGate() {
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
   if (d.inScope) { clearStartedOutside(sid); return false; }   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
-  const n = outsideNotice({ dir: d.dir, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
+  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
   // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
   //  코덱스(0.157) SessionStart 출력 스키마도 같은 두 칸을 받는다. 그 밖의 어댑터는 이 출력을 버리거나 본문만 꺼낸다.
   process.stdout.write(JSON.stringify({ systemMessage: n.user, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");

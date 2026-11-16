@@ -29,15 +29,15 @@ export function cleanEditLabel(raw: unknown): string {
 
 /**
  * «기록만» 이름 바꾸기를 막을 까닭 — 없으면 null. 순서가 곧 답이다:
- *  기록을 못 읽었다(503 — 없는 게 아니다) · 기록이 없다(404) · 주인이 아니다(403 — 초대받은 사람도 이름은 못 바꾼다, 중앙 assertManage 와 같다) ·
+ *  기록을 못 읽었다(503 — 없는 게 아니다) · 기록이 없다(404) · 주인도 초대받은 사람도 아니다(403) ·
  *  다른 세션으로 이어진 옛 행이다(409 — 이름은 이어진 새 세션에) · 다듬으니 빈 이름(400).
  */
 export function storedLabelRefusal(
-  row: { owner: string; superseded_by?: string | null } | null | undefined, me: string, label: string, readFailed: boolean,
+  row: { owner: string; invites?: string[]; superseded_by?: string | null } | null | undefined, me: string, label: string, readFailed: boolean,
 ): { status: number; message: string } | null {
   if (readFailed) return { status: 503, message: "세션 기록을 읽지 못했습니다 — 잠시 뒤 다시 해 주세요" };
   if (!row) return { status: 404, message: "세션을 찾을 수 없습니다" };
-  if (!me || row.owner !== me) return { status: 403, message: "내 세션만 이름을 바꿀 수 있습니다" };
+  if (!me || (row.owner !== me && !row.invites?.includes(me))) return { status: 403, message: "이 세션의 초대 멤버만 이름을 바꿀 수 있습니다" };
   if (row.superseded_by) return { status: 409, message: "이 세션은 새 세션으로 이어졌어요 — 이어진 세션에서 이름을 바꿔 주세요" };
   if (!label) return { status: 400, message: "이름이 필요합니다" };
   return null;

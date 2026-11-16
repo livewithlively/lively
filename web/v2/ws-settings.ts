@@ -26,6 +26,7 @@ import {
   linkTeam, linkedTeams, pendingPromotions, resolvePromotion, setAutoPromote, unlinkTeam,
 } from './switcher.js';
 import { openMemberModal, peopleSection } from './ws-people.js';
+import { openTransfer } from './transfer.js';
 
 interface WsRowLike {
   slug: string; name: string; kind: string; is_primary?: boolean;
@@ -100,7 +101,13 @@ export function openWsSettings(w: WsRowLike): void {
     try {
       if (primary && nameChanged) {
         //  primary 이름 = 조직 이름. 워크스페이스 축이 아니라 조직 프로필이 정본이다(admin 전용).
-        await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ name: newName }) });
+        //  #5524 — 표시명(display_name)도 함께 바꾼다. 제품이 조직을 부르는 이름은 «표시명, 없으면 이름» 이라
+        //   (레일 · 대화 머리말 · 알림 · 등록부 primary 행이 모두 이 규칙), name 만 바꾸면 표시명이 있는 박스에선
+        //   저장해도 아무 데도 안 바뀐다(신고 2026-11-11 «저장 눌러도 그대로»). 등록부 행은 서버가 따라 맞춘다.
+        //  ⚠ 셀프호스트에서만 — 매니지드는 CP 가 이름의 정본이고 name 으로만 맞춘다(provisioner · renameWorkspace).
+        //   거기서 표시명을 박아 두면 이후 CP 이름 변경이 표시명에 가려 영영 안 보인다.
+        const body = managedWorkspaces() ? { name: newName } : { name: newName, display_name: newName };
+        await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify(body) });
       }
       if ((!primary && nameChanged) || faceChanged) {
         await saveWorkspaceSettings(w.slug, {
@@ -163,6 +170,17 @@ export function openWsSettings(w: WsRowLike): void {
       el('span', { class: 'v2-wspop-tt' }, el('b', { text: '관리탭 열기' }),
         el('span', { text: '수집·증류·연결·알림… 전부 이 워크스페이스에만 저장돼요' }))));
 
+  // ── 워크스페이스 간 옮기기(#5458) — 관리자만(서버도 admin 을 요구한다). 이 워크스페이스의 지식을 파일로 내보내고,
+  //  다른 워크스페이스에서 받은 파일을 미리 본 뒤 들인다. 창은 v2/transfer.ts 가 따로 연다(설정 창 안에 두기엔 크다).
+  const transferSec = isAdmin() ? el('section', { class: 'v2wss-sec' },
+    el('h3', { class: 'v2wss-sec-t', text: '워크스페이스 간 옮기기' }),
+    el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { close(); openTransfer('export'); } },
+      el('span', { class: 'v2-wspop-ic' }, icon('download')),
+      el('span', { class: 'v2-wspop-tt' }, el('b', { text: '지식 내보내기' }), el('span', { text: '분류나 문서를 골라 파일로 받습니다' }))),
+    el('button', { class: 'v2-wspop-row', type: 'button', onclick: () => { close(); openTransfer('import'); } },
+      el('span', { class: 'v2-wspop-ic' }, icon('upload')),
+      el('span', { class: 'v2-wspop-tt' }, el('b', { text: '지식 가져오기' }), el('span', { text: '다른 워크스페이스에서 받은 파일을 미리 보고 들입니다' })))) : null;
+
   const head = el('header', { class: 'v2wss-h' },
     el('span', { class: 'v2wss-h-face' }, workspaceFace(w, 'v2-wscard-big')),
     el('div', { class: 'v2wss-h-txt' },
@@ -171,7 +189,7 @@ export function openWsSettings(w: WsRowLike): void {
     el('button', { class: 'v2mem-x', type: 'button', 'aria-label': '닫기', title: '닫기 (Esc)', onclick: close }, icon('x')));
 
   const box = el('div', { class: 'v2wss', role: 'dialog', 'aria-modal': 'true', 'aria-label': `${w.name} 설정` },
-    head, el('div', { class: 'v2wss-b' }, profileSec, peopleSec, teamsSec, advSec));
+    head, el('div', { class: 'v2wss-b' }, profileSec, peopleSec, teamsSec, transferSec, advSec));
   const back = el('div', { class: 'v2wss-back' }, box) as HTMLElement;
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   document.addEventListener('keydown', onKey, true);

@@ -826,6 +826,26 @@
   "input_hash": "4442a5a6f6164db4"
  },
  {
+  "name": "org_record_scope_get",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/record-scope"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_record_scope_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/record-scope"
+  ],
+  "input_hash": "0e3cc75348cbea72"
+ },
+ {
   "name": "org_auto_runs",
   "scope": "memory",
   "mcp": true,
@@ -3002,7 +3022,7 @@
   "rest": [
    "POST /api/ui/v6/projects/:id"
   ],
-  "input_hash": "aa951c74f28f8215"
+  "input_hash": "80beb7c541058e2e"
  },
  {
   "name": "project_rename_v6",
@@ -5915,6 +5935,76 @@
    "POST /api/ui/agent-job-limits"
   ],
   "input_hash": "9e450f33d1ebf86f"
+ },
+ {
+  "name": "transfer_export_catalog",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/transfer/catalog"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "transfer_export_catalog_knowledge",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/transfer/catalog/knowledge"
+  ],
+  "input_hash": "2d909d9a08379c9f"
+ },
+ {
+  "name": "transfer_export_preview",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/transfer/export/preview"
+  ],
+  "input_hash": "b036ca3077ab78c8"
+ },
+ {
+  "name": "transfer_imports",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/transfer/imports"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "transfer_import_get",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/transfer/imports/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "transfer_import_apply",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/transfer/imports/:id/apply"
+  ],
+  "input_hash": "3afd3729bb63c974"
+ },
+ {
+  "name": "transfer_import_undo",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/transfer/imports/:id/undo"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "browser_status",

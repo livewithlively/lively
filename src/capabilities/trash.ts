@@ -10,7 +10,7 @@ import { restoreSource, countTrashedFileSources } from "../v6/source-store.js";
 import { restoreKnowledge } from "../v6/knowledge-store.js";
 import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
-import { visibleListIds, type Viewer } from "../v6/visibility.js";
+import { projectVisFor, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
 
@@ -27,7 +27,7 @@ const entityOf = (raw: unknown, allowed: readonly string[] = ENTITIES): string =
 //  같은 실수가 컴파일 에러가 된다.
 async function filterVisibleDeleted(entries: DeletedRow[], viewer: Viewer): Promise<DeletedRow[]> {
   if (viewer === null || !entries?.length) return entries;
-  const visIds = await visibleListIds(viewer);
+  const pv = await projectVisFor(viewer);
   const out: DeletedRow[] = [];
   for (const e of entries) {
     if (e.entity === "knowledge" || e.entity === "source") {
@@ -36,7 +36,9 @@ async function filterVisibleDeleted(entries: DeletedRow[], viewer: Viewer): Prom
       out.push(e); continue;
     }
     if (e.entity === "project") {
-      if (e.list_id != null && visIds && !visIds.has(e.list_id)) continue;
+      if (e.list_id != null && pv.lists && !pv.lists.has(e.list_id)) continue;
+      // #5522 — 지운 초안은 만든 사람에게만(팀원 행은 삭제와 함께 사라져 근거가 없다).
+      if (e.draft && pv.draftViewer !== null && e.created_by !== pv.draftViewer) continue;
       out.push(e); continue;
     }
     out.push(e);   // 카테고리 — 조직 공용 분류축이라 종전대로(콘텐츠 본문이 아니다)
@@ -51,9 +53,11 @@ async function canRestore(before: Record<string, unknown>, entity: string, viewe
   if (entity === "knowledge" || entity === "source") return before.visibility !== "members";
   if (entity === "project") {
     const listId = before.list_id == null ? null : Number(before.list_id);
-    if (listId == null) return true;
-    const visIds = await visibleListIds(viewer);
-    return !visIds || visIds.has(listId);
+    const pv = await projectVisFor(viewer);
+    if (listId != null && pv.lists && !pv.lists.has(listId)) return false;
+    // #5522 — 지운 초안은 만든 사람만 되살린다(목록 filterVisibleDeleted 와 같은 근거).
+    if (before.draft === true && pv.draftViewer !== null && before.created_by !== pv.draftViewer) return false;
+    return true;
   }
   return true;   // 카테고리 — 조직 공용 분류축
 }
@@ -111,9 +115,9 @@ const trashCounts: Capability = {
   expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/deleted/counts"], parse: () => ({}) }] },
   handler: async (_input: any, _user: any, ctx: any) => {
     const viewer: Viewer = ctx?.viewer ?? null;
-    const visIds = viewer === null ? null : await visibleListIds(viewer);
+    const pv = viewer === null ? null : await projectVisFor(viewer);
     const [c, files] = await Promise.all([
-      countDeleted({ gate: viewer !== null, visibleListIds: visIds ? [...visIds] : null }),
+      countDeleted({ gate: viewer !== null, visibleListIds: pv?.lists ? [...pv.lists] : null, draftViewer: pv?.draftViewer ?? null }),
       countTrashedFileSources(ctx?.viewer, undefined, personalRootMember(_user ?? {})),
     ]);
     return { knowledge: c.knowledge, project: c.project, source: c.source, files };

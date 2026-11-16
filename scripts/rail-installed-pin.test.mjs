@@ -67,17 +67,20 @@ const mainTs = read("web/v2/main.ts");
 check(/installedAppId: \(\) => \{ const t = tabsApi\?\.current\(\); return t && \/\^#\\\/i\\\/\/\.test\(t\.route\) \? t\.appId : null; \}/.test(mainTs),
   "W9 셸이 #/i/… 화면에서만 그 탭의 앱 id 를 레일에 알려 준다(세션 화면의 appId 는 넘기지 않는다)");
 
-//  #5319 4차(원준 2026-11-05 «홈과 자료 이거 두 개를 맨 위에 고정된 앱으로») — 자료를 홈 바로 뒤에 기기당 한 번 고정한다.
-//   #2423 청소(옛 기본값의 자료 내리기)보다 뒤에 돌고, 정본이 도착하면 그 한 번만 정본에도 끼운다(그 뒤 사람이 빼면 그대로).
+//  #5550(원준 2026-11-16 «고정 앱을 <홈>, <수집·증류> 이거만 · 최근 앱도 처음엔 아무것도 안 뜨게 · 우클릭에 독에서 삭제») —
+//   자료를 내리고 수집·증류를 홈 바로 뒤에 기기당 한 번 고정한다. #2423 청소 뒤에 돌고, 정본이 도착하면 그 한 번만 정본에도 끼운다.
 {
   const railTs = read("web/v2/rail.ts");
-  const initAt = railTs.indexOf("if (!localStorage.getItem(SRC_UNPIN_STORE))"), pinAt = railTs.indexOf("if (!localStorage.getItem(SRC_PIN_STORE))");
-  check(initAt > 0 && pinAt > initAt && /const SRC_PIN_STORE = deviceStore\('lively_v2_rail_src_pinned_5319'\);/.test(railTs),
-    "P1 자료 고정은 기기당 한 번 · #2423 청소 뒤에 돈다");
-  check(/out\.splice\(h >= 0 \? h \+ 1 : 0, 0, 'sources'\);/.test(railTs) && /if \(list\.includes\('sources'\)\) return \[\.\.\.list\];/.test(railTs),
-    "P2 자리는 홈 바로 뒤(홈이 없으면 맨 앞) · 이미 있으면 그대로");
-  check(/const pinNow = pinnedSrcThisLoad;\n\s*pinnedSrcThisLoad = false;\n\s*if \(pinNow && !order\.includes\('sources'\)\)/.test(railTs),
-    "P3 정본이 도착하면 이번 로드에 처음 고정한 경우에만 정본에도 끼운다 — 다시 읽기마다 사람의 빼기를 되돌리지 않는다");
+  const initAt = railTs.indexOf("if (!localStorage.getItem(SRC_UNPIN_STORE))"), pinAt = railTs.indexOf("if (!localStorage.getItem(CTX_PIN_STORE))");
+  check(initAt > 0 && pinAt > initAt && /const CTX_PIN_STORE = deviceStore\('lively_v2_rail_ctx_pinned_5550'\);/.test(railTs),
+    "C1 수집·증류 고정은 기기당 한 번 · #2423 청소 뒤에 돈다");
+  check(/const out = list\.filter\(\(k\) => k !== 'sources'\);/.test(railTs) && /out\.splice\(h >= 0 \? h \+ 1 : 0, 0, CTX_PIN_KEY\);/.test(railTs),
+    "C2 자료는 내려가고 수집·증류는 홈 바로 뒤(홈이 없으면 맨 앞)");
+  check(/const pinNow = pinnedCtxThisLoad;\n\s*pinnedCtxThisLoad = false;\n\s*if \(pinNow\)/.test(railTs),
+    "C3 정본이 도착하면 이번 로드에 처음 고정한 경우에만 정본에도 끼운다");
+  check(!/seedRecent|SEED_APPS|SRC_PIN_STORE/.test(railTs), "C4 #5319 의 최근 칸 씨앗 · 자료 고정은 걷혔다");
+  check(/filter\(\(k\) => keys\.includes\(k\)\)/.test(fnBody(railTs, "recentForRail")), "C5 ★ 최근 칸은 기록에 있는 앱만 — 표 순서로 채우지 않는다(처음엔 빈 칸)");
+  check(/독에서 삭제/.test(fnBody(railTs, "dockMenu")) && /forgetAppUse\(key\)/.test(fnBody(railTs, "removeRecent")), "C6 최근 칸 우클릭에 「독에서 삭제」 — 최근 기록에서 뺀다");
   const sideTs = read("web/v2/side.ts");
   check(!/v2-langtg/.test(sideTs) && /function retireScreenLang\(\): void \{ if \(screenLangOn\(\)\) setScreenLang\(false\); \}/.test(sideTs) && /function navRow\(\): HTMLElement \{\n\s*retireScreenLang\(\);/.test(sideTs),
     "P4 맨 윗줄 «EN» 알약은 없다 — 켜 둔 채 남은 영어 보기는 한 번 끈다(끌 문이 없어졌으므로)");

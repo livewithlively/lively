@@ -14,9 +14,9 @@ const SIG_CDIR = 0x02014b50;
 const SIG_LOCAL = 0x04034b50;
 
 /** 한 항목을 풀었을 때의 상한 — 압축폭탄(1KB → 4GB)이 탭을 통째로 얼리는 것을 막는다. */
-const MAX_INFLATE = 64 * 1024 * 1024;
+const MAX_INFLATE = 512 * 1024 * 1024;   // #5480 — 항목 하나를 풀어 쥐는 상한(압축폭탄 방지). 큰 워드 document.xml(수백 MB)도 열리게 64MB 에서 올렸다
 /** 중앙 디렉터리에서 읽어 들일 항목 수 상한 — 수십만 개짜리 아카이브의 목록을 그리다 멈추지 않게. */
-const MAX_ENTRIES = 20000;
+const MAX_ENTRIES = 200_000;   // #5480 — 목록은 화면이 «더 보기» 로 나눠 그린다
 
 export interface ZipEntry {
   /** 아카이브 안 경로(`word/document.xml`). */

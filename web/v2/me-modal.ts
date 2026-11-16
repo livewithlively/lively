@@ -379,7 +379,7 @@ function aiPane(data: any, liv: any): HTMLElement {
 function aiAccountPane(): { node: HTMLElement; init: () => void } {
   const host = el('div');
   const node = pane('AI 계정 연결',
-    'AI 세션과 자동 작업에 사용할 AI 계정을 연결합니다. AI 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.',
+    'AI 세션과 수집·증류에 사용할 AI 계정을 연결합니다. AI 세션에서 로그인 오류가 나면 여기서 다시 로그인하세요.',
     host);
   node.classList.add('v2me-pane-wide');   // 계정 행은 [이름 · 배지 · 버튼] 한 줄이라 520px 에선 버튼이 접힌다
   return { node, init: () => host.replaceChildren(myAiAccountsGrid()) };

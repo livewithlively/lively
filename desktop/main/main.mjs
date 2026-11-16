@@ -28,13 +28,14 @@ import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDri
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, createOpenLedger, surfacePopupTitle, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, macUpdateHandoffAction, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, sessionHash, personLink, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
+import { workspaceEnterRequest, workspaceExchange, accountHomeNavigation } from "./account-workspace.mjs";
 import { execFileSync } from "node:child_process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -42,11 +43,14 @@ const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
 
 const BOUNDS_FILE = join(LIVELY_DIR, "desktop-window.json");
 const APP_BOUNDS_FILE = join(LIVELY_DIR, "desktop-app-window.json");   // 웹 UI 창은 마법사와 크기·자리가 다르다 — 따로 기억
+const MAC_UPDATE_HANDOFF_FILE = join(LIVELY_DIR, "desktop-update-handoff.json");
 const WEB_PRELOAD = join(HERE, "..", "preload", "web.cjs");
 
 let tray = null, win = null, quitting = false;
 let appWin = null;                  // 웹 UI 창(게이트웨이 /ui/) — web-shell.mjs. 마법사 창(win)과 preload·채널이 다르다
 let appLoaded = { url: null, token: null };   // 웹 창에 마지막으로 실은 주소·토큰 — 달라졌으면 다시 싣는다(재로그인 뒤 옛 토큰으로 401 나는 걸 막는다)
+let selectedGatewayUrl = null;      // 앱 화면의 워크스페이스. CLI·노드의 바인딩과 별개다.
+let pendingWorkspace = null;        // 앱 안 계정 로그인 뒤 이어서 열 워크스페이스
 let rejectedToken = null;           // 게이트웨이가 401 로 거부한 토큰(문자열) — 파일의 토큰이 바뀌면(재로그인) 저절로 풀린다
 let webError = null;                // 웹 창을 못 실었을 때의 사유(사람용 한 줄) — 마법사의 '라이블리 열기' 카드가 보여준다
 let startedHidden = false;          // 로그인 때 자동으로(숨겨) 떴나 — 그러면 갖춰져 있어도 창을 안 띄운다
@@ -92,6 +96,8 @@ async function refreshState({ deep = false } = {}) {
     if (state.gatewayUrl) resetNotifyBinding();
   }
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
+  next.accountLoggedIn = (await session.defaultSession.cookies.get({ url: cloudUrl(), name: "lvly_sid" })).some((c) => c.name === "lvly_sid");
+  if (next.accountLoggedIn && !selectedGatewayUrl) selectedGatewayUrl = cloudUrl();
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
   next.tokenRejected = !!(rejectedToken && readTrim(join(LIVELY_DIR, "token")) === rejectedToken);
@@ -419,15 +425,25 @@ async function applyUpdate() {
       const which = appWinVisible() ? "app" : (win && win.isVisible()) ? "setup" : null;
       if (which) writeFileSync(join(LIVELY_DIR, "desktop-reopen"), which);
     } catch { /* 마커 실패는 비치명 */ }
+    if (process.platform === "darwin") {
+      try {
+        mkdirSync(LIVELY_DIR, { recursive: true });
+        writeFileSync(MAC_UPDATE_HANDOFF_FILE, JSON.stringify({ version: updateReady, startedAt: Date.now() }));
+      } catch { /* 쓰지 못해도 설치기는 시도한다 */ }
+    }
     quitting = true;                                   // 창 close 핸들러가 숨기기 대신 닫게
     send(IPC.LOG, { stream: "raw", line: `업데이트 적용 — 앱을 다시 시작합니다 (${updateReady})…` });
     u.quitAndInstall(true, true);                      // Windows: 설치기 /S --force-run · Linux AppImage: 교체 후 재실행
-    // 안전망 — 여기까지 왔는데도 앱이 안 닫히면 `quitting` 을 되돌린다. 켜 둔 채로 두면 그 뒤 사람이 창을 닫을 때
-    //  트레이로 숨는 대신 창이 **진짜 닫혀** 자동 적용 예약(창 hide 에 달려 있다)까지 함께 사라진다(#2203).
-    const guard = setTimeout(() => { quitting = false; }, 20_000);
+    // macOS 에서 앱이 5초 뒤에도 살아 있으면 강제 종료해 ShipIt 이 기존 앱을 교체할 수 있게 한다.
+    // 다른 OS 는 종전처럼 quit 플래그를 되돌려 창 닫기 규약을 지킨다.
+    const guard = setTimeout(() => {
+      if (process.platform === "darwin") app.exit(0);
+      else quitting = false;
+    }, process.platform === "darwin" ? 5_000 : 20_000);
     if (guard.unref) guard.unref();
     return { ok: true };
   } catch (e) {
+    if (process.platform === "darwin") rmSync(MAC_UPDATE_HANDOFF_FILE, { force: true });
     quitting = false;
     const line = `업데이트 적용 실패: ${String(e?.message || e).slice(0, 200)}`;
     send(IPC.LOG, { stream: "raw", line }); updateNote = line; void refreshState();
@@ -648,6 +664,11 @@ async function openFromBanner(event) {
       windowWs = typeof v === "string" ? v : null;
     }
     const t = clickTarget(event, { gatewayUrl: state.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins() });
+    if (ws?.via === "enter") {
+      const enter = workspaceEnterRequest(ws.enter, webOrigin(cloudUrl()));
+      const hash = event?.id ? sessionHash(event.id) : event?.link ? personLink(event.link) : null;
+      if (enter && hash) { await enterWorkspaceInApp(enter.id, hash); return; }
+    }
     if (t.how === "external") { await shell.openExternal(t.url); return; }
     if (t.how === "hash") { openHashInApp(t.hash); return; }
     if (t.how === "load") { loadInApp(t.url); return; }
@@ -659,6 +680,59 @@ function cpOrigins() {
   const out = new Set([webOrigin(DEFAULT_CLOUD_URL)]);
   try { out.add(webOrigin(cloudUrl())); } catch { /* 개발용 덮어쓰기가 형식 오류 — 기본만 */ }
   return [...out].filter(Boolean);
+}
+
+async function accountCookie(cloud) {
+  const cookies = await session.defaultSession.cookies.get({ url: cloud, name: "lvly_sid" });
+  const value = cookies.find((c) => c.name === "lvly_sid")?.value;
+  if (!value) return null;
+  try {
+    const res = await fetch(`${cloud}/api/me`, { headers: { Cookie: `lvly_sid=${value}` }, signal: AbortSignal.timeout(10_000) });
+    if (res.ok) return value;
+    if (res.status !== 401) throw new Error("계정 서버에 연결하지 못했습니다.");
+  } catch { throw new Error("계정 서버에 연결하지 못했습니다."); }
+  return null;
+}
+
+async function enterWorkspaceInApp(workspaceId, hash = null) {
+  const cloud = cloudUrl();
+  const sid = await accountCookie(cloud);
+  if (!sid) {
+    pendingWorkspace = { id: workspaceId, hash };
+    selectedGatewayUrl = cloud;
+    const opened = showApp();
+    if (!opened.ok) throw new Error(opened.error || "계정 로그인 화면을 열지 못했습니다.");
+    return;
+  }
+  pendingWorkspace = null;
+  for (let attempt = 0; attempt < 31; attempt++) {
+    const path = `${cloud}/api/workspaces/${encodeURIComponent(workspaceId)}/enter${hash ? `?to=${encodeURIComponent(hash)}` : ""}`;
+    const res = await fetch(path, {
+      headers: { Cookie: `lvly_sid=${sid}` }, signal: AbortSignal.timeout(15_000),
+    });
+    const result = await res.json().catch(() => ({}));
+    if (res.status === 503 && (result.status === "waking" || result.status === "provisioning")) {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      continue;
+    }
+    if (!res.ok || result.status !== "redirect") throw new Error(result.message || "접근 권한 또는 워크스페이스 상태를 확인해 주세요.");
+    const target = workspaceExchange(result.url, webOrigin(cloud));
+    if (!target) throw new Error("워크스페이스 입장 주소가 올바르지 않습니다.");
+    const exchange = new URL(target.exchangeUrl);
+    if (hash) { exchange.searchParams.set("to", hash); exchange.hash = hash; }
+    if (!appWin || appWin.isDestroyed()) {
+      const r = showApp();
+      if (!r.ok) throw new Error(r.error || "앱 창을 열지 못했습니다.");
+    }
+    selectedGatewayUrl = target.gatewayUrl;
+    lastGen = null;
+    appLoaded = { url: target.uiUrl, token: null };
+    await appWin.loadURL(exchange.href);
+    resetNotifyBinding();
+    appWin.show(); appWin.focus();
+    return;
+  }
+  throw new Error("워크스페이스가 아직 준비되지 않았습니다. 잠시 뒤 다시 시도해 주세요.");
 }
 /** 알림 클릭 → 앱 창을 띄우고 그 화면으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
 function openHashInApp(hash) {
@@ -688,6 +762,17 @@ function resetNotifyBinding() {
   setTimeout(() => void pollNotifications(), 0);
 }
 
+async function notifyConnection() {
+  if (selectedGatewayUrl) {
+    if (selectedGatewayUrl === cloudUrl()) return null;
+    const cookies = await session.defaultSession.cookies.get({ url: selectedGatewayUrl, name: "lively_sess" });
+    const sid = cookies.find((c) => c.name === "lively_sess")?.value;
+    return sid ? { gw: selectedGatewayUrl, headers: { Cookie: `lively_sess=${sid}` } } : null;
+  }
+  const token = state.ready ? readTrim(join(LIVELY_DIR, "token")) : "";
+  return token && state.gatewayUrl ? { gw: state.gatewayUrl, headers: { Authorization: `Bearer ${token}` } } : null;
+}
+
 /**
  * 실시간 스트림에 붙는다 (#1842). 게이트웨이가 하네스 훅 보고를 받는 **그 순간** 사건을 밀어 주므로,
  *  "AI 를 여러 개 병렬로 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다(폴링은 폴백으로 남는다).
@@ -695,9 +780,9 @@ function resetNotifyBinding() {
  * ⚠ 이 함수는 연결이 끊길 때까지 돌아온다 — 호출자는 await 하지 않고 재연결만 예약한다.
  */
 async function connectNotifyStream() {
-  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
-  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { scheduleStreamRetry(); return; }
+  const auth = await notifyConnection();
+  if (!auth) { scheduleStreamRetry(); return; }
+  const gw = auth.gw.replace(/\/+$/, "");
   const ctl = new AbortController();
   streamCtl = ctl;
   const gen = notifyGen;                                 // #4054 — 이 연결이 붙은 매인 곳의 세대
@@ -705,7 +790,7 @@ async function connectNotifyStream() {
   try {
     //  #4054 — 다른 워크스페이스 사건까지 청한다(서버가 계정으로 확인한 것만 준다). 사건마다 워크스페이스 표시가 붙는다.
     const res = await fetch(streamUrl(gw), {
-      headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      headers: { ...auth.headers, Accept: "text/event-stream" },
       signal: ctl.signal,
     });
     // 구 게이트웨이엔 이 표면이 없다(404) — 조용히 폴링만 쓴다(그래서 폴링을 없애지 않았다).
@@ -757,21 +842,21 @@ function scheduleStreamRetry() {
  */
 async function pollNotifications() {
   if (notifyPolling) return;
-  const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
-  const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; boundWs = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
+  const auth = await notifyConnection();
+  if (!auth) { notifySnapshot = null; personSeen = null; personSince = null; boundWs = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
+  const gw = auth.gw.replace(/\/+$/, "");
   notifyPolling = true;
   const gen = notifyGen;                                 // #4054 — 이 폴이 떠난 매인 곳의 세대
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: auth.headers,
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
     const data = await res.json();
     const next = snapshotSessions(data && data.sessions);
     if (gen !== notifyGen) return;                       // 그 사이 매인 곳이 바뀌었다 — 옛 곳의 목록을 새 기준선으로 쓰지 않는다
-    await pollPersonFeed(gw, token, gen);                // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    await pollPersonFeed(gw, auth.headers, gen);                // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
     if (gen !== notifyGen) return;
     const prefs = notifyPrefs();
     const events = diffSessions(notifySnapshot, next, prefs, boundWs);   // #4054 — 이 목록은 매인 워크스페이스의 것
@@ -791,9 +876,9 @@ async function pollNotifications() {
  * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
  *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
  */
-async function pollPersonFeed(gw, token, gen) {
+async function pollPersonFeed(gw, headers, gen) {
   const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
   const data = await res.json();
   if (gen !== notifyGen) return;                       // #4054 — 옛 곳의 설정·커서·표시를 초기화 뒤에 되써 넣지 않는다
@@ -812,13 +897,29 @@ async function pollPersonFeed(gw, token, gen) {
 // 게이트웨이가 서빙하는 /ui/ 를 **그대로** 싣는다 — 화면 코드를 앱에 두지 않는다. 앱이 보태는 건 토큰 주입(preload/web.cjs)·
 //  창 열기 규칙(같은 출처=앱 안 새 창, 바깥=브라우저)·401 감지(토큰 거부→마법사) 셋뿐이다.
 /** 사람이 '창 열기' 를 눌렀을 때 — 갖춰졌으면 라이블리 화면, 아니면 마법사(할 일이 있다). */
-function showMain() { return state.ready ? (showApp().ok ? appWin : showWindow()) : showWindow(); }
+//  ★ 준비 전이면 **마법사의 시작 카드**다(#5520). #5430 이 여기서 곧장 클라우드 계정 로그인 화면을 띄웠더니
+//   시작 카드의 «회사에 직접 설치했어요 — 주소 입력» 갈래가 화면에서 사라져 셀프호스팅 사용자가 로그인할 길이 없어졌다.
+//   클라우드 계정 로그인은 시작 카드의 [라이블리 클라우드로 로그인](openAccountLogin)이 연다 — 두 갈래를 나란히 둔다.
+function showMain() {
+  if (state.ready) return showApp().ok ? appWin : showWindow();
+  return showWindow();
+}
+/** 시작 카드의 클라우드 갈래 — 앱 창에 계정 로그인 화면(cloud /login)을 싣는다. 로그인 뒤 흐름은 #5430 그대로. */
+function openAccountLogin() {
+  let cloud;
+  try { cloud = cloudUrl(); } catch (e) { return { ok: false, error: e.message }; }   // 개발용 덮어쓰기(env)의 형식 오류
+  selectedGatewayUrl = cloud;
+  const r = showApp();
+  if (r.ok && win && !win.isDestroyed()) win.hide();   // 창 두 개를 겹쳐 두지 않는다(마법사는 트레이에서 다시 열린다)
+  return r;
+}
 function showApp() {
-  if (!state.ready) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
-  const url = webUiUrl(state.gatewayUrl);
+  if (!state.ready && selectedGatewayUrl !== cloudUrl()) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
+  const displayGateway = selectedGatewayUrl || state.gatewayUrl;
+  const url = selectedGatewayUrl === cloudUrl() ? `${cloudUrl()}${state.accountLoggedIn ? "/home" : "/login"}` : webUiUrl(displayGateway);
   if (!url) return { ok: false, error: "게이트웨이 주소가 없습니다." };
-  const token = readTrim(join(LIVELY_DIR, "token"));
-  watchTokenRejection(state.gatewayUrl);
+  const token = selectedGatewayUrl ? null : readTrim(join(LIVELY_DIR, "token"));
+  if (token) watchTokenRejection(state.gatewayUrl);
   if (!appWin || appWin.isDestroyed()) {
     const b = loadAppBounds();
     appWin = new BrowserWindow({
@@ -870,7 +971,15 @@ function showApp() {
     });
     // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
     //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).
-    appWin.webContents.on("did-navigate", (_e, navUrl) => void offerWorkspaceRebind(navUrl));
+    appWin.webContents.on("did-navigate", (_e, navUrl) => {
+      void offerWorkspaceRebind(navUrl);
+      if (!pendingWorkspace || !accountHomeNavigation(navUrl, webOrigin(cloudUrl()))) return;
+      const next = pendingWorkspace;
+      pendingWorkspace = null;
+      void enterWorkspaceInApp(next.id, next.hash).catch((err) => {
+        void dialog.showMessageBox({ type: "error", message: "워크스페이스를 열지 못했습니다.", detail: String(err?.message || err) });
+      });
+    });
     appWin.webContents.on("did-navigate-in-page", (_e, navUrl, isMainFrame) => {
       if (isMainFrame) void offerWorkspaceRebind(navUrl);
     });
@@ -897,8 +1006,9 @@ function showApp() {
  */
 let lastGen = null;
 async function reloadIfStale() {
-  if (!appWin || appWin.isDestroyed() || !state.gatewayUrl) return;
-  const base = String(state.gatewayUrl).replace(/\/+$/, "");
+  const gateway = selectedGatewayUrl || state.gatewayUrl;
+  if (!appWin || appWin.isDestroyed() || !gateway || gateway === cloudUrl()) return;
+  const base = String(gateway).replace(/\/+$/, "");
   let v = null, policy = "auto";
   try {
     const r = await fetch(`${base}/ui/__gen`, { cache: "no-store" });
@@ -1251,7 +1361,7 @@ app.on("web-contents-created", (_e, wc) => {
   });
 
   wc.setWindowOpenHandler(({ url }) => {
-    const t = openTargetFor(url, state.gatewayUrl);
+    const t = openTargetFor(url, selectedGatewayUrl || state.gatewayUrl);
     if (t === "external") { shell.openExternal(url); return { action: "deny" }; }
     if (t !== "child") return { action: "deny" };
     return {
@@ -1263,13 +1373,26 @@ app.on("web-contents-created", (_e, wc) => {
       },
     };
   });
-  wc.on("will-navigate", (e, url) => {
+  const accountWorkspaceNavigation = (e, url) => {
     // 마법사(file://)는 어디로도 안 간다. 웹 창은 같은 출처 안에서만 움직인다 — 바깥 링크는 브라우저로.
-    const t = openTargetFor(url, state.gatewayUrl);
+    const enter = workspaceEnterRequest(url, webOrigin(cloudUrl()));
+    if (enter && !wc.getURL().startsWith("file:")) {
+      e.preventDefault();
+      const target = pendingWorkspace || enter;
+      pendingWorkspace = null;
+      void enterWorkspaceInApp(target.id, target.hash).catch((err) => {
+        void dialog.showMessageBox({ type: "error", message: "워크스페이스를 열지 못했습니다.", detail: String(err?.message || err) });
+      });
+      return;
+    }
+    const t = openTargetFor(url, selectedGatewayUrl || state.gatewayUrl);
     if (t === "child" && !wc.getURL().startsWith("file:")) return;
     e.preventDefault();
     if (t === "external") shell.openExternal(url);
-  });
+  };
+  wc.on("will-navigate", accountWorkspaceNavigation);
+  // 계정 로그인 POST 뒤 /ws/:id/enter 로 오는 서버 redirect 도 같은 판정이 필요하다.
+  wc.on("will-redirect", accountWorkspaceNavigation);
 });
 
 // ── CLI 구동 ────────────────────────────────────────────────────────────────
@@ -1285,6 +1408,7 @@ app.on("web-contents-created", (_e, wc) => {
 //   · 수락 = `setup --cloud` 재실행. 승인 화면에서 그 워크스페이스를 고르면 CLI 의 afterLogin 이
 //     노드·MCP 를 그리로 따라오게 한다(kit/cli/lively.mjs). 앱이 따로 노드를 만지지 않는다 — 정본은 CLI 다.
 async function offerWorkspaceRebind(navUrl) {
+  if (selectedGatewayUrl) return; // 계정 앱의 화면 선택은 CLI·노드 바인딩을 바꾸지 않는다.
   if (running) return;
   const drift = workspaceDriftFrom(navUrl, state.gatewayUrl);
   if (!drift || driftAsked.has(drift.to)) return;
@@ -1424,6 +1548,10 @@ async function onboard(url) {
   if (advice.error) return { ok: false, error: advice.error };
   try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
   const gw = advice.url;
+  // 셀프호스팅 갈래를 골랐다 — 앞서 클라우드 갈래를 눌러 봤어도 앱 창은 이 게이트웨이를 싣는다(#5520).
+  //  안 지우면 설치를 마친 뒤 '라이블리 열기' 가 이 회사 주소가 아니라 클라우드 로그인 화면을 연다.
+  //  (클라우드 계정에 이미 로그인돼 있으면 refreshState 가 종전대로 계정 화면을 다시 고른다.)
+  if (selectedGatewayUrl === cloudUrl() && !state.accountLoggedIn) selectedGatewayUrl = null;
 
   const c = await ensureCli({ url: gw, cloud: false });
   if (!c.ok) return c;
@@ -1512,15 +1640,19 @@ ipcMain.handle(IPC.CHECK_UPDATE, async () => { await checkUpdates(); return { ok
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
 ipcMain.handle(IPC.OPEN_APP, () => showApp());
+ipcMain.handle(IPC.ACCOUNT_LOGIN, () => openAccountLogin());
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // ── 웹 UI 창 채널(IPC_WEB) — 원격 페이지 쪽 다리. 보내는 프레임이 **게이트웨이 출처**일 때만 답한다(다른 사이트가 이 창에
 //  실렸다면 토큰도, 로그아웃도 주지 않는다). preload/web.cjs 도 출처를 한 번 더 본다(양쪽 방어).
-const fromGateway = (e) => { const o = webOrigin(state.gatewayUrl); try { return !!o && new URL(e.senderFrame?.url || e.sender.getURL()).origin === o; } catch { return false; } };
+const fromGateway = (e) => { const o = webOrigin(selectedGatewayUrl || state.gatewayUrl); try { return !!o && new URL(e.senderFrame?.url || e.sender.getURL()).origin === o; } catch { return false; } };
 ipcMain.on(IPC_WEB.BOOT, (e) => {
   const ok = fromGateway(e);
   // frameless 는 출처와 무관하다 — 이 창이 frameless 로 떠 있다는 사실이므로, 어떤 페이지가 실렸든 타이틀바는 있어야 창을 끈다.
   e.returnValue = {
-    ...webBootPayload({ gatewayUrl: state.gatewayUrl, token: ok ? readTrim(join(LIVELY_DIR, "token")) : null, appVersion: safeAppVersion(), platform: process.platform }),
+    ...webBootPayload({ gatewayUrl: selectedGatewayUrl || state.gatewayUrl,
+      token: ok && !selectedGatewayUrl ? readTrim(join(LIVELY_DIR, "token")) : null,
+      appVersion: safeAppVersion(), platform: process.platform }),
+    accountMode: !!selectedGatewayUrl,
     frameless: framelessOn(process.platform),
     // 브라우저 서피스 능력(#1829) — 웹은 이 값의 **존재 여부로** `<webview>` 를 쓸지 폴백을 그릴지 정한다.
     //  게이트웨이 출처일 때만 준다: 남의 사이트가 이 창에 실렸다면 우리 능력을 알려 줄 이유가 없다.
@@ -1564,6 +1696,16 @@ ipcMain.handle(IPC_WEB.UPDATE_APPLY, async (e) => {
 });
 ipcMain.handle(IPC_WEB.LOGOUT, async (e) => {
   if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
+  const cookies = await session.defaultSession.cookies.get({});
+  for (const c of cookies) {
+    if (c.name !== "lvly_sid" && c.name !== "lively_sess") continue;
+    const host = c.domain.replace(/^\./, "");
+    if (host !== new URL(cloudUrl()).hostname && !host.endsWith(`.${new URL(cloudUrl()).hostname}`)) continue;
+    await session.defaultSession.cookies.remove(`${c.secure ? "https" : "http"}://${host}${c.path || "/"}`, c.name);
+  }
+  selectedGatewayUrl = null;
+  await refreshState();
+  if (!state.cliPath && !locateCli(existsSync)) return { ok: true };
   // 웹의 '로그아웃' 은 데스크톱 로그인(CLI 토큰)까지 끝낸다 — 안 그러면 다음 창 열기에서 토큰이 다시 들어가 '로그아웃이 안 된다'.
   return start("logout", {});
 });
@@ -1577,8 +1719,18 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
 // 가려진 창·다른 데스크톱 공간의 창도 숨김으로 치지 않는다 — 사람이 다른 공간에 있는 동안 AI 가 웹 칸에서 연 페이지가
 //  그려지고 찍히게(browser-surface OCCLUDED_WINDOW_SWITCH 머리말). 스위치는 앱이 준비되기 **전에** 걸어야 먹는다.
 app.commandLine.appendSwitch(OCCLUDED_WINDOW_SWITCH);
+function macUpdateStillInstalling() {
+  if (process.platform !== "darwin" || !existsSync(MAC_UPDATE_HANDOFF_FILE)) return false;
+  let action = "clear";
+  try { action = macUpdateHandoffAction(JSON.parse(readFileSync(MAC_UPDATE_HANDOFF_FILE, "utf8")), app.getVersion()); }
+  catch { /* 손상된 표시 파일은 설치 중이라는 근거가 아니다 */ }
+  if (action === "exit") return true;
+  rmSync(MAC_UPDATE_HANDOFF_FILE, { force: true });
+  return false;
+}
 // 두 번째 인스턴스는 창만 띄우고 죽는다 — 트레이 아이콘이 둘, CLI 가 동시에 둘 도는 걸 막는다.
-if (!app.requestSingleInstanceLock()) app.quit();
+if (macUpdateStillInstalling()) app.exit(0);
+else if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => showMain());
   app.whenReady().then(async () => {
@@ -1600,7 +1752,7 @@ else {
     //    앉아 아무것도 안 한다(실측: 이 검증 하네스가 그 상태를 그대로 잡았다). 그래서 판정은 appReady 한 자리다.
     //  · 갖춰졌고 사람이 켰으면 라이블리 화면(웹 UI). 로그인 때 자동으로 숨겨 떴으면 트레이만.
     const first = startupWindow({ ready: state.ready, startedHidden });
-    if (first === "setup") showWindow(); else if (first === "app") showApp();
+    if (first === "setup") showMain(); else if (first === "app") showApp();
     // 업데이트 적용 재시작 — 창에서 적용을 눌렀던 사람에게 **그 창**을 되돌려준다(마커는 applyUpdate 가 창이 보일 때만 남긴다).
     try { const m = join(LIVELY_DIR, "desktop-reopen"); if (existsSync(m)) { const which = readTrim(m); rmSync(m, { force: true }); if (which === "app") showApp(); else showWindow(); } } catch { /* noop */ }
     // 노드는 앱 밖에서도 죽고 살아난다(OS 데몬·사용자의 `lively node stop`). 주기적으로 되읽지 않으면

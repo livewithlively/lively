@@ -1,6 +1,7 @@
 // 앱 서버 검사 층의 백그라운드 작업 길 · 사람 요청 시간 끊기(#4486 앱 v2-7) 시험 — 진짜 검사 층 글(GUARD_JS)을 이 기계의 node 로 띄우고,
 //  뒤에 가짜 앱 · 앞에 가짜 게이트웨이(LIVELY_API_URL — claim · tick · result 를 받아 적는다)를 둔다(Lambda 안과 같은 모양: 웹 어댑터 → 검사 층 → 앱).
-//  사양 엣지 표 A(spec-4486.md): K1~K15 작업 길 · P1~P5 사람 요청 시간 · K16~K18 · P6 함수 마감(x-amzn-lambda-context) · P7 위조 작업 번호(격리 리뷰).
+//  사양 엣지 표 A(spec-4486.md): K1~K15 작업 길 · P1~P5 사람 요청 시간 · K16~K18 · P6 함수 마감(x-amzn-lambda-context) · P7 위조 작업 번호(격리 리뷰) ·
+//  K19 작업을 시작한 자리(x-lively-job-source — 검사 층 6 판).
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -74,7 +75,7 @@ async function startApi(replies: Partial<Record<"claim" | "tick" | "result", Rep
       if (!m) { res.writeHead(404).end(); return; }
       const op = m[2] as "claim" | "tick" | "result";
       const def: Reply = op === "claim"
-        ? { status: 200, body: { job: Number(m[1]), run: RUN, member: "윤상민", member_name: "윤 상민", variant: "draft", timeout_s: 30, tick_s: 1 } }
+        ? { status: 200, body: { job: Number(m[1]), run: RUN, member: "윤상민", member_name: "윤 상민", variant: "draft", timeout_s: 30, tick_s: 1, source: "app-ui" } }
         : op === "tick" ? { status: 200, body: { cancel: false } } : { status: 200, body: { ok: true, status: "done" } };
       const r = next(op) ?? def;
       if (r.status === 0) return;
@@ -137,7 +138,7 @@ const calls = (api: { calls: ApiCall[] }, op: string): ApiCall[] => api.calls.fi
 const results = (api: { calls: ApiCall[] }): Array<Record<string, unknown>> => calls(api, "result").map((c) => c.body as Record<string, unknown>);
 const claimReply = (o: Record<string, unknown> = {}): Reply => ({ status: 200, body: { job: 7, run: RUN, member: "m", member_name: "m", variant: "pub", timeout_s: 30, tick_s: 1, ...o } });
 
-test("K1 ★ 시작 확인 → 앱은 돌기 신원 · 사람 · 판 · 작업 번호를 받고 본문은 그대로 · 결과를 보고한 «뒤» 에 함수 응답이 끝난다", async () => {
+test("K1 ★ 시작 확인 → 앱은 돌기 신원 · 사람 · 판 · 작업 번호 · 시작한 자리를 받고 본문은 그대로 · 결과를 보고한 «뒤» 에 함수 응답이 끝난다", async () => {
   const r = await rig();
   try {
     const t0 = Date.now();
@@ -161,6 +162,7 @@ test("K1 ★ 시작 확인 → 앱은 돌기 신원 · 사람 · 판 · 작업 �
     assert.equal(decodeURIComponent(String(seen.headers["x-lively-member-name"])), "윤 상민");
     assert.equal(seen.headers["x-lively-variant"], "draft");
     assert.equal(seen.headers["x-lively-job"], "7");
+    assert.equal(seen.headers["x-lively-job-source"], "app-ui", "작업을 시작한 자리 = claim 의 source");
     assert.ok(claim[0]!.at <= seen.at, "앱보다 시작 확인이 먼저");
     const res = results(r.api);
     assert.equal(res.length, 1);
@@ -319,11 +321,45 @@ test("K13 새로 도입한 env 부재 — 라이블리 주소 · 앱 서버 토�
 test("K14 들어온 x-lively-* 는 지우고 검사한 값으로 — 이벤트에 x-lively-member: evil 을 실어도 앱은 작업을 시작한 사람만 본다", async () => {
   const r = await rig();
   try {
-    await jobReq(r.g.port, "/api/jobs/x", {}, jobCredential("call", 7, CALL_PART), { "x-lively-member": "evil", "x-lively-job": "999", "x-lively-other": "1" });
+    await jobReq(r.g.port, "/api/jobs/x", {}, jobCredential("call", 7, CALL_PART), { "x-lively-member": "evil", "x-lively-job": "999", "x-lively-other": "1", "x-lively-job-source": "evil" });
     const h = r.app.seen[0]!.headers;
     assert.equal(decodeURIComponent(String(h["x-lively-member"])), "윤상민");
     assert.equal(h["x-lively-job"], "7");
+    assert.equal(h["x-lively-job-source"], "app-ui", "위조한 시작 자리 대신 claim 의 source");
     assert.equal(h["x-lively-other"], undefined);
+  } finally { await r.done(); }
+});
+
+test("K19 ★ 작업을 시작한 자리 — claim 의 source 를 x-lively-job-source 로 · 들어온 같은 머리글(위조 app-ui)은 늘 지운다 · 꼴이 틀리거나 없으면 싣지 않는다", async () => {
+  //  [claim 의 source(undefined = 칸 없음 — 옛 게이트웨이), 앱이 받을 값(undefined = 머리글 없음), 까닭]
+  const cases: Array<[unknown, string | undefined, string]> = [
+    ["mcp", "mcp", "MCP 로 시작한 작업 — 위조한 app-ui 대신 게이트웨이 값"],
+    ["app-front", "app-front", "앱 주소로 연 앱 화면"],
+    ["mcp-tool", "mcp-tool", "하이픈이 든 값"],
+    ["a".repeat(32), "a".repeat(32), "32자까지"],
+    [undefined, undefined, "옛 게이트웨이(claim 에 source 칸 없음) — 위조 값도 넘기지 않는다"],
+    [null, undefined, "옛 행(source 없음)"],
+    ["", undefined, "빈 글"],
+    ["a".repeat(33), undefined, "33자"],
+    ["App-UI", undefined, "대문자"],
+    ["app_ui", undefined, "밑줄"],
+    ["app ui", undefined, "빈칸"],
+    ["1mcp", undefined, "숫자로 시작"],
+    ["-mcp", undefined, "하이픈으로 시작"],
+    ["mcp\r\nx-evil: 1", undefined, "줄바꿈(머리글 끼워 넣기)"],
+    [42, undefined, "글이 아님"],
+    [["app-ui"], undefined, "배열"],
+  ];
+  const r = await rig({ claim: cases.map(([source]) => claimReply(source === undefined ? {} : { source })) });
+  try {
+    for (const [i, [source, want, why]] of cases.entries()) {
+      const out = await jobReq(r.g.port, `/api/jobs/x?i=${i}`, {}, undefined, { "x-lively-job-source": "app-ui" });
+      assert.equal(out.status, 200, `${why} — 작업은 그대로 돈다`);
+      const h = r.app.seen[i]!.headers;
+      assert.equal(h["x-lively-job-source"], want, `${why} — claim source ${JSON.stringify(source)}`);
+      assert.equal(h["x-lively-job"], "7", why);
+    }
+    assert.equal(r.app.seen.length, cases.length);
   } finally { await r.done(); }
 });
 
@@ -415,12 +451,13 @@ test("P6 사람 요청도 함수 마감 1초 앞에서 끊는다(요청 시간�
   } finally { await r.done(); }
 });
 
-test("P7 사람 요청에 실린 위조 x-lively-job — 앱은 작업 번호를 못 본다(livelyMember(req).job 으로 판정하는 새 머리글)", async () => {
+test("P7 사람 요청에 실린 위조 x-lively-job · x-lively-job-source — 앱은 작업 번호도 시작한 자리도 못 본다(livelyMember(req).job · jobSource 로 판정하는 머리글)", async () => {
   const r = await rig();
   try {
-    const out = await req(r.g.port, "/slow?ms=0", { "x-lively-identity": personTok(), "x-lively-job": "999" });
+    const out = await req(r.g.port, "/slow?ms=0", { "x-lively-identity": personTok(), "x-lively-job": "999", "x-lively-job-source": "app-ui" });
     assert.equal(out.status, 200);
     assert.equal(r.app.seen[0]!.headers["x-lively-job"], undefined);
+    assert.equal(r.app.seen[0]!.headers["x-lively-job-source"], undefined);
     assert.equal(r.app.seen[0]!.headers["x-lively-member"], "sangmin-yoon");
   } finally { await r.done(); }
 });

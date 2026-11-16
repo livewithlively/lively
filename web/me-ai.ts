@@ -131,7 +131,30 @@ const HEADLESS_HINT: Record<string, string> = {
   codex: '주소를 열고 아래 코드를 입력한 뒤 ChatGPT 계정으로 로그인하세요. 로그인하면 이 화면에 연결 상태가 자동으로 표시됩니다.',
 };
 
-function headlessParts(h: any, reload: () => void) {
+/** 연결 끊기 확인 문구가 알아야 하는 둘레 — 이 사람이 워크스페이스 실행 멤버인가, 끊은 뒤에도 남는 자동 작업 AI 는 무엇인가. */
+interface HeadlessCtx { runnerIsMe: boolean; others: string[] }
+function headlessCtxOf(st: any, h: any): HeadlessCtx {
+  const rows = ((st?.harnesses || []) as any[]);
+  return {
+    runnerIsMe: !!st?.runner?.is_me,
+    others: rows.filter((r) => r && r.key !== h.key && r.connected).map((r) => AI_BRAND[r.key] || r.label || r.key),
+  };
+}
+/**
+ * (#5147) [연결 끊기] 앞에서 묻는 말 — **끊으면 무엇이 달라지는지**를 그 사람 처지대로 말한다.
+ *  자동 작업은 자격이 있는 AI 중 Claude 를 먼저 고르고, 하나도 없으면 멈춘다(resolveSandboxHarness).
+ *  그래서 «내가 실행 멤버인데 남는 AI 가 없다» 가 유일하게 워크스페이스 전체를 세우는 경우다 — 그때만 크게 경고한다.
+ */
+export function headlessDisconnectPrompt(name: string, ctx: HeadlessCtx): string {
+  const head = `수집·증류에 쓰는 ${name} 연결을 끊을까요?\n\n저장해 둔 ${name} 로그인 정보를 지웁니다. 다시 연결하면 복구됩니다. AI 세션 로그인은 그대로입니다.`;
+  if (ctx.runnerIsMe && !ctx.others.length) {
+    return `${head}\n\n⚠ 이 워크스페이스의 수집·증류가 내 계정으로 실행되고 있습니다. 연결된 다른 AI 가 없어서, 끊으면 다시 연결할 때까지 수집·증류가 멈춥니다.`;
+  }
+  if (ctx.others.length) return `${head}\n\n끊은 뒤에는 수집·증류가 ${ctx.others.join(', ')} 계정으로 실행됩니다.`;
+  return head;
+}
+
+function headlessParts(h: any, reload: () => void, ctx: HeadlessCtx = { runnerIsMe: false, others: [] }) {
   const panel = el('div', { class: 'aiacct-login', hidden: true });
   let handle: InlineLoginHandle | null = null;
   const fail = h.failure;
@@ -141,7 +164,7 @@ function headlessParts(h: any, reload: () => void) {
       ? ' 내 PC(노드)에서 돈 작업이었다면 그 PC 에서 Claude 로그인을 다시 하셔야 합니다(이 표시는 30일 뒤 사라집니다). 멈춘 예약 작업은 관리 ▸ 자동화에서 다시 켜세요.'
       : '') }
     : h.connected
-      ? { text: '연결됨', cls: 'pill pill-ok', tip: '자동 작업이 이 계정으로 실행됩니다. 로그인 정보가 저장되어 있다는 뜻이며, 인증에 실패하면 이 자리에 «멈춤»이 표시됩니다.' }
+      ? { text: '연결됨', cls: 'pill pill-ok', tip: '수집·증류가 이 계정으로 실행됩니다. 로그인 정보가 저장되어 있다는 뜻이며, 인증에 실패하면 이 자리에 «멈춤»이 표시됩니다.' }
       : { text: '연결 안 됨', cls: 'pill', tip: '연결하지 않았습니다. [연결]을 누르면 이 자리에서 연결할 수 있습니다.' };
   const sub = fail
     ? `${fail.message} · ${relTime(fail.at)}`
@@ -209,7 +232,7 @@ function headlessParts(h: any, reload: () => void) {
   //  표(새 창)에 쓰는 짧은 꼬리말 — 언제 연결했는지(날짜). 멈췄으면 사유는 배지 툴팁에 있다.
   const at = h.connected_at ? new Date(h.connected_at) : null;
   const meta = !fail && h.connected && at && !isNaN(at.getTime()) ? `${at.getMonth() + 1}월 ${at.getDate()}일 연결` : '';
-  const act = canInline
+  const connect = canInline
     ? el('button', {
       type: 'button', class: h.connected && !fail ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
       text: h.connected ? '다시 연결' : '연결',
@@ -217,17 +240,33 @@ function headlessParts(h: any, reload: () => void) {
       onclick: () => run(true),
     })
     : el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 넣기', onclick: () => pasteToken() });
+  //  (#5147) 연결을 거두는 길 — 종전엔 이 칸에 넣는 버튼만 있고 빼는 버튼이 없었다(AI 세션 칸엔 [로그아웃]이 있다).
+  //   자격은 내 멤버 비밀 한 칸이라, 내 자격 삭제(me_credential_delete)로 그 칸만 지운다. 판은 매번 저장소에서 읽으므로
+  //   다음 실행부터 곧바로 반영된다(캐시 없음 — sandbox-credentials).
+  const disconnect = async (ev: Event) => {
+    const name = AI_BRAND[h.key] || h.label;
+    if (!confirm(headlessDisconnectPrompt(name, ctx))) return;
+    const btn = ev.currentTarget as HTMLButtonElement; btn.disabled = true;
+    handle?.stop();
+    try {
+      const r: any = await api('/api/ui/me/credential/delete', { method: 'POST', body: JSON.stringify({ kind: h.kind, scope_key: '' }) });
+      toast(r && r.deleted === false ? `${name} 수집·증류 연결이 이미 없습니다.` : `${name} 수집·증류 연결을 끊었습니다.`);
+    } catch (e: any) { toast('연결을 끊지 못했습니다 — ' + ((e && e.message) || e), true); }
+    reload();
+  };
+  const act = el('div', { class: 'aiacct-act' }, connect,
+    h.connected ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '연결 끊기', onclick: disconnect }) : null);
   return { badge, sub, meta, act, panel };
 }
 
-function headlessRow(h: any, reload: () => void) {
-  const p = headlessParts(h, reload);
+function headlessRow(h: any, reload: () => void, ctx?: HeadlessCtx) {
+  const p = headlessParts(h, reload, ctx);
   return el('div', { class: 'aiacct' },
     el('div', { class: 'aiacct-txt' },
       el('div', { class: 'aiacct-head' },
         el('span', { class: 'aiacct-name', text: h.label }), p.badge),
       el('div', { class: 'aiacct-sub', text: p.sub })),
-    el('div', { class: 'aiacct-act' }, p.act),
+    p.act,
     p.panel);
 }
 
@@ -282,7 +321,7 @@ function headlessSection(st: any, reload: () => void): HTMLElement[] {
       anyFail ? el('span', { class: 'pill pill-warn', text: '확인 필요' }) : null),
     el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '증류·점검처럼 내가 자리에 없어도 도는 작업은, 여기서 따로 연결한 계정으로 실행됩니다.' }),
     ...(line ? [line] : []),
-    ...rows.map((r) => headlessRow(r, reload)),
+    ...rows.map((r) => headlessRow(r, reload, headlessCtxOf(st, r))),
   ];
 }
 
@@ -320,7 +359,7 @@ function myAiAccountsCard() {
 }
 
 
-// ── 새 창 [AI 계정 연결] 탭의 표(원준 2026-09-28) — 줄 = AI, 열 = «AI 세션» · «자동 작업». ────────────
+// ── 새 창 [AI 계정 연결] 탭의 표(원준 2026-09-28) — 줄 = AI, 열 = «AI 세션» · «수집·증류»(#5147 에서 «자동 작업» 을 바꿨다 — 앱 이름과 같은 말). ────────────
 //  카드(액자)를 걷고 한 장의 표로 둔다. 로그인 · 연결 동작은 위 부품(aiAccountParts · headlessParts)을 그대로 쓴다
 //  — 클래식 [내 AI 계정] 과 같은 한 벌이다. 설명은 열 머리의 (?) 두 개에만 넣는다(궁금한 사람만 본다).
 function aiLogo(key: string): HTMLElement {
@@ -331,8 +370,8 @@ function aiLogo(key: string): HTMLElement {
 function runnerSentence(st: any): string {
   const r = st?.runner;
   if (!r) return '';
-  if (r.is_me) return '이 워크스페이스의 자동 작업은 내 계정으로 실행됩니다.';
-  if (r.member) return `이 워크스페이스의 자동 작업은 ${r.name || r.member}님 계정으로 실행됩니다.`;
+  if (r.is_me) return '이 워크스페이스의 수집·증류는 내 계정으로 실행됩니다.';
+  if (r.member) return `이 워크스페이스의 수집·증류는 ${r.name || r.member}님 계정으로 실행됩니다.`;
   return '';
 }
 function myAiAccountsGrid() {
@@ -351,17 +390,17 @@ function myAiAccountsGrid() {
       const hl: any[] = ((headless || {}) as any).harnesses || [];
       const keys = [...AI_ORDER.filter((k) => accounts.some((a) => a.key === k) || hl.some((h) => h.key === k)),
         ...accounts.map((a) => a.key).filter((k) => !AI_ORDER.includes(k))];
-      const tipHeadless = ['수집, 증류, 점검처럼 라이블리가 서버에서 자동으로 실행하는 작업입니다. AI 세션 로그인과 별도로 연결하며, Claude와 ChatGPT만 지원합니다.',
+      const tipHeadless = ['수집, 증류, 점검처럼 라이블리가 서버에서 자동으로 실행하는 작업에 쓰는 계정입니다. AI 세션 로그인과 별도로 연결하며, Claude와 ChatGPT만 지원합니다.',
         runnerSentence(headless)].filter(Boolean).join(' ');
       const rows: HTMLElement[] = [el('div', { class: 'v2me-phead' },
         el('span', { class: 'v2me-pk', text: 'AI' }),
         el('span', { class: 'v2me-pk' }, 'AI 세션', qmark('내가 직접 열어서 사용하는 AI 세션입니다. 여기서 연결한 계정으로 실행됩니다.')),
-        el('span', { class: 'v2me-pk' }, '자동 작업', qmark(tipHeadless)))];
+        el('span', { class: 'v2me-pk' }, '수집·증류', qmark(tipHeadless)))];
       for (const k of keys) {
         const a = accounts.find((x) => x.key === k);
         const h = hl.find((x) => x.key === k);
         const ap = a ? aiAccountParts(a, mine, load, { grid: true }) : null;
-        const hp = h ? headlessParts(h, load) : null;
+        const hp = h ? headlessParts(h, load, headlessCtxOf(headless, h)) : null;
         const cell = (badge: HTMLElement | null, meta: string, extra: HTMLElement | null, acts: HTMLElement | null) =>
           el('div', { class: 'v2me-pcell' },
             el('div', { class: 'v2me-pst' }, badge, extra, meta ? el('span', { class: 'v2me-pm', text: meta }) : null),

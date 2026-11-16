@@ -254,6 +254,13 @@ export async function healPmMirror(
            reresolvedAssignee: rr.assignee, reresolvedSurfaces: rr.surfaces };
 }
 
+/** domain-wiki 슬러그 모드 항목인가(이름 키 upsert 대상). 경로 모드는 fields.domain_wiki.id_mode='path' 를 싣는다. */
+function isDomainWikiSlugItem(it: RawItem): boolean {
+  if (it.provenance.system !== "domain-wiki") return false;
+  const dw = (it.fields as { domain_wiki?: { id_mode?: unknown } } | undefined)?.domain_wiki;
+  return dw?.id_mode !== "path";
+}
+
 // ── 단일 RawItem → v6 적재(라우팅). ingestItems 의 client 공유 — item 단위 BEGIN/COMMIT(다중 테이블 원자성). ──
 //  라우팅: routeIngestV6(type, system) → project|knowledge|source|pm_* | null(미정의=skip).
 //  external_id 부재(이론상 불가)면 멱등키가 없어 skip. 적재 시 true, skip 시 false.
@@ -277,14 +284,15 @@ export async function mirrorExternalToV6(
     let ok = false;
     if (target === "project") ok = await mirrorProjectV6(client, it, system, externalId);
     // domain-wiki(#696): 파일 슬러그=name 자연식별 → name-키 upsert(기존 NULL-external 행 채택). 그 외 K류는 external-좌표.
-    else if (target === "knowledge" && system === "domain-wiki") ok = await mirrorKnowledgeByNameV6(client, it, system, externalId);
+    //  경로 모드(id_mode=path) 항목은 external_id 가 경로라 이름 키가 아니다 — 외부 좌표 upsert 로 보낸다(같은 이름의 남의 지식을 덮지 않는다).
+    else if (target === "knowledge" && isDomainWikiSlugItem(it)) ok = await mirrorKnowledgeByNameV6(client, it, system, externalId);
     else if (target === "knowledge") ok = await mirrorKnowledgeV6(client, it, system, externalId, opts?.claimKey);
     else if (target === "source") {
       ok = await mirrorSourceV6(client, it, system, externalId);
       // 'both' — 원문을 자료로 남기면서 지식도 만든다(출처 추적 + 즉시 검색). 같은 트랜잭션 안이라
       //  둘 중 하나만 적재되는 반쪽 상태가 생기지 않는다. 지식 쪽 실패는 항목 전체를 롤백시킨다.
       if (alsoMirrorKnowledge(it.type, system, outputMode)) {
-        const kOk = system === "domain-wiki"
+        const kOk = isDomainWikiSlugItem(it)
           ? await mirrorKnowledgeByNameV6(client, it, system, externalId)
           : await mirrorKnowledgeV6(client, it, system, externalId, opts?.claimKey);
         ok = ok || kOk;
