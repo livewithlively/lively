@@ -24,6 +24,21 @@
 //   G9 report 는 아무것도 쓰지 않는다
 //   G10 on — G1·G13 은 하위까지 완료 후 휴지통, G3·G6·G7 은 닫기만(G11 은 기록이 있지만 손길 25일이라 idle 기준 전). 사유가 외부 푸시 닫힘 노트에, 실행 신원이 감사에 남는다.
 //       커넥터가 만든 하위는 닫지 않는다.
+//
+//  ── 초안(project.draft)과의 관계 — «기록 없음» 은 «아직 초안이고 남긴 것도 없다» 일 때뿐이다 ──
+//   무엇이 «남긴 것» 인지는 v6/project-draft.ts 머리말이 정본이고, 후보 판정은 그 SQL 을 그대로 읽는다(substantiveDraftIds).
+//   아래 껍데기는 전부 기계 이름 · 손길 20일(empty 기준 14일은 넘고 idle 기준 30일은 안 넘는다) — «기록 없음» 으로 읽히면 휴지통에 간다.
+//   G14 풀린(draft=false) 프로젝트에 리스트만 지정            → 기록 있음 · on 에서 그대로
+//   G15 풀린 프로젝트 — 사람이 본문만 고쳤다(실제 경로 updateProject) → 기록 있음 · on 에서 그대로
+//   G16 아직 초안 · 세션이 폴더에 만든 파일(entry=generated)만   → 기록 있음 · on 에서 그대로
+//       (대조) 사람이 올린 파일(entry=upload)만                 → 남긴 것이 아니다 · 기록 없음 → 휴지통
+//   G17 아직 초안 · 일부러 만든 태스크(name_source NULL) 하나만  → 기록 있음 · on 에서 그대로
+//   G18 남긴 것 없는 초안(기계 이름 — G1·G13)                  → 닫고 휴지통 · **draft 는 true 그대로**
+//   G19 남긴 것 없는 초안(agent 이름)                          → 닫기만 · **draft 는 true 그대로** · 만든 사람 아닌 구성원에게 안 보인다
+//   G20 사람이 project_set_status_v6 로 완료(web · mcp)         → 종전대로 draft 가 풀린다. 입력에 keepDraft 를 실어도 못 켠다.
+//   G21 대기·실행 중인 위탁 작업(org_agent_job)이 걸린 프로젝트  → 쓰기 직전 확인이 «활동 중» 으로 보고 건너뛴다. 끝난 작업은 아니다.
+//   G22 초안 풀기 스윕(sweepDraftReleases)과 같은 정본 — 정리가 «기록 있음» 으로 센 초안 = 스윕이 푸는 초안.
+//       정리가 한 일(닫힘 · 휴지통 · 감사)은 «남긴 것» 이 아니라, 스윕이 돌아도 정리로 닫힌 초안은 초안 그대로다.
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -43,6 +58,11 @@ const { candidateRows, runProjectGc, hasLiveSession } = await import(`${DIST}/sc
 const { AUTO_CREATED_MARK } = await import(`${DIST}/project/first-prompt-project.js`);
 const es = await import(`${DIST}/v6/execution-session-store.js`);
 const { ensureSessionTask } = await import(`${DIST}/v6/session-task.js`);
+const ps = await import(`${DIST}/v6/project-store.js`);
+const vis = await import(`${DIST}/v6/visibility.js`);
+const axes = await import(`${DIST}/v6/visibility-axes.js`);
+const { projectV6Capabilities } = await import(`${DIST}/capabilities/projects-v6.js`);
+const { sweepDraftReleases } = await import(`${DIST}/v6/project-draft.js`);
 
 let pass = 0, fail = 0;
 const chk = (n, c, why = "") => { if (c) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL ${n} — ${why}`); } };
@@ -50,11 +70,13 @@ const A = "__gc_pg__";
 const SHELL = `## 첫 지시(원문)\n\n점검하자\n\n${AUTO_CREATED_MARK}`;
 const ago = (d) => `now() - interval '${d} days'`;
 
+//  프로젝트 행은 따로 말하지 않으면 **초안**으로 심는다 — 세션 첫 지시로 생긴 껍데기가 태어나는 모습이다(first-prompt-project.ts).
+//   태스크 · 서브태스크의 draft 는 쓰이지 않는다(뿌리 프로젝트로 판정).
 const mk = async (o) => (await itemsPool.query(
-  `INSERT INTO project(level, parent_id, name, description, status, created_by, name_source)
-   VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+  `INSERT INTO project(level, parent_id, name, description, status, created_by, name_source, draft)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
   [o.level ?? "project", o.parent ?? null, o.name ?? "p", o.desc ?? SHELL, o.status ?? "active", o.by ?? A,
-    o.ns === undefined ? "rule" : o.ns])).rows[0].id;
+    o.ns === undefined ? "rule" : o.ns, o.draft ?? ((o.level ?? "project") === "project")])).rows[0].id;
 const age = (id, d) => itemsPool.query(`UPDATE project SET updated_at=${ago(d)} WHERE id=$1`, [id]);
 const proj = async (o, d) => { const id = await mk(o); await age(id, d); return id; };
 
@@ -86,7 +108,7 @@ try {
   await proj({ level: "task", parent: g6, status: "done" }, 40);
   await proj({ level: "task", parent: g6, status: "done" }, 40);
 
-  const h = await proj({ name: "사람 프로젝트", desc: "사람이 쓴 본문", ns: null }, 40);
+  const h = await proj({ name: "사람 프로젝트", desc: "사람이 쓴 본문", ns: null, draft: false }, 40);
   const g7 = await proj({ name: "G7" }, 40);
   await itemsPool.query(`INSERT INTO project_edge(from_project_id, to_project_id, relation, created_at) VALUES($1,$2,'related',${ago(40)})`, [g7, h]);
 
@@ -110,6 +132,38 @@ try {
   await itemsPool.query(`UPDATE project SET updated_at=${ago(20)} WHERE id=$1 OR parent_id=$1`, [g13]);
   await itemsPool.query(`UPDATE execution_session SET last_seen=${ago(20)}, updated_at=${ago(20)} WHERE id=$1`, [SID13]);
   await itemsPool.query(`UPDATE session_project SET created_at=${ago(20)}, valid_from=${ago(20)} WHERE session_id=$1`, [SID13]);
+
+  // ── 초안과의 관계(G14 ~ G21) ──
+  const B = "__gc_pg_other__";   // 만든 사람(A)이 아닌 구성원
+  await axes.setVisAxes({ project: true }); axes.invalidateVisAxes();   // 프로젝트 축이 켜져 있어야 초안이 남에게 가려진다
+  const g14 = await mk({ name: "G14 풀림 · 리스트만", draft: false });
+  const lid = (await itemsPool.query(`INSERT INTO project_list(name) VALUES('pgt-gc 리스트') RETURNING id`)).rows[0].id;
+  await itemsPool.query(`UPDATE project SET list_id=$2, updated_at=${ago(20)} WHERE id=$1`, [g14, lid]);
+  const g15 = await mk({ name: "G15 풀림 · 본문만 고침" });
+  await ps.updateProject(g15, { description: `${SHELL}\n\n사람이 덧붙인 메모` }, { actor: A, source: "web" });
+  const g15draft = (await itemsPool.query(`SELECT draft FROM project WHERE id=$1`, [g15])).rows[0].draft;
+  await age(g15, 20);
+  const src = (pid, entry, n) => itemsPool.query(
+    `INSERT INTO source(kind, title, body_md, external_system, external_instance, external_id, fields)
+     VALUES('local_file', $1, '', 'local', '', $2, $3::jsonb)`,
+    [`pgt-gc ${n}`, `project:${pid}/${n}`, JSON.stringify({ entry, root: "project", path: n })]);
+  const g16 = await proj({ name: "G16 초안 · 만든 파일" }, 20);
+  await src(g16, "generated", "report.md");
+  const g16u = await proj({ name: "G16 초안 · 올린 파일" }, 20);
+  await src(g16u, "upload", "uploads/photo.png");
+  const g17 = await proj({ name: "G17 초안 · 일부러 만든 태스크" }, 20);
+  const g17t = await proj({ level: "task", parent: g17, status: "todo", ns: null }, 20);   // task_create_v6 로 만든 태스크는 name_source 가 비어서 태어난다
+  const g19 = await proj({ name: "G19 초안 · agent 이름", ns: "agent" }, 20);
+  const g20w = await proj({ name: "G20 사람이 완료(web)" }, 0);
+  const g20m = await proj({ name: "G20 사람이 완료(mcp)" }, 0);
+  const job = (pid, status) => itemsPool.query(
+    `INSERT INTO org_agent_job(requester, project_id, cwd, prompt, timeout_sec, status) VALUES($1,$2,'/tmp/pgt-gc','점검',600,$3)`, [A, pid, status]);
+  const g21 = await proj({ name: "G21 대기 중인 위탁 작업" }, 20);
+  await job(g21, "queued");
+  const g21r = await proj({ name: "G21 실행 중인 위탁 작업" }, 20);
+  await job(g21r, "running");
+  await job(g1, "done");   // 끝난 작업은 «활동 중» 이 아니다 — G1 은 그대로 정리된다
+  vis.invalidateVisibilityCache();
 
   const exHuman = await proj({ name: "human", ns: "human" }, 40);
   const exConn = await proj({ name: "conn", by: "connector:clickup" }, 40);
@@ -145,16 +199,31 @@ try {
   chk("G8 human·connector·표식 없음·완료·휴지통은 후보가 아니다",
     ![exHuman, exConn, h, exDone, exTrash].some((id) => by.has(id)), JSON.stringify(rows.map((r) => r.id)));
 
+  chk("G14 풀린 프로젝트에 리스트만 지정 → 기록 있음(빈 껍데기가 아니다)", by.get(g14)?.hasRecord === true, JSON.stringify(by.get(g14)));
+  chk("G15 (전제) 사람이 본문을 고치면 초안이 풀린다", g15draft === false, String(g15draft));
+  chk("G15 풀린 프로젝트 — 사람이 본문만 고쳤다 → 기록 있음", by.get(g15)?.hasRecord === true, JSON.stringify(by.get(g15)));
+  chk("G16 아직 초안 · 세션이 폴더에 만든 파일만 → 기록 있음", by.get(g16)?.hasRecord === true, JSON.stringify(by.get(g16)));
+  chk("G16 (대조) 사람이 올린 파일만 있는 초안은 남긴 것이 아니다 → 기록 없음", by.get(g16u)?.hasRecord === false, JSON.stringify(by.get(g16u)));
+  chk("G17 아직 초안 · 일부러 만든 태스크 하나만 → 기록 있음 · 담당자가 없어 보호는 아니다",
+    by.get(g17)?.hasRecord === true && by.get(g17)?.protected === false, JSON.stringify(by.get(g17)));
+  chk("G19 남긴 것 없는 초안(agent 이름) → 기록 없음", by.get(g19)?.hasRecord === false && by.get(g19)?.nameSource === "agent", JSON.stringify(by.get(g19)));
+  chk("G19 (전제) 초안은 만든 사람만 보고 다른 구성원은 못 본다",
+    (await vis.canSeeProjectRow(g19, A)) === true && (await vis.canSeeProjectRow(g19, B)) === false);
+  chk("G21 대기·실행 중인 위탁 작업이 걸린 프로젝트는 «활동 중» 이다 · 끝난 작업(G1)은 아니다",
+    (await hasLiveSession(g21)) === true && (await hasLiveSession(g21r)) === true && (await hasLiveSession(g1)) === false);
+
   const snap = async () => (await itemsPool.query(
-    `SELECT id, status, trashed_at FROM project WHERE created_by IN ($1, 'connector:clickup') ORDER BY id`, [A])).rows;
+    `SELECT id, status, trashed_at, draft FROM project WHERE created_by IN ($1, 'connector:clickup') ORDER BY id`, [A])).rows;
   const before = JSON.stringify(await snap());
   const rep = await runProjectGc({}, { id: "pgt-gc", action: "project_gc", interval_sec: 86400 });
   chk("G9 report 는 후보만 요약하고 아무것도 쓰지 않는다",
-    rep.status === "ok" && rep.summary.mode === "report" && rep.summary.empty.trash === 2 && rep.summary.idle.close === 3 && rep.summary.protected_excluded === 2
-      && JSON.stringify(await snap()) === before, JSON.stringify(rep.summary));
+    rep.status === "ok" && rep.summary.mode === "report" && rep.summary.protected_excluded === 2 && JSON.stringify(await snap()) === before, JSON.stringify(rep.summary));
+  //  empty: 휴지통 5 = G1 · G13 · G16(올린 파일) · G21 둘(위탁 작업은 쓰기 직전에만 본다) · 닫기 1 = G19 / idle: 닫기 3 = G3 · G6 · G7
+  chk("G9 report 요약 — empty 휴지통 5 · 닫기 1, idle 닫기 3(풀린 프로젝트 · 남긴 것 있는 초안은 empty 가 아니다)",
+    rep.summary.empty.trash === 5 && rep.summary.empty.close === 1 && rep.summary.idle.close === 3, JSON.stringify(rep.summary));
 
   const res = await runProjectGc({ mode: "on" }, { id: "pgt-gc", action: "project_gc", interval_sec: 86400 });
-  const st = async (id) => (await itemsPool.query(`SELECT status, trashed_at FROM project WHERE id=$1`, [id])).rows[0];
+  const st = async (id) => (await itemsPool.query(`SELECT status, trashed_at, draft FROM project WHERE id=$1`, [id])).rows[0];
   const s1 = await st(g1);
   chk("G10 G1 은 완료 후 휴지통", s1.status === "done" && s1.trashed_at != null, JSON.stringify({ s1, done: res.summary.done }));
   const s13 = await st(g13);
@@ -172,8 +241,40 @@ try {
   const audit = (await itemsPool.query(
     `SELECT op FROM org_content_audit WHERE entity='project' AND entity_key=$1 AND actor='cron:pgt-gc' ORDER BY id`, [String(g1)])).rows.map((r) => r.op);
   chk("G10 감사에 실행 신원(cron:<잡>)으로 상태 변경·휴지통이 남는다", audit.includes("set_status") && audit.includes("trash"), JSON.stringify(audit));
-  chk("G10 요약 — 휴지통 2(G1·G13) · 닫기 3 · 오류 0", res.status === "ok" && res.summary.done.trashed === 2 && res.summary.done.closed === 3
+  chk("G10 요약 — 휴지통 3(G1·G13·G16 올린 파일) · 닫기 4(G3·G6·G7·G19) · 활동 중 건너뜀 2(G21) · 오류 0",
+    res.status === "ok" && res.summary.done.trashed === 3 && res.summary.done.closed === 4 && res.summary.done.skipped_live === 2
     && res.summary.done.error_count === 0, JSON.stringify(res.summary.done));
+
+  const kept = await Promise.all([g14, g15, g16, g17].map(st));
+  chk("G14~G17 풀린 프로젝트 · 남긴 것이 있는 초안은 empty 기준일(14일)을 넘겨도 닫히지도 휴지통에 가지도 않는다",
+    kept.every((r) => r.status === "active" && r.trashed_at == null) && (await st(g17t)).status === "todo", JSON.stringify(kept));
+  chk("G16 (대조) 올린 파일만 있는 초안은 종전대로 닫고 휴지통", (await st(g16u)).status === "done" && (await st(g16u)).trashed_at != null);
+  chk("G18 남긴 것 없는 초안(기계 이름)은 닫고 휴지통에 가도 초안 그대로다 — 되살려도 만든 사람만 본다",
+    s1.draft === true && s13.draft === true && (await vis.canSeeProjectRow(g1, B)) === false, JSON.stringify({ s1, s13 }));
+  vis.invalidateVisibilityCache();
+  const s19 = await st(g19);
+  chk("G19 남긴 것 없는 초안(agent 이름)은 닫히기만 하고 초안 그대로다", s19.status === "done" && s19.trashed_at == null && s19.draft === true, JSON.stringify(s19));
+  chk("G19 정리로 닫힌 초안은 여전히 만든 사람만 본다 — 다른 구성원에게는 단건도 «숨은 프로젝트» 다",
+    (await vis.canSeeProjectRow(g19, A)) === true && (await vis.canSeeProjectRow(g19, B)) === false && (await vis.hiddenProjects(B)).ids.has(g19));
+  chk("G21 위탁 작업이 걸린 프로젝트는 건드리지 않았다",
+    (await Promise.all([g21, g21r].map(st))).every((r) => r.status === "active" && r.trashed_at == null));
+
+  //  스윕과 같은 정본을 읽는지 — 정리가 «기록 있음» 으로 센 초안은 스윕이 푸는 초안이고, 정리가 한 일은 스윕 눈에 «남긴 것» 이 아니다.
+  await sweepDraftReleases();
+  const dr = async (ids) => (await Promise.all(ids.map(st))).map((r) => r.draft);
+  chk("G22 스윕이 돌아도 정리로 닫힌 초안(G1·G13·G16 올린 파일·G19)은 초안 그대로 — 닫힘 · 휴지통 · 감사는 «남긴 것» 이 아니다",
+    (await dr([g1, g13, g16u, g19])).every((d) => d === true), JSON.stringify(await dr([g1, g13, g16u, g19])));
+  chk("G22 정리가 «기록 있음» 으로 센 초안(G16 만든 파일 · G17 태스크)은 스윕이 푸는 바로 그 초안이다",
+    (await dr([g16, g17])).every((d) => d === false), JSON.stringify(await dr([g16, g17])));
+
+  const setStatus = projectV6Capabilities.find((c) => c.name === "project_set_status_v6");
+  const human = { userId: A, email: "", scopes: [], projects: ["*"] };
+  await setStatus.handler({ id: g20w, status: "done", status_raw: null, keepDraft: true, keep_draft: true }, human, { actor: A, source: "web", viewer: null });
+  await setStatus.handler({ id: g20m, status: "done", status_raw: null, keepDraft: true, keep_draft: true }, human, { actor: A, source: "mcp", viewer: null });
+  const s20 = await Promise.all([g20w, g20m].map(st));
+  chk("G20 사람·세션이 완료하면(web · mcp) 종전대로 초안이 풀린다 — 입력에 keepDraft 를 실어도 켜지지 않는다",
+    s20.every((r) => r.status === "done" && r.draft === false), JSON.stringify(s20));
+  chk("G20 초안을 남기는 스위치는 입력 스키마에 없다", !Object.keys(setStatus.input).some((k) => /draft/i.test(k)), JSON.stringify(Object.keys(setStatus.input)));
 } catch (e) {
   fail++; console.error("FAIL 예외", e);
 } finally {

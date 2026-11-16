@@ -127,12 +127,12 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "repo", label: "레포 (선택)", kind: "repo", hint: "지정하면 공유 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(프롬프트에 클론 지시 불필요). 비우면 빈 워크스페이스." },
     HEADLESS_HARNESS_PARAM, HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ], run: (p, job) => runAgentHeadless(p, job.id, job.created_by ?? null) },
-  // 세션 첫 지시로 자동 생성된 프로젝트 중 방치된 것을 닫거나(기록 있음) 닫고 휴지통에 넣는다(기록 없음·기계 이름). 기본은 report(쓰기 0).
+  // 세션 첫 지시로 자동 생성된 프로젝트 중 방치된 것을 닫거나(기록 있음 · 초안에서 풀림) 닫고 휴지통에 넣는다(남긴 것 없는 초안·기계 이름). 기본은 report(쓰기 0).
   //  판정은 actions/project-gc-plan.ts, 기록·손길의 정의는 actions/project-gc.ts CANDIDATE_SQL.
   { key: "project_gc", label: "자동 생성 프로젝트 정리 (방치·장기 미활동)", params: [
     { name: "mode", label: "모드", kind: "select", choices: ["report", "on"], hint: "report = 후보 수와 앞 id 만 요약(쓰기 0, 기본) · on = 실제로 닫고 휴지통에 넣는다. on 이 아니면 report." },
-    { name: "empty_days", label: "기록 없는 프로젝트 기준(일)", kind: "text", hint: `기록(지식·작업 기록·연결·댓글·체크리스트·첨부·시간 기록·대화·팀원·하위 여럿)이 없고 손길이 이만큼 없으면 정리. 기계 이름이면 닫고 휴지통, 다듬은 이름이면 닫기만. 기본 ${GC_DEFAULTS.emptyDays}.` },
-    { name: "idle_days", label: "기록 있는 프로젝트 기준(일)", kind: "text", hint: `기록이 있는데 손길이 이만큼 없으면 닫는다(휴지통 아님). 기본 ${GC_DEFAULTS.idleDays}.` },
+    { name: "empty_days", label: "기록 없는 프로젝트 기준(일)", kind: "text", hint: `아직 초안이고 기록(지식·작업 기록·연결·댓글·체크리스트·첨부·시간 기록·대화·팀원·하위 여럿·세션이 만든 파일·일부러 만든 태스크)이 없는 프로젝트에 손길이 이만큼 없으면 정리. 기계 이름이면 닫고 휴지통, 다듬은 이름이면 닫기만. 닫아도 초안은 풀리지 않는다(만든 사람과 팀원만 본다). 기본 ${GC_DEFAULTS.emptyDays}.` },
+    { name: "idle_days", label: "기록 있는 프로젝트 기준(일)", kind: "text", hint: `기록이 있거나 초안에서 풀린 프로젝트에 손길이 이만큼 없으면 닫는다(휴지통 아님). 기본 ${GC_DEFAULTS.idleDays}.` },
     { name: "batch_trash", label: "회차당 휴지통 상한", kind: "text", hint: `기본 ${GC_DEFAULTS.batchTrash}.` },
     { name: "batch_close", label: "회차당 닫기 상한", kind: "text", hint: `기본 ${GC_DEFAULTS.batchClose}.` },
     { name: "batch_children", label: "회차당 하위 태스크 닫기 상한", kind: "text", hint: `기본 ${GC_DEFAULTS.batchChildren}. 모자라면 그 프로젝트는 다음 회차로 넘긴다(회차 첫 프로젝트는 상한보다 많아도 처리).` },

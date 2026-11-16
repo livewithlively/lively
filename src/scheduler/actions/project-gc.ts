@@ -10,6 +10,14 @@
 //   컨텍스트 안에서 돌리고, itemsPool 파사드의 바인딩과 행 수준 보안이 어느 행이 보이는지를 정한다 — 다른 정비 액션과 같은 규율이다.
 //   그래서 이 파일 안에서 withTenant 를 다시 걸거나 테넌트를 순회하면 안 된다(남의 워크스페이스를 대신 치우게 된다).
 //   격리는 project-gc-tenant.pg-test.mjs 가 앱 역할 · FORCE RLS 로 잰다.
+//
+//  ── 초안(project.draft) ──
+//  세션 첫 지시로 생긴 프로젝트는 초안으로 태어나고, 무언가를 남기면 초안에서 풀린다(v6/project-draft.ts — 무엇이 «남긴 것» 인지는
+//   그 파일 머리말이 정본이다). 초안은 만든 사람과 팀원만 본다(v6/visibility.ts — 본문에 첫 지시 원문이 있다). 그래서 두 가지를 지킨다:
+//   · «기록 없음»(empty 단계 — 휴지통까지 가는 쪽)은 **아직 초안이고 그 정본으로도 남긴 것이 없는** 프로젝트뿐이다. 풀린 프로젝트는
+//     누가 리스트에 올렸거나 본문을 고쳤거나 무언가를 남긴 것이라 기록이 있는 쪽(idle — 닫기만)으로 센다.
+//   · 여기서 닫아도 초안은 풀지 않는다 — 정리가 비공개 첫 지시를 전원에게 여는 일이 되면 안 된다. 완료 핸들러가 크론 경로
+//     (ctx.source='cron')를 보고 초안을 그대로 둔다(capabilities/projects-v6.ts projectSetStatusV6 · project-store.updateProjectStatus keepDraft).
 import { itemsPool, q } from "../../db/client.js";
 import type { CronJob } from "../registry.js";
 import type { LivelyUser } from "../../context.js";
@@ -80,19 +88,21 @@ bound AS (
 
 /**
  * 후보 SQL — 정리 대상 프로젝트마다 가족(프로젝트 + 하위 태스크 + 그 서브태스크)을 모아 기록 유무·마지막 손길·보호 여부를 잰다.
- *  $1 표식 · $2 이보다 오래된 손길만(일 — 두 단계 기준 중 짧은 쪽) · $3 조직 시간대의 오늘(YYYY-MM-DD, 기한 비교).
+ *  $1 표식 · $2 이보다 오래된 손길만(일 — 두 단계 기준 중 짧은 쪽) · $3 조직 시간대의 오늘(YYYY-MM-DD, 기한 비교)
+ *  · $4 아직 초안인데 남긴 것이 있는 프로젝트 id(v6/project-draft.ts substantiveDraftIds — 그 정본 SQL 을 여기 옮겨 적지 않는다).
  *  보호 = 열린 가족 노드에 기한이 남았거나, 사람이 만든 노드에 담당자가 있다. 담당자는 사람이 만든 노드에서만 센다 — 세션 태스크는
  *   세션 주인을 담당자로 자동 지정하고(v6/session-task.ts ensureSessionTask) name_source 가 session 으로 태어나 이름을 지어도 agent 까지만
  *   오른다. 사람이 그 태스크를 골라 열면 human 으로 올라간다(bindSessionTask) — 그때부터는 사람의 의사다. NULL 은 human 이다
  *   (컬럼 이전 행 · task_create_v6 로 만든 태스크).
- *  기록 = 직계 하위가 RECORD_MIN_DIRECT_CHILDREN 이상이거나, 가족 어디든 아래 rec 의 흔적이 하나라도 있다.
+ *  기록 = 초안이 아니거나($4 에 든 «남긴 것이 있는 초안» 포함 — 파일 머리말 «초안»), 직계 하위가 RECORD_MIN_DIRECT_CHILDREN 이상이거나,
+ *   가족 어디든 아래 rec 의 흔적이 하나라도 있다. 즉 «기록 없음» 은 남긴 것 없는 초안에서만 나온다.
  *   rec 에는 사람이 남기는데 project.updated_at 을 올리지 않는 쓰기(댓글·체크리스트·첨부·시간 기록·프로젝트 대화·팀원)를 함께 넣는다 —
  *   빠지면 댓글만 달린 프로젝트가 «기록 없음» 으로 휴지통에 간다.
  *  손길 = 가족 updated_at · 세션 구간 시작 · rec 흔적 시각 · 붙은 세션의 활동(SESSION_CTES) 중 최댓값.
  */
 export const CANDIDATE_SQL = `
 WITH target AS (
-  SELECT p.id, p.name_source
+  SELECT p.id, p.name_source, (p.draft IS TRUE AND NOT (p.id = ANY($4::int[]))) AS bare_draft
     FROM project p
    WHERE p.level = 'project'
      AND p.trashed_at IS NULL AND p.archived_at IS NULL
@@ -118,7 +128,7 @@ WITH target AS (
     FROM fam f GROUP BY f.root
 ), ${SESSION_CTES}, scored AS (
   SELECT t.id, t.name_source, a.open_children, COALESCE(a.protected, false) AS protected,
-         (a.direct_children >= ${RECORD_MIN_DIRECT_CHILDREN} OR rec.n > 0) AS has_record,
+         (NOT t.bare_draft OR a.direct_children >= ${RECORD_MIN_DIRECT_CHILDREN} OR rec.n > 0) AS has_record,
          GREATEST(a.max_updated, sp.at, rec.at, se.max_active) AS last_touch
     FROM target t
     JOIN agg a ON a.root = t.id
@@ -142,7 +152,12 @@ SELECT * FROM scored
  WHERE last_touch < now() - make_interval(days => $2::int)
  ORDER BY last_touch, id`;
 
-/** 쓰기 직전 확인 — 이 프로젝트 가족에 붙은 세션 중 최근에 활동한 것이 있나(소유자 무관). $1 프로젝트 · $2 창(시간). */
+/**
+ * 쓰기 직전 확인 — 이 프로젝트가 지금 쓰이는 중인가(소유자 무관). $1 프로젝트 · $2 창(시간).
+ *  · 가족에 붙은 세션 중 최근에 활동한 것이 있다
+ *  · 이 프로젝트 폴더에서 돌 위탁 작업이 대기·실행 중이다(org_agent_job — project_id 는 프로젝트 행의 id, 열린 상태는
+ *    queued·starting·running: org/schema/sessions-infra.ts). 작업 컨테이너는 세션 표에 박스 행을 남기지 않아 위 세션 신호로는 안 잡힌다.
+ */
 const LIVE_GUARD_SQL = `
 WITH agg AS (
   SELECT $1::int AS root, ARRAY(
@@ -150,7 +165,8 @@ WITH agg AS (
     UNION ALL SELECT c.id FROM project c WHERE c.parent_id = $1
     UNION ALL SELECT g.id FROM project c JOIN project g ON g.parent_id = c.id WHERE c.parent_id = $1) AS ids
 ), ${SESSION_CTES}
-SELECT COALESCE((SELECT max_active FROM sess) > now() - make_interval(hours => $2::int), false) AS live`;
+SELECT (COALESCE((SELECT max_active FROM sess) > now() - make_interval(hours => $2::int), false)
+        OR EXISTS (SELECT 1 FROM org_agent_job j WHERE j.project_id = $1 AND j.status IN ('queued', 'starting', 'running'))) AS live`;
 
 /** 함께 닫을 열린 하위 — 서브태스크 먼저(부모보다 먼저 닫는다). 커넥터가 만든 하위는 외부 원본의 몫이라 건드리지 않는다. */
 const OPEN_CHILDREN_SQL = `
@@ -166,7 +182,8 @@ export async function candidateRows(minDays: number, now: Date = new Date()): Pr
   //  표식 모듈은 프로젝트 스토어까지 끌고 와 동적으로 읽는다 — 레지스트리가 이 파일을 정적으로 로드한다(registry.ts 머리말).
   const { AUTO_CREATED_MARK } = await import("../../project/first-prompt-project.js");
   const { orgTimezone } = await import("../../org/timezone.js");
-  const rows = await q(itemsPool, CANDIDATE_SQL, [AUTO_CREATED_MARK, minDays, localDateOf(now, await orgTimezone())]);
+  const { substantiveDraftIds } = await import("../../v6/project-draft.js");
+  const rows = await q(itemsPool, CANDIDATE_SQL, [AUTO_CREATED_MARK, minDays, localDateOf(now, await orgTimezone()), await substantiveDraftIds()]);
   return rows.map((r) => ({
     id: Number(r.id),
     nameSource: r.name_source == null ? null : String(r.name_source),
@@ -233,10 +250,12 @@ export async function runProjectGc(params: Record<string, unknown>, job: CronJob
   const actor = "cron:" + job.id;
   const user: LivelyUser = { userId: actor, email: "", scopes: [], projects: ["*"] };
   // viewer=null 은 내부 경로(가시성 필터 없음) — 이 잡이 도는 워크스페이스의 행은 전부 대상이다.
+  //  ⚠ source 'cron' 은 감사 표기만이 아니다 — 완료 핸들러가 이 값을 보고 초안을 풀지 않는다(파일 머리말 «초안»). 다른 값으로 바꾸면
+  //   여기서 닫은 초안이 전원에게 공개된다(project-gc.pg-test.mjs G18 · G19 가 잡는다).
   const ctx: CapabilityCtx = { actor, source: "cron", viewer: null };
   const caps = await loadCaps();
   //  trashed = 닫고 휴지통까지 · closed = 닫기만(close 단계) · closed_not_trashed = 닫았는데 휴지통이 거부·실패해 닫힌 채 남은 것
-  //  skipped_live = 쓰기 직전 활동 중인 세션이 보여 아무것도 안 한 것 · deferred = 다시 읽은 하위가 회차 예산을 넘어 미룬 것
+  //  skipped_live = 쓰기 직전 활동 중인 세션이나 대기·실행 중인 위탁 작업이 보여 아무것도 안 한 것 · deferred = 다시 읽은 하위가 회차 예산을 넘어 미룬 것
   const done = { trashed: 0, closed: 0, closed_not_trashed: 0, children_closed: 0, skipped_live: 0, deferred: 0,
     errors: [] as Array<{ id: number; step: string; error: string; closed?: true }> };
 

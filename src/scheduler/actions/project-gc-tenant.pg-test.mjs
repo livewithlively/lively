@@ -62,12 +62,12 @@ try {
   const { withTenant } = await import(`${D}/org/tenant-context.js`);
   const { candidateRows, runProjectGc } = await import(`${D}/scheduler/actions/project-gc.js`);
   const A = { id: TA, slug: "ws-a" };
-  // 두 워크스페이스에 같은 조건의 껍데기 하나씩 — 기록 없음 · 기계 이름 · 손길 20일 전. 심기는 소유자 연결(dbc)로 한다.
+  // 두 워크스페이스에 같은 조건의 껍데기 하나씩 — 초안 · 기록 없음 · 기계 이름 · 손길 20일 전. 심기는 소유자 연결(dbc)로 한다.
   //  ⚠ dist 모듈은 풀을 앱 역할로 바꾼 **뒤에** import 한다 — 먼저 부르면 db/client 가 소유자 DSN 으로 풀을 만들어 RLS 를 안 탄다.
   const { AUTO_CREATED_MARK } = await import(`${D}/project/first-prompt-project.js`);
   const shell = async (t, name) => (await dbc.query(
-    `INSERT INTO project(tenant_id, level, name, description, status, created_by, name_source, updated_at)
-     VALUES ($1, 'project', $2, $3, 'active', '__gc_tenant__', 'rule', now() - interval '20 days') RETURNING id`,
+    `INSERT INTO project(tenant_id, level, name, description, status, created_by, name_source, draft, updated_at)
+     VALUES ($1, 'project', $2, $3, 'active', '__gc_tenant__', 'rule', true, now() - interval '20 days') RETURNING id`,
     [t, name, `첫 지시\n\n${AUTO_CREATED_MARK}`])).rows[0].id;
   const pa = await shell(TA, "A 껍데기");
   const pb = await shell(TB, "B 껍데기");

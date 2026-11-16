@@ -60,7 +60,8 @@ export async function releaseProjectDraft(rowId: number, reason: DraftReleaseRea
   }
 }
 
-// «남긴 것» 이 있는 초안의 id — 머리말의 목록을 그대로 옮긴 SQL. sweepDraftReleases 만 쓴다.
+// «남긴 것» 이 있는 초안의 id — 머리말의 목록을 그대로 옮긴 SQL. 이 판정의 SQL 은 이 한 벌뿐이다:
+//  sweepDraftReleases(풀기)와 substantiveDraftIds(읽기만 — 정리 크론이 «버려도 되는 껍데기» 를 가릴 때)가 함께 쓴다.
 //  ⚠ 파일은 source 를 **한 번** 훑어 프로젝트 번호를 뽑는다(초안마다 LIKE 를 돌리면 초안 수 × 자료 수가 된다).
 //  ⚠ 작업기록 · 코멘트 · 태스크는 프로젝트 행뿐 아니라 그 태스크 · 서브태스크에 달린 것도 본다(node = 뿌리와 그 후손).
 const SUBSTANTIVE_DRAFTS_SQL = `
@@ -86,6 +87,18 @@ const SUBSTANTIVE_DRAFTS_SQL = `
   UNION SELECT n.root FROM project t JOIN node n ON n.node = t.id
          WHERE t.level IN ('task', 'subtask') AND t.name_source IS NULL
   UNION SELECT d.id FROM d JOIN files f ON f.pid = d.id::text`;
+
+/**
+ * 남긴 것이 있는데 아직 초안인 프로젝트의 id — **읽기만** 한다(아무것도 풀지 않는다).
+ *  쓰는 자리의 releaseProjectDraft 가 실패했거나 스윕이 아직 안 돈 초안은 «초안인데 남긴 것이 있는» 상태로 남는다.
+ *  초안 여부만 보고 «남긴 것 없음» 으로 읽으면 그 프로젝트를 빈 껍데기로 다루게 되므로, 그런 판정을 하는 자리
+ *  (scheduler/actions/project-gc.ts)는 이 집합을 함께 본다. 조건을 따로 적지 않고 스윕과 같은 SQL 을 쓴다 —
+ *  «남긴 것» 의 목록이 바뀌면 두 곳이 함께 바뀐다.
+ */
+export async function substantiveDraftIds(): Promise<number[]> {
+  const rows = await q(itemsPool, SUBSTANTIVE_DRAFTS_SQL, []);
+  return rows.map((r) => Number(r.root));
+}
 
 /**
  * 남긴 것이 있는데 아직 초안인 프로젝트를 한꺼번에 푼다. 풀린 수를 돌려준다. 멱등 — 몇 번 돌려도 결과가 같다.
