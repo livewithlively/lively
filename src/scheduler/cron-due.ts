@@ -24,6 +24,8 @@ export interface CronDueInput {
   now: number;
   /** 조직 시간대(#778). 없으면 서버 로컬 — cron-expr 의 계약 그대로. */
   tz?: string;
+  /** 매치 뒤 고정 지연(ms) — cron-stagger.ts. 없으면 0(종전 판정). 첫 실행에는 쓰지 않는다. */
+  offsetMs?: number;
 }
 
 /**
@@ -44,7 +46,7 @@ export function cronDue(inp: CronDueInput): boolean {
   const lastMs = new Date(raw).getTime();
   if (!Number.isFinite(lastMs)) return false;
   const next = nextCronTime(parsed, new Date(lastMs), inp.tz);
-  return next !== null && next.getTime() <= inp.now;
+  return next !== null && next.getTime() + (inp.offsetMs ?? 0) <= inp.now;
 }
 
 export interface RunOnceDueInput {
