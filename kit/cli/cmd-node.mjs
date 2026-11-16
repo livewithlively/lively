@@ -463,6 +463,23 @@ export function nodeIdTakenByOther(registerErr, rotateErr) {
 }
 
 /**
+ * (순수) 목록에서 본 그 이름의 노드가 **다른 사람의 개인 컴퓨터**인가 — 회전하기 **전에** 묻는다.
+ *  서버는 관리자에게 남의 노드 회전도 내준다(src/node/routes.ts requireOwn). 그래서 관리자의 컴퓨터는 위 판정(409 + 403)에
+ *  걸리지 않는다: 묻지 않고 회전하면 403 대신 **그 사람 노드의 열쇠가 나온다** — 그 사람의 노드는 끊기고(옛 열쇠 무효),
+ *  그 사람의 세션이 이 컴퓨터에서 열린다.
+ *  ⚠ 모르면 false 다(목록에 없다 · 주인 칸이 비었다 · 내 id 를 모른다) — 종전 길(회전 → 403 이면 비킨다)로 간다.
+ *  ⚠ worker 노드는 관리자들이 함께 다시 앉히는 컴퓨터라 여기서 가르지 않는다(종전처럼 회전).
+ * @param {{owner_member?: string|null, kind?: string|null}|null|undefined} node GET /api/ui/nodes 의 그 이름 행(없으면 undefined)
+ * @param {string|null|undefined} memberId 내 구성원 id
+ */
+export function nodeOwnedByOther(node, memberId) {
+  const owner = String(node?.owner_member ?? "").trim();
+  const me = String(memberId ?? "").trim();
+  if (!owner || !me) return false;
+  return owner !== me && node?.kind !== "worker";
+}
+
+/**
  * (순수) `--id` 없이 실행했을 때의 노드 id.
  *  기본은 호스트 이름(slug)이다. 다만 앞선 실행이 **이름이 겹쳐 비켜 등록한** 기록(`<slug>-…`, 같은 게이트웨이)이 있으면 그 이름을 잇는다 —
  *  안 그러면 실행마다 «호스트 이름으로 등록 → 409 → 비켜 등록 → 열쇠 회전» 을 되풀이한다.
@@ -646,19 +663,38 @@ async function cmdNode(rest) {
     let r = await register(nodeId).catch((e) => ({ __err: e }));
     if (r.__err) { // 이미 존재 → 토큰 회전으로 새 토큰 확보(본인 노드여야 통과)
       const e1 = r.__err;
-      r = await rotate(nodeId).catch((e) => ({ __err: e }));
-      if (r.__err) {
-        const e2 = r.__err;
-        if (!nodeIdTakenByOther(e1, e2)) bothFailed(e1, e2);
+      const takenMsg = `'${nodeId}' 는 다른 구성원이 이미 쓰는 노드 이름입니다 — 다른 이름을 주세요: lively node --id <이름>`;
+      // ★ 회전하기 **전에** 그 이름의 주인을 본다(nodeOwnedByOther 머리말) — 관리자는 남의 노드도 회전이 통과해서,
+      //  묻지 않고 회전하면 호스트 이름이 같은 다른 사람의 노드 열쇠를 가져온다.
+      //  이름을 직접 줬으면(--id) 보지 않는다: 그 노드를 지목해 다시 앉히는 길이다(관리 화면의 `lively node --daemon --id …` 안내).
+      let me = null, rows = [], others = false;
+      if (!parsed.id && e1.status === 409) {
+        // ⚠ 못 읽으면 **멈춘다**(회전하지 않는다) — 주인을 모르는 채 회전하면 관리자의 컴퓨터가 남의 노드 열쇠를 가져올 수 있다.
+        //  다시 실행하면 되는 일이고(등록은 방금 응답했다), 잘못 회전한 것은 그 사람의 노드가 끊긴 뒤에야 드러난다.
+        const ask = (path) => api(path).catch((e) => die(`'${nodeId}' 는 이미 등록된 노드 이름인데, 누구의 것인지 확인하지 못했습니다 — 잠시 뒤 다시 실행하세요. (${e.message})`, 1));
+        me = await ask("/api/ui/me/profile");
+        const listed = await ask("/api/ui/nodes");
+        rows = Array.isArray(listed?.nodes) ? listed.nodes : [];
+        others = nodeOwnedByOther(rows.find((n) => n?.id === nodeId), me?.id);
+      }
+      let e2 = null;
+      if (!others) r = await rotate(nodeId).catch((e) => { e2 = e; return null; });
+      if (others || e2) {
+        if (e2 && !nodeIdTakenByOther(e1, e2)) bothFailed(e1, e2);
         // 같은 이름의 노드가 **다른 사람 것**이다(호스트 이름이 같은 컴퓨터) — collisionNodeId 머리말.
         //  이름을 직접 줬으면(--id) 바꿔 등록하지 않는다: 그 이름을 고른 사람에게 다른 이름을 고르라고 말한다.
-        if (parsed.id) die(`'${nodeId}' 는 다른 구성원이 이미 쓰는 노드 이름입니다 — 다른 이름을 주세요: lively node --id <이름>`, 1);
-        const me = await api("/api/ui/me/profile").catch(() => null);
+        if (parsed.id) die(takenMsg, 1);
         const alt = collisionNodeId(hostSlug, me?.id);
-        if (!alt || alt === nodeId) bothFailed(e1, e2);
+        // 비킬 이름을 못 만들었다 — 회전이 거절된 길이면 두 오류를, 회전을 하지 않은 길이면 그 이름이 남의 것이라고 말한다.
+        if (!alt || alt === nodeId) { if (e2) bothFailed(e1, e2); die(takenMsg, 1); }
+        // 비킨 이름마저 남의 것이면(구성원 id 를 이름 규칙에 맞추며 글자가 바뀌거나 잘려 겹칠 수 있다) 여기서 멈춘다 — 그것도 회전하지 않는다.
+        if (nodeOwnedByOther(rows.find((n) => n?.id === alt), me?.id)) die(`'${nodeId}' 와 '${alt}' 모두 다른 구성원이 이미 쓰는 노드 이름입니다 — 이름을 직접 주세요: lively node --id <이름>`, 1);
         say(dim(`· '${nodeId}' 는 다른 구성원의 컴퓨터가 이미 쓰는 이름입니다(호스트 이름이 같습니다) — '${alt}' 로 등록합니다.`));
-        // 비킨 이름이 이미 있으면 그건 내 것이다(앞선 실행이 등록했는데 로컬 기록이 사라진 경우) → 회전으로 잇는다.
-        r = await register(alt).catch((e3) => rotate(alt).catch((e4) => bothFailed(e3, e4)));
+        // 비킨 이름이 **이미 있으면**(409) 그건 내 것이다(앞선 실행이 등록했는데 로컬 기록이 사라진 경우 — 로그아웃 뒤 다시 로그인) → 회전으로 잇는다.
+        //  그 밖의 등록 실패는 회전으로 넘기지 않고 그대로 말한다.
+        r = await register(alt).catch((e3) => (e3.status === 409
+          ? rotate(alt).catch((e4) => bothFailed(e3, e4))
+          : die(`노드 등록 실패 — ${e3.message}`, 1)));
         nodeId = alt;
       }
     }

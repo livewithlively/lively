@@ -331,6 +331,8 @@ try {
       } else if (req.method === "POST" && /^\/api\/ui\/nodes\/[^/]+\/rotate$/.test(p3)) {
         rot3.push(decodeURIComponent(p3.split("/")[4]));
         json(403, { error: "본인 노드가 아닙니다" });
+      } else if (req.method === "GET" && p3 === "/api/ui/nodes") {
+        json(200, { nodes: [] });   // 관리자가 아니면 목록에는 내 노드만 나온다 — 남의 노드는 보이지 않는다
       } else if (p3 === "/api/ui/me/profile") {
         json(200, { id: "mina", display_name: "미나" });
       } else if (p3 === "/api/ui/node-agent") {
@@ -374,6 +376,119 @@ try {
           && !existsSync(join(H4.home, ".lively", "node-agent.env")),
         `code=${r3.code}\n${r3.err.slice(-300)}`);
     } finally { srv3.close(); }
+  }
+
+  // ⑫ 이름 겹침 — **관리자**의 컴퓨터. 서버는 관리자에게 남의 노드 회전도 내준다(requireOwn).
+  //  그래서 «등록 409 → 회전» 을 묻지 않고 하면 403 이 나지 않고 **그 사람 노드의 열쇠가 나온다**:
+  //   그 사람의 노드는 끊기고(옛 열쇠 무효), 그 사람의 세션이 관리자 컴퓨터에서 열린다. ⑪ 의 판정(409 + 403)으로는 못 잡는다.
+  //  사양: 이름을 직접 주지 않았으면 회전하기 **전에** 그 이름의 주인을 본다(관리자에게는 목록에 남의 노드도 나온다).
+  //   주인이 다른 구성원이고 worker 가 아니면 회전하지 않고 ⑪ 처럼 비켜 등록한다. 주인이 나거나 알 수 없으면 종전 길이다.
+  {
+    const TOKEN5 = "lvk_test_collision_admin_77";
+    const NODE_TOKEN5 = "lvk_test_node_agent_admin";
+    const ROTATED = "lvk_test_node_agent_rotated";   // 회전이 내주는 열쇠 — 남의 노드였다면 «가져온 열쇠» 다
+    const SLUG = (osHostname().split(".")[0] || "node").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "node";
+    const MINE = `${SLUG}-jisoo`;
+    // 케이스마다 바꾸는 서버 상태: 호스트 이름 그대로의 노드 주인·종류, 목록·프로필이 읽히는가.
+    //  altOwner = 비킨 이름의 노드가 이미 있을 때 그 주인(null = 없음) · altFail = 비킨 이름 등록이 409 가 아닌 오류로 실패.
+    const WORLD0 = { owner: "mina", kind: "member", listOk: true, profileOk: true, altOwner: null, altFail: false };
+    const world = { ...WORLD0 };
+    const reg5 = [], rot5 = [], lists5 = [];
+    const srv5 = createServer((req, res) => {
+      const p5 = (req.url || "").split("?")[0];
+      const json = (code, o) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(o));
+      if (String(req.headers.authorization || "") !== `Bearer ${TOKEN5}`) { res.writeHead(401).end(); return; }
+      if (req.method === "POST" && p5 === "/api/ui/nodes") {
+        let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
+          const b = JSON.parse(body || "{}"); reg5.push(b.id);
+          if (b.id === MINE && world.altFail) json(500, { error: "저장 실패" });
+          else if (b.id === MINE && !world.altOwner) json(200, { node: { id: MINE, name: MINE, kind: "member" }, token: NODE_TOKEN5, install: "…" });
+          else json(409, { error: `이미 존재하는 노드입니다: ${b.id}` });
+        });
+      } else if (req.method === "GET" && p5 === "/api/ui/nodes") {
+        lists5.push(1);
+        if (!world.listOk) { json(500, { error: "목록 실패" }); return; }
+        // 관리자에게는 남의 노드도 목록에 나온다(주인과 함께). 무관한 다른 노드도 섞어 둔다 — 이름으로 골라야 한다.
+        json(200, { nodes: [
+          { id: "unrelated-box", name: "unrelated-box", kind: "member", owner_member: "someone" },
+          { id: SLUG, name: SLUG, ...(world.kind ? { kind: world.kind } : {}), owner_member: world.owner, online: true },
+          ...(world.altOwner ? [{ id: MINE, name: MINE, kind: "member", owner_member: world.altOwner }] : []),
+        ] });
+      } else if (req.method === "POST" && /^\/api\/ui\/nodes\/[^/]+\/rotate$/.test(p5)) {
+        // ★ 관리자라 회전이 **통과한다** — CLI 가 부르기만 하면 그 노드의 열쇠가 나온다.
+        const id = decodeURIComponent(p5.split("/")[4]); rot5.push(id);
+        json(200, { node: { id, name: id, kind: "member" }, token: ROTATED, install: "…" });
+      } else if (p5 === "/api/ui/me/profile") {
+        if (!world.profileOk) { json(500, { error: "프로필 실패" }); return; }
+        json(200, { id: "jisoo", display_name: "지수" });
+      } else if (p5 === "/api/ui/node-agent") {
+        res.writeHead(200, { "content-type": "application/gzip" }).end(AGENT_TGZ);
+      } else { res.writeHead(404).end(); }
+    });
+    await new Promise((r) => srv5.listen(0, "127.0.0.1", r));
+    const GW5 = `http://127.0.0.1:${srv5.address().port}`;
+    // 한 케이스 = 새 HOME 에서 한 번 실행. 서버 상태를 덮어쓰고 기록을 비운 뒤 돌린다.
+    const run5 = async (name, patch, args = ["node", "--daemon"]) => {
+      Object.assign(world, WORLD0, patch);
+      reg5.length = 0; rot5.length = 0; lists5.length = 0;
+      const H = newHome(name);
+      writeFileSync(join(H.home, ".lively", "gateway-url"), GW5);
+      writeFileSync(join(H.home, ".lively", "token"), TOKEN5);
+      chmodSync(join(H.home, ".lively", "token"), 0o600);
+      const r = await lively(H, args);
+      const p = join(H.home, ".lively", "node-agent.env");
+      return { r, env: existsSync(p) ? readFileSync(p, "utf8") : "" };
+    };
+    const dump = (x) => `code=${x.r.code} 등록=${reg5} 회전=${rot5} 목록조회=${lists5.length}\n${x.env}\n${x.r.err.slice(-400)}`;
+    const rotatedInPlace = (x) => x.r.code === 0 && reg5.join(",") === SLUG && rot5.join(",") === SLUG
+      && x.env.includes(`LIVELY_NODE_ID=${SLUG}\n`) && x.env.includes(`LIVELY_NODE_TOKEN=${ROTATED}`);
+    try {
+      // 행 1 — 주인이 다른 구성원(개인 컴퓨터).
+      const a = await run5("h-admin-other", {});
+      check("⑫ 배선: 회전 전에 주인을 물었다(목록 조회가 실제로 나갔다)", lists5.length >= 1, dump(a));
+      check("⑫ ★ 관리자여도 남의 노드를 회전하지 않는다(그 사람 노드의 열쇠를 가져오지 않는다)",
+        a.r.code === 0 && rot5.length === 0 && !a.env.includes(ROTATED), dump(a));
+      check("⑫ ★ 관리자도 <호스트 이름>-<구성원 id> 로 비켜 등록하고 그 까닭을 말한다",
+        reg5.join(",") === `${SLUG},${MINE}` && a.env.includes(`LIVELY_NODE_ID=${MINE}\n`) && a.env.includes(`LIVELY_NODE_TOKEN=${NODE_TOKEN5}`)
+          && new RegExp(`${MINE}' 로 등록합니다`).test(a.r.err), dump(a));
+
+      // 행 9 — 목록 행에 kind 칸이 없어도 남의 것이다(없다고 worker 로 보지 않는다).
+      const a2 = await run5("h-admin-other-nokind", { kind: null });
+      check("⑫ kind 칸이 없는 남의 노드도 회전하지 않는다", a2.r.code === 0 && rot5.length === 0 && a2.env.includes(`LIVELY_NODE_ID=${MINE}\n`), dump(a2));
+
+      // 행 2 — 주인이 **나**: 종전처럼 회전으로 잇는다(로그아웃으로 로컬 기록이 지워진 뒤 다시 로그인한 길).
+      const b = await run5("h-admin-own", { owner: "jisoo" });
+      check("⑫ ★ 그 이름의 주인이 나면 종전처럼 회전으로 잇는다(비키지 않는다)", rotatedInPlace(b), dump(b));
+
+      // 행 4 — worker 노드는 관리자들이 함께 다시 앉히는 컴퓨터다 → 종전처럼 회전.
+      const c = await run5("h-admin-worker", { kind: "worker" });
+      check("⑫ 남이 등록한 worker 노드는 종전처럼 회전한다", rotatedInPlace(c), dump(c));
+
+      // 행 5·6 — 주인을 **확인하지 못했으면**(목록 · 프로필 요청 실패) 멈춘다. 모르는 채 회전하면 남의 열쇠를 가져올 수 있다.
+      const stopped = (x) => x.r.code !== 0 && rot5.length === 0 && x.env === "";
+      const d = await run5("h-admin-nolist", { listOk: false });
+      check("⑫ ★ 목록을 못 읽으면 회전하지 않고 멈춘다(다시 실행하라고 말한다)", stopped(d) && /확인하지 못했습니다/.test(d.r.err) && !/lively login/.test(d.r.err), dump(d));
+      const e = await run5("h-admin-noprofile", { profileOk: false });
+      check("⑫ ★ 내 구성원 id 를 못 읽으면 회전하지 않고 멈춘다", stopped(e) && /확인하지 못했습니다/.test(e.r.err), dump(e));
+
+      // 비킨 이름이 **이미 내 것으로 있다** — 로그아웃(로컬 기록 삭제) 뒤 다시 로그인한 길. 새로 만들지 못하니 회전으로 잇는다.
+      const g = await run5("h-admin-alt-mine", { altOwner: "jisoo" });
+      check("⑫ ★ 비킨 이름이 이미 내 것이면 그 이름을 회전으로 잇는다(호스트 이름 쪽은 회전하지 않는다)",
+        g.r.code === 0 && reg5.join(",") === `${SLUG},${MINE}` && rot5.join(",") === MINE
+          && g.env.includes(`LIVELY_NODE_ID=${MINE}\n`) && g.env.includes(`LIVELY_NODE_TOKEN=${ROTATED}`), dump(g));
+
+      // 비킨 이름마저 남의 것 — 그것도 회전하지 않고 멈춘다(이름을 직접 고르라고 말한다).
+      const h = await run5("h-admin-alt-others", { altOwner: "someone" });
+      check("⑫ ★ 비킨 이름도 남의 것이면 어느 쪽도 회전하지 않고 멈춘다", stopped(h) && /--id/.test(h.r.err), dump(h));
+
+      // 비킨 이름 등록이 «이미 있다»(409)가 아닌 오류로 실패 — 회전으로 넘기지 않는다.
+      const i = await run5("h-admin-alt-fail", { altFail: true });
+      check("⑫ 비킨 이름 등록이 409 가 아닌 오류면 회전하지 않고 그 오류를 말한다", stopped(i) && reg5.join(",") === `${SLUG},${MINE}` && /노드 등록 실패/.test(i.r.err), dump(i));
+
+      // 행 7 — 이름을 **직접 준** 관리자는 종전 그대로다(그 노드를 지목해 다시 앉히는 길). 주인도 묻지 않는다.
+      const f = await run5("h-admin-explicit", {}, ["node", "--daemon", "--id", SLUG]);
+      check("⑫ --id 로 지목한 관리자는 종전처럼 회전한다(주인을 묻지 않는다)", rotatedInPlace(f) && lists5.length === 0, dump(f));
+    } finally { srv5.close(); }
   }
 } finally {
   server.close();

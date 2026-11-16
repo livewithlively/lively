@@ -7,7 +7,7 @@
 //  그 이름이 **다른 사람의 노드**면 `<호스트 이름>-<구성원 id>` 로 비켜 등록하고, 다음 실행은 그 이름을 잇는다.
 // 실행: node kit/cli/node-id-collision.test.mjs
 import assert from "node:assert/strict";
-import { collisionNodeId, nodeIdTakenByOther, defaultNodeId } from "./cmd-node.mjs";
+import { collisionNodeId, nodeIdTakenByOther, defaultNodeId, nodeOwnedByOther } from "./cmd-node.mjs";
 import { normGw } from "./lively.mjs";   // 실사용과 같은 정규화로 본다
 
 let pass = 0;
@@ -64,6 +64,30 @@ t("C4 호스트 이름이 바뀌었으면 종전처럼 새 호스트 이름(#216
   assert.equal(pick({ prevId: "old-host" }), "macbook-air");
   assert.equal(pick({ prevId: "old-host-mina" }), "macbook-air");
   assert.equal(pick({ prevId: "macbook-airport" }), "macbook-air", "앞부분만 같은 다른 이름은 비킨 이름이 아니다");
+});
+
+// ── D. 회전하기 전에 묻는 «남의 개인 컴퓨터인가» ─────────────────────────────
+//  서버는 관리자에게 남의 노드 회전도 내준다 — B 의 판정(409 + 403)은 관리자에게 성립하지 않는다(403 이 안 난다).
+//  그래서 이름을 직접 주지 않은 실행은 회전 전에 목록에서 그 이름의 주인을 본다.
+t("D1 ★ 주인이 다른 구성원인 개인 컴퓨터 → 남의 것(회전하지 않는다)", () => {
+  assert.equal(nodeOwnedByOther({ owner_member: "mina", kind: "member" }, "jisoo"), true);
+  assert.equal(nodeOwnedByOther({ owner_member: "mina" }, "jisoo"), true, "kind 칸이 없다고 worker 로 보지 않는다");
+  assert.equal(nodeOwnedByOther({ owner_member: "mina", kind: "member", shared: true }, "jisoo"), true, "공유로 열어 둔 컴퓨터도 주인은 그 사람이다");
+});
+t("D2 주인이 나 → 내 것(종전처럼 회전으로 잇는다)", () => {
+  assert.equal(nodeOwnedByOther({ owner_member: "jisoo", kind: "member" }, "jisoo"), false);
+  assert.equal(nodeOwnedByOther({ owner_member: " jisoo " }, "jisoo"), false, "앞뒤 공백은 같은 사람이다");
+});
+t("D3 worker 노드는 가르지 않는다 — 관리자들이 함께 다시 앉히는 컴퓨터", () => {
+  assert.equal(nodeOwnedByOther({ owner_member: "mina", kind: "worker" }, "jisoo"), false);
+});
+t("D4 ★ 모르면 false — 목록에 없다 · 주인 칸이 비었다 · 내 id 를 모른다(종전 길로 간다)", () => {
+  for (const node of [undefined, null, {}, { owner_member: "" }, { owner_member: null }, { owner_member: "   " }]) {
+    assert.equal(nodeOwnedByOther(node, "jisoo"), false, `node=${JSON.stringify(node)}`);
+  }
+  for (const me of [undefined, null, "", "   "]) {
+    assert.equal(nodeOwnedByOther({ owner_member: "mina", kind: "member" }, me), false, `me=${JSON.stringify(me)}`);
+  }
 });
 
 console.log(`\n${pass} passed`);
