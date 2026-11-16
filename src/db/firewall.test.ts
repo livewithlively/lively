@@ -536,4 +536,29 @@ rejectsP("pos-4: GROUP BY ROLLUP (번호) 가 마스킹 컬럼을 가리킴", "S
 rejectsP("pos-5: GROUP BY CUBE (번호, 번호)", "SELECT id, account_no, count(*) AS c FROM accounts GROUP BY CUBE (1, 2)", acct, /최상위 SELECT 투영/);
 okP("pos-6: GROUP BY ROLLUP (번호) 가 무마스킹 컬럼을 가리키면 통과", "SELECT id, count(*) AS c FROM accounts GROUP BY ROLLUP (1)", acct);
 
+// ══════════ 검증 파서와 DB 가 다르게 읽는 어휘 꼴 — 파서가 못 본 SQL 이 실행되지 않게 거부한다 ══════════
+//  pg: 일반 문자열에서 백슬래시는 글자다(standard_conforming_strings) — 파서는 이스케이프로 읽어 문자열 끝이 어긋난다.
+rejects("lex-pg-1: 문자열 안 백슬래시+따옴표", "SELECT 'a\\' AS x, id FROM orders --'", /백슬래시/);
+rejects("lex-pg-2: 인용 식별자 안 백슬래시", "SELECT \"a\\\" AS x, id FROM orders --\"", /백슬래시/);
+rejects("lex-pg-3: 줄 주석은 CR 에서도 끝난다 — 그 뒤의 문자열도 같은 규칙", "SELECT id -- memo\r , 'a\\' AS x FROM orders --'", /백슬래시/);
+okP("lex-pg-ok-1: 따옴표 앞이 아닌 백슬래시(정규식·LIKE)는 그대로", "SELECT id FROM orders WHERE note ~ '\\d+' OR note LIKE '100\\%'", acct);
+okP("lex-pg-ok-2: 따옴표 겹쳐 쓰기('')는 그대로", "SELECT id FROM orders WHERE note = 'it''s'", acct);
+okP("lex-pg-ok-3: 백슬래시 두 개로 끝나는 문자열은 양쪽이 같게 읽는다",
+  "SELECT id FROM orders WHERE note = 'a\\\\' AND id IN (SELECT o.id FROM foo o)", acct, (p) => assert.deepEqual(sortedTables(p), ["foo", "orders"]));
+//  mysql: 실행 주석(/*! … */)은 주석이 아니라 실행되는 SQL 이고, 공백 없는 `--` 는 주석이 아니라 빼기 두 번이다.
+rejMy("lex-my-1: 실행 주석 /*! … */", "SELECT id /*! , name */ FROM orders", /실행 주석/);
+rejMy("lex-my-2: 버전 붙은 실행 주석 /*!50000 … */", "SELECT id /*!50000 , name */ FROM orders", /실행 주석/);
+rejMy("lex-my-3: 일반 주석 뒤의 실행 주석(mysql 주석은 겹치지 않는다)", "SELECT id /* /* */ /*! , name */ -- */\n FROM orders", /실행 주석/);
+rejMy("lex-my-4: # 주석 안 따옴표 뒤의 실행 주석", "SELECT id # it's\n /*! , name */ FROM orders # '\n", /실행 주석/);
+rejMy("lex-my-5: 문자열 뒤의 실행 주석(\"…\" 안 백슬래시 이스케이프)", "SELECT \"a\\\"\" /*! , name */ , \"x\" FROM orders", /실행 주석/);
+rejMy("lex-my-6: 공백 없는 -- 는 주석이 아니다", "SELECT id FROM orders WHERE id = 5--1", /--/);
+rejMy("lex-my-7: 줄 주석 안에 홀로 선 CR", "SELECT id -- memo\r , '\n FROM orders -- '", /줄 주석/);
+rejMy("lex-my-8: # 주석 안에 홀로 선 CR", "SELECT id # memo\r , '\n FROM orders -- '", /줄 주석/);
+okMy("lex-my-ok-0: CRLF 로 끝나는 줄 주석은 그대로", "SELECT id -- memo\r\n FROM orders # memo\r\n WHERE id = 1");
+okMy("lex-my-ok-1: 일반 주석 · `-- ` 주석 · # 주석 · 줄 끝 -- 는 그대로",
+  "SELECT id /* 메모 */ FROM orders -- 메모\n WHERE id = 1 # it's\n AND id < 9 --\n");
+okMy("lex-my-ok-2: 문자열 리터럴 안의 /*! 와 -- 는 값", "SELECT id FROM orders WHERE note = '/*! x */' OR note = \"--x\"");
+okMy("lex-my-ok-3: 최적화 힌트 주석(/*+ … */)은 그대로", "SELECT /*+ MAX_EXECUTION_TIME(1000) */ id FROM orders");
+ok("lex-ok: pg 의 공백 없는 -- 는 주석 그대로", () => assertSafeSelect("SELECT id FROM orders WHERE id = 5 --1\n"));
+
 console.log(`\n${pass} checks passed`);

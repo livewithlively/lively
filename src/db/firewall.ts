@@ -566,10 +566,23 @@ const PARSER_KNOWN_OPS = new Set([
 ]);
 const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/; // 달러 인용 태그(숫자로 시작 불가 — $1 은 파라미터)
 //  같은 스캔에서 **검증 파서와 DB 가 다르게 읽는 어휘 꼴**(lexHazard)도 찾는다. 파서가 «실패» 하면 거부로 끝나지만
-//  «다르게 읽으면» 파서가 보지 못한 이름이 그대로 실행되므로, 그런 꼴은 파싱 전에 거부한다:
+//  «다르게 읽으면» 파서가 보지 못한 SQL 이 그대로 실행되므로, 그런 꼴은 파싱 전에 거부한다:
 //   pg    · U&"…" / U&'…' — DB 는 유니코드 이스케이프를 풀어 다른 이름·값으로 읽는다.
+//         · 문자열 안의 백슬래시+따옴표 — 일반 문자열에서 백슬래시는 글자인데(standard_conforming_strings) 파서는
+//           이스케이프로 읽어 문자열이 끝나는 자리가 어긋난다. E'…' 도 함께 막는다(따옴표는 '' 로 쓸 수 있다).
+//         · 인용 식별자 안의 백슬래시 — 같은 이유(DB 는 글자, 파서는 이스케이프).
+//   mysql · 실행 주석(/*! … */ · /*M! … */) — 주석 꼴이지만 서버가 안의 SQL 을 실행한다.
+//         · 공백 없는 `--` — 뒤에 공백·제어문자가 없으면 주석이 아니라 빼기 두 번인데 파서는 주석으로 읽는다.
+//         · 줄 주석 안에 홀로 선 CR — 서버는 줄 주석을 LF 에서만 끝내는데 파서는 CR 에서도 끝낸다.
+//  이 판정이 맞으려면 스캐너가 따옴표·주석 경계를 그 DB 처럼 읽어야 한다 — 그래서 mysql 에서는 "…" 를 문자열로,
+//  # 을 줄 주석으로 읽고, 블록 주석은 겹치지 않으며(pg 만 겹친다), 줄 주석은 pg 에서 CR·LF, mysql 에서 LF 로 끝난다.
 const LEX_HAZARD = {
   unicodeEscape: "Blocked: 유니코드 이스케이프 식별자·문자열(U&\"…\" · U&'…')은 쓸 수 없습니다 — 이름·값을 그대로 쓰세요",
+  backslashQuote: "Blocked: 문자열 안의 백슬래시+따옴표(\\')는 쓸 수 없습니다 — 따옴표는 '' 로 겹쳐 쓰세요",
+  backslashIdent: "Blocked: 인용 식별자 안의 백슬래시는 쓸 수 없습니다",
+  executableComment: "Blocked: 실행 주석(/*! … */)은 쓸 수 없습니다",
+  dashDash: "Blocked: '--' 바로 뒤에 공백이 없으면 주석이 아닙니다 — 주석은 '-- ' 로, 빼기는 띄어 쓰세요",
+  commentCr: "Blocked: 줄 주석 안에 줄바꿈 없는 CR(\\r) 문자가 있습니다 — 줄 주석은 줄바꿈(\\n)으로 끝내세요",
 } as const;
 interface SqlTextScan {
   parseSql: string; // 파서에 넘길 사본(pg 에서만 중화 — 그 외엔 원본과 동일)
@@ -583,29 +596,51 @@ function scanSqlText(sql: string, dialect: SqlDialect): SqlTextScan {
   let mixedCaseQuoted = false;
   let lexHazard: string | null = null;
   let i = 0;
+  const skipLineComment = (): void => {
+    while (i < n && sql[i] !== "\n") {
+      if (sql[i] === "\r") {
+        if (pg) break;
+        if (sql[i + 1] !== "\n") lexHazard ??= LEX_HAZARD.commentCr;
+      }
+      i++;
+    }
+  };
   while (i < n) {
     const c = sql[i];
     if (c === "-" && sql[i + 1] === "-") { // 줄 주석
-      while (i < n && sql[i] !== "\n") i++;
+      if (!pg && i + 2 < n && sql.charCodeAt(i + 2) > 32) lexHazard ??= LEX_HAZARD.dashDash;
+      skipLineComment();
       continue;
     }
-    if (c === "/" && sql[i + 1] === "*") { // 블록 주석(pg 는 중첩 허용)
+    if (!pg && c === "#") { // mysql 줄 주석
+      skipLineComment();
+      continue;
+    }
+    if (c === "/" && sql[i + 1] === "*") { // 블록 주석(pg 는 중첩 허용, mysql 은 첫 */ 에서 끝난다)
+      if (!pg && (sql[i + 2] === "!" || ((sql[i + 2] === "M" || sql[i + 2] === "m") && sql[i + 3] === "!"))) lexHazard ??= LEX_HAZARD.executableComment;
       let depth = 1;
       i += 2;
       while (i < n && depth > 0) {
-        if (sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; continue; }
+        if (pg && sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; continue; }
         if (sql[i] === "*" && sql[i + 1] === "/") { depth--; i += 2; continue; }
         i++;
       }
       continue;
     }
-    if (c === "'") { // 문자열 리터럴('' 더블링 · 백슬래시 이스케이프 — sql-scrub 과 같은 관대한 규칙)
-      i++;
+    if (c === "'" || (!pg && c === "\"")) { // 문자열 리터럴(따옴표 더블링 · 백슬래시 이스케이프 — sql-scrub 과 같은 관대한 규칙). mysql 은 "…" 도 문자열
+      const start = ++i;
+      let end = n;
       while (i < n) {
-        if (sql[i] === "\\") { i += 2; continue; }
-        if (sql[i] === "'") { if (sql[i + 1] === "'") { i += 2; continue; } i++; break; }
+        if (sql[i] === "\\") {
+          if (pg && sql[i + 1] === c) lexHazard ??= LEX_HAZARD.backslashQuote;
+          i += 2;
+          continue;
+        }
+        if (sql[i] === c) { if (sql[i + 1] === c) { i += 2; continue; } end = i; i++; break; }
         i++;
       }
+      // mysql 의 "…" 는 ANSI_QUOTES 에서 식별자다 — 대소문자 관측은 식별자일 때와 같게 유지한다.
+      if (c === "\"" && sql.slice(start, end) !== sql.slice(start, end).toLowerCase()) mixedCaseQuoted = true;
       continue;
     }
     if (c === "\"" || c === "`") { // 인용 식별자 — 대소문자 보존 여부를 여기서 관측한다
@@ -617,8 +652,12 @@ function scanSqlText(sql: string, dialect: SqlDialect): SqlTextScan {
       }
       const ident = sql.slice(start, i);
       if (ident !== ident.toLowerCase()) mixedCaseQuoted = true;
+      if (pg && ident.includes("\\")) lexHazard ??= LEX_HAZARD.backslashIdent;
       i++;
       continue;
+    }
+    if (pg && (c === "U" || c === "u") && sql[i + 1] === "&" && (sql[i + 2] === "\"" || sql[i + 2] === "'")) {
+      lexHazard ??= LEX_HAZARD.unicodeEscape; // 따옴표·주석 밖에서만 여기에 온다
     }
     if (c === "$") { // 달러 인용 문자열($tag$…$tag$)
       const tag = DOLLAR_TAG_RE.exec(sql.slice(i))?.[0];
@@ -629,9 +668,6 @@ function scanSqlText(sql: string, dialect: SqlDialect): SqlTextScan {
       }
       i++;
       continue;
-    }
-    if (pg && (c === "U" || c === "u") && sql[i + 1] === "&" && (sql[i + 2] === "\"" || sql[i + 2] === "'")) {
-      lexHazard ??= LEX_HAZARD.unicodeEscape; // 따옴표·주석 밖에서만 여기에 온다
     }
     if (pg && OP_CHARS.includes(c)) {
       // 연산자 문자 런을 통째로 읽는다 — 부분 매칭 금지(`#>>` 를 `#>` 로 자르면 남은 `>` 가 파싱을 깬다).
