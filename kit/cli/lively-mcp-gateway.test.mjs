@@ -79,10 +79,12 @@ function startUpstream({ tools = [], sse = true, dripList = false, holdOpen = fa
       else { res.writeHead(200, { "content-type": "application/json" }); res.end(payload); }
     });
   });
-  const state = { tools, seen, srv };
+  const state = { tools, seen, srv, conns: 0 };
+  srv.on("connection", () => { state.conns++; });   // 연결 방식(E37~E39)의 관측 장치 — 요청 수가 아니라 TCP 연결 수
   return new Promise((resolve) => srv.listen(0, "127.0.0.1", () => resolve({
     url: `http://127.0.0.1:${srv.address().port}`,
     seen,
+    conns: () => state.conns,
     setTools: (t) => { state.tools = t; },
     close: () => new Promise((r) => srv.close(r)),
   })));
@@ -165,6 +167,7 @@ delete process.env.LIVELY_TOKEN;
 //   실측 2026-08-28: E11 이 `Bearer lvk_…`(실 토큰)로 실패했다. CI 는 깨끗한 env 라 안 잡혔다 —
 //   env 를 읽는 테스트는 **자기가 읽는 변수를 전부** 스크럽해야 한다.
 delete process.env.LIVELY_MCP_TOKEN;
+delete process.env.LIVELY_MCP_CONNECTION;   // E37~E39 가 연결 방식의 우선순위를 잰다
 
 const { serveMcpGateway, callTimeoutFor, sessionHeaderValue } = await import("./lively-mcp-gateway.mjs");
 
@@ -582,6 +585,45 @@ try {
     const r = await p.waitFor(361, 5000);
     check("E36 줄끝 없이 끝난 응답도 받는다", r?.result?.content?.[0]?.text === "called:no_eol" && !r?.result?.isError, `r=${JSON.stringify(r)}`);
     await p.end(); await up.close();
+  }
+  // E37~E39 — 상류 연결 방식. fresh 는 호출마다 새 연결이어야 한다 — 호스트 네트워크가 바뀐 뒤 풀에 남은 연결을 집으면
+  //  요청이 상류에 닿지 않고 응답 없음 시한을 다 쓴다. 연결 방식은 env > ~/.lively/mcp-connection > fresh 순이고, 모르는 값은 fresh 다.
+  //  단언은 상류가 받은 TCP 연결 수와 connection 헤더로 한다(같은 연결로 두 번 오면 reuse, 두 연결이면 fresh).
+  {
+    const MODE_FILE = join(LIVELY, "mcp-connection");
+    const cases = [
+      { id: "E37", name: "기본값은 fresh — 호출마다 새 연결", env: undefined, file: undefined, want: "fresh" },
+      { id: "E38", name: "파일 reuse — 연결을 재사용(종전 동작)", env: undefined, file: "reuse\n", want: "reuse" },
+      { id: "E39", name: "env 가 파일을 이긴다 · 모르는 값은 fresh", env: "nonsense", file: "reuse\n", want: "fresh" },
+    ];
+    let id = 370;
+    try {
+      for (const c of cases) {
+        if (c.env === undefined) delete process.env.LIVELY_MCP_CONNECTION; else process.env.LIVELY_MCP_CONNECTION = c.env;
+        if (c.file === undefined) { try { unlinkSync(MODE_FILE); } catch { /* */ } } else writeFileSync(MODE_FILE, c.file);
+        const up = await startUpstream({ tools: T(["ping_tool"]) });
+        setGw(up.url);
+        const p = startProxy(serveMcpGateway);
+        const replies = [];
+        for (let k = 0; k < 2; k++) {
+          p.send({ jsonrpc: "2.0", id: ++id, method: "tools/call", params: { name: "ping_tool", arguments: {} } });
+          replies.push(await p.waitFor(id));
+        }
+        const okReplies = replies.every((r) => r?.result?.content?.[0]?.text === "called:ping_tool");
+        const calls = up.seen.filter((s) => s.method === "tools/call");
+        const wantConns = c.want === "fresh" ? 2 : 1;
+        //  reuse 쪽은 «close 가 아님»만 본다 — keep-alive 헤더는 fetch 가 붙이는 기본값이지 이 코드가 싣는 게 아니다.
+        const headerOk = (s) => (c.want === "fresh" ? s.headers.connection === "close" : s.headers.connection !== "close");
+        //  E38 의 연결 1개는 스텁 기본 분기가 응답을 res.end 한 번에 끝내기 때문에 성립한다(프레임과 끝을 나눠 보내면 fetch 가 연결을 새로 맺는다).
+        check(`${c.id} ${c.name}`,
+          okReplies && calls.length === 2 && up.conns() === wantConns && calls.every(headerOk),
+          `conns=${up.conns()} headers=${calls.map((s) => s.headers.connection)} replies=${JSON.stringify(replies)}`);
+        await p.end(); await up.close();
+      }
+    } finally {   // 실패해도 다음 시나리오(E24 하위프로세스는 process.env 를 물려받는다)로 새지 않게
+      delete process.env.LIVELY_MCP_CONNECTION;
+      try { unlinkSync(MODE_FILE); } catch { /* */ }
+    }
   }
   // ── E24 피어(하네스) 소멸 = 이 프로세스가 죽어야 하는 유일한 경우 (#2213 릭 회귀) ──────────
   //  왜 하위프로세스로 재는가: 이 방어는 **진짜 stdio 로 서빙할 때만** 무장한다(가짜 스트림으로 무장하면

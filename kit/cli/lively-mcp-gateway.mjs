@@ -65,6 +65,19 @@ const PROBE_TIMEOUT_MS = Number(process.env.LIVELY_MCP_PROBE_TIMEOUT_MS || 4_000
 // 상류 복구 감시 주기 — 상류가 죽어 있을 때만 돈다. 테스트가 짧게 줄여 쓴다.
 const WATCH_INTERVAL_MS = Number(process.env.LIVELY_MCP_WATCH_MS || 20_000);
 
+// ── 상류 연결 방식 ─────────────────────────────────────────────────────────────
+//  fresh(기본) = 호출마다 새 연결(`connection: close`) · reuse = keep-alive 로 연결을 재사용(종전 동작).
+//  왜 fresh 가 기본인가: 이 프로세스가 컨테이너·VM 의 NAT 뒤에서 돌 때 호스트 네트워크가 바뀌면(Wi-Fi ↔ 테더링·VPN 재접속)
+//   풀에 남은 연결은 RST 도 FIN 도 받지 못한 채 ESTABLISHED 로 남는다. 다음 호출이 그 연결을 집으면 요청이 상류에 닿지 않고
+//   CALL_TIMEOUT_MS 를 다 쓴 뒤 «응답 없음»으로 끝난다 — 게이트웨이의 툴 호출 기록에도 남지 않아 서버 쪽에선 보이지 않는다.
+//   새 연결은 그 순간의 경로로 맺어지므로 이 실패가 없다. 대가는 호출마다 TCP·TLS 왕복 한 번이다.
+//  우선순위: env LIVELY_MCP_CONNECTION > ~/.lively/mcp-connection > fresh. 호출마다 읽으므로 바꾸면 다음 호출부터 적용된다.
+//   모르는 값은 fresh 로 본다(오타가 종전의 실패 모드로 조용히 되돌리지 않게).
+function connectionMode() {
+  const v = String(process.env.LIVELY_MCP_CONNECTION || readLively("mcp-connection") || "").trim().toLowerCase();
+  return v === "reuse" ? "reuse" : "fresh";
+}
+
 // ── 기록 범위(#5016) ──────────────────────────────────────────────────────────
 //  작업 폴더 밖에서 켠 세션이면 라이블리 도구를 0개로 세운다 — 상류(게이트웨이)에 아무것도 묻지 않는다(인코그니토와 같다).
 //  판정은 훅과 **같은 파일**(~/.lively/hooks/record-scope.mjs)로 한다 — 갈리면 «훅은 꺼졌는데 도구는 있는» 반쪽 세션이 된다.
@@ -269,6 +282,8 @@ function upstreamHeaders() {
   //  그대로 알린다. 게이트웨이 미들웨어가 이 헤더로 그 워크스페이스 컨텍스트를 연다(없으면 primary = 종전).
   const wsSlug = (process.env.LVLY_TENANT_SLUG || "").trim();
   if (wsSlug) h["x-lively-workspace"] = wsSlug;
+  //  내장 fetch 는 이 헤더를 지켜 응답 뒤 연결을 닫고 풀에 돌려놓지 않는다(테스트 E37 이 연결 수로 확인한다).
+  if (connectionMode() === "fresh") h.connection = "close";
   return h;
 }
 

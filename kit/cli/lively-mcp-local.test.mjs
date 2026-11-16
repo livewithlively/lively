@@ -177,7 +177,7 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
   {
     const seen = [];
     const srv = createServer((req, res) => {
-      seen.push({ url: req.url, auth: req.headers.authorization });
+      seen.push({ url: req.url, auth: req.headers.authorization, conn: req.headers.connection });
       res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
     });
     await new Promise((r) => srv.listen(0, "127.0.0.1", r));
@@ -207,6 +207,20 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
     rmTok();
     g = await callApi();
     check("T4 토큰 파일 부재 → env 토큰으로 폴백", g?.auth === "Bearer tok-env-stale", `auth=${g?.auth}`);
+
+    // T5 — 상류 연결 방식은 형제 프록시(lively-mcp-gateway E37~E39)와 같은 설정·같은 규칙을 따른다(판정을 두 곳에 둔다 — 갈리면 여기서 드러난다).
+    //  env > ~/.lively/mcp-connection > fresh · 모르는 값은 fresh. fresh 는 connection: close, reuse 는 keep-alive.
+    setTok("tok-file");
+    const MODE_FILE = join(TMP_LIVELY, "mcp-connection");
+    const conn = async ({ env, file }) => {
+      if (env === undefined) delete process.env.LIVELY_MCP_CONNECTION; else process.env.LIVELY_MCP_CONNECTION = env;
+      if (file === undefined) { try { unlinkSync(MODE_FILE); } catch { /* */ } } else writeFileSync(MODE_FILE, file);
+      seen.length = 0; await makeCtx(process.cwd()).api("/api/ui/repos"); return seen[0]?.conn;
+    };
+    const got = [await conn({}), await conn({ file: "reuse\n" }), await conn({ env: "nonsense", file: "reuse\n" })];
+    delete process.env.LIVELY_MCP_CONNECTION; try { unlinkSync(MODE_FILE); } catch { /* */ }
+    check("T5 연결 방식 — 기본 close · 파일 reuse 면 close 아님 · env 가 파일을 이기고 모르는 값은 close",
+      got.map((v) => v === "close").join(",") === "true,false,true", `got=${got}`);
 
     delete process.env.LIVELY_TOKEN;
     await new Promise((r) => srv.close(r));
