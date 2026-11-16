@@ -73,6 +73,8 @@ function pjvSideSearchIcon() {
 function pjvBundleIcon(color, kind?) {
   const n = sv('svg', { class: 'pjv-bundle-ic' + (kind ? ' ' + kind : ''), viewBox: '0 0 24 24', width: 17, height: 17, 'aria-hidden': 'true' });
   if (kind === 'none') n.append(sv('path', { d: ICONS.projNone, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  //  #5522 「초안」 — 셸 사이드바의 「초안」 줄과 같은 연필(lib/icon-paths ICONS.pencil).
+  else if (kind === 'draft') n.append(sv('path', { d: ICONS.pencil, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   else n.append(sv('path', { d: ICONS.folder, fill: 'none', stroke: color || 'var(--muted-2)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   return n;
 }

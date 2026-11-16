@@ -46,7 +46,13 @@ import { isMyProject } from '../lib/board-view.js';   // #4865 — '내 할당' 
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 바깥 셸이 알려 온 리스트 즐겨찾기 변경
 import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavListCacheSet, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
 import { openProjectV2Form } from './project-form.js';
+import { DRAFT_HINT, DRAFT_LABEL, DRAFT_TIP, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 한 벌(셸 사이드바 「초안」 줄과 같은 것을 센다)
 import { pjvMySessionCounts, pjvPrefetchSessions, pjvSessGroupLabel, pjvSessGroupMenu, pjvSessionListView } from './session-list.js';   // #4865 「리스트」 뷰 = 스코프 안 프로젝트(줄마다 세션 요약)
+
+/** #5522 「초안」 스코프가 비었을 때 — 초안은 무언가를 남기면 풀려 제 리스트 · 「기타 (미분류)」로 간다. */
+const PJV_NO_DRAFTS = '초안이 없습니다. 세션 첫 지시로 생긴 프로젝트가 아무것도 남기기 전까지 여기 섭니다.';
+/** 초안은 있는데 툴바 좁히기(검색 · 필터 · 담당자 · 내 할당만)에 모두 걸러졌을 때 — «초안이 없다» 고 하면 틀린 말이다(격리 리뷰 지적). */
+const PJV_NO_DRAFTS_FILTERED = '이 조건에 맞는 초안이 없습니다. 검색어 · 필터 · 담당자를 바꿔 보세요.';
 
 // ════════════════════════════════════════════
 // 프로젝트(v2) #/projects2 — 맥락 = 카테고리 + 지식 + 프로젝트 중 '프로젝트'(= 맥락의 *변화*).
@@ -149,6 +155,8 @@ function pjvKanbanBoard(projects, selList, ctx) {
     const body = el('div', { class: 'pjv-kb-body' });
     for (const p of cards) {
       const card = el('div', { class: 'pjv-kb-card' + (p.status === 'done' ? ' done' : ''), draggable: 'true', role: 'link', tabindex: '0' });
+      //  #5522 초안 표시 — 칸반은 상태 칸으로만 나뉘어 초안이 제 칸에 섞인다. 이름 위에 작은 표시로 가른다(이름은 두 줄에서 잘리므로 따로).
+      if (isDraftProj(p)) card.append(el('span', { class: 'pj-draft-tag pjv-kb-draft', title: DRAFT_TIP, text: DRAFT_LABEL }));
       card.append(el('div', { class: 'pjv-kb-name', text: p.name }));
       const tags = Array.isArray(p.tags) ? p.tags.slice(0, 3) : [];
       if (tags.length) {
@@ -482,6 +490,11 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const groupByList = new Map<number, any>();
     let unGroup: any = null;
     for (const g of groups) { if (g.list) groupByList.set(g.list.id, g); else unGroup = g; }
+    //  #5522 — 초안은 「기타 (미분류)」에 세지도 그리지도 않는다. 제 자리(「초안」 스코프 __drafts__ · 셸 사이드바 「초안」 줄)가 따로 있다.
+    //   초안은 리스트를 정하면 풀리므로(src/v6/project-draft.ts) 거의 모두 리스트 밖이지만, 옛 행을 위해 모든 묶음에서 모은다.
+    //   「전체」 · 리스트 스코프에서는 종전대로 맨 아래 접힌 「초안」 묶음에 선다(rows.ts pjvRenderStatusGroups).
+    const unReal: any[] = unGroup ? unGroup.projects.filter((p) => !isDraftProj(p)) : [];
+    const draftsAll: any[] = groups.flatMap((g) => g.projects).filter(isDraftProj);
     // 트리 검색용 원본 프로젝트(#1154) — 사이드바 검색은 '어디로 갈지'를 찾는 내비게이션이라 툴바 좁히기
     //  (검색어·필터·담당자·'내 할당만')의 영향을 받으면 안 된다. groupByList 는 그 관문(pjvBuildListGroups → filterProj)을
     //  이미 지난 뒤라 검색 소스로 쓰면 두 검색이 조용히 AND 로 겹쳤다 — 툴바에 '결제'가 남아 있으면 트리에서 '온보딩'을
@@ -543,7 +556,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const kids = (foldersByParent.get(fid) || []).flatMap((c) => folderListsDeep(c.id));
       return [...own, ...kids];
     };
-    const showUn = !!unGroup && visCount(unGroup.projects) > 0; // 미분류는 보일 게 있을 때만
+    const showUn = visCount(unReal) > 0; // 미분류는 보일 게 있을 때만(초안 빼고 — 위 #5522)
 
     // 선택 해소(#473 후속: '전체' 제거) — 기본/사라진 대상이면 '트리 순서상 맨 위의 내용(보이는 프로젝트) 있는 폴더/리스트'.
     //  내용 있는 게 없으면 맨 위 후보(빈 폴더라도)로. sel: F<id> | L<id> | __none__.
@@ -553,7 +566,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const selCandidates = [
       ...folderList.filter((f) => !archiveFolderIds.has(Number(f.id))).map((f) => ({ key: 'F' + f.id, has: folderHasVis(f) })),
       ...topLists.map((l) => ({ key: 'L' + l.id, has: listHasVis(l.id) })),
-      ...(showUn ? [{ key: '__none__', has: visCount(unGroup.projects) > 0 }] : []),
+      ...(showUn ? [{ key: '__none__', has: true }] : []),
+      //  #5522 — 초안만 있는 사람(리스트 · 일반 프로젝트 없음)이 빈 「기타」에 착지하지 않게 맨 끝 후보로 둔다.
+      ...(draftsAll.length ? [{ key: '__drafts__', has: true }] : []),
     ];
     // ⭐ 즐겨찾기 우선(#1114) — 즐겨찾기한 리스트가 있으면 트리 순서 대신 그게 기본 진입(사이드바 맨 위 '즐겨찾기' 구역과 같은 순서).
     //  내용(보이는 프로젝트) 있는 즐겨찾기 우선, 전부 비었으면 첫 즐겨찾기 — 사용자가 직접 꽂은 핀이라 빈 리스트여도 트리 휴리스틱보다 앞선다.
@@ -568,6 +583,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     else if (typeof sel === 'string' && sel[0] === 'F' && !folderExists(sel.slice(1))) sel = defaultSel();
     if (sel !== pjvSidebarSel.key) pjvSidebarSel.explicit = false; // 자동 해소된 스코프 — 사용자가 고른 게 아님(#662)
     pjvSidebarSel.key = sel;
+    //  #5522 초안만 보는 스코프 — 비어 있어도 다른 스코프로 옮기지 않는다(초안이 모두 풀린 것이 «여기 없다» 의 뜻이다).
+    //   여기선 초안을 맨 아래 묶음으로 빼지 않고(전부가 초안이다) 새 프로젝트 줄도 두지 않는다(사람이 만든 것은 초안이 아니라 곧 빠진다).
+    const draftScope = sel === '__drafts__';
     // 스코프별 뷰 로드(#541) — 이 스코프의 저장 뷰(없으면 기본: 폴더/스페이스=개요, 리스트=상태)를 globals 로.
     //  byStatus 파라미터도 여기서 재동기(render() 가 넘긴 값은 로드 전 스냅샷이므로).
     pjvApplyView(pjvLoadScopeView(sel) || pjvDefaultView(sel));
@@ -582,7 +600,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const inScope = sel[0] === 'F' ? new Set(folderListsDeep(Number(sel.slice(1))).map((l) => Number(l.id)))
       : sel[0] === 'L' ? new Set([Number(sel.slice(1))]) : null;
     const scopeRaw = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
-      : sel === '__none__' ? projects.filter((p) => p.list_id == null) : projects;
+      : sel === '__none__' ? projects.filter((p) => p.list_id == null && !isDraftProj(p))
+      : sel === '__drafts__' ? projects.filter(isDraftProj) : projects;
     pjvSetFilterUniverse(scopeRaw, lists);
     const selectArea = (key) => {
       // 스코프 전환 — URL push(뒤로가기 가능) + 인메모리 render(리페치 없음). 뷰 로드는 renderArea 재진입이 처리.
@@ -600,7 +619,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     if (sel === '__all__') shownProjects = groups.flatMap((g) => g.projects);
     else if (sel[0] === 'F') { const fid = sel.slice(1); shownProjects = folderListsDeep(Number(fid)).flatMap((l) => (groupByList.get(l.id)?.projects) || []); }
     else if (sel[0] === 'L') { selList = lists.find((l) => String(l.id) === sel.slice(1)); shownProjects = (groupByList.get(Number(sel.slice(1)))?.projects) || []; }
-    else if (sel === '__none__') shownProjects = unGroup ? unGroup.projects : [];
+    else if (sel === '__none__') shownProjects = unReal;
+    else if (sel === '__drafts__') shownProjects = draftsAll;
     const listIdForAdd = selList ? selList.id : null; // 특정 리스트 선택 시 새 프로젝트는 그 리스트로
     const mineOnly = pjvBoardMineOnly.on;
 
@@ -665,7 +685,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     setGroupCtx({ selList, groupBy, rerender: render, enabled: true, scopeKey: sel });
     if (groupBtn) pjvSyncGroupBtn(groupBtn, groupBy, true, sel);
 
-    const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') + (pjvBoardView.table ? ' pjv-table-mode' : '') });
+    const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') + (pjvBoardView.table ? ' pjv-table-mode' : '') + (draftScope ? ' pjv-drafts-scope' : '') });
     // 셸의 우측 컬럼 상단에 페이지 크롬(제목·하위탭·보드헤드) + 툴바를 얹는다 — 사이드바는 좌측에서 y=64 부터 풀하이트(#607).
     //  noNav(#662)여도 같은 자리에 얹는다(#1067) — 사이드바를 접어도 '사이드바만 사라지고' 나머지는 그대로여야 한다.
     if (pageChrome) main.append(pageChrome);
@@ -764,7 +784,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         boardBox.append(pjvListGroup(og, reload, canDelete, effFields, anchorId, meId, taskCtx, true, false, { boxed: true, crumb: crumbOf(l), groupBy }));
       }
       if (!any) boardBox.append(el('div', { class: 'pjv-proj-empty', text: scoped.length ? (mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.') : '이 폴더에 리스트가 없습니다.' }));
-    } else if (pjvBoardView.byFolder) {
+    } else if (pjvBoardView.byFolder && !draftScope) {
       // 리스트로 나누기(#756) — 사이드바를 닫지 않고(상태로·칸반과 동일하게 유지) 우측 컬럼에 '리스트별 접이식 그룹'으로.
       //  폴더 뷰(위 selFolder 분기)와 동형: 전체 스코프면 모든 리스트(+미분류), 단일 리스트 스코프면 그 리스트만.
       //  byStatus 는 false 라 리스트 안 상태 중첩 없음(순수 리스트 그룹).
@@ -782,7 +802,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       if (!anyL) boardBox.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
     } else if (byStatus) {
       // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
-      pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort });
+      if (draftScope && !shownProjects.length) boardBox.append(el('div', { class: 'pjv-proj-empty', text: scopeRaw.length ? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS }));
+      else pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort,
+        ...(draftScope ? { noAdd: true, draftScope: true } : {}) });
     } else {
       boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null)); // #607/D 리스트별 필드 추가
       const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
@@ -794,8 +816,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
           : (savedCmp || (colSort ? pjvColSortCmp(colSort) : ((a, b) => rank(a) - rank(b) || pjvManualCmp(a, b)))));
       const flatBody = el('div', { class: 'pjv-tgroup-body pjv-flat-body' });
       for (const p of rows) flatBody.append(pjvProjRow(p, reload, null, canDelete, effFields, anchorId, taskCtx));
-      if (!rows.length) flatBody.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
-      if (!mineOnly) flatBody.append(pjvProjAddRow('in_progress', reload, flatBody, null, effFields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
+      if (!rows.length) flatBody.append(el('div', { class: 'pjv-proj-empty', text: draftScope ? (scopeRaw.length ? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS) : mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
+      if (!mineOnly && !draftScope) flatBody.append(pjvProjAddRow('in_progress', reload, flatBody, null, effFields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
       boardBox.append(flatBody);
     }
     if (boardBox.childNodes.length) main.append(boardBox); // 표 뷰만 가로 스크롤 박스로(개요·칸반은 main 에 직접)
@@ -1141,15 +1163,30 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       // 미분류('기타') — 검색 중엔 '기타/미분류' 문자열 매칭 또는 미분류 프로젝트 매칭(#665)일 때.
       //  (#1154) 검색 중 노출 판정은 showUn(툴바 필터를 지난 값)이 아니라 원본 미분류 프로젝트로 한다 —
       //   필터에 걸려 보드에서 빠진 미분류 프로젝트도 트리 검색으로는 찾아갈 수 있어야 한다. 카운트는 그대로 '보이는 수'.
-      const unSearchHit = sideSearchActive() && (sideSearchNorm('기타 미분류').includes(sideQ()) || searchProjsUn.some(projMatchesQ));
+      //  #5522 — 초안은 「기타」 가 아니라 아래 「초안」 줄 밑에서 찾아진다(「기타」 스코프가 초안을 그리지 않으므로).
+      const searchUnReal = searchProjsUn.filter((p) => !isDraftProj(p));
+      const searchDrafts = projects.filter(isDraftProj);
+      const unSearchHit = sideSearchActive() && (sideSearchNorm('기타 미분류').includes(sideQ()) || searchUnReal.some(projMatchesQ));
       if (sideSearchActive() ? unSearchHit : showUn) {
         const unKey = '__none__';
         const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' },
-          pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(unGroup ? visCount(unGroup.projects) : 0) }));
+          pjvBundleIcon(null, 'none'), el('span', { class: 'pjv-side-navlabel', text: '기타 (미분류)' }), el('span', { class: 'pjv-side-navcount', text: String(visCount(unReal)) }));
         uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
         pjvFolderDropTarget(uit, null, reload);
         treeWrap.append(uit);
-        appendProjMatches(searchProjsUn, 1, '__none__');
+        appendProjMatches(searchUnReal, 1, '__none__');
+      }
+      //  #5522 「초안」 — 셸 사이드바와 같은 줄. 초안이 있을 때만(지금 보고 있으면 0 이어도).
+      //   검색 중엔 「초안」 이라는 말이나 초안 프로젝트가 걸릴 때만 서고, 걸린 초안을 그 밑에 둔다(「기타」 와 같은 규칙).
+      const draftSearchHit = sideSearchActive() && (sideSearchNorm(DRAFT_LABEL).includes(sideQ()) || searchDrafts.some(projMatchesQ));
+      if (sideSearchActive() ? draftSearchHit : (draftsAll.length || sel === '__drafts__')) {
+        const dKey = '__drafts__';
+        const dit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === dKey ? ' active' : ''), role: 'button', tabindex: '0', title: DRAFT_HINT },
+          pjvBundleIcon(null, 'draft'), el('span', { class: 'pjv-side-navlabel', text: DRAFT_LABEL }), el('span', { class: 'pjv-side-navcount', text: String(draftsAll.length) }));
+        dit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(dKey); });
+        dit.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectArea(dKey); } });
+        treeWrap.append(dit);
+        appendProjMatches(searchDrafts, 1, dKey);
       }
       // 📦 아카이브(#1067) — 평소엔 늘 고정 노출(휴지통 바로 위), 검색 중엔 안에 매칭이 있을 때만(펼친 채로).
       if (!sideSearchActive() || archiveHasMatch()) renderArchiveNode();
@@ -1242,6 +1279,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   const scopeChip = el('span', { class: 'pjv-scope-chip', title: '사이드바에서 고른 범위만 보는 중 — × 로 전체 보기' });
   const scopeName = (key) => {
     if (key === '__none__') return '기타 (미분류)';
+    if (key === '__drafts__') return DRAFT_LABEL;
     if (typeof key === 'string' && key[0] === 'L') { const l = lists.find((x) => String(x.id) === key.slice(1)); return l ? l.name : null; }
     if (typeof key === 'string' && key[0] === 'F') { const f = (folders || []).find((x) => String(x.id) === key.slice(1)); return f ? f.name : null; }
     return null;
@@ -1379,6 +1417,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     }
     if (leafList) items.push(mkCrumb(pjvListGlyph(leafList), leafList.name, 'L' + leafList.id, 'is-leaf'));
     if (sel === '__none__') items.push(mkCrumb(pjvBundleIcon(null, 'none'), '기타 (미분류)', '__none__', 'is-leaf'));
+    if (sel === '__drafts__') items.push(mkCrumb(pjvBundleIcon(null, 'draft'), DRAFT_LABEL, '__drafts__', 'is-leaf'));
     // 구분자(/)를 끼워 넣고, 잎 옆에 ⌄(설정 메뉴)·☆(즐겨찾기)를 붙인다.
     // 경로(조상)와 잎(지금 자리)을 따로 감싼다(#4231) — 데스크톱은 둘 다 display:contents 라 종전과 한 픽셀도 다르지 않고,
     //  폰(50-mobile.css ≤640)에서만 «작은 경로 한 줄 + 큰 제목 한 줄» 두 층으로 선다(클릭업 모바일의 리스트 머리).
