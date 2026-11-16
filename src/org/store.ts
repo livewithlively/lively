@@ -30,8 +30,8 @@ export {
   getHarnessMachineAlias, setHarnessMachineAlias,
   getHarnessLocalPref, setHarnessLocalPref,
   getLocalModePreferences, setLocalModePreference,
-  getLocalScopePreferences, getLocalScopePreference, updateLocalScopePreference, applyLocalScopeChange,
-  DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN,
+  getLocalScopePreferences, getLocalScopePreference, updateLocalScopePreference, applyLocalScopeChange, localScopeView,
+  DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN, isWorkRootForm,
   getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivSession,
   setLivWelcomeProgress, listLivSecondTurnCandidates,
   memberIdByEmail, upsertMember, removeMember,
@@ -40,7 +40,7 @@ export type {
   MemberIdentity, OrgMember, ReportedStep,
   HarnessSnapshotAsset, HarnessSnapshot, HarnessSnapshots, HarnessMachineAlias, HarnessLocalPref,
   LocalSessionMode, LocalModePreference, LocalModePreferences,
-  RecordScope, LocalScopePreference, LocalScopePreferences, LocalScopeChange,
+  RecordScope, LocalScopePreference, LocalScopePreferences, LocalScopeChange, LocalScopeView, LocalScopeEntry, OrgRecordScope,
   LivWork, LivDecision, LivDeclined, LivProfile, LivSessionRef, LivWelcome, LivWelcomeProgress,
   MemberInput,
 } from "./store/members.js";
@@ -60,6 +60,7 @@ export {
   getRuntimeConfig, updateRuntimeConfig, getUiSurface,
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
   getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource, getContextJobPolicySource,
+  getOrgRecordScope, setOrgRecordScope,
 } from "./store/runtime-config.js";
 export type { OrgRuntimeConfig, HookRuntime, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
 

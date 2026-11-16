@@ -35,11 +35,11 @@ export interface SheetDoc {
 }
 
 //  상한 — 200쪽짜리 보고서를 다 그리면 칸이 멈춘다. 「무슨 문서인지 안다」에 필요한 양을 넘지 않는다.
-const MAX_BLOCKS = 3000;
-const MAX_RUN_CHARS = 400_000;
-const MAX_SHEET_ROWS = 500;
-const MAX_SHEET_COLS = 60;
-const MAX_SHEETS = 20;
+const MAX_BLOCKS = 200_000;   // #5480 — 화면이 «더 보기» 로 나눠 그리므로 판독은 넉넉히(종전 3000)
+const MAX_RUN_CHARS = 50_000_000;
+const MAX_SHEET_ROWS = 200_000;
+const MAX_SHEET_COLS = 300;
+const MAX_SHEETS = 200;
 
 const trimRuns = (runs: Run[]): Run[] => runs.filter((r) => r.text !== '');
 

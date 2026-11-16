@@ -5,6 +5,7 @@
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, type WriteCtx } from "./content-audit.js";
+import { releaseProjectDraft } from "./project-draft.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 
 export interface ListMember { member_id: string; display_name: string | null }
@@ -235,6 +236,8 @@ export async function setProjectListForProject(projectId: number, listId: number
     `UPDATE project SET list_id=$2, updated_at=now() WHERE id=$1 AND level='project' RETURNING list_id`,
     [projectId, listId]);
   await auditOrgContent("project", String(projectId), "set_list", { list_id: before.list_id }, { list_id: after.list_id }, ctx);
+  // #5522 — 리스트(영역)에 넣었다 = 정리된 프로젝트 → 초안이면 푼다. 그때부터 공개범위는 그 리스트가 정한다.
+  if (after.list_id != null) await releaseProjectDraft(projectId, "list", ctx);
   return after.list_id;
 }
 

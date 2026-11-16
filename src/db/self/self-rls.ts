@@ -26,7 +26,7 @@ import type pg from "pg";
 import { itemsPool } from "../client.js";
 import { logger } from "../../log.js";
 import { ITEMS_CONTENT_TABLES } from "./self-source.js";
-import { visibleListIds, visibleFolderIds, listIdPredicate, type Viewer } from "../../v6/visibility.js";
+import { visibleFolderIds, listIdPredicate, projectVisFor, projectVisPredicate, type Viewer } from "../../v6/visibility.js";
 
 export const SELF_RLS_ROLE = "lively_reader";
 export const SCOPE_TABLE = "lively_vis_scope";
@@ -153,20 +153,24 @@ function quoteIdent(name: string): string {
 /** 이 뷰어에게 숨길 것들 — 전부 술어 SoT 로 계산한다. 이 파일은 '무엇이 숨겨지나'를 스스로 판단하지 않는다. */
 async function hiddenSets(viewer: Viewer): Promise<Array<{ kind: ScopeKind; key: string }>> {
   const out: Array<{ kind: ScopeKind; key: string }> = [];
-  const visLists = await visibleListIds(viewer);
-  if (visLists === null) return out;   // 특권 — 숨길 것 없음
-
-  // 안 보이는 리스트·스페이스. ⚠ 술어는 컬럼마다 새로 만든다 — 생성된 SQL 을 정규식으로 고쳐 쓰면
-  //  그 순간 사본이 생긴다(v2 에서 리비전 큐가 그렇게 깨질 뻔했다).
-  for (const r of await itemsPool.query(
-    `SELECT id FROM project_list WHERE NOT (${listIdPredicate("id", visLists)})`).then((x) => x.rows)) {
-    out.push({ kind: "list", key: String(r.id) });
-  }
-  const visFolders = await visibleFolderIds(viewer);
-  if (visFolders !== null) {
+  // #5522 — 프로젝트 행은 리스트뿐 아니라 초안으로도 가려진다. 판정 재료를 술어 SoT 에서 그대로 받는다
+  //  (특권 · 축 꺼짐 · 전체 긴급 열람이면 둘 다 null — 숨길 것 없음).
+  const pv = viewer === null ? null : await projectVisFor(viewer);
+  if (!pv || (pv.lists === null && pv.draftViewer === null)) return out;
+  const visLists = pv.lists;
+  if (visLists !== null) {
+    // 안 보이는 리스트·스페이스. ⚠ 술어는 컬럼마다 새로 만든다 — 생성된 SQL 을 정규식으로 고쳐 쓰면
+    //  그 순간 사본이 생긴다(v2 에서 리비전 큐가 그렇게 깨질 뻔했다).
     for (const r of await itemsPool.query(
-      `SELECT id FROM project_folder WHERE NOT (${listIdPredicate("id", visFolders)})`).then((x) => x.rows)) {
-      out.push({ kind: "fold", key: String(r.id) });
+      `SELECT id FROM project_list WHERE NOT (${listIdPredicate("id", visLists)})`).then((x) => x.rows)) {
+      out.push({ kind: "list", key: String(r.id) });
+    }
+    const visFolders = await visibleFolderIds(viewer);
+    if (visFolders !== null) {
+      for (const r of await itemsPool.query(
+        `SELECT id FROM project_folder WHERE NOT (${listIdPredicate("id", visFolders)})`).then((x) => x.rows)) {
+        out.push({ kind: "fold", key: String(r.id) });
+      }
     }
   }
 
@@ -174,8 +178,8 @@ async function hiddenSets(viewer: Viewer): Promise<Array<{ kind: ScopeKind; key:
   //  후손을 안 넣으면 task 행의 list_id 가 NULL 이라 그대로 열린다 — v1 에서 실제로 그랬던 결함이다.
   const projRows = await itemsPool.query(`
     WITH RECURSIVE hidden AS (
-      SELECT id FROM project WHERE level='project' AND list_id IS NOT NULL
-         AND NOT (${listIdPredicate("list_id", visLists)})
+      SELECT hp.id FROM project hp WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft)
+         AND NOT (${projectVisPredicate("hp.list_id", "hp.id", pv)})
       UNION ALL
       SELECT c.id FROM project c JOIN hidden h ON c.parent_id = h.id
     )

@@ -10,6 +10,11 @@
 //
 //  증분 없음: 매 실행 전체 워킹트리를 읽는다(로컬 파일 177개, 저렴) — last_synced_at 기반 아카이브 스윕
 //  (sweepDomainWikiArchived, run-sync)이 삭제된 파일을 아카이브로 전파하려면 전량 관측이 필요하다.
+//
+//  경로 식별 모드(id_mode=path): 위 «basename 슬러그 = name» 은 파일명이 전역 유니크한 작은 위키에서만 성립한다.
+//  제품 문서 레포(실측: 한 레포 .md 4,078개 중 1,216개가 이름을 나눠 쓰거나 슬러그가 빈다)에서는 서로 덮어쓴다.
+//  이 모드는 레포 상대경로를 external_id 로 쓰고 외부 좌표 upsert(mirrorKnowledgeV6)로 보낸다 — 같은 이름의 다른
+//  지식(사람이 쓴 것 포함)을 덮지 않는다. 이름은 domain-wiki-md.wikiPathName(경로 해시). 슬러그 모드(기본)는 그대로다.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs";
@@ -19,8 +24,14 @@ import type { RawItem } from "../items/store.js";
 import { itemsPool } from "../db/client.js";
 import { sweepDomainWikiArchived } from "../v6/connector-mirror.js";
 import { logger } from "../log.js";
-import { resolveConnectorConfig } from "./config.js";
-import { normalizeWikiLinks, parseFrontmatter, wikiSlug } from "./domain-wiki-md.js";
+import { resolveConnectorConfig, boundCollector } from "./config.js";
+import { hasCategoryRules, ruleCategoryOnly } from "../v6/mirror/output-rules.js";
+import {
+  normalizeWikiLinks, parseFrontmatter, wikiSlug,
+  wikiPathName, firstHeading, buildPathLinkTargets, normalizeWikiLinksByPath, type PathLinkTargets,
+  maskSensitive, parseMaskKinds, unknownMaskWords, type MaskKind,
+} from "./domain-wiki-md.js";
+import { GlobSet, inScope, parseGlobList, toPosixRel } from "./path-glob.js";
 
 const execFileP = promisify(execFile);
 const SYSTEM = "domain-wiki";
@@ -33,10 +44,20 @@ interface DwConfig {
   gitPull: boolean;
   baseUrl: string;
   instance: string;
+  /** slug(기본 · 파일명 슬러그가 이름) | path(레포 상대경로가 정체성). */
+  idMode: "slug" | "path";
+  /** 범위 — 비면 전부. content 기준 상대경로에 맞춘다. */
+  include: string[];
+  exclude: string[];
+  /** 쓰기 전에 가릴 민감정보 종류(비면 안 가린다)와 남길 이메일 도메인. */
+  mask: Set<MaskKind>;
+  maskKeepEmailDomains: string[];
 }
 
 async function loadConfig(): Promise<DwConfig> {
   const c = await resolveConnectorConfig(SYSTEM);
+  const unknownMask = unknownMaskWords(c.mask);
+  if (unknownMask.length) console.warn(`${SYSTEM}: mask 에 모르는 낱말(${unknownMask.join(", ")}) — 네 종류 전부를 가린다(phone,email,bizno,rrn,all 중에서 고른다).`);
   return {
     repoPath: c.repo_path?.trim() || null,
     contentSubdir: c.content_subdir?.trim() || CONTENT_DEFAULT,
@@ -44,7 +65,19 @@ async function loadConfig(): Promise<DwConfig> {
     //  기본값을 씌우지 않는다 — 예시 도메인이 근거 링크로 새는 것을 막는다(위 toRawItem 주석).
     baseUrl: (c.base_url?.trim() || "").replace(/\/+$/, ""),
     instance: c.instance?.trim() || INSTANCE_DEFAULT,
+    idMode: (c.id_mode ?? "").trim().toLowerCase() === "path" ? "path" : "slug",
+    include: parseGlobList(c.include),
+    exclude: parseGlobList(c.exclude),
+    mask: parseMaskKinds(c.mask),
+    maskKeepEmailDomains: String(c.mask_keep_email_domains ?? "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
   };
+}
+
+/** 범위 거르기(include/exclude) — 순수. 미리보기와 실제 인입이 같은 판정을 쓰도록 export. */
+export function selectMarkdown(rels: readonly string[], include: readonly string[], exclude: readonly string[]): string[] {
+  if (!include.length && !exclude.length) return [...rels];
+  const inc = new GlobSet(include), exc = new GlobSet(exclude);
+  return rels.filter((r) => inScope(r, inc, exc));
 }
 
 /** content 루트 아래 *.md 상대경로(content 기준) 전량. 심볼릭·.git 등은 walk 하지 않는다.
@@ -109,6 +142,116 @@ export function toRawItem(
   };
 }
 
+/** `git log --format=%x01%cI --name-only` 출력 → 경로별 **마지막** 커밋 시각(ISO). 순수(단위테스트 대상).
+ *  git log 는 새 커밋부터 내보내므로 경로를 처음 만난 커밋이 그 파일의 마지막 커밋이다.
+ *  core.quotePath=false 여도 따옴표 · 제어문자가 든 경로는 C 따옴표로 나온다 — 풀어서 쓴다(못 풀면 그 경로는 건너뛴다). */
+export function parseGitLogTimes(out: string): Map<string, string> {
+  const times = new Map<string, string>();
+  let at: string | null = null;
+  for (const line of out.split("\n")) {
+    if (!line) continue;
+    if (line.startsWith("\x01")) { at = line.slice(1).trim() || null; continue; }
+    if (!at) continue;
+    const p = line.startsWith('"') ? unquoteGitPath(line) : line;
+    if (p && !times.has(p.normalize("NFC"))) times.set(p.normalize("NFC"), at);
+  }
+  return times;
+}
+
+/** git 의 C 따옴표 경로("a\\tb.md" · 8진수 UTF-8 바이트) → 원래 경로. 형식이 깨졌으면 null. */
+function unquoteGitPath(q: string): string | null {
+  if (q.length < 2 || !q.endsWith('"')) return null;
+  const body = q.slice(1, -1);
+  const bytes: number[] = [];
+  const ESC: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c !== "\\") {
+      //  코드 포인트 단위로 — 보충 평면 글자(이모지 등)를 UTF-16 반쪽씩 인코딩하면 깨진다.
+      const ch = String.fromCodePoint(body.codePointAt(i)!);
+      for (const b of Buffer.from(ch, "utf8")) bytes.push(b);
+      i += ch.length - 1;
+      continue;
+    }
+    const n = body[i + 1];
+    if (n === undefined) return null;
+    if (/[0-7]/.test(n)) { bytes.push(parseInt(body.slice(i + 1, i + 4), 8)); i += 3; continue; }
+    if (!(n in ESC)) return null;
+    bytes.push(ESC[n]); i += 1;
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** 레포 상대경로 → 마지막 커밋 시각. git 이 없거나 실패하면 빈 표(호출부가 파일 mtime 으로 폴백한다).
+ *  한 번의 git log 로 전체를 얻는다(실측: 커밋 13,469개 · 9.5만 줄에 1초). 파일마다 git log 를 부르면 수천 번 뜬다. */
+async function gitLastCommitTimes(repoPath: string, subdir: string): Promise<Map<string, string>> {
+  try {
+    const { stdout } = await execFileP("git",
+      //  --relative: repo_path 가 레포 안쪽 폴더여도 경로를 repo_path 기준으로 받는다(루트면 영향 없음).
+      ["-C", repoPath, "-c", "core.quotePath=false", "log", "--no-renames", "--relative", "--format=%x01%cI", "--name-only", "HEAD", "--", subdir || "."],
+      { timeout: 120_000, maxBuffer: 256 * 1024 * 1024 });
+    return parseGitLogTimes(stdout);
+  } catch (e) {
+    console.warn(`${SYSTEM}: git log 실패(파일 mtime 으로 진행): ${(e as Error).message}`);
+    return new Map();
+  }
+}
+
+/** 원본 blob 주소 — 경로 조각마다 인코딩한다(공백 · 한글 · `#` 이 든 경로가 링크에서 끊기지 않게). */
+export function blobUrl(baseUrl: string, relpath: string): string | undefined {
+  if (!baseUrl) return undefined;
+  return `${baseUrl}/${toPosixRel(relpath).split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** 경로 모드 RawItem — 순수(단위테스트 대상). toRawItem(슬러그 모드)과 따로 두어 그쪽 출력을 한 바이트도 바꾸지 않는다.
+ *  · external_id = content 기준 상대경로(NFC POSIX). name_hint = wikiPathName — 신규 행이 이 이름으로 태어난다.
+ *  · path = 같은 경로 — 수집기 산출 규칙(output_config.category_rules)이 이 값에 맞춰 분류를 고른다.
+ *  · 제목: 프론트매터 title → 본문 첫 `# 제목` → 경로(확장자 뺀). README 가 수백 개라 파일명만으로는 못 가린다.
+ *  · 시각: 마지막 커밋 시각이 있으면 그것, 없으면 파일 mtime(클론한 시각이라 부정확하다는 것을 안다).
+ *  · 가리기: **원문 전체를 먼저** 가린 뒤 앞머리를 풀고 링크를 바꾼다 — 앞머리 값(title · code_sot …)도 함께 가려지고,
+ *    바꿔 넣은 내부 링크의 이름(끝의 경로 해시가 숫자만 10자리면 전화번호 꼴이다)이 가리기에 깨지지 않는다.
+ *  · code_sot · source_sot 는 앞머리에서만 읽는다(본문 줄이 우연히 그 꼴이면 값으로 새지 않게). */
+export function toRawItemPath(
+  args: { relpath: string; raw: string; mtime?: string; committedAt?: string; instance: string; baseUrl: string;
+          mask?: ReadonlySet<MaskKind>; maskKeepEmailDomains?: readonly string[] },
+  targets: PathLinkTargets,
+): RawItem {
+  const rel = toPosixRel(args.relpath);
+  const m = maskSensitive(args.raw, args.mask ?? new Set<MaskKind>(), args.maskKeepEmailDomains ?? []);
+  const raw = m.text;
+  const { title: fmTitle, body } = parseFrontmatter(raw);
+  const linked = normalizeWikiLinksByPath(body, rel, targets);
+  const title = fmTitle || firstHeading(body) || rel.replace(/\.md$/i, "");
+  const masked = Object.fromEntries(Object.entries(m.masked).filter(([, v]) => Number(v) > 0));
+  const fm = raw.match(/^---\n([\s\S]*?)\n---\n?/)?.[1] ?? "";
+  const fmCodeSot = fm.match(/^code_sot:\s*(.+)$/m)?.[1]?.trim();
+  const fmSourceSot = fm.match(/^source_sot:\s*(.+)$/m)?.[1]?.trim();
+  const at = args.committedAt ?? args.mtime;
+  return {
+    type: "doc",
+    provenance: {
+      category: "collab_tool",
+      system: SYSTEM,
+      instance: args.instance,
+      external_id: rel,
+      external_url: blobUrl(args.baseUrl, rel),
+    },
+    name_hint: targets.byPath.get(rel) ?? wikiPathName(args.instance, rel),
+    path: rel,
+    title,
+    body: linked || undefined,
+    occurred_at: at,
+    updated_at: at,
+    fields: {
+      domain_wiki: {
+        relpath: rel, id_mode: "path", code_sot: fmCodeSot, source_sot: fmSourceSot,
+        ...(args.committedAt ? { committed_at: args.committedAt } : {}),
+        ...(Object.keys(masked).length ? { masked } : {}),
+      },
+    },
+  };
+}
+
 async function* backfill(_opts?: BackfillOpts): AsyncIterable<RawItem> {
   const cfg = await loadConfig();
   if (!cfg.repoPath) {
@@ -126,7 +269,12 @@ async function* backfill(_opts?: BackfillOpts): AsyncIterable<RawItem> {
     catch (e) { console.warn(`${SYSTEM}: git pull 실패(워킹트리로 진행): ${(e as Error).message}`); }
   }
 
-  const rels = listMarkdown(contentRoot);
+  const all = listMarkdown(contentRoot);
+  const inc = new GlobSet(cfg.include);
+  if (inc.configured && !inc.size) console.warn(`${SYSTEM}: 포함 경로(include)에 유효한 패턴이 없다 — 아무것도 인입하지 않는다(설정: ${cfg.include.join(", ")}).`);
+  const rels = selectMarkdown(all, cfg.include, cfg.exclude);
+  if (rels.length !== all.length) console.log(`${SYSTEM}: 범위(include/exclude) ${all.length}개 중 ${rels.length}개.`);
+  if (cfg.idMode === "path") { yield* backfillByPath(cfg, contentRoot, rels); return; }
   // 타깃셋 = 레포 슬러그(자기참조 해소) ∪ 기존 notion 미러 name(노션 URL 해소).
   const repoSlugs = new Set(rels.map((r) => wikiSlug(path.basename(r, ".md"))));
   const knownTargets = new Set<string>([...repoSlugs, ...(await notionTargetNames())]);
@@ -135,7 +283,9 @@ async function* backfill(_opts?: BackfillOpts): AsyncIterable<RawItem> {
   for (const rel of rels) {
     const full = path.join(contentRoot, rel);
     try {
-      const raw = fs.readFileSync(full, "utf8");
+      const raw0 = fs.readFileSync(full, "utf8");
+      //  가리기는 원문 전체에 먼저(경로 모드와 같은 이유 — 앞머리 값 · 바꿔 넣은 링크 보호). 안 켜면 원문 그대로.
+      const raw = cfg.mask.size ? maskSensitive(raw0, cfg.mask, cfg.maskKeepEmailDomains).text : raw0;
       const mtime = fs.statSync(full).mtime.toISOString();
       yield toRawItem({ relpath: rel, raw, mtime, instance: cfg.instance, baseUrl: cfg.baseUrl }, knownTargets);
       n++;
@@ -144,6 +294,41 @@ async function* backfill(_opts?: BackfillOpts): AsyncIterable<RawItem> {
     }
   }
   console.log(`${SYSTEM}: ${n}개 md → 지식 인입(레포 슬러그 ${repoSlugs.size}, 타깃 ${knownTargets.size}).`);
+}
+
+/** 경로 모드 본체 — 범위 안 파일 전량을 매번 읽는다(삭제 전파 스윕의 전제는 슬러그 모드와 같다). */
+async function* backfillByPath(cfg: DwConfig, contentRoot: string, rels: readonly string[]): AsyncIterable<RawItem> {
+  const posix = rels.map(toPosixRel);
+  const targets = buildPathLinkTargets(posix, (rel) => wikiPathName(cfg.instance, rel), await notionTargetNames());
+  //  git log 경로는 레포 루트 기준이고 rel 은 content 기준이다 — 하위폴더를 붙여 찾는다.
+  const sub = toPosixRel(path.relative(cfg.repoPath!, contentRoot)) || ".";
+  const times = await gitLastCommitTimes(cfg.repoPath!, sub);
+  //  경로 분류 규칙이 있으면 «어느 규칙에도 안 걸린 파일» 을 먼저 센다 — 그 파일은 target_category 로 가거나(있으면)
+  //   미분류로 쌓인다. 미분류 지식은 소환되지 않으므로, 범위를 넓힌 뒤 규칙을 빠뜨린 것을 로그에서 바로 보게 한다.
+  const oc = boundCollector()?.outputConfig;
+  if (hasCategoryRules(oc)) {
+    const miss = posix.filter((rel) => !ruleCategoryOnly(oc, rel));
+    if (miss.length) console.warn(`${SYSTEM}: 경로 분류 규칙에 안 걸린 파일 ${miss.length}개(target_category ${typeof oc?.target_category === "string" && oc.target_category ? `'${oc.target_category}' 로` : "없음 → 미분류"}): ${miss.slice(0, 10).join(", ")}${miss.length > 10 ? " …" : ""}`);
+  }
+  let n = 0, timed = 0;
+  for (let i = 0; i < rels.length; i++) {
+    const rel = posix[i];
+    const full = path.join(contentRoot, rels[i]);
+    try {
+      const raw = fs.readFileSync(full, "utf8");
+      const mtime = fs.statSync(full).mtime.toISOString();
+      const committedAt = times.get(sub === "." ? rel : `${sub}/${rel}`);
+      if (committedAt) timed++;
+      yield toRawItemPath({ relpath: rel, raw, mtime, committedAt, instance: cfg.instance, baseUrl: cfg.baseUrl,
+        mask: cfg.mask, maskKeepEmailDomains: cfg.maskKeepEmailDomains }, targets);
+      n++;
+    } catch (e) {
+      console.warn(`${SYSTEM}: 파일 처리 실패(skip) ${rel}: ${(e as Error).message}`);
+    }
+  }
+  console.log(`${SYSTEM}: 경로 모드 ${n}개 md → 지식 인입(커밋 시각 ${timed}개 · 가리기 ${[...cfg.mask].join(",") || "없음"}).`);
+  //  커밋 시각을 못 찾은 파일은 mtime 을 쓰는데, mtime 은 다시 클론하면 바뀐다 — 그 파일들은 매 싱크 «변경» 으로 보여 판이 오른다.
+  if (timed < n) console.warn(`${SYSTEM}: 커밋 시각을 못 찾은 파일 ${n - timed}개 — 파일 mtime 으로 대신했다(git log 실패 · 얕은 클론이면 확인).`);
 }
 
 // ── 후처리(#696) — 삭제 전파 스윕(이번 전량 싱크 미관측 행 아카이브). #1313 R44 로 run-sync 에서 이관. ──

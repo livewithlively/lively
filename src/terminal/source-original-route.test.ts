@@ -41,9 +41,9 @@ test("★ 자료 원본 창구는 개인 폴더 파일만 — 올린 사람의 O
   assert.match(r, /userOsUser\(owner\)/, "올린 사람의 OS 사용자로 읽지 않는다 — 게이트웨이 권한으로 읽으면 심링크가 박스 파일에 닿는다");
   assert.match(r, /resolveRootPath\(owner, "personal", /, "올린 사람의 개인 폴더로 풀지 않는다");
   assert.match(r, /assertJailed\(base, abs, osUser\)/, "심링크를 해소한 뒤 다시 보지 않는다(#3668 T1)");
-  assert.match(r, /sendFile\(res, abs, osUser, /, "미리보기 상한·헤더를 브라우즈와 다른 코드로 보낸다");
-  //  브라우즈 파일 받기와 같은 한 벌 — 상한(MAX_PREVIEW)·Content-Disposition·no-store 가 갈리지 않게.
-  assert.match(routeBody('app.get("/api/ui/terminal/browse/file"'), /sendFile\(res, abs, osUser, /);
+  assert.match(r, /sendFile\(req, res, abs, osUser, /, "미리보기 상한·헤더를 브라우즈와 다른 코드로 보낸다");
+  //  브라우즈 파일 받기와 같은 한 벌 — 구간 응답(#5480)·Content-Disposition·no-store 가 갈리지 않게.
+  assert.match(routeBody('app.get("/api/ui/terminal/browse/file"'), /sendFile\(req, res, abs, osUser, /);
 });
 
 test("★ 자료 화면 — 개인 폴더 파일의 미리보기·내려받기는 자료 id 창구로, 남의 개인 폴더 «폴더에서 열기» 는 그리지 않는다", () => {

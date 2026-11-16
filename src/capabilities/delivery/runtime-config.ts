@@ -82,8 +82,9 @@ export const runtimeConfigCapabilities: Capability[] = [
     "임베딩/저장소/호출로그/세션메모리/세션회수/세션공유 정책. 위 축약 필드는 훅용 fold 판이라 그것만으로는 관리 상태를 볼 수 없다. 수정은 org_runtime_update.",
     [{ method: "GET", paths: ["/api/ui/org/runtime-config"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
-      // 훅이 동적으로 필요한 것만(비밀 아님): hooks 토글 + 너지문구. work_roots(디렉토리 경로)는
-      //  비-admin 에게 노출 안 함 — 설치 번들(.lively/work-roots, 멤버 본인 설치 경로)로만 전달.
+      // 훅이 동적으로 필요한 것만(비밀 아님): hooks 토글 + 너지문구. work_roots(디렉토리 경로)는 이 응답(런타임 설정 전량)으로는
+      //  비-admin 에게 노출 안 함. 다만 구성원은 이 목록을 원래 받는다 — 설치 번들(.lively/work-roots)과, 조직 기록 범위의 허용 목록으로
+      //  me_local_scope_get(자기 컴퓨터의 유효 값 · 조직 줄 표시)에서. 여기서 막는 건 보안 필드와 묶인 «전량» 이다.
       const c = await getRuntimeConfig();
       // write_tools(기록 인정 툴)·auto_approve(자동승인 툴의 완전한 MCP 식별자)도 훅이 동적으로 읽음(B) —
       //  툴 '이름'뿐이라 비밀 아님(work_roots 와 달리 노출 OK). 훅이 매 세션 settings.json permissions.allow 에 reconcile.
@@ -873,6 +874,49 @@ export const runtimeConfigCapabilities: Capability[] = [
       writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값"),
       write_tools: z.array(z.string()).optional().describe("기록 인정 툴 이름(접두사 없이) — 비우면 기본 목록"),
       pull_tools: z.array(z.string()).optional().describe("외부 인입으로 볼 MCP 툴 이름 prefix — 비우면 기능 끔"),
+    }),
+
+  // ── 조직 기록 범위(#5016 후속) — 구성원 컴퓨터에서 연 AI 에 라이블리를 붙일 폴더의 조직 기본값 ──
+  //  방식(작업 폴더에서만=기본 꺼짐·허용 목록 | 어디서나=기본 켜짐·제외 목록)과 두 목록. 구성원은 컴퓨터마다 목록만 덮어쓴다
+  //  (me_local_scope_set — 방식은 못 바꾼다). 구성원 컴퓨터의 다음 세션 시작 때 닿는다(세션 시작 훅이 유효 값을 받아 간다).
+  //  관리자 몫인 이유는 work_roots 와 같다 — 구성원 컴퓨터의 디렉터리 경로를 정하고, 대화가 워크스페이스에 올라갈지를 가른다.
+  restOnly("org_record_scope_get", "조직 기록 범위 조회",
+    "구성원 컴퓨터에서 연 AI 에 라이블리를 붙일 폴더의 조직 기본값 — scope(work_folders=작업 폴더에서만·기본 꺼짐 · anywhere=어디서나·기본 켜짐)·" +
+    "work_roots(허용 목록 — 작업 폴더에서만 방식에서 쓴다)·exclude_roots(제외 목록 — 어디서나 방식에서 쓴다). 수정은 org_record_scope_set.",
+    [{ method: "GET", paths: ["/api/ui/org/record-scope"], parse: () => ({}) }],
+    async () => {
+      const { getOrgRecordScope } = await import("../../org/store.js");
+      return { record_scope: await getOrgRecordScope() };
+    }),
+  restOnly("org_record_scope_set", "조직 기록 범위 저장",
+    "조직 기록 범위를 저장한다 — 준 칸만 바꾼다. scope: work_folders(작업 폴더에서만 — 기본 꺼짐, work_roots 에 든 폴더만 켠다) | " +
+    "anywhere(어디서나 — 기본 켜짐, exclude_roots 에 든 폴더만 끈다). work_roots·exclude_roots 는 통째 교체(절대경로 또는 ~ 로 시작). " +
+    "두 목록은 따로 남는다(방식을 바꿔도 다른 목록은 지워지지 않는다). 구성원은 컴퓨터마다 목록만 덮어쓰고 방식은 못 바꾼다. " +
+    "구성원 컴퓨터의 다음 세션부터 적용. work_roots 는 org_runtime_update 의 work_roots 와 같은 칸이다.",
+    [{ method: "POST", paths: ["/api/ui/org/record-scope"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const { setOrgRecordScope, isWorkRootForm, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN } = await import("../../org/store.js");
+      const patch: { scope?: "work_folders" | "anywhere"; work_roots?: string[]; exclude_roots?: string[] } = {};
+      if (input.scope !== undefined) {
+        if (input.scope !== "work_folders" && input.scope !== "anywhere") throw new HttpError(400, "scope 는 work_folders|anywhere 만 허용됩니다");
+        patch.scope = input.scope;
+      }
+      for (const k of ["work_roots", "exclude_roots"] as const) {
+        const v = input[k];
+        if (v === undefined) continue;
+        if (!Array.isArray(v)) throw new HttpError(400, `${k} 는 배열이어야 합니다`);
+        if (v.length > MAX_WORK_ROOTS) throw new HttpError(400, `${k} 는 ${MAX_WORK_ROOTS}개까지입니다`);
+        const list = v.map((x, i) => str(x, `${k}[${i}]`, MAX_WORK_ROOT_LEN).trim()).filter(Boolean);
+        const bad = list.find((x) => !isWorkRootForm(x));
+        if (bad) throw new HttpError(400, `절대경로나 ~ 로 시작하는 경로만 넣을 수 있습니다: ${bad}`);
+        patch[k] = list;
+      }
+      if (!Object.keys(patch).length) throw new HttpError(400, "바꿀 값(scope·work_roots·exclude_roots)이 없습니다");
+      return { record_scope: await setOrgRecordScope(patch, { actor: actorOf(user), source: ctx?.source ?? "web" }) };
+    }, {
+      scope: z.enum(["work_folders", "anywhere"]).optional().describe("work_folders=작업 폴더에서만(기본 꺼짐·허용 목록) | anywhere=어디서나(기본 켜짐·제외 목록)"),
+      work_roots: z.array(z.string()).optional().describe("허용 목록(통째 교체) — 절대경로 또는 ~ 로 시작"),
+      exclude_roots: z.array(z.string()).optional().describe("제외 목록(통째 교체) — 절대경로 또는 ~ 로 시작"),
     }),
 ];
 
