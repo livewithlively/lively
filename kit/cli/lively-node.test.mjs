@@ -7,7 +7,7 @@
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, hostname as osHostname } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -304,6 +304,76 @@ try {
         env2.length > 0 && env2.includes(`LIVELY_GATEWAY_URL=${GW2}`) && !env2.includes(NODE_TOKEN),
         env2 || "(node-agent.env 없음)");
     } finally { srv2.close(); }
+  }
+
+  // ⑪ 이름 겹침 — **호스트 이름이 같은 다른 사람의 컴퓨터**가 그 이름을 먼저 등록해 둔 경우.
+  //  실측(2026-11-16): 회사가 나눠 준 맥 두 대가 모두 `acmeui-MacBookAir`. 두 번째 사람은 등록 409 → 회전 403 으로 막히고
+  //   «접속 열쇠가 유효하지 않습니다 — lively login 으로 다시 등록하세요» 만 봤다(다시 로그인해도 낫지 않는다).
+  //   데스크톱 앱의 [노드 시작] 은 `lively node --daemon` 고정이라 `--id` 로 비킬 수도 없었다.
+  //  사양: 이름을 직접 주지 않았으면 `<호스트 이름>-<구성원 id>` 로 비켜 등록하고, 다음 실행은 그 이름을 그대로 잇는다.
+  {
+    const TOKEN3 = "lvk_test_collision_gateway_55";
+    const NODE_TOKEN3 = "lvk_test_node_agent_collide";
+    const SLUG = (osHostname().split(".")[0] || "node").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "node";
+    const MINE = `${SLUG}-mina`;
+    const reg3 = [], rot3 = [];
+    const srv3 = createServer((req, res) => {
+      const p3 = (req.url || "").split("?")[0];
+      const json = (code, o) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(o));
+      if (String(req.headers.authorization || "") !== `Bearer ${TOKEN3}`) { res.writeHead(401).end(); return; }
+      if (req.method === "POST" && p3 === "/api/ui/nodes") {
+        let body = ""; req.on("data", (c) => (body += c)); req.on("end", () => {
+          const b = JSON.parse(body || "{}"); reg3.push(b.id);
+          // 호스트 이름 그대로는 **남의 노드**가 이미 쓰고 있다. 비킨 이름은 비어 있다.
+          if (b.id === MINE) json(200, { node: { id: MINE, name: MINE, kind: "member" }, token: NODE_TOKEN3, install: "…" });
+          else json(409, { error: `이미 존재하는 노드입니다: ${b.id}` });
+        });
+      } else if (req.method === "POST" && /^\/api\/ui\/nodes\/[^/]+\/rotate$/.test(p3)) {
+        rot3.push(decodeURIComponent(p3.split("/")[4]));
+        json(403, { error: "본인 노드가 아닙니다" });
+      } else if (p3 === "/api/ui/me/profile") {
+        json(200, { id: "mina", display_name: "미나" });
+      } else if (p3 === "/api/ui/node-agent") {
+        res.writeHead(200, { "content-type": "application/gzip" }).end(AGENT_TGZ);
+      } else { res.writeHead(404).end(); }
+    });
+    await new Promise((r) => srv3.listen(0, "127.0.0.1", r));
+    const GW3 = `http://127.0.0.1:${srv3.address().port}`;
+    try {
+      const H3 = newHome("h-collide");
+      const envPath = join(H3.home, ".lively", "node-agent.env");
+      const readEnv = () => (existsSync(envPath) ? readFileSync(envPath, "utf8") : "");
+      writeFileSync(join(H3.home, ".lively", "gateway-url"), GW3);
+      writeFileSync(join(H3.home, ".lively", "token"), TOKEN3);
+      chmodSync(join(H3.home, ".lively", "token"), 0o600);
+
+      // 이름을 주지 않고 실행 = 데스크톱 앱의 [노드 시작] 이 부르는 그대로.
+      const r1 = await lively(H3, ["node", "--daemon"]);
+      const env1 = readEnv();
+      check("⑪ ★ 호스트 이름이 남의 노드와 겹치면 <호스트 이름>-<구성원 id> 로 비켜 등록한다",
+        r1.code === 0 && reg3.join(",") === `${SLUG},${MINE}` && rot3.join(",") === SLUG
+          && env1.includes(`LIVELY_NODE_ID=${MINE}\n`) && env1.includes(`LIVELY_NODE_TOKEN=${NODE_TOKEN3}`),
+        `code=${r1.code} 등록=${reg3} 회전=${rot3}\n${env1}\n${r1.err.slice(-400)}`);
+      check("⑪ 왜 다른 이름이 됐는지 사람에게 말한다", new RegExp(`${MINE}' 로 등록합니다`).test(r1.err), r1.err.slice(-400));
+
+      // 다시 실행 — 비킨 이름을 그대로 잇는다. 호스트 이름으로 다시 등록을 시도하면(=매 실행 409 → 회전) 안 된다.
+      const before = reg3.length;
+      const r2 = await lively(H3, ["node", "--daemon"]);
+      check("⑪ ★ 다음 실행은 비킨 이름을 잇는다(다시 등록·회전하지 않는다)",
+        r2.code === 0 && reg3.length === before && rot3.length === 1 && readEnv().includes(`LIVELY_NODE_ID=${MINE}\n`),
+        `code=${r2.code} 등록 +${reg3.length - before} 회전=${rot3.length}\n${r2.err.slice(-300)}`);
+
+      // 이름을 **직접 준** 경우엔 바꿔 등록하지 않는다 — 그 이름이 남의 것이라고 말하고 멈춘다(로그인 탓으로 돌리지 않는다).
+      const H4 = newHome("h-collide-explicit");
+      writeFileSync(join(H4.home, ".lively", "gateway-url"), GW3);
+      writeFileSync(join(H4.home, ".lively", "token"), TOKEN3);
+      chmodSync(join(H4.home, ".lively", "token"), 0o600);
+      const r3 = await lively(H4, ["node", "--daemon", "--id", "someone-elses-box"], { expectFail: true });
+      check("⑪ --id 로 준 이름이 남의 것이면 멈추고 다른 이름을 고르라고 말한다",
+        r3.code !== 0 && /다른 구성원이 이미 쓰는 노드 이름/.test(r3.err) && !/lively login/.test(r3.err)
+          && !existsSync(join(H4.home, ".lively", "node-agent.env")),
+        `code=${r3.code}\n${r3.err.slice(-300)}`);
+    } finally { srv3.close(); }
   }
 } finally {
   server.close();
