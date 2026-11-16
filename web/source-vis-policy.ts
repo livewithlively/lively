@@ -221,7 +221,11 @@ function openBackfill(reload) {
     (go as any).disabled = true;
     try {
       const d = await api('/api/ui/source-vis-policy/backfill', { method: 'POST', body: JSON.stringify({ dry_run: false }) });
-      toast(`${d.locked}건을 잠그고 ${d.resynced ?? 0}건의 대상을 바꿨습니다`); back.remove(); reload();
+      // 일부만 적용된 판을 «다 됐다» 로 읽지 않게 — 건너뛴 것·못 본 것이 있으면 같은 토스트에서 말하고, 읽을 수 있게 더 오래 띄운다.
+      const partial = (d.lock_busy ? ` · 다른 작업이 쥐고 있어 ${d.lock_busy}건은 건너뛰었습니다 — 다시 누르면 맞춥니다` : '')
+        + (d.truncated ? ' · 한도에 걸려 오래된 자료는 못 봤습니다' : '');
+      toast(`${d.locked}건을 잠그고 ${d.resynced ?? 0}건의 대상을 바꿨습니다` + partial, !!partial, partial ? 9000 : undefined);
+      back.remove(); reload();
     } catch (e: any) { (go as any).disabled = false; toast('적용하지 못했습니다 — ' + e.message, true); }
   };
 }
