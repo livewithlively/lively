@@ -565,14 +565,23 @@ const PARSER_KNOWN_OPS = new Set([
   "~", "~*", "!~", "!~*", // 정규식
 ]);
 const DOLLAR_TAG_RE = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/; // 달러 인용 태그(숫자로 시작 불가 — $1 은 파라미터)
+//  같은 스캔에서 **검증 파서와 DB 가 다르게 읽는 어휘 꼴**(lexHazard)도 찾는다. 파서가 «실패» 하면 거부로 끝나지만
+//  «다르게 읽으면» 파서가 보지 못한 이름이 그대로 실행되므로, 그런 꼴은 파싱 전에 거부한다:
+//   pg    · U&"…" / U&'…' — DB 는 유니코드 이스케이프를 풀어 다른 이름·값으로 읽는다.
+const LEX_HAZARD = {
+  unicodeEscape: "Blocked: 유니코드 이스케이프 식별자·문자열(U&\"…\" · U&'…')은 쓸 수 없습니다 — 이름·값을 그대로 쓰세요",
+} as const;
 interface SqlTextScan {
   parseSql: string; // 파서에 넘길 사본(pg 에서만 중화 — 그 외엔 원본과 동일)
   mixedCaseQuoted: boolean; // 대문자를 포함한 인용식별자("Person" · `Person`)가 원문에 있는가
+  lexHazard: string | null; // 검증 파서와 DB 가 다르게 읽는 어휘 꼴이 있으면 그 거부 문구(처음 만난 것)
 }
-function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
+function scanSqlText(sql: string, dialect: SqlDialect): SqlTextScan {
+  const pg = dialect === "postgresql";
   const out = sql.split("");
   const n = sql.length;
   let mixedCaseQuoted = false;
+  let lexHazard: string | null = null;
   let i = 0;
   while (i < n) {
     const c = sql[i];
@@ -621,7 +630,10 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
       i++;
       continue;
     }
-    if (neutralizeOps && OP_CHARS.includes(c)) {
+    if (pg && (c === "U" || c === "u") && sql[i + 1] === "&" && (sql[i + 2] === "\"" || sql[i + 2] === "'")) {
+      lexHazard ??= LEX_HAZARD.unicodeEscape; // 따옴표·주석 밖에서만 여기에 온다
+    }
+    if (pg && OP_CHARS.includes(c)) {
       // 연산자 문자 런을 통째로 읽는다 — 부분 매칭 금지(`#>>` 를 `#>` 로 자르면 남은 `>` 가 파싱을 깬다).
       let end = i;
       while (end < n && OP_CHARS.includes(sql[end])) {
@@ -645,7 +657,7 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
     }
     i++;
   }
-  return { parseSql: out.join(""), mixedCaseQuoted };
+  return { parseSql: out.join(""), mixedCaseQuoted, lexHazard };
 }
 
 /**
@@ -654,7 +666,7 @@ function scanSqlText(sql: string, neutralizeOps: boolean): SqlTextScan {
  *  미리 거부하므로 이 스캐너의 관대한 리터럴 규칙과 Postgres 의 렉싱이 어긋날 자리가 없다.
  */
 export function parserSafeCopy(sql: string): string {
-  return scanSqlText(sql, true).parseSql;
+  return scanSqlText(sql, "postgresql").parseSql;
 }
 
 // ── #1181 ① CTE(WITH) 는 테이블이 아니다 ──
@@ -767,7 +779,8 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
 
   // 파서에 넘길 사본 — pgvector 연산자 중화(pg) + 인용식별자 대소문자 관측(#1181). 실행되는 SQL 은 언제나 원본.
-  const scan = scanSqlText(sql, dialect === "postgresql");
+  const scan = scanSqlText(sql, dialect);
+  if (scan.lexHazard) throw new Error(scan.lexHazard);
   const parseSql = scan.parseSql;
 
   let ast: unknown;

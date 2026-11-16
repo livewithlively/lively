@@ -515,6 +515,18 @@ ok("from-shape-2: 지금 받는 FROM 모양은 그대로 통과", () => {
     "SELECT a.id FROM (orders a, foo f)"]) { assertSafeSelect(sql, undefined, MY); assertSafeSelect(sql, acct, MY); }
 });
 
+// ══════════ pg 유니코드 이스케이프 식별자·문자열(U&"…" · U&'…') ══════════
+//  DB 는 이스케이프를 풀어 다른 이름으로 읽는데 검증 파서는 U 와 인용 이름을 따로 읽는다 — 이름으로 판정할 수 없어 거부한다.
+rejectsP("uesc-1: U&\"…\" 식별자의 파생", "SELECT left(U&\"account\\005Fno\", 100) FROM accounts", acct, /유니코드 이스케이프/);
+rejectsP("uesc-2: U&\"…\" 식별자의 WHERE 조건", "SELECT id FROM accounts WHERE U&\"account\\005Fno\" LIKE 'a%'", acct, /유니코드 이스케이프/);
+rejectsP("uesc-3: 소문자 u&\"…\"", "SELECT left(u&\"account\\005Fno\", 100) FROM accounts", acct, /유니코드 이스케이프/);
+rejects("uesc-4: 정책이 없어도 거부(테이블 이름도 같은 꼴로 쓸 수 있다)", "SELECT id FROM U&\"orders\"", /유니코드 이스케이프/);
+rejectsP("uesc-5: U&'…' 문자열", "SELECT id FROM accounts WHERE status = U&'d\\0061ta'", acct, /유니코드 이스케이프/);
+okP("uesc-ok-1: 문자열 리터럴 안의 U& 글자는 값", "SELECT id FROM accounts WHERE status = 'AT&T U&\"x\"'", acct);
+okP("uesc-ok-2: 주석 안의 U& 글자", "SELECT id FROM accounts -- U&\"x\"\n", acct);
+okP("uesc-ok-3: U 와 & 사이·뒤에 공백이 있으면 비트 연산이다", "SELECT o.u & o.flags AS f, o.u & \"flags\" AS g FROM orders o", acct);
+okMy("uesc-ok-4: mysql 은 대상 아님(무변경)", "SELECT u&\"x\" AS f FROM orders", acct);
+
 // ══════════ 위치 번호 — DISTINCT ON · ROLLUP/CUBE 안의 번호도 그 번호의 투영 컬럼을 가리킨다 ══════════
 rejectsP("pos-1: DISTINCT ON (번호) 가 마스킹 컬럼을 가리킴", "SELECT DISTINCT ON (2) id, account_no FROM accounts", acct, /최상위 SELECT 투영/);
 okP("pos-2: DISTINCT ON (번호) 가 무마스킹 컬럼을 가리키면 통과", "SELECT DISTINCT ON (1) id, account_no FROM accounts", acct,
