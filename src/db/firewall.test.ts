@@ -1,7 +1,7 @@
 // firewall 단위 체크 — RLS GUC 덮어쓰기/위험함수 차단 회귀(보안 핵심).
 // 실행: npm run build && node dist/db/firewall.test.js
 import assert from "node:assert/strict";
-import { assertSafeSelect, isSystemDeniedTable, type SourcePolicy } from "./firewall.js";
+import { assertKnownFromShapes, assertSafeSelect, isSystemDeniedTable, type SourcePolicy } from "./firewall.js";
 import { selfBaseTableMode, ITEMS_CONTENT_TABLES } from "./self-source.js";
 
 let pass = 0;
@@ -383,5 +383,136 @@ okP("scope-grant-1: grant 보유자는 CTE 안 파생도 통과",
   "WITH d AS (SELECT CASE WHEN a.account_no LIKE '1%' THEN CAST(a.account_no AS CHAR(4)) END AS x FROM accounts a) SELECT x FROM d", granted);
 okMy("scope-grant-2: grant 보유자는 서브쿼리 안 조건도 통과 (mysql)",
   "SELECT id FROM orders WHERE account_id IN (SELECT a.id FROM accounts a WHERE a.account_no = '1')", granted);
+
+// ══════════ 괄호로 묶은 조인 — 안쪽 테이블도 테이블 게이트·마스킹 규칙·감사 기록을 받는다 ══════════
+//  파서의 tableList 는 괄호 조인 안의 테이블을 싣지 않는다. 테이블 집합은 AST 에서 직접 모은 것과 합친다.
+const sortedTables = (p: ReturnType<typeof assertSafeSelect>): string[] => [...(p.tables ?? [])].sort();
+const bothDeny = (name: string, sql: string, re: RegExp, pol?: SourcePolicy): void => {
+  if (pol) rejectsP(`${name} (pg)`, sql, pol, re); else rejects(`${name} (pg)`, sql, re);
+  rejMy(`${name} (mysql)`, sql, re, pol);
+};
+bothDialects("paren-1: 괄호 조인 안 마스킹 컬럼의 표현식",
+  "SELECT lower(b.account_no) FROM orders a JOIN (accounts b JOIN foo f ON true) ON true");
+bothDialects("paren-2: 괄호 조인 안 마스킹 컬럼의 WHERE 조건",
+  "SELECT a.id FROM orders a JOIN (accounts b JOIN foo f ON true) ON true WHERE b.account_no LIKE '1%'");
+bothDialects("paren-3: 괄호 조인 안 테이블의 미수식 마스킹 컬럼",
+  "SELECT lower(account_no) FROM orders a JOIN (accounts b JOIN foo f ON true) ON true");
+bothDialects("paren-4: 괄호 조인 안 조인키(USING)",
+  "SELECT o.id FROM orders o JOIN (accounts a JOIN foo f USING (account_no)) ON true");
+bothDeny("paren-5: 괄호 조인 안 시스템 차단 테이블(정책 없음)",
+  "SELECT a.id FROM orders a JOIN (auth_token t JOIN foo f ON true) ON true", /Blocked table: auth_token/);
+bothDeny("paren-6: 괄호 조인 안 시스템 차단 테이블(정책 있음)",
+  "SELECT a.id FROM orders a JOIN (auth_token t JOIN foo f ON true) ON true", /Blocked table: auth_token/, acct);
+bothDeny("paren-7: 괄호 조인 안 미허용 테이블(allow-list)",
+  "SELECT p.id FROM project p JOIN (person x JOIN task t ON true) ON true", /Blocked table: person/, selfPolicy());
+okP("paren-8: 괄호 조인 안 테이블이 감사 tables 에 들어간다 (pg)",
+  "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct,
+  (p) => assert.deepEqual(sortedTables(p), ["bar", "foo", "orders"]));
+okMy("paren-8: 괄호 조인 안 테이블이 감사 tables 에 들어간다 (mysql)",
+  "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct,
+  (p) => assert.deepEqual(sortedTables(p), ["bar", "foo", "orders"]));
+ok("paren-9: 차단 에러의 tables 에도 괄호 조인 안 테이블이 실린다", () => {
+  assert.throws(
+    () => assertSafeSelect("SELECT lower(b.account_no) FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct),
+    (e: Error & { tables?: string[] }) => ["accounts", "foo", "orders"].every((t) => e.tables?.includes(t)),
+  );
+});
+rejectsP("paren-10: 겹친 괄호 조인 안 마스킹 컬럼 (pg)",
+  "SELECT lower(b.account_no) FROM orders a JOIN (x JOIN (accounts b JOIN foo f ON true) ON true) ON true", acct, /최상위 SELECT 투영/);
+rejectsP("paren-11: 맨 앞이 겹친 괄호 조인 (pg)",
+  "SELECT lower(b.account_no) FROM ((accounts b JOIN foo f ON true) JOIN bar ON true)", acct, /최상위 SELECT 투영/);
+rejects("paren-12: 겹친 괄호 조인 안 시스템 차단 테이블 (pg)",
+  "SELECT a.id FROM orders a JOIN (x JOIN (auth_token t JOIN foo f ON true) ON true) ON true", /Blocked table: auth_token/);
+rejects("paren-13: 괄호 조인 안 서브쿼리의 시스템 차단 테이블",
+  "SELECT a.id FROM orders a JOIN (foo f JOIN (SELECT id FROM auth_token) s ON true) ON true", /Blocked table: auth_token/);
+// mysql 은 FROM 이 괄호 조인으로 시작하면 FROM 전체를 다른 모양으로 준다(뒤따르는 조인이 따로 실린다).
+rejMy("paren-14: 괄호 조인 뒤에 조인된 마스킹 테이블 (mysql)",
+  "SELECT lower(o.account_no) FROM (foo f JOIN bar b ON true) JOIN accounts o ON true", /최상위 SELECT 투영/, acct);
+rejMy("paren-15: 괄호 조인 뒤에 조인된 시스템 차단 테이블 (mysql · 정책 없음)",
+  "SELECT f.id FROM (foo f JOIN bar b ON true) JOIN auth_token o ON true", /Blocked table: auth_token/);
+rejMy("paren-16: 괄호 조인 뒤 쉼표로 이은 마스킹 테이블 (mysql)",
+  "SELECT lower(o.account_no) FROM (foo f JOIN bar b ON true), accounts o", /최상위 SELECT 투영/, acct);
+rejMy("paren-17: 괄호 안 쉼표 목록 (mysql)",
+  "SELECT lower(b.account_no) FROM orders a JOIN (accounts b, foo f) ON true", /최상위 SELECT 투영/, acct);
+rejMy("paren-18: 괄호로 감싼 테이블 하나 FROM (accounts t) (mysql)",
+  "SELECT lower(t.account_no) FROM (accounts t)", /최상위 SELECT 투영/, acct);
+rejMy("paren-19: 겹친 괄호로 감싼 테이블 FROM ((accounts a)) (mysql)",
+  "SELECT lower(a.account_no) FROM ((accounts a))", /최상위 SELECT 투영/, acct);
+rejectsP("paren-20: 괄호로 감싼 테이블 하나 (pg 파서가 받는 꼴)", "SELECT lower(account_no) FROM (accounts t)", acct, /최상위 SELECT 투영/);
+okMy("paren-21: 괄호 조인으로 시작하는 FROM 의 감사 tables (mysql)",
+  "SELECT f.id FROM (foo f JOIN bar b ON true) JOIN orders o ON true", acct,
+  (p) => assert.deepEqual(sortedTables(p), ["bar", "foo", "orders"]));
+rejMy("paren-22: 괄호 조인 안의 다른 스키마 참조 (mysql)",
+  "SELECT a.id FROM orders a JOIN (otherdb.t b JOIN foo f ON true) ON true", /다른 스키마/);
+okMy("paren-23: 괄호 조인 안의 같은 스키마 수식은 통과 (mysql)",
+  "SELECT a.id FROM orders a JOIN (hf.t b JOIN foo f ON true) ON true", undefined,
+  (p) => assert.deepEqual(sortedTables(p), ["foo", "orders", "t"]));
+// 괄호 조인 자체는 정상 문법이다 — 마스킹·차단과 무관하면 정책이 있어도 통과한다(과잉 차단 회귀 방지).
+okP("paren-ok-1: 무관한 괄호 조인은 통과 (pg)", "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+okMy("paren-ok-1: 무관한 괄호 조인은 통과 (mysql)", "SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true", acct);
+ok("paren-ok-2: 정책 없이도 괄호 조인은 통과", () => assertSafeSelect("SELECT o.id FROM orders o JOIN (foo f JOIN bar b ON true) ON true"));
+okP("paren-ok-3: allow-list 소스에서 허용 테이블끼리의 괄호 조인",
+  "SELECT p.id FROM project p JOIN (task t JOIN activity a ON a.project_id = t.project_id) ON t.project_id = p.id", selfPolicy(),
+  (p) => assert.deepEqual(sortedTables(p), ["activity", "project", "task"]));
+okP("paren-ok-4: 괄호 조인 안의 CTE 이름은 테이블이 아니다",
+  "WITH c AS (SELECT project_id FROM task) SELECT p.id FROM project p JOIN (c JOIN activity a ON a.project_id = c.project_id) ON c.project_id = p.id",
+  selfPolicy(), (p) => assert.deepEqual(sortedTables(p), ["activity", "project", "task"]));
+okP("paren-ok-5: 괄호 조인 안 마스킹 테이블의 무마스킹 컬럼",
+  "SELECT b.id, f.name FROM orders a JOIN (accounts b JOIN foo f ON f.id = b.id) ON b.id = a.account_id WHERE b.status = 'x'", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 0));
+// 괄호 조인 안 마스킹 컬럼의 직접 투영은 허용 위치다 — 결과 마스킹이 가릴 수 있게 기대치에 세어져야 한다.
+okP("paren-ok-6: 괄호 조인 안 마스킹 컬럼의 최상위 직접 투영 + minMasked (pg)",
+  "SELECT b.account_no FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okMy("paren-ok-6: 괄호 조인 안 마스킹 컬럼의 최상위 직접 투영 + minMasked (mysql)",
+  "SELECT b.account_no FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct,
+  (p) => assert.equal(p.minMaskedOutputs, 1));
+okP("paren-ok-7: 괄호 조인을 덮는 최상위 * 는 마스킹 테이블을 덮는다",
+  "SELECT * FROM orders a JOIN (accounts b JOIN foo f ON true) ON true", acct,
+  (p) => assert.equal(p.hasTopStarOverMaskedTable, true));
+// 괄호 조인에 붙인 별칭(pg) — 그 이름은 안쪽 테이블들의 컬럼을 가리킨다.
+rejectsP("paren-alias-1: 괄호 조인 별칭으로 수식한 마스킹 컬럼의 파생",
+  "SELECT lower(j.account_no) FROM (accounts b JOIN foo f ON true) AS j", acct, /최상위 SELECT 투영/);
+okP("paren-alias-2: 괄호 조인 별칭으로 수식한 직접 투영 + minMasked",
+  "SELECT j.account_no FROM (accounts b JOIN foo f ON true) AS j", acct, (p) => assert.equal(p.minMaskedOutputs, 1));
+rejectsP("paren-alias-3: 괄호 조인의 컬럼 별칭 목록",
+  "SELECT lower(j.x) FROM (accounts b JOIN foo f ON true) AS j(x, y)", acct, /컬럼 별칭 목록/);
+
+// 별칭 바인딩 — 안쪽 범위가 괄호 조인으로 같은 별칭을 다른 테이블에 다시 묶어도 그 테이블로 판정한다.
+bothDialects("bind-1: 서브쿼리의 괄호 조인이 바깥 별칭을 마스킹 테이블에 다시 묶음",
+  "SELECT id FROM orders a, accounts z WHERE EXISTS (SELECT 1 FROM (accounts a JOIN foo f ON true) WHERE lower(a.account_no) = 'x')");
+// 무엇에 묶였는지 알 수 없는 별칭(함수형 FROM)은 바깥의 동명 별칭에 기대지 않고 이름으로 보수 판정한다.
+rejectsP("bind-2: 함수형 FROM 별칭이 바깥 별칭을 가리면 이름으로 판정",
+  "SELECT o.id FROM orders g, accounts z WHERE EXISTS (SELECT 1 FROM generate_series(1, 2) g WHERE lower(g.account_no) = 'x')", acct, /최상위 SELECT 투영/);
+okP("bind-3: 파생 테이블 별칭은 해석된 빈 바인딩이다 — 안쪽 출력의 동명 컬럼은 마스킹 원본이 아니다",
+  "SELECT t.account_no FROM (SELECT o.account_no FROM orders o) t, accounts z", acct, (p) => assert.equal(p.minMaskedOutputs, 0));
+
+// pg 의 FROM ONLY — 파서는 ONLY 를 테이블 이름(뒤 이름은 별칭)이나 함수 호출로 읽어 실제 테이블이 AST 에 남지 않는다.
+rejects("only-1: FROM ONLY t 거부", "SELECT id FROM ONLY auth_token", /ONLY/);
+rejects("only-2: FROM ONLY (t) 거부", "SELECT id FROM ONLY (auth_token)", /ONLY/);
+rejects("only-3: JOIN ONLY t 거부", "SELECT o.id FROM orders o JOIN ONLY auth_token ON true", /ONLY/);
+rejectsP("only-4: FROM ONLY 마스킹 테이블 거부", "SELECT lower(account_no) FROM ONLY accounts", acct, /ONLY/);
+
+// FROM 항목이 아는 모양(테이블·파생 서브쿼리·괄호 조인·함수형·VALUES·dual)이 아니면 무엇을 읽는지 알 수 없다 → 거부.
+ok("from-shape-1: 모르는 FROM 항목은 거부", () => {
+  assert.throws(() => assertKnownFromShapes({ type: "select", from: [{ relation: "accounts" }] }, "postgresql"), /FROM/);
+  assert.throws(() => assertKnownFromShapes({ type: "select", from: { relation: "accounts" } }, "mysql"), /FROM/);
+  assert.throws(() => assertKnownFromShapes({ type: "select", from: [{ expr: { type: "tables", expr: [{ relation: "accounts" }] } }] }, "postgresql"), /FROM/);
+  assert.throws(() => assertKnownFromShapes({ type: "select", where: { ast: { type: "select", from: [{ expr: { type: "mystery" } }] } } }, "postgresql"), /FROM/);
+});
+ok("from-shape-2: 지금 받는 FROM 모양은 그대로 통과", () => {
+  for (const sql of [
+    "SELECT 1", "SELECT 1 FROM dual", "SELECT id FROM public.orders o", "SELECT t.x FROM (SELECT 1 AS x) t",
+    "SELECT g FROM generate_series(1, 3) g", "SELECT * FROM generate_series(1, 3) AS g(n)",
+    "SELECT * FROM json_to_recordset('[]') AS x(a int, b text)", "SELECT * FROM (VALUES (1, 2)) AS v(a, b)",
+    "SELECT o.id FROM orders o, LATERAL (SELECT f.id FROM foo f WHERE f.id = o.id) t",
+    "SELECT o.id FROM orders o LEFT JOIN LATERAL generate_series(1, o.n) g ON true",
+    "SELECT id FROM orders TABLESAMPLE SYSTEM (10)", "SELECT a.id FROM orders a CROSS JOIN (foo f CROSS JOIN bar b)",
+  ]) { assertSafeSelect(sql); assertSafeSelect(sql, acct); }
+  for (const sql of ["SELECT 1", "SELECT 1 FROM dual", "SELECT id FROM hf.orders o", "SELECT t.x FROM (SELECT 1 AS x) t",
+    "SELECT o.id FROM orders o, LATERAL (SELECT f.id FROM foo f WHERE f.id = o.id) t", "SELECT id FROM (orders)",
+    "SELECT a.id FROM (orders a, foo f)"]) { assertSafeSelect(sql, undefined, MY); assertSafeSelect(sql, acct, MY); }
+});
 
 console.log(`\n${pass} checks passed`);

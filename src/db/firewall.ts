@@ -181,16 +181,114 @@ function refTableName(node: Record<string, unknown>): string | null {
   if (typeof t === "object" && typeof (t as { value?: unknown }).value === "string") return (t as { value: string }).value;
   return null;
 }
+// ── FROM 항목의 모양 ──
+//  파서(node-sql-parser 5.4)가 FROM 자리에 주는 모양은 아래가 전부다. 테이블 수집·별칭 바인딩·CTE 판정이 저마다
+//  «FROM 의 직계 table» 만 보면 괄호로 묶은 조인 안의 테이블이 통째로 빠지므로 모양 해석을 한 곳에 둔다.
+//   table   { db, table, as, … }                              실제 테이블(또는 CTE 이름)
+//   derived { expr: { ast, … }, as }                          파생 테이블(서브쿼리) — 안쪽은 자기 범위에서 따로 판정된다
+//   group   pg    { expr: { type: "tables", expr: [항목…] }, as }
+//           mysql { expr: [항목…], joins: [항목…] }             괄호로 묶은 조인 — 안쪽 항목도 같은 범위의 FROM 항목이다.
+//                 mysql 은 FROM 이 괄호 조인으로 시작하면 from 자체를 이 객체로 주고, 뒤따르는 조인을 joins 에 싣는다.
+//   opaque  함수형({ type: "expr", expr: { type: "function" | "tablefunc" } }) · VALUES · dual
+//           테이블을 직접 가리키지 않는다(인자·값 안의 서브쿼리는 일반 순회가 훑는다).
+//  그 밖의 모양은 무엇을 읽는지 알 수 없으므로 assertKnownFromShapes 가 거부한다(fail-closed).
+type FromShape =
+  | { kind: "table"; table: string }
+  | { kind: "derived" }
+  | { kind: "group"; items: unknown[] }
+  | { kind: "opaque" };
+function fromShape(item: unknown): FromShape | null {
+  if (item === null || typeof item !== "object" || Array.isArray(item)) return null;
+  const f = item as Record<string, unknown>;
+  if (typeof f.table === "string") return { kind: "table", table: f.table };
+  if (f.type === "dual") return { kind: "opaque" };
+  const e = f.expr;
+  if (Array.isArray(e)) {
+    if (f.joins !== undefined && f.joins !== null && !Array.isArray(f.joins)) return null;
+    return { kind: "group", items: [...e, ...(Array.isArray(f.joins) ? f.joins : [])] };
+  }
+  if (e === null || typeof e !== "object") return null;
+  const eo = e as Record<string, unknown>;
+  if (eo.ast !== null && typeof eo.ast === "object") return { kind: "derived" };
+  if (eo.type === "tables" && Array.isArray(eo.expr)) return { kind: "group", items: eo.expr };
+  if (eo.type === "values") return { kind: "opaque" };
+  if (f.type === "expr" && (eo.type === "function" || eo.type === "tablefunc")) return { kind: "opaque" };
+  return null;
+}
+// SELECT 노드의 from → 항목 목록(FROM 없음 = 빈 목록, mysql 의 «괄호 조인으로 시작하는 FROM» = 그 래퍼 하나).
+function fromItemsOf(from: unknown): unknown[] {
+  if (from === null || from === undefined) return [];
+  return Array.isArray(from) ? from : [from];
+}
+// 한 SELECT 의 FROM 이 그 범위에 들이는 항목 전부 — 괄호 조인은 래퍼와 안쪽 항목을 함께 낸다(파생 테이블 안쪽은 다른 범위).
+function scopeFromItems(from: unknown): Array<{ item: Record<string, unknown>; shape: FromShape | null }> {
+  const out: Array<{ item: Record<string, unknown>; shape: FromShape | null }> = [];
+  const visit = (it: unknown): void => {
+    if (it === null || typeof it !== "object" || Array.isArray(it)) return;
+    const shape = fromShape(it);
+    out.push({ item: it as Record<string, unknown>, shape });
+    if (shape?.kind === "group") for (const child of shape.items) visit(child);
+  };
+  for (const it of fromItemsOf(from)) visit(it);
+  return out;
+}
+// function 노드의 이름 파트(스키마 수식이면 여러 개) — v5: name = { name: [{ value }, …] }.
+function functionNameParts(node: unknown): string[] {
+  const parts = (node as { name?: { name?: unknown } } | null)?.name?.name;
+  if (!Array.isArray(parts)) return [];
+  return parts.map((p) => (p as { value?: unknown } | null)?.value).filter((v): v is string => typeof v === "string");
+}
+// pg 는 `FROM ONLY t` · `FROM ONLY (t)` 로 t 를 읽는데, 파서는 ONLY 를 테이블 이름(t 는 별칭)이나 함수 호출로 읽는다 —
+//  실제로 읽는 테이블이 AST 에 테이블로 남지 않는다. ONLY 는 pg 예약어라 인용하지 않은 테이블·함수 이름일 수 없다.
+function readsAsOnly(item: unknown, shape: FromShape): boolean {
+  if (shape.kind === "table") return shape.table.toLowerCase() === "only";
+  if (shape.kind !== "opaque") return false;
+  return functionNameParts((item as { expr?: unknown }).expr).some((p) => p.toLowerCase() === "only");
+}
+/**
+ * FROM 항목의 구조 검사(순수) — 모든 SELECT 의 FROM 항목이 위의 아는 모양인지 본다. 모르는 모양은 그 안에서 어떤 테이블을
+ *  읽는지 알 수 없어 테이블 게이트도 마스킹 규칙도 걸 수 없으므로 거부한다. 정책 유무와 무관하다(시스템 차단 테이블도 같은 길).
+ */
+export function assertKnownFromShapes(root: unknown, dialect: SqlDialect): void {
+  const check = (item: unknown): void => {
+    const shape = fromShape(item);
+    if (shape === null) throw new Error("Blocked: 해석할 수 없는 FROM 항목입니다 — 테이블·서브쿼리·조인으로 풀어 쓰세요");
+    if (dialect === "postgresql" && readsAsOnly(item, shape)) throw new Error("Blocked: FROM ONLY 는 쓸 수 없습니다 — ONLY 를 빼고 테이블 이름만 쓰세요");
+    if (shape.kind === "group") for (const child of shape.items) check(child);
+  };
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === null || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      for (const el of node) stack.push(el);
+      continue;
+    }
+    const n = node as Record<string, unknown>;
+    for (const item of fromItemsOf(n.from)) check(item);
+    for (const val of Object.values(n)) {
+      if (val !== null && typeof val === "object") stack.push(val);
+    }
+  }
+}
+
 // 별칭 바인딩 — 수식 이름(lower) → 그 이름이 가리킬 수 있는 실제 테이블들(lower). 파생 테이블(FROM 서브쿼리)
 //  별칭은 빈 집합이다(그 컬럼은 안쪽 SELECT 의 출력이고, 안쪽의 원본 참조는 그 자리에서 따로 판정된다).
+//  UNRESOLVED 가 든 집합은 «이 이름이 무엇의 컬럼을 가리키는지 알 수 없다» 는 뜻이다(함수형 FROM·VALUES 의 별칭) —
+//  빈 집합(해석된 파생 테이블)과 달리 컬럼 이름으로 보수 판정해야 한다. NUL 은 테이블 이름에 올 수 없어 겹치지 않는다.
 type AliasBindings = Map<string, Set<string>>;
+const UNRESOLVED = "\u0000";
 interface ScopedRef { ref: Record<string, unknown>; scope: AliasBindings }
 interface ScopedRefScan { refs: ScopedRef[]; usingCols: string[]; naturalJoin: boolean; columnAliasList: boolean; rootScope: AliasBindings | null }
 
+// 별칭 문자열에서 이름만 — pg 파서는 컬럼 별칭 목록을 별칭에 붙여 "a(x, y)" 로 준다.
+function aliasName(as: string): string {
+  return as.split("(")[0].trim();
+}
 // 반환값 = 실제 테이블에 FROM 컬럼 별칭 목록(`t AS a(x, y)`)이 붙어 있는가. pg 파서는 이걸 별칭 문자열 "a(x, y)" 로
 //  주므로 별칭도 컬럼 이름 바뀜도 해석할 수 없다. 파생 테이블·VALUES 의 `v(a, b)` 는 안쪽 SELECT 가 따로 판정돼 해당 없다.
+//  괄호 조인 안의 항목도 같은 범위에 묶는다 — 안쪽에서만 정의된 별칭이 바깥 범위의 동명 별칭으로 해석되지 않게.
 function bindFrom(from: unknown, into: AliasBindings): boolean {
-  if (!Array.isArray(from)) return false;
   let columnAliasList = false;
   const bind = (name: string, real: string | null): void => {
     const key = name.toLowerCase();
@@ -198,17 +296,29 @@ function bindFrom(from: unknown, into: AliasBindings): boolean {
     if (real) set.add(real);
     into.set(key, set);
   };
-  for (const f of from) {
-    if (f === null || typeof f !== "object") continue;
-    const fo = f as { table?: unknown; as?: unknown; expr?: unknown };
-    const alias = typeof fo.as === "string" && fo.as ? fo.as : null;
-    if (typeof fo.table === "string") {
-      const rt = fo.table.toLowerCase();
+  for (const { item, shape } of scopeFromItems(from)) {
+    const alias = typeof item.as === "string" && item.as ? item.as : null;
+    if (shape?.kind === "table") {
+      const rt = shape.table.toLowerCase();
       bind(rt, rt);
       if (alias?.includes("(")) columnAliasList = true;
       else if (alias) bind(alias, rt);
-    } else if (alias && fo.expr !== null && typeof fo.expr === "object" && "ast" in fo.expr) {
-      bind(alias, null);
+    } else if (shape?.kind === "derived") {
+      if (alias) bind(alias, null);
+    } else if (shape?.kind === "group") {
+      // 괄호 조인에 붙인 별칭(pg `(a JOIN b) AS j`)은 안쪽 테이블들의 컬럼을 가리킨다. 테이블이 아닌 항목이 섞여 있으면
+      //  그 컬럼의 출처는 알 수 없다.
+      if (!alias) continue;
+      const inner = scopeFromItems(shape.items);
+      const tables = inner.flatMap((x) => (x.shape?.kind === "table" ? [x.shape.table.toLowerCase()] : []));
+      if (alias.includes("(") && tables.length > 0) columnAliasList = true;
+      bind(aliasName(alias), null);
+      for (const t of tables) bind(aliasName(alias), t);
+      if (inner.some((x) => x.shape?.kind !== "table" && x.shape?.kind !== "derived" && x.shape?.kind !== "group")) bind(aliasName(alias), UNRESOLVED);
+    } else {
+      // 함수형 FROM·VALUES — tablefunc 는 별칭을 expr.as(함수 꼴)로 준다.
+      const name = alias ? aliasName(alias) : functionNameParts((item.expr as { as?: unknown } | null | undefined)?.as)[0];
+      if (name) bind(name, UNRESOLVED);
     }
   }
   return columnAliasList;
@@ -230,15 +340,15 @@ function collectScopedRefs(root: unknown): ScopedRefScan {
     const n = node as Record<string, unknown>;
     if (n.type === "column_ref") refs.push({ ref: n, scope });
     let inner = scope;
-    if (n.type === "select" && Array.isArray(n.from)) {
+    if (n.from !== null && typeof n.from === "object") {
       inner = new Map([...scope].map(([k, v]) => [k, new Set(v)]));
       if (bindFrom(n.from, inner)) columnAliasList = true;
       if (n === root) rootScope = inner;
-      for (const f of n.from) {
+      for (const { item: f } of scopeFromItems(n.from)) {
         // pg 파서는 `t NATURAL JOIN u` 의 NATURAL 을 t 의 별칭으로 읽고 조인키를 남기지 않는다 — AST 가 원문과 다르다.
-        const as = (f as { as?: unknown } | null)?.as;
+        const as = f.as;
         if (typeof as === "string" && as.toLowerCase() === "natural") naturalJoin = true;
-        const using = (f as { using?: unknown } | null)?.using;
+        const using = f.using;
         if (!Array.isArray(using)) continue;
         for (const u of using) {
           const v = typeof u === "string" ? u : (u as { value?: unknown } | null)?.value;
@@ -298,13 +408,13 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
     for (const key of policy.maskedCols) if (key.startsWith(t + ".")) return true;
     return false;
   };
-  // 수식 참조는 그 참조에서 보이는 별칭 바인딩으로 실제 테이블을 찾는다. 바인딩이 없는 수식(해석 불가)은
-  //  미수식과 같이 이름으로 보수 매칭한다(fail-closed).
+  // 수식 참조는 그 참조에서 보이는 별칭 바인딩으로 실제 테이블을 찾는다. 바인딩이 없거나 해석 불가(UNRESOLVED)로
+  //  표시된 수식은 미수식과 같이 이름으로 보수 매칭한다(fail-closed) — 이름 매칭은 이 쿼리의 테이블 전부를 후보로 본다.
   const isSensitive = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean => {
     const col = cn.toLowerCase();
     const tr = refTableName(ref);
     const bound = tr ? scope.get(tr.toLowerCase()) : undefined;
-    if (bound) return [...bound].some((t) => policy.maskedCols.has(`${t}.${col}`));
+    if (bound && !bound.has(UNRESOLVED)) return [...bound].some((t) => policy.maskedCols.has(`${t}.${col}`));
     return relevantNames.has(col);
   };
   const scan = collectScopedRefs(stmt);
@@ -550,6 +660,7 @@ export function parserSafeCopy(sql: string): string {
 //   - 이 walk 가 무언가를 놓치면 그 이름은 tableList 에 남아 게이트를 받는다(과잉차단 = fail-closed).
 interface TableRefScan {
   real: Set<string>; // 실제 테이블로 참조된 이름(lower)
+  realEntries: Set<string>; // 같은 참조를 parser.tableList 와 같은 꼴("select::{db}::{table}")로 — 테이블 집합에 합친다
   cteRefs: Set<string>; // CTE 로 참조된 이름(lower)
   cteNames: Set<string>; // 정의된 CTE 이름 전부(lower) — 시스템 차단 테이블명 충돌 검사용
 }
@@ -571,9 +682,14 @@ function cteEntryName(entry: Record<string, unknown>): { raw: string; quoted: bo
   return null;
 }
 function collectTableRefs(stmt: unknown, fold: boolean): TableRefScan {
-  const acc: TableRefScan = { real: new Set(), cteRefs: new Set(), cteNames: new Set() };
+  const acc: TableRefScan = { real: new Set(), realEntries: new Set(), cteRefs: new Set(), cteNames: new Set() };
   walkQueryScope(stmt, new Set<string>(), fold, acc);
   return acc;
+}
+function addRealTable(f: Record<string, unknown>, table: string, acc: TableRefScan): void {
+  const db = [f.db, f.schema].filter((x): x is string => typeof x === "string" && x.length > 0).join(".");
+  acc.real.add(table.toLowerCase());
+  acc.realEntries.add(`select::${db || "null"}::${table}`);
 }
 function walkQueryScope(node: unknown, visible: ReadonlySet<string>, fold: boolean, acc: TableRefScan): void {
   if (node === null || typeof node !== "object") return;
@@ -584,6 +700,8 @@ function walkQueryScope(node: unknown, visible: ReadonlySet<string>, fold: boole
   const n = node as Record<string, unknown>;
   const withList = Array.isArray(n.with) ? (n.with as Record<string, unknown>[]) : null;
   if (withList === null && n.type !== "select") { // 쿼리 스코프가 아니면 가시범위를 그대로 물려 내려간다
+    // FROM 자리 밖에서 만난 테이블 노드({db, table}) — 어떤 문법인지 모르므로 실제 테이블로 센다(게이트 대상, fail-closed).
+    if (typeof n.table === "string" && "db" in n && n.type !== "column_ref") addRealTable(n, n.table, acc);
     for (const v of Object.values(n)) if (v !== null && typeof v === "object") walkQueryScope(v, visible, fold, acc);
     return;
   }
@@ -601,26 +719,29 @@ function walkQueryScope(node: unknown, visible: ReadonlySet<string>, fold: boole
     }
     vis = scoped;
   }
-  if (Array.isArray(n.from)) {
-    for (const item of n.from) {
-      if (item === null || typeof item !== "object") continue;
-      const f = item as Record<string, unknown>;
-      const t = f.table;
-      if (typeof t === "string") {
-        const db = f.db;
-        const qualified = typeof db === "string" && db.length > 0 && db.toLowerCase() !== "null"; // 스키마 수식은 CTE 일 수 없다
-        const key = qualified ? null : identKey(t, false, fold);
-        if (key !== null && vis.has(key)) acc.cteRefs.add(t.toLowerCase());
-        else acc.real.add(t.toLowerCase());
-      }
-      for (const [k, v] of Object.entries(f)) { // 조인 조건·파생테이블(서브쿼리)은 같은 가시범위로 계속 훑는다
-        if (k === "table" || k === "db" || k === "as") continue;
-        if (v !== null && typeof v === "object") walkQueryScope(v, vis, fold, acc);
-      }
+  const visitFrom = (item: unknown): void => {
+    if (item === null || typeof item !== "object") return;
+    const f = item as Record<string, unknown>;
+    const shape = fromShape(item);
+    if (shape?.kind === "table") {
+      const t = shape.table;
+      const db = f.db;
+      const qualified = typeof db === "string" && db.length > 0 && db.toLowerCase() !== "null"; // 스키마 수식은 CTE 일 수 없다
+      const key = qualified ? null : identKey(t, false, fold);
+      if (key !== null && vis.has(key)) acc.cteRefs.add(t.toLowerCase());
+      else addRealTable(f, t, acc);
     }
-  }
+    // 괄호로 묶은 조인 — 안쪽 항목도 이 SELECT 의 FROM 항목이다(같은 가시범위에서 테이블·CTE 를 가린다).
+    if (shape?.kind === "group") for (const child of shape.items) visitFrom(child);
+    for (const [k, v] of Object.entries(f)) { // 조인 조건·파생테이블(서브쿼리)·함수 인자는 같은 가시범위로 계속 훑는다
+      if (k === "table" || k === "db" || k === "as") continue;
+      if (shape?.kind === "group" && (k === "expr" || k === "joins")) continue; // 위에서 항목으로 처리
+      if (v !== null && typeof v === "object") walkQueryScope(v, vis, fold, acc);
+    }
+  };
+  for (const item of fromItemsOf(n.from)) visitFrom(item);
   for (const [k, v] of Object.entries(n)) { // columns·where·orderby·_next(UNION) 등 — WITH 별칭이 보이는 범위
-    if (k === "with" || (k === "from" && Array.isArray(v))) continue; // 위에서 처리(배열이 아닌 from 은 여기서 훑는다)
+    if (k === "with" || k === "from") continue; // 위에서 처리
     if (v !== null && typeof v === "object") walkQueryScope(v, vis, fold, acc);
   }
 }
@@ -656,6 +777,8 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
   // CTE/서브쿼리 포함 전 함수 호출 검사 — pg: set_config/current_setting 등 / mysql: sleep·load_file 등(주석 우회 대비)
   assertNoForbiddenFunctions(stmts[0], dialect === "mysql" ? MYSQL_FORBIDDEN_FUNCTIONS : FORBIDDEN_FUNCTIONS);
+  // FROM 항목이 아는 모양이 아니면 그 안의 테이블을 셀 수 없다 — 테이블 게이트보다 먼저 거부한다.
+  assertKnownFromShapes(stmts[0], dialect);
 
   // #1181 ① — WITH 별칭은 테이블이 아니다. 스코프 인지로 훑어 'CTE 로만 참조된 이름'을 가려낸다.
   const refs = collectTableRefs(stmts[0], !scan.mixedCaseQuoted);
@@ -665,10 +788,12 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
   }
   const cteOnly = new Set([...refs.cteRefs].filter((n) => !refs.real.has(n)));
 
-  // 참조 테이블 deny — node-sql-parser 의 tableList: "{type}::{db}::{table}" (조인/서브쿼리 포함 전수).
+  // 참조 테이블 deny — node-sql-parser 의 tableList: "{type}::{db}::{table}" (조인/서브쿼리 포함).
+  //  tableList 는 괄호로 묶은 조인 안의 테이블을 싣지 않는다(mysql 은 괄호 조인 뒤에 이어진 조인도) — AST 를 직접 훑어
+  //  모은 실제 테이블 참조와 합친 것이 시스템 차단·allow/deny·마스킹 관련성·감사 기록의 테이블 집합이다.
   let tables: string[];
   try {
-    tables = parser.tableList(parseSql, { database: dialect });
+    tables = [...new Set([...parser.tableList(parseSql, { database: dialect }), ...refs.realEntries])];
   } catch (e) {
     throw new Error(`Unparseable SQL: ${(e as Error).message}`);
   }
@@ -682,7 +807,7 @@ export function assertSafeSelect(sql: string, policy?: SourcePolicy, opts?: Safe
       const dbPart = segs.length >= 3 ? segs[1] : null;
       // #1181 ① WITH 별칭 — 실제 테이블이 아니므로 게이트도 감사(tables)도 대상이 아니다(스키마 수식이면 CTE 일 수 없다).
       if ((!dbPart || dbPart === "null") && cteOnly.has(name)) continue;
-      tableNames.push(name); // 차단으로 throw 하더라도 감사(P5)가 '어떤 테이블을 건드리려 했나'를 알도록 먼저 수집
+      if (!tableNames.includes(name)) tableNames.push(name); // 차단으로 throw 하더라도 감사(P5)가 '어떤 테이블을 건드리려 했나'를 알도록 먼저 수집
       // mysql 크로스-스키마 거부(#715) — db-수식 참조는 소스 스키마와 일치할 때만(미수식 'null' 은 통과 —
       //  커넥션이 소스 스키마로 고정돼 있어 미수식은 그 스키마로 해석된다). information_schema/mysql/sys 포함 전부 차단.
       if (dialect === "mysql" && dbPart && dbPart !== "null" && dbPart.toLowerCase() !== srcSchema) {
