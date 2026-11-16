@@ -300,6 +300,51 @@ function branchHeldNote(ctx, base, branch) {
     : "";
 }
 
+// 레지스트리의 이 레포 행(clone 주소 · 등록한 기본 브랜치) — 한 호출 안에서 게이트웨이를 한 번만 묻는다(#1723).
+//  부르는 쪽이 필요할 때 `await row()` 한다: base 가 이미 있고 ref 도 받은 호출은 게이트웨이를 아예 안 묻는다.
+function registryRow(ctx, repo) {
+  let p = null;
+  return () => (p ??= (async () => {
+    const reg = await ctx.api("/api/ui/repos");
+    return (reg && reg.domainmapRepos || []).find((r) => r && r.name === repo) || null;
+  })());
+}
+// 등록한 기본 브랜치 — 레지스트리 default_branch 를 «쓸 수 있는 브랜치 이름» 으로. 비었거나 형식이 안 맞으면 ""(등록값 없음).
+//  ⚠ **git 소스를 연결한 레포(clone_url 있음)만** 등록값이 있다고 본다: default_branch 칸은 기본값이 'main' 이라, 스캔·인입으로
+//   생기기만 하고 아무도 git 주소 · 기본 브랜치를 등록한 적 없는 레포에도 'main' 이 실려 온다. 그 값은 사람이 고른 게 아니다
+//   → 그런 레포는 종전 동작(원격 기본 브랜치) 그대로다. 서버(project-provision registeredBranchOfRow)와 같은 규칙.
+const registeredBranch = (row) => {
+  if (!row || typeof row.clone_url !== "string" || !row.clone_url.trim()) return "";
+  const b = typeof row.default_branch === "string" ? row.default_branch.trim() : "";
+  return b && BRANCH_RE.test(b) ? b : "";
+};
+
+// ref 를 안 준 호출의 기준 브랜치(#1723) — **레포에 등록한 기본 브랜치**가 원격에 있으면 그것, 아니면 원격 기본 브랜치.
+//  왜: 등록 화면의 «기본 브랜치» 는 도메인맵 스캔과 작업 클론이 함께 보는 단일 소스다. 원격 기본이 develop 이고 배포가
+//   main 인 레포를 «main» 으로 등록해 두면, ref 없는 워크트리 · 핀도 main(배포된 코드)에서 떠야 한다 — 종전엔 원격 기본
+//   (develop)에서 떠 배포 전 코드를 읽었다. ref 를 직접 준 호출은 여기로 오지 않는다(그 값을 그대로 따른다).
+//  등록 브랜치가 원격에 없거나 게이트웨이가 답하지 않으면 종전 동작(원격 기본)으로 돌아가고 note 로 사유를 돌려준다.
+async function defaultRefBranch(ctx, base, row) {
+  let r = null, asked = true;
+  try { r = await row(); } catch { asked = false; }
+  const remote = () => remoteDefaultBranch(ctx, base);
+  if (!asked) {
+    const b = remote();
+    return { branch: b, note: `등록한 기본 브랜치를 읽지 못해(게이트웨이 응답 없음) 원격 기본 브랜치 '${b}' 를 기준으로 삼았습니다.` };
+  }
+  const reg = registeredBranch(r);
+  if (!reg) return { branch: remote(), note: null };
+  if (ctx.sh("git", ["-C", base, "show-ref", "--verify", "--quiet", `refs/remotes/origin/${reg}`], { allowFail: true }).code === 0) return { branch: reg, note: null };
+  const b = remote();
+  return { branch: b, note: b === reg ? null
+    : `등록한 기본 브랜치 '${reg}' 가 원격(origin)에 없어 원격 기본 브랜치 '${b}' 를 기준으로 삼았습니다 — 관리 ▸ 레포에서 기본 브랜치를 확인하세요.` };
+}
+// ref 인자 해석 — 준 값이 있으면 그대로(형식만 확인), 없으면 위 기본값.
+async function refBranchOf(ctx, base, ref, row) {
+  const given = ref && BRANCH_RE.test(String(ref).trim()) ? String(ref).trim() : "";
+  return given ? { branch: given, note: null } : defaultRefBranch(ctx, base, row);
+}
+
 // origin 기본 브랜치(main/master 등) — symbolic-ref 우선, 없으면 흔한 후보 확인, 최종 폴백 main.
 function remoteDefaultBranch(ctx, base) {
   const sym = ctx.sh("git", ["-C", base, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { allowFail: true }).stdout.trim();
@@ -340,14 +385,20 @@ function resolveWtPath(cwd, repo, p, marker = findProjectMarkerUp(cwd)) {
 
 // base 확보 — 로컬에 없으면 레지스트리 clone_url 로 clone, 있으면 fetch(refs 만; 워킹트리 미변경 = RO 규율).
 //  작업 워크트리(repoWorktree)·읽기전용 핀(repoPin) 공용 진입.
-async function ensureBase(ctx, repo, base) {
+//  새로 받을 땐 등록한 기본 브랜치로 받는다(#1723) — 그 브랜치가 원격에 없으면(원격에 물어 확인) 원격 기본 브랜치로 받는다.
+async function ensureBase(ctx, repo, base, row = registryRow(ctx, repo)) {
   if (!isGitRepo(ctx, base)) {
-    const reg = await ctx.api("/api/ui/repos");
-    const row = (reg.domainmapRepos || []).find((r) => r && r.name === repo);
-    const url = row && row.clone_url;
+    const r = await row();
+    const url = r && r.clone_url;
     if (!url) throw new Error(`레포 '${repo}' 가 이 머신에 없고 등록된 clone 주소도 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.`);
     mkdirSync(dirname(base), { recursive: true });
-    const c = ctx.sh("git", ["clone", url, base], { allowFail: true });
+    const want = registeredBranch(r);
+    let c = ctx.sh("git", ["clone", ...(want ? ["--branch", want] : []), url, base], { allowFail: true });
+    if (c.code !== 0 && want) {
+      // 실패가 «등록 브랜치가 원격에 없음» 때문인지 원격에 물어 가른다 — git 의 실패 문구는 로캘·버전마다 달라 문구로 가르지 않는다.
+      const ls = ctx.sh("git", ["ls-remote", "--heads", url, `refs/heads/${want}`], { allowFail: true });
+      if (ls.code === 0 && !ls.stdout.trim()) c = ctx.sh("git", ["clone", url, base], { allowFail: true });
+    }
     if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${gitFail(c.stderr)}${authNote(c.stderr, url)}`);
   } else {
     ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
@@ -457,8 +508,8 @@ function relinkAdmin(wt, admin, newId) {
 // 이 머신에서 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·브랜치·origin 대비 최신).
 export async function repoList(ctx) {
   const reg = await ctx.api("/api/ui/repos");
-  const cloneUrl = new Map();
-  for (const r of (reg.domainmapRepos || [])) if (r && typeof r.name === "string") cloneUrl.set(r.name, r.clone_url ?? null);
+  const cloneUrl = new Map(), regBranch = new Map();
+  for (const r of (reg.domainmapRepos || [])) if (r && typeof r.name === "string") { cloneUrl.set(r.name, r.clone_url ?? null); regBranch.set(r.name, registeredBranch(r) || null); }
   const names = Array.isArray(reg.repos) && reg.repos.length ? reg.repos : [...cloneUrl.keys()];
   const dir = reposDir();
   const repos = names.map((name) => {
@@ -470,7 +521,8 @@ export async function repoList(ctx) {
       head = ctx.sh("git", ["-C", base, "rev-parse", "--short", "HEAD"], { allowFail: true }).stdout.trim() || null;
       status = (ctx.sh("git", ["-C", base, "status", "-sb"], { allowFail: true }).stdout.split("\n")[0] || "").trim() || null;
     }
-    return { name, clone_url: cloneUrl.get(name) ?? null, cloned, base, branch, head, status };
+    // default_branch = 등록한 기본 브랜치(#1723) — ref 없는 워크트리·핀이 뜨는 기준. branch(base 가 지금 서 있는 브랜치)와 다를 수 있다.
+    return { name, clone_url: cloneUrl.get(name) ?? null, default_branch: regBranch.get(name) ?? null, cloned, base, branch, head, status };
   });
   return { repos_dir: dir, count: repos.length, repos };
 }
@@ -482,10 +534,10 @@ export async function repoWorktree(ctx, args) {
   const base = join(reposDir(), repo);
 
   // ① base 확보(clone or fetch) — 공용.
-  await ensureBase(ctx, repo, base);
+  const row = registryRow(ctx, repo);
+  await ensureBase(ctx, repo, base, row);
 
   // ② 경로 결정 — **브랜치가 경로에 달려 있으므로**(아래) 경로가 먼저다. 마커는 한 번만 걸어 올라가 재사용한다.
-  const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
   const marker = findProjectMarkerUp(ctx.cwd);
   const asked = args.path && String(args.path).trim();
   const want = resolveWtPath(ctx.cwd, repo, asked, marker);
@@ -571,6 +623,8 @@ export async function repoWorktree(ctx, args) {
   clearStaleRegistrations(ctx, base, { paths: [wt], branch }, regs);
 
   // ⑤ worktree add — 새 브랜치(origin/<ref> 최신 기준) 시도 → 같은 브랜치가 이미 있으면 attach 폴백(provision 동형).
+  //  ref 를 안 줬으면 레포에 등록한 기본 브랜치가 기준이다(#1723). 있는 워크트리를 돌려주는 위쪽 경로는 기준이 필요 없어 묻지 않는다.
+  const { branch: refBranch, note: refNote } = await refBranchOf(ctx, base, args.ref, row);
   let r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch, `origin/${refBranch}`], { allowFail: true });
   if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, branch], { allowFail: true });          // 기존 브랜치 attach
   if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch], { allowFail: true });     // origin/<ref> 없을 때 base HEAD
@@ -587,6 +641,7 @@ export async function repoWorktree(ctx, args) {
   if (asideFrom) {
     out.note += ` · 기본 자리(${asideFrom})는 ${asideReason(slot.why)} 옆자리로 비켜섰습니다.`;
   }
+  if (refNote) { out.ref_note = refNote; out.note += ` · ${refNote}`; }
   // 스탬프가 없으면 다음 호출이 이 자리를 «모르는 자리» 로 보고 또 옆으로 비켜선다 — 자리가 늘어나는 건 그 신호다.
   if (adminNow && stampable && !stamped) out.warning = `소유 표시(${basename(adminNow)}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`;
   return out;
@@ -631,8 +686,10 @@ export async function repoPin(ctx, args) {
   const repo = String(args.repo || "").trim();
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
-  await ensureBase(ctx, repo, base);
-  const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
+  const row = registryRow(ctx, repo);
+  await ensureBase(ctx, repo, base, row);
+  const { branch: refBranch, note: refNote } = await refBranchOf(ctx, base, args.ref, row);   // ref 없으면 등록한 기본 브랜치(#1723)
+  const withRef = (o) => (refNote ? { ...o, ref_note: refNote, note: `${o.note} · ${refNote}` } : o);
   const target = `origin/${refBranch}`;
   const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", target], { allowFail: true }).stdout.trim();
   if (!sha) throw new Error(`ref 해석 실패: ${target} (레포 '${repo}') — ref 이름을 확인하세요.`);
@@ -646,7 +703,7 @@ export async function repoPin(ctx, args) {
   //  — 지우는 건 (기본이면) 이 SHA 의 자리이거나 (지정이면) 호출자가 명시한 자리라, 남의 세션 핀이 아니다(#932).
   if (isGitRepo(ctx, pin)) {
     const cur = ctx.sh("git", ["-C", pin, "rev-parse", "--short", "HEAD"], { allowFail: true }).stdout.trim();
-    if (cur === sha) return { repo, pin, sha, ref: refBranch, base, reused: true, note: pinNote(pin, repo, sha) };
+    if (cur === sha) return withRef({ repo, pin, sha, ref: refBranch, base, reused: true, note: pinNote(pin, repo, sha) });
     ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
   }
   mkdirSync(dirname(pin), { recursive: true });
@@ -654,24 +711,25 @@ export async function repoPin(ctx, args) {
   const r = ctx.sh("git", ["-C", base, "worktree", "add", "--detach", pin, target], { allowFail: true });
   if (r.code !== 0) throw new Error(`핀 생성 실패(${repo}@${target}): ${gitFail(r.stderr)}`);
   const committed = ctx.sh("git", ["-C", pin, "log", "-1", "--format=%ci"], { allowFail: true }).stdout.trim() || null;
-  return { repo, pin, sha, ref: refBranch, base, committed, reused: false, note: pinNote(pin, repo, sha) };
+  return withRef({ repo, pin, sha, ref: refBranch, base, committed, reused: false, note: pinNote(pin, repo, sha) });
 }
 
 // 핀 제거 — 읽기전용 사본이라 force(낙서 무시). base·작업 워크트리 무영향.
 //  기본 경로는 content-addressed(repo+sha)라 지우려면 SHA 를 알아야 한다 → origin/<ref> 를 repoPin 과 **같은 방식**으로
 //  다시 해석해 **그 SHA 의 핀만** 지운다(다른 세션의 다른 SHA 핀은 안 건드린다, #932). ref 는 핀 때와 같은 값을 줘야
-//  맞아떨어진다(기본은 원격 기본 브랜치로 대칭). **best-effort**: 핀이 이미 없어도(main 이 그새 움직여 SHA 가 달라졌거나
+//  맞아떨어진다(기본은 repoPin 과 같은 기준 — 등록한 기본 브랜치, 없으면 원격 기본 브랜치 — 로 대칭). **best-effort**: 핀이 이미 없어도(main 이 그새 움직여 SHA 가 달라졌거나
 //  tmpdir 이 청소됐거나) 에러가 아니다 — 스테일 등록만 털고 removed:null 로 알린다(남는 detached 핀은 읽기전용이라 무해).
-export function repoPinRemove(ctx, args) {
+export async function repoPinRemove(ctx, args) {
   const repo = String(args.repo || "").trim();
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
   const explicit = args.path && String(args.path).trim();
-  let pin;
+  let pin, why = "";
   if (explicit) {
     pin = isAbsolute(explicit) ? explicit : join(ctx.cwd, explicit);
   } else {
-    const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
+    const { branch: refBranch, note: refNote } = await refBranchOf(ctx, base, args.ref, registryRow(ctx, repo));
+    why = refNote ? ` · ${refNote}` : "";   // 기준이 핀 만들 때와 달라졌을 수 있다(게이트웨이 무응답 등) — 못 찾았을 때 그 사유를 함께 준다
     const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", `origin/${refBranch}`], { allowFail: true }).stdout.trim();
     // ref 를 못 풀면 지울 핀을 특정할 수 없다 — 종전엔 여기서 blanket prune 을 돌렸지만(«스테일 등록만 정리»), 그게 남의
     //  워크트리를 지우던 바로 그 경로라 이제 아무것도 안 한다(#3678). 표적 없이 지울 것은 없다.
@@ -680,7 +738,7 @@ export function repoPinRemove(ctx, args) {
   }
   const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
   clearStaleRegistrations(ctx, base, { paths: [pin] }); // 디렉터리는 이미 없고 등록만 남은 경우 — 그 등록만(#3678: blanket prune 금지)
-  if (r.code !== 0) return { removed: null, note: `핀이 이미 없거나 제거 실패(무해): ${gitFail(r.stderr)}` };
+  if (r.code !== 0) return { removed: null, note: `핀이 이미 없거나 제거 실패(무해): ${gitFail(r.stderr)}${why}` };
   return { removed: pin };
 }
 

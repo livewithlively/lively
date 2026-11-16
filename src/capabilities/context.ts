@@ -35,7 +35,8 @@ const repoList: Capability = {
   description:
     "레포 목록의 union — domainmap 에 매핑된 레포(domainmapRepos) ∪ item 매핑테이블에 등장하는 레포(mappingRepos), " +
     "합집합은 repos. domainmap 다운 시에도 부분 성공(domainmapError 필드). 다른 도메인/프로젝트 툴의 repo 이름을 찾을 때 먼저 호출. " +
-    "각 domainmapRepos 항목은 clone_url(자격증명 제거된 git clone 주소, 미설정 시 null) 을 포함 — 소스가 로컬에 없으면 이 주소로 클론한다(접근 인증은 멤버 본인의 GitHub 자격증명).",
+    "각 domainmapRepos 항목은 clone_url(자격증명 제거된 git clone 주소, 미설정 시 null) 을 포함 — 소스가 로컬에 없으면 이 주소로 클론한다(접근 인증은 멤버 본인의 GitHub 자격증명). " +
+    "default_branch 는 등록한 기본 브랜치다 — 서버 공유 클론과 로컬 워크트리·핀 도구(ref 를 안 줬을 때)가 이 브랜치를 기준으로 삼는다(원격에 없으면 원격 기본 브랜치).",
   scope: "context",
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/repos"], parse: () => ({}) }] },
@@ -70,6 +71,8 @@ const repoRefresh: Capability = {
     "게이트웨이(클론 소유자)가 실행하므로 멤버는 group-write 없이도 최신 코드를 읽게 되고, 공유 실행코드(하네스·플러그인·스킬)를 " +
     "멤버가 변조할 수 없어 OS uid 격리가 유지된다. fetch 는 요청 멤버(없으면 게이트웨이) git 자격으로 인증한다. " +
     "비파괴 — dirty/갈라짐이면 건드리지 않고 사유(status: ok|up-to-date|dirty|no-clone|no-upstream|error)를 반환한다. " +
+    "공유 클론이 레포에 등록한 기본 브랜치와 다른 브랜치에 있으면, 워킹트리가 깨끗하고 그 브랜치가 원격에 있을 때 등록 브랜치로 바꾼 뒤 최신화한다 " +
+    "(branch=끝난 뒤 브랜치 · switched_from=바꾸기 전 브랜치 · branch_note=바꿨거나 바꾸지 않은 사유). " +
     "웹 도메인맵 탭 '코드 최신화' 버튼과 공용 진입.",
   scope: "context",
   input: { name: z.string() },

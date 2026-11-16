@@ -29,7 +29,9 @@ import type { GitCredentialSecret } from "../org/credentials/git-credential-stor
 //    조직 폴백이 없다(task-scheduler.ts). 반면 게이트웨이 로컬용 resolveGitSecret 은 "멤버 없으면 조직 폴백"이라,
 //    그걸 그대로 노드에 주입하면 **조직 공용 git 키가 멤버 노트북으로 나간다**(권한 상승). 그래서 호출자가
 //    본인 자격만 해소해 넘기는 형태로 못 박는다 — 이 모듈은 받은 것만 쓴다.
-export interface RepoProvisionAuth { gitUrl: string | null; secret?: GitCredentialSecret | null }
+//  · defaultBranch = 레지스트리 repo.default_branch(#1723). 노드가 공유 클론을 이 브랜치로 받고 맞추는 데 쓴다.
+//    옛 게이트웨이는 안 싣는다 → 노드는 «등록값 모름» 으로 보고 종전대로 원격 기본 브랜치를 따른다.
+export interface RepoProvisionAuth { gitUrl: string | null; secret?: GitCredentialSecret | null; defaultBranch?: string | null }
 
 // 노드로 내보낼 레포 주입을 해소하는 **단일 관문**(#905 C4) — 위탁(task-scheduler)·프로젝트(provision-remote) 공용.
 //  DB(레지스트리 git_url + 자격)를 아는 게이트웨이에서만 부른다. 자격 정책(member=본인만 · worker=조직폴백)은
@@ -41,7 +43,7 @@ export async function resolveRepoInject(
   const row = await getRepo(repo).catch(() => null);
   const host = hostOf(row?.git_url);
   const secret = host ? await (gatewayCapability("leaseGitSecretForNode")?.(requesterId, host, nodeKind) ?? Promise.resolve(null)).catch(() => null) : null;
-  return { gitUrl: row?.git_url ?? null, secret };
+  return { gitUrl: row?.git_url ?? null, secret, defaultBranch: registeredBranchOfRow(row) };
 }
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
 export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "../org/credentials/git-auth-prepare.js";
@@ -189,15 +191,75 @@ async function ensureRepoGroupWritable(repoPath: string): Promise<void> {
   });
 }
 
+// 등록한 기본 브랜치(#1723) — 레지스트리 repo.default_branch 를 «쓸 수 있는 브랜치 이름» 으로 읽는다. 비었거나
+//  형식이 안 맞으면 null(= 등록값 없음 → 종전대로 원격 기본 브랜치). git 인자로 그대로 들어가므로 여기서 형식을 거른다
+//  (BRANCH_RE 는 선두 특수문자를 막아 `--upload-pack=…` 같은 옵션 주입이 안 된다).
+export function registeredBranchOf(v: unknown): string | null {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s && BRANCH_RE.test(s) ? s : null;
+}
+
+// 레지스트리 행에서 읽는 등록 브랜치 — **git 소스를 연결한 레포만** 등록값이 있다고 본다(#1723).
+//  왜: repo.default_branch 칸은 기본값이 'main' 이라, 스캔·인입으로 생기기만 하고 아무도 git 소스(주소 + 기본 브랜치)를
+//   등록한 적 없는 행에도 'main' 이 들어 있다. 그 값은 사람이 고른 게 아니다 → 그런 레포는 종전 동작(원격 기본 브랜치) 그대로.
+//   git 소스 등록(repo_set_source · 관리 ▸ 레포 폼)은 주소와 기본 브랜치를 함께 저장하므로 주소가 있으면 브랜치도 등록된 값이다.
+export function registeredBranchOfRow(row: { git_url?: unknown; default_branch?: unknown } | null | undefined): string | null {
+  const url = typeof row?.git_url === "string" ? row.git_url.trim() : "";
+  return url ? registeredBranchOf(row?.default_branch) : null;
+}
+
+// git stderr 한 줄(사유 표시용) — fatal:/error: 줄 우선, 없으면 마지막 줄.
+function gitReason(err: string): string {
+  const lines = String(err ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[lines.length - 1] ?? "원인 미상";
+}
+
+export interface BaseBranchAlign {
+  branch: string | null;      // 맞춘 뒤 지금 브랜치(detached 면 null)
+  switchedFrom?: string;      // 바꿨으면 바꾸기 전 브랜치
+  note?: string;              // 바꿨거나, 바꾸지 않은 사유(사람 말)
+}
+
+// 공유 클론을 등록한 기본 브랜치로 맞춘다(#1723) — 레지스트리의 «기본 브랜치» 는 도메인맵 스캔과 작업 클론이 함께 보는
+//  단일 소스인데, 클론은 원격 HEAD(호스트의 기본 브랜치)로 받아져 있을 수 있다(원격 기본 develop · 배포 main).
+//  비파괴: 워킹트리가 깨끗할 때만 · 브랜치에 붙어 있을 때만(detached 는 누가 일부러 세워 둔 것일 수 있다) · 등록 브랜치가
+//  원격에 있을 때만 바꾼다. 안 바꾸면 손대지 않고 사유를 돌려준다. 옛 브랜치와 그 커밋은 그대로 남는다(checkout 만 한다).
+//  ⚠ 호출자가 fetch 를 먼저 한다 — origin/<등록 브랜치> 가 방금 받은 것이어야 «원격에 없다» 판정이 맞다.
+//  ⚠ 공유 클론(workspace/repos/<name>)에만 부른다. 사람이 경로를 직접 지정한 클론은 그 사람이 고른 브랜치를 존중한다.
+async function alignBaseBranch(repoPath: string, want: string | null, dirty: boolean): Promise<BaseBranchAlign> {
+  const cur = (await git(["symbolic-ref", "--short", "-q", "HEAD"], repoPath)).out.trim() || null;
+  if (!want || cur === want) return { branch: cur };
+  if (!cur) return { branch: null, note: `공유 클론이 브랜치에 붙어 있지 않아(detached HEAD) 등록한 기본 브랜치 '${want}' 로 바꾸지 않았습니다.` };
+  if (dirty) return { branch: cur, note: `공유 클론에 로컬 변경이 있어, 지금 브랜치 '${cur}' 를 등록한 기본 브랜치 '${want}' 로 바꾸지 않았습니다(관리자 확인 필요).` };
+  if (!(await git(["show-ref", "--verify", "--quiet", `refs/remotes/origin/${want}`], repoPath)).ok) {
+    return { branch: cur, note: `등록한 기본 브랜치 '${want}' 가 원격(origin)에 없어 지금 브랜치 '${cur}' 를 그대로 둡니다 — 관리 ▸ 레포에서 기본 브랜치를 확인하세요.` };
+  }
+  const hasLocal = (await git(["show-ref", "--verify", "--quiet", `refs/heads/${want}`], repoPath)).ok;
+  // 끝의 `--` — 같은 이름의 파일·폴더가 있어도 브랜치로 읽게 한다(없으면 git 이 «경로냐 브랜치냐» 로 거부한다).
+  const co = await git(hasLocal ? ["checkout", "-q", want, "--"] : ["checkout", "-q", "-b", want, "--track", `origin/${want}`], repoPath);
+  if (!co.ok) return { branch: cur, note: `등록한 기본 브랜치 '${want}' 로 바꾸지 못해 지금 브랜치 '${cur}' 를 그대로 둡니다: ${gitReason(co.err)}` };
+  // 이미 있던 로컬 브랜치에 upstream 이 없으면 origin/<등록 브랜치> 로 잇는다 — 안 이으면 뒤따르는 fast-forward(@{u})가
+  //  대상이 없어 옛 커밋에 머문다. upstream 이 이미 있으면 그 설정을 건드리지 않는다.
+  if (hasLocal && !(await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], repoPath)).ok) {
+    await git(["branch", "-q", `--set-upstream-to=origin/${want}`, want], repoPath);
+  }
+  return { branch: want, switchedFrom: cur, note: `공유 클론의 브랜치를 '${cur}' 에서 등록한 기본 브랜치 '${want}' 로 바꿨습니다.` };
+}
+
 // 재사용 레포를 현재 브랜치의 upstream 으로 fast-forward — 새 워크트리가 최신 base HEAD 에서 잘리도록.
 //  best-effort·비파괴: 무인 provision 이라 자동 머지커밋·리베이스·충돌 금지 → ff-only 만.
 //   dirty·무upstream·갈라짐·오프라인이면 손대지 않고 낡은 채 진행(터미널 생성을 막지 않음).
 //   @{u} 사용 → repos 기본 클론(main→origin/main)이든 직접입력 경로(피처브랜치→그 upstream)든 브랜치 선택 존중.
-async function refreshRepo(repoPath: string, extraEnv?: Record<string, string>): Promise<void> {
+//  alignTo(#1723) — 공유 클론일 때만 호출자가 등록한 기본 브랜치를 넘긴다. fetch 뒤 · ff 앞에 그 브랜치로 맞춘다.
+async function refreshRepo(repoPath: string, extraEnv?: Record<string, string>, alignTo: string | null = null): Promise<BaseBranchAlign> {
   const st = await git(["status", "--porcelain"], repoPath);
-  if (!st.ok || st.out) return;                             // dirty 또는 상태확인 실패 → skip
-  await git(["fetch"], repoPath, extraEnv);                  // private 면 자격 필요 → extraEnv 주입. 실패(오프라인 등) 무시
-  await git(["merge", "--ff-only", "@{u}"], repoPath);       // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
+  if (!st.ok) return { branch: null };                      // 상태확인 실패 → skip
+  const dirty = !!st.out;
+  //  맞출 때는 --prune — 원격에서 지워진 브랜치의 옛 origin/<이름> 이 남아 있으면 «원격에 있다» 로 잘못 읽고 죽은 브랜치로 바꾼다.
+  if (!dirty) await git(alignTo ? ["fetch", "--prune"] : ["fetch"], repoPath, extraEnv); // private 면 자격 필요 → extraEnv 주입. 실패(오프라인 등) 무시
+  const al = alignTo ? await alignBaseBranch(repoPath, alignTo, dirty) : { branch: null };
+  if (!dirty) await git(["merge", "--ff-only", "@{u}"], repoPath); // ff 불가(갈라짐/무upstream) → 실패 무시, base 그대로
+  return al;
 }
 
 export interface SharedRepoRefreshResult {
@@ -207,6 +269,9 @@ export interface SharedRepoRefreshResult {
   after?: string;
   advanced: boolean;
   detail?: string;
+  branch?: string | null;       // #1723 — 끝난 뒤 공유 클론의 브랜치(detached 면 null)
+  switched_from?: string;       // 등록한 기본 브랜치로 바꿨으면 바꾸기 전 브랜치
+  branch_note?: string;         // 브랜치를 바꿨거나, 등록 브랜치와 다른데 바꾸지 않은 사유
 }
 
 // 공유 베이스(workspace/repos/<name>) 워킹트리를 upstream 으로 fast-forward — 웹 '코드 최신화' 버튼·MCP 공용 진입(#660 RO 모델).
@@ -214,7 +279,8 @@ export interface SharedRepoRefreshResult {
 //  플러그인·스킬)를 멤버가 못 고쳐 OS uid 격리(#524)를 유지한다(로컬쓰기 축 P1 우회). fetch 는 요청멤버(없으면 게이트웨이) 자격을
 //  주입한다(원격인증 축 P2, #540). 비파괴: dirty 면 손대지 않고 skip, ff 불가(갈라짐/무upstream)면 base 그대로(reset·머지커밋 없음).
 //  대상은 도메인맵 스캐너 클론(stateDir/repos, git-pull.ts)이 아니라 멤버가 실제로 읽는 provision 클론(PROJECT_SHARED_BASE/repos)이다.
-export async function refreshSharedRepo(name: string, memberId?: string | null): Promise<SharedRepoRefreshResult> {
+//  inject — ensureBaseClone 과 같은 주입 묶음(git_url · 자격 · 등록한 기본 브랜치). 주면 DB 대신 그걸 쓴다(DB 없는 자리 · 시험).
+export async function refreshSharedRepo(name: string, memberId?: string | null, inject?: RepoProvisionAuth): Promise<SharedRepoRefreshResult> {
   const clean = String(name ?? "").trim();
   if (!REPO_NAME_RE.test(clean)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
   const repoPath = confineToWorkspace(path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, clean), "레포");
@@ -223,20 +289,31 @@ export async function refreshSharedRepo(name: string, memberId?: string | null):
   }
   const headOf = async () => (await git(["rev-parse", "HEAD"], repoPath)).out.trim();
   const before = await headOf();
+  const row = inject ? { git_url: inject.gitUrl, default_branch: inject.defaultBranch ?? null } : await getRepo(clean).catch(() => null);
+  const want = registeredBranchOfRow(row);                   // #1723 — 등록한 기본 브랜치(없으면 null → 종전 동작)
 
   // dirty 면 비파괴로 skip(공유 클론은 게이트웨이 소유라 보통 clean — dirty 면 사람이 봐야 함).
   const st = await git(["status", "--porcelain"], repoPath);
   if (!st.ok) return { repo: clean, status: "error", before, advanced: false, detail: "git status 실패" };
-  if (st.out) return { repo: clean, status: "dirty", before, advanced: false, detail: "공유 클론에 로컬 변경이 있어 건드리지 않았습니다(관리자 확인 필요)." };
+  if (st.out) {
+    const al = await alignBaseBranch(repoPath, want, true);  // dirty → 바꾸지 않는다. 브랜치가 어긋나 있으면 그 사유만 받는다
+    return { repo: clean, status: "dirty", before, advanced: false, branch: al.branch,
+      ...(al.note ? { branch_note: al.note } : {}),
+      detail: "공유 클론에 로컬 변경이 있어 건드리지 않았습니다(관리자 확인 필요)." + (al.note ? ` ${al.note}` : "") };
+  }
 
-  // upstream 없으면 ff 대상 자체가 없음.
-  const up = await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], repoPath);
-  if (!up.ok) return { repo: clean, status: "no-upstream", before, advanced: false, detail: "현재 브랜치에 upstream 이 없습니다." };
+  // upstream 없으면 ff 대상 자체가 없음. 단 등록 브랜치와 어긋나 있으면 아래에서 브랜치를 맞춘 뒤에 다시 본다(#1723).
+  const curBranch = (await git(["symbolic-ref", "--short", "-q", "HEAD"], repoPath)).out.trim() || null;
+  const mismatch = !!want && curBranch !== want;
+  const hasUpstream = async () => (await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], repoPath)).ok;
+  if (!mismatch && !(await hasUpstream())) {
+    return { repo: clean, status: "no-upstream", before, advanced: false, branch: curBranch, detail: "현재 브랜치에 upstream 이 없습니다." };
+  }
 
   // 자격 주입 — 요청멤버 우선, 없으면 게이트웨이. host: 레지스트리 git_url → origin remote → github.com.
-  const row = await getRepo(clean).catch(() => null);
   const host = hostOf(row?.git_url) ?? hostOf(await originUrl(repoPath)) ?? "github.com";
-  const secret = await (gatewayCapability("resolveGitSecret")?.(memberId ?? null, host) ?? Promise.resolve(null)).catch(() => null);
+  const secret = inject ? (inject.secret ?? null)
+    : await (gatewayCapability("resolveGitSecret")?.(memberId ?? null, host) ?? Promise.resolve(null)).catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {
     const f = await git(["fetch", "--prune"], repoPath, auth.env);
@@ -245,15 +322,24 @@ export async function refreshSharedRepo(name: string, memberId?: string | null):
         throw new HttpError(401, `레포 '${clean}' fetch 인증 실패 — 호스트 '${host}' 자격이 없습니다. `
           + `멤버는 내 프로필 ▸ git 인증에, 관리자는 관리탭 ▸ 게이트웨이 git 계정에 '${host}' 자격을 등록하세요.`);
       }
-      return { repo: clean, status: "error", before, advanced: false, detail: `fetch 실패: ${describeGitError(f.err, row?.git_url)}` };
+      return { repo: clean, status: "error", before, advanced: false, branch: curBranch, detail: `fetch 실패: ${describeGitError(f.err, row?.git_url)}` };
+    }
+    // 등록한 기본 브랜치로 맞춘다(#1723) — 방금 fetch 했으므로 origin/<등록 브랜치> 유무가 곧 원격의 사실이다.
+    const al = mismatch ? await alignBaseBranch(repoPath, want, false) : { branch: curBranch } as BaseBranchAlign;
+    const br = { branch: al.branch, ...(al.switchedFrom ? { switched_from: al.switchedFrom } : {}), ...(al.note ? { branch_note: al.note } : {}) };
+    if (!(await hasUpstream())) {
+      const after = await headOf();
+      return { repo: clean, status: "no-upstream", before, after, advanced: after !== before, ...br,
+        detail: "현재 브랜치에 upstream 이 없습니다." + (al.note ? ` ${al.note}` : "") };
     }
     const m = await git(["merge", "--ff-only", "@{u}"], repoPath);
     const after = await headOf();
     if (!m.ok) {
-      return { repo: clean, status: "error", before, after, advanced: after !== before,
-        detail: "fast-forward 불가 — 공유 클론이 upstream 과 갈라졌습니다(관리자 확인 필요)." };
+      return { repo: clean, status: "error", before, after, advanced: after !== before, ...br,
+        detail: "fast-forward 불가 — 공유 클론이 upstream 과 갈라졌습니다(관리자 확인 필요)." + (al.note ? ` ${al.note}` : "") };
     }
-    return { repo: clean, status: before === after ? "up-to-date" : "ok", before, after, advanced: before !== after };
+    return { repo: clean, status: before === after ? "up-to-date" : "ok", before, after, advanced: before !== after, ...br,
+      ...(al.note ? { detail: al.note } : {}) };
   } finally {
     await auth.cleanup();
   }
@@ -329,12 +415,14 @@ function confineToWorkspace(abs: string, label: string): string {
 const expandHome = (p: string): string => (p.startsWith("~/") ? path.join(process.env.HOME || "", p.slice(2)) : p);
 
 // 공유 base 클론 확보(#458/#660 RO 모델) — workspace/repos/<name> 에 호스트당 1회 clone, 재사용 시 upstream FF.
+//  브랜치(#1723): 레지스트리에 등록한 기본 브랜치로 받고(`--branch`), 이미 받은 공유 클론이 다른 브랜치면 깨끗할 때만 그 브랜치로
+//   바꾼다. 등록 브랜치가 원격에 없으면 종전대로 원격 기본 브랜치를 따르고 사유(branchNote)를 남긴다.
 //  이 base 는 '읽기 원본'이다: 실제 작업은 worktree 로 격리한다(base 직접 작업 금지 규율). 프로젝트·위탁 provision 공용.
 //  자격(#540): 레포 host 매칭 멤버(없으면 게이트웨이) 자격을 이 호출의 git 에만 주입. inputPath 로 기존 클론 경로 지정 가능(프로젝트용).
 async function ensureBaseClone(
   name: string, memberId: string | null,
   opts?: { inputPath?: string | null; allowClone?: boolean; inject?: RepoProvisionAuth },
-): Promise<{ repoPath: string; cloned: boolean }> {
+): Promise<{ repoPath: string; cloned: boolean; branch: string | null; branchNote?: string }> {
   if (!REPO_NAME_RE.test(name)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
   const reposBase = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR);
   const inputPath = opts?.inputPath && String(opts.inputPath).trim() ? expandHome(String(opts.inputPath).trim()) : path.join(reposBase, name);
@@ -346,7 +434,12 @@ async function ensureBaseClone(
   //  "레포의 git 주소가 레지스트리에 없습니다" 라는 **오진**이 난다 — 레포는 멀쩡히 등록돼 있는데 사용자에게
   //  "레지스트리에 등록하라"고 시킨다(시키는 대로 해도 안 고쳐진다). 그래서 DB 를 아는 게이트웨이가 조회해 넘긴다.
   const inject = opts?.inject;
-  const row = inject ? { git_url: inject.gitUrl } : await getRepo(name).catch(() => null);
+  const row = inject ? { git_url: inject.gitUrl, default_branch: inject.defaultBranch ?? null } : await getRepo(name).catch(() => null);
+  // 등록한 기본 브랜치(#1723) — 새 클론은 이 브랜치로 받고, 이미 받은 **공유 클론**은 이 브랜치로 맞춘다.
+  //  사람이 경로를 직접 지정한 기존 클론(inputPath)은 맞추지 않는다 — 그 사람이 고른 브랜치를 따른다(refreshRepo 주석).
+  //  지정한 경로에 클론이 아직 없어 **새로 받는** 경우는 등록 브랜치로 받는다(고른 브랜치가 아직 없다).
+  const want = registeredBranchOfRow(row);
+  const isSharedClone = repoPath === path.resolve(reposBase, name);
   const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
   //  레포 이름을 함께 넘긴다(#1881 G8) — GitHub App 폴백이 토큰을 그 레포로 좁힌다(최소권한 + 설치가 여럿일 때 상류가 판정).
   const secret = inject ? (inject.secret ?? null)
@@ -355,6 +448,8 @@ async function ensureBaseClone(
       })();
   const auth = await prepareGitAuth(secret);
   let cloned = false;
+  let branchNote: string | undefined;
+  let switched = false;
   try {
     if (!existed) {
       if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
@@ -362,7 +457,18 @@ async function ensureBaseClone(
       if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
       await assertDiskWritable(`레포 '${name}' 클론`, [PROJECT_SHARED_BASE]);
       await fsp.mkdir(path.dirname(repoPath), { recursive: true });
-      const c = await git(["clone", "--config", "core.sharedRepository=group", url, repoPath], undefined, auth.env);
+      const cloneArgs = (branch: string | null) => ["clone", "--config", "core.sharedRepository=group", ...(branch ? ["--branch", branch] : []), url, repoPath];
+      let c = await git(cloneArgs(want), undefined, auth.env);
+      if (!c.ok && want) {
+        // 등록 브랜치로 받기가 실패했다 — 그 브랜치가 **원격에 없어서** 인지 원격에 물어 가른다(#1723). git 의 실패 문구는
+        //  로캘·버전마다 달라 문구로 가르지 않는다(게다가 그 문구의 "not found" 는 아래 isAuthError 에 걸려 인증 실패로 오진된다).
+        //  원격이 «그 이름의 브랜치 없음» 이라고 답할 때만 원격 기본 브랜치로 다시 받는다. 그 밖의 실패는 아래 종전 처리로 간다.
+        const ls = await git(["ls-remote", "--heads", url, `refs/heads/${want}`], undefined, auth.env, CHECK_TIMEOUT_MS);
+        if (ls.ok && !ls.out.trim()) {
+          c = await git(cloneArgs(null), undefined, auth.env);
+          if (c.ok) branchNote = `등록한 기본 브랜치 '${want}' 가 원격에 없어 원격 기본 브랜치로 받았습니다 — 관리 ▸ 레포에서 기본 브랜치를 확인하세요.`;
+        }
+      }
       if (!c.ok) {
         if (isAuthError(c.err)) {
           throw new HttpError(401, `레포 '${name}' 클론 인증 실패 — 호스트 '${host}' 자격이 없거나 프로토콜이 안 맞습니다. `
@@ -375,13 +481,19 @@ async function ensureBaseClone(
     } else {
       await ensureRepoGroupWritable(repoPath);
       await git(["config", "core.sharedRepository", "group"], repoPath).catch(() => { /* best-effort */ });
-      await refreshRepo(repoPath, auth.env);
+      const al = await refreshRepo(repoPath, auth.env, isSharedClone ? want : null);
+      branchNote = al.note;
+      switched = !!al.switchedFrom;
     }
     // gc 의 자동 워크트리 prune 을 끈다(#3678) — `git gc --auto`(commit·fetch 뒤 저절로)는 gc.worktreePruneExpire(기본 3개월)
     //  보다 오래 index 를 안 건드린 «경로 없는» 등록을 지우는데, 공유 base 에서 «경로 없음» 은 «이 프로세스가 못 보는 살아
     //  있는 워크트리» 일 수 있다. 워크트리들은 base 의 config 를 공유하므로 어느 쪽에서 gc 가 돌아도 같이 막힌다. 멱등.
     await git(["config", "gc.worktreePruneExpire", "never"], repoPath).catch(() => { /* best-effort */ });
-    return { repoPath, cloned };
+    const branch = (await git(["symbolic-ref", "--short", "-q", "HEAD"], repoPath)).out.trim() || null;
+    // 상태가 바뀐 때(브랜치를 바꿨다 · 새로 받으며 원격 기본으로 돌아갔다)만 info — «어긋난 채 그대로» 는 주기 갱신마다
+    //  되풀이되므로 debug 로 낮춘다(사유는 호출자가 받는 branchNote 와 주기 갱신 요약에 매번 실린다).
+    if (branchNote) (switched || cloned ? logger.info : logger.debug).call(logger, { repo: name, branch, registered: want, note: branchNote }, "공유 클론 기본 브랜치 맞추기(#1723)");
+    return { repoPath, cloned, branch, ...(branchNote ? { branchNote } : {}) };
   } finally {
     await auth.cleanup();
   }
@@ -391,12 +503,13 @@ async function ensureBaseClone(
 //  의 최신 원본이자 scheduler 'refresh_bases' 주기 갱신의 per-repo 진입점(#900). ensureBaseClone(#458/#660) 공용 래퍼 —
 //  실패는 던지지 않고 status:'error' 로 담아, 전 repo 순회 배치가 한 레포 실패(인증·오프라인 등)로 멈추지 않게 한다.
 export async function ensureProvisionBase(
-  name: string, memberId?: string | null,
-): Promise<{ repo: string; status: "cloned" | "refreshed" | "error"; cloned: boolean; head: string | null; detail?: string }> {
+  name: string, memberId?: string | null, inject?: RepoProvisionAuth,
+): Promise<{ repo: string; status: "cloned" | "refreshed" | "error"; cloned: boolean; head: string | null; detail?: string; branch?: string | null; branch_note?: string }> {
   try {
-    const { repoPath, cloned } = await ensureBaseClone(name, memberId ?? null, { allowClone: true });
+    const { repoPath, cloned, branch, branchNote } = await ensureBaseClone(name, memberId ?? null, { allowClone: true, inject });
     const head = (await git(["rev-parse", "--short", "HEAD"], repoPath)).out.trim() || null;
-    return { repo: name, status: cloned ? "cloned" : "refreshed", cloned, head };
+    // branch_note(#1723) — 등록한 기본 브랜치로 바꿨거나, 어긋나 있는데 바꾸지 않은 사유. 주기 갱신(refresh_bases) 요약에 그대로 실린다.
+    return { repo: name, status: cloned ? "cloned" : "refreshed", cloned, head, branch, ...(branchNote ? { branch_note: branchNote } : {}) };
   } catch (e) {
     return { repo: name, status: "error", cloned: false, head: null, detail: e instanceof Error ? e.message : String(e) };
   }

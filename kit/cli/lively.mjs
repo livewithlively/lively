@@ -3287,7 +3287,7 @@ async function cmdRepo(rest) {
     if (sub === "pin") {
       const op = String(pos[0] || "").toLowerCase();
       if (op === "remove" || op === "rm") {
-        const res = repoPinRemove(ctx, { repo: pos[1], ref: o.ref, path: o.path });
+        const res = await repoPinRemove(ctx, { repo: pos[1], ref: o.ref, path: o.path });
         ok(res.removed ? `핀 제거: ${res.removed}` : (res.note || "제거할 핀 없음")); return;
       }
       const repo = pos[0];

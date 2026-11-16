@@ -156,10 +156,10 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("이전 SHA 핀이 스톰프 안 됨 (p1 HEAD 여전히 sha1)", headAtP1 === p1.sha, `p1.pin HEAD=${headAtP1}, 기대=${p1.sha}`);
 
   // 제거는 현재 ref(→p2 SHA)의 핀만 — 다른 SHA 핀(p1)은 안 건드린다
-  const rm = repoPinRemove(pinCtx, { repo: "base" });
+  const rm = await repoPinRemove(pinCtx, { repo: "base" });
   check("pin_remove → 현재 SHA 핀만 제거", rm.removed === p2.pin && !existsSync(p2.pin), JSON.stringify(rm));
   check("pin_remove 후에도 다른 SHA 핀(p1)은 남음", existsSync(p1.pin), "p1 이 사라짐");
-  const rm2 = repoPinRemove(pinCtx, { repo: "base" });   // best-effort: 이미 없는 걸 또 지워도 에러 아님
+  const rm2 = await repoPinRemove(pinCtx, { repo: "base" });   // best-effort: 이미 없는 걸 또 지워도 에러 아님
   check("pin_remove 재호출 → 에러 없이 removed:null", rm2.removed === null, JSON.stringify(rm2));
 
   // ── 11) 오래된 핀 TTL 스윕(#932) — repo_pin_remove 가 안 불려 누적된 핀을 다음 핀 호출이 걷는다 ──
@@ -263,7 +263,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   hide("boxA");
   const rB = await repoWorktree(ctx(contB), { repo: "base" });
   await repoPin(ctx(contB), { repo: "base" });
-  repoPinRemove(ctx(contB), { repo: "base" });
+  await repoPinRemove(ctx(contB), { repo: "base" });
   show("boxA");
   check("A: B 가 뜬 뒤에도 A 의 admin 이 그대로(등록 미삭제·역참조 일치)", existsSync(adminA) && same(adminBack(adminA), join(wtA, ".git")), `admin=${adminA} back=${adminBack(adminA)}`);
   check("A: A 의 HEAD 브랜치 불변(project/1001)", branchAt(wtA) === "project/1001", branchAt(wtA));

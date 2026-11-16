@@ -183,7 +183,7 @@ const ALWAYS_LOAD = { "anthropic/alwaysLoad": true };
 registerTool({
   name: "lively_local_repo_list",
   title: "이 머신에서 워크트리 뜰 수 있는 레포",
-  description: "관리탭에 등록된 레포 목록 + 이 머신 로컬 base 클론 상태(클론됨?·현재 브랜치·origin 대비 최신)를 반환한다. "
+  description: "관리탭에 등록된 레포 목록 + 등록한 기본 브랜치(default_branch — ref 없는 워크트리·핀의 기준) + 이 머신 로컬 base 클론 상태(클론됨?·현재 브랜치·origin 대비 최신)를 반환한다. "
     + "코드 작업을 시작하기 전에 '어떤 레포를 lively_local_repo_worktree 로 뜰 수 있는지' 확인하는 용도 — "
     + "프로젝트에 레포가 연결돼 있지 않아도(또는 cwd 에 코드가 없어도) 이걸로 후보를 확인할 수 있다. "
     + "base 는 pristine 공유 원본이니 직접 작업하지 말고 워크트리를 떠서 작업하라.",
@@ -217,7 +217,7 @@ registerTool({
         + "<프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>. ⚠ 스크래치패드/임시경로 금지(휘발성 → 작업 유실, 비-canonical → project/<id> provision 충돌 #932). "
         + "여길 벗어나면 브랜치 기본값도 project/<id> 가 아니라 wt/<repo> 계열이 된다(같은 브랜치를 두 자리에 걸 수 없으므로)" },
       branch: { type: "string", description: "워크트리 브랜치. 기본: 기본 경로(프로젝트 슬롯)면 project/<id>, 그 외엔 wt/<repo>[-n]" },
-      ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: origin 기본 브랜치 최신" },
+      ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: 레포에 등록한 기본 브랜치의 최신(등록값이 원격에 없으면 origin 기본 브랜치 — 그땐 note 에 사유)" },
     },
     required: ["repo"],
     additionalProperties: false,
@@ -287,7 +287,7 @@ registerTool({
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
-      ref: { type: "string", description: "핀할 ref(origin/<ref>). 기본: origin 기본 브랜치(main 등)" },
+      ref: { type: "string", description: "핀할 ref(origin/<ref>). 기본: 레포에 등록한 기본 브랜치(등록값이 원격에 없으면 origin 기본 브랜치 — 그땐 note 에 사유)" },
       path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리 밑 repo+SHA(content-addressed — "
         + "같은 SHA 는 세션 간 공유, 다른 SHA 는 공존)" },
     },
@@ -301,19 +301,19 @@ registerTool({
   name: "lively_local_repo_pin_remove",
   title: "핀 제거",
   description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다. "
-    + "기본 경로는 repo+SHA 라, 핀 때와 같은 ref 를 줘야 그 SHA 의 핀을 찾아 지운다(기본은 원격 기본 브랜치로 대칭). "
+    + "기본 경로는 repo+SHA 라, 핀 때와 같은 ref 를 줘야 그 SHA 의 핀을 찾아 지운다(기본은 핀 만들 때와 같은 기준 — 등록한 기본 브랜치 — 로 대칭). "
     + "핀이 이미 없어도 에러가 아니다(best-effort) — 다른 세션의 다른 SHA 핀은 건드리지 않는다.",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름" },
-      ref: { type: "string", description: "핀 때 쓴 ref(origin/<ref>). 기본: origin 기본 브랜치 — 기본 경로 SHA 를 이 ref 로 해석해 찾는다" },
+      ref: { type: "string", description: "핀 때 쓴 ref(origin/<ref>). 기본: 레포에 등록한 기본 브랜치(없으면 origin 기본 브랜치) — 기본 경로 SHA 를 이 ref 로 해석해 찾는다" },
       path: { type: "string", description: "핀 경로(생성 때 --path 를 지정했다면 같은 값). 지정 시 ref 는 무시" },
     },
     required: ["repo"],
     additionalProperties: false,
   },
-  handler: (args, ctx) => { const r = repoPinRemove(ctx, args); return ctx.text(r.removed ? `핀 제거됨: ${r.removed}` : (r.note || "제거할 핀 없음")); },
+  handler: async (args, ctx) => { const r = await repoPinRemove(ctx, args); return ctx.text(r.removed ? `핀 제거됨: ${r.removed}` : (r.note || "제거할 핀 없음")); },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
