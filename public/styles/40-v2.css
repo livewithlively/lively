@@ -2922,8 +2922,6 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
    처음엔 머리글 12.5/700 · 행 13/600 이라 행이 더 커 보여 위계가 뒤집혀 있었다(프리뷰 실측). */
 .v2-pg-t .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 13.5px; font-weight: 700; line-height: 1.5; }
-.v2-pg-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linejoin: round; stroke-linecap: round; }
-.v2-pg-row:hover .v2-pg-ic { stroke: var(--blue); }
 /* 도는 세션이 하나도 없는 카드(#3778 2판) — **이름 자체가** «오늘은 여기 끝났다» 고 말한다.
    오른쪽 끝 고리 하나로는 안 됐다: 손을 얹으면 .v2-sums 가 숨고(그 자리를 압정·＋·[→] 가 받는다)
    목록을 훑는다는 건 곧 손을 얹는다는 것이라, 정작 보려는 순간에 신호가 없었다.
@@ -2939,14 +2937,13 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
     카드 머리의 «작업 중» 점은 서 있기만 한다. 깜빡임은 세션 줄(.v2-app-inst-st)의 몫이다: 카드를 펴면 같은 일을 두 점이
     함께 깜빡였고, 조각 카드(「지금 볼 것」)는 늘 펴져 있어 늘 그랬다. 점 자체는 남긴다 — 접힌 카드에선 그게 유일한 표식이다. */
 .v2-pg-row .v2-dot.busy { animation: none; }
-.v2-pg-row .v2-cnt { flex: none; margin-left: 2px; }
 /*  ⚠ ＋ 는 **머리글 흐름 밖(절대위치)** 에 띄우고 안 보일 땐 display:none 이라 자리도 안 먹는다.
     opacity:0 로 숨기면 안 보이는데도 폭(18+2px)을 그대로 차지해 **상태 점·개수가 오른쪽 끝에 못 붙는다** —
     #1954 ⓑ 가 앱 행에서 이미 밟은 함정이고, 이 머리글에서 그대로 재발했다(상민님 2026-08-26 재지적).
     손을 얹으면 그 오른쪽 자리를 ＋ 가 받고 점·개수는 잠깐 물러난다(앱 행의 × 규약과 같다). */
 .v2-pg-row .v2-newb { position: absolute; right: 5px; top: 50%; margin: -9px 0 0; opacity: 1; display: none; }
 .v2-pg-row:hover .v2-newb, .v2-pg-row .v2-newb:focus-visible { display: inline-grid; }
-.v2-pg-row:hover .v2-sums, .v2-pg-row:hover .v2-cnt { visibility: hidden; }
+.v2-pg-row:hover .v2-sums { visibility: hidden; }
 /* ★고정 압정(#3778) — ＋ 와 같은 절대위치 문법(위 주석의 그 이유: 자리를 먹으면 점·개수가 오른쪽 끝에 못 붙는다).
    ⚠ 압정은 **고정된 동안 손을 떼도 남는다** — 그게 '고정됨'을 말하는 유일한 표식이라 hover 에 숨기면 안 된다.
    그래서 자리가 둘이다: 혼자 서 있을 땐 오른쪽 끝(＋ 가 없으니 그 자리가 비어 있다), 손을 얹어 ＋ 가 들어오면
