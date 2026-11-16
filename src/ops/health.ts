@@ -27,6 +27,11 @@ export type Status = "ok" | "degraded" | "down" | "starting";
 /** 디스크 임계치 — **관리탭(DB) 저장소 정책이 단일 출처**(src/org/policies/storage-policy.ts). 호출자가 주입한다. */
 export interface Thresholds {
   warnPct: number;
+  /**
+   * 0 이면 «0% 이상» 이라 늘 참이다 — 그래서 criticalFreeBytes 와 함께 주면 **남은 공간만으로** 위험을 판정한다(#5564:
+   *  큰 디스크를 거의 채워 쓰는 컴퓨터에선 비율이 막는 시점을 정하지 못한다). 바닥 없이 0 이면 어떤 디스크든 위험이
+   *  되므로, 저장소 정책은 «비율 0 · 바닥 0» 을 만들지 않는다(storage-policy.ts invariant).
+   */
   criticalPct: number;
   /**
    * #4780 — 위험이 되려면 **남은 공간도** 이것(바이트)보다 적어야 한다. 0·생략 = 사용률만 본다(종전).

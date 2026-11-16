@@ -84,7 +84,8 @@ delete process.env.LIVELY_NODE_TOKEN;
     (err: unknown) => {
       assert.ok(err instanceof HttpError);
       assert.equal(err.status, 507);
-      assert.match(err.message, /사용률이 0% 이상이고 남은 공간이 .+보다 적으면 새 작업을 막습니다/, "막는 기준을 말해야 얼마나 비울지 셈한다");
+      assert.match(err.message, /\)\. 남은 공간이 .+보다 적으면 새 작업을 막습니다/, "막는 기준을 말해야 얼마나 비울지 셈한다");
+      assert.doesNotMatch(err.message, /사용률이 0% 이상/, "#5564 비율 0 은 «비율을 보지 않는다» 다 — 뜻 없는 «0% 이상» 을 말하지 않는다");
       return true;
     },
   );
@@ -109,6 +110,17 @@ delete process.env.LIVELY_NODE_TOKEN;
   } finally {
     if (prev === undefined) delete process.env.LIVELY_NODE_TOKEN; else process.env.LIVELY_NODE_TOKEN = prev;
   }
+}
+
+// ── #5564 문구: 비율을 끄고(0) 남은 공간만 볼 때 — 기준 문장에 비율이 없고, 1GB 미만 바닥은 MB 로 읽힌다 ──
+{
+  const G = 1024 ** 3;
+  const st = { usedPct: 99.9, level: "critical" as const, path: "/Users/me/workspace", availBytes: 0.3 * G };
+  const msg = diskFullError("새 세션", st, { warnPct: 85, criticalPct: 0, criticalFreeBytes: 0.5 * G }).message;
+  assert.match(msg, /\(99\.9% 사용, 307MB 남음\)\. 남은 공간이 512MB보다 적으면 새 작업을 막습니다\. /, msg);
+  assert.doesNotMatch(msg, /사용률이/, msg);
+  // 비율만 보는 설정(바닥 0)은 종전 문장 그대로.
+  assert.match(diskFullError("새 세션", st, { warnPct: 85, criticalPct: 99 }).message, /사용률이 99% 이상이면 새 작업을 막습니다/);
 }
 
 // ── 여유로우면 당연히 통과 ──

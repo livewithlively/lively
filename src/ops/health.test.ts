@@ -42,6 +42,18 @@ const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영
   assert.equal(levelFor(96.7, { ...t, criticalFreeBytes: 0 }, 100 * G), "critical", "바닥 0(끔)이면 사용률만 본다");
 }
 
+// ── #5564 비율 0 + 바닥 — 사용률과 무관하게 «남은 공간 < 바닥» 일 때만 위험 ──
+//  회귀 대상: 큰 디스크를 거의 채워 쓰는 컴퓨터(245GB 맥미니, 스왑으로 97% 안팎)가 비율 때문에 막히는 것.
+{
+  const G = 1024 ** 3;
+  const t = { warnPct: 85, criticalPct: 0, criticalFreeBytes: 0.5 * G };
+  assert.equal(levelFor(99.7, t, 0.6 * G), "warn", "99.7% 여도 바닥(512MB)보다 많이 남았으면 막지 않는다");
+  assert.equal(levelFor(99.8, t, 0.4 * G), "critical", "바닥 아래면 위험");
+  assert.equal(levelFor(99.8, t, 0.5 * G), "warn", "바닥과 같으면 아직 막지 않는다");
+  assert.equal(levelFor(40, t, 0.4 * G), "critical", "비율을 안 보므로 사용률이 낮아도 바닥 아래면 위험");
+  assert.equal(levelFor(40, t, 3 * G), "ok", "경고 비율은 그대로 따로 본다");
+}
+
 // ── 시크릿 유출 방지: 미인증 /readyz 응답에 접속 자격이 실리면 안 된다 ──
 {
   const leaky = 'connection to server at "db" failed: postgres://items:itemspw@localhost:55433/items';
