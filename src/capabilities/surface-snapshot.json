@@ -3022,7 +3022,7 @@
   "rest": [
    "POST /api/ui/v6/projects/:id"
   ],
-  "input_hash": "aa951c74f28f8215"
+  "input_hash": "80beb7c541058e2e"
  },
  {
   "name": "project_rename_v6",

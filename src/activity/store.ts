@@ -4,7 +4,8 @@
 //  activity_touch(코드 footprint)를 한 트랜잭션(withTx)으로 원자 기록한다 — 통합의 산물.
 //  author_person=토큰 신원(누가), author_agent='어떤 AI'(하네스 — 게이트웨이가 접속 신원/User-Agent 로 식별, 프로젝트 #182). 사람×AI 집계의 축.
 import { withTx, q, one, itemsPool } from "../db/client.js";
-import { visibleListIds, listIdPredicate, type Viewer } from "../v6/visibility.js";
+import { projectVisFor, projectVisPredicate, type Viewer } from "../v6/visibility.js";
+import { releaseProjectDraft } from "../v6/project-draft.js";
 import { saneLimit } from "../domainmap/core/types.js";
 import { conflictKey } from "../org/ingest/external-identity.js";
 import { appScopeKnowledgeWhere } from "../v6/knowledge-common.js";   // #5100 앱 맥락 범위 — 지식 참조
@@ -46,6 +47,15 @@ export interface LogActivityResult {
 //  안전 — conflictKey 정규화). v6: projectId 는 project FK(미존재면 null 로 무시), kuRefs 는 knowledge(v6) FK 라
 //  존재 안 하는 지식은 침묵 skip(전체 트랜잭션이 FK 위반으로 abort 되는 것 방지 — 결과에 skippedKnowledge 로 보고).
 export async function logActivity(input: LogActivityInput, authorPerson: string | null): Promise<LogActivityResult> {
+  const res = await logActivityTx(input, authorPerson);
+  // #5522 — 프로젝트에 **직접 남긴** 작업기록이면 그 프로젝트가 초안에서 나온다(수집해 온 것 = external_id 보유는 세지 않는다).
+  //  트랜잭션 밖에서 부른다 — 초안 표시는 이 기록의 일부가 아니고, 실패해도 기록은 남아야 한다.
+  if (res.project != null && !(typeof input.external_id === "string" && input.external_id.length > 0)) {
+    await releaseProjectDraft(res.project, "activity", { actor: authorPerson, source: "activity" });
+  }
+  return res;
+}
+async function logActivityTx(input: LogActivityInput, authorPerson: string | null): Promise<LogActivityResult> {
   return withTx(async (client) => {
     let repoId: number | null = null;
     if (input.repo) {
@@ -259,9 +269,17 @@ export async function listActivities(f: ListActivitiesFilter & { viewer?: Viewer
   // 공개범위(#1291) — 잠긴 프로젝트에 달린 작업은 그 대상에게만. 프로젝트에 안 달린 작업(project_id NULL)은
   //  귀속을 판정할 근거가 없으므로 종전대로 노출한다(세션 기반 파생 귀속은 후속 범위).
   if (f.viewer !== undefined && f.viewer !== null) {
-    const visIds = await visibleListIds(f.viewer);
+    // #5522 — 초안도 같은 술어로 거른다. a.project_id 는 태스크일 수도 있어 뿌리 프로젝트까지 타고 올라가 본다
+    //  (종전엔 태스크 행의 list_id 가 늘 비어 «미분류 = 전원» 으로 통과했다 — 잠긴 프로젝트의 태스크에 단 기록이 샜다).
+    const pv = await projectVisFor(f.viewer);
     where.push(`(a.project_id IS NULL OR EXISTS(
-      SELECT 1 FROM project pv WHERE pv.id = a.project_id AND ${listIdPredicate("pv.list_id", visIds)}))`);
+      SELECT 1 FROM project pv
+        LEFT JOIN project pvpar ON pvpar.id = pv.parent_id
+        LEFT JOIN project pvroot ON pvroot.id = CASE WHEN pv.level='subtask' THEN pvpar.parent_id
+                                                     WHEN pv.level='task'    THEN pvpar.id
+                                                     ELSE pv.id END
+       WHERE pv.id = a.project_id
+         AND ${projectVisPredicate("COALESCE(pvroot.list_id, pv.list_id)", "COALESCE(pvroot.id, pv.id)", pv)}))`);
   }
   const off = Math.min(Math.max(Number(f.offset) || 0, 0), 1_000_000);   // #709 페이지네이션
   args.push(lim); const limP = `$${args.length}`;
