@@ -425,6 +425,22 @@ for (const [n, sql] of [
   ["pg 식 age()", "SELECT date_part('year', age('2024-03-01', birth_date)) FROM users"],
   ["조건", "SELECT id FROM users WHERE birth_date < '1990-03-01'"],
 ] as const) rejectsP(`age-pg-${n}: pg 에서는 age 컬럼의 어떤 파생도 불허`, sql, agePolicy(), /최상위 SELECT 투영|Unparseable/);
+//  안내 문구는 그 소스에서 되는 것만 말한다 — pg 소스에 없는 TIMESTAMPDIFF 파생을 권하지 않는다.
+assert.throws(() => assertSafeSelect("SELECT id FROM users WHERE birth_date < '1990-03-15'", agePolicy(), { dialect: "postgresql" }),
+  (e: Error) => /MySQL 소스에서만/.test(e.message) && !/TIMESTAMPDIFF/.test(e.message), "age-pg-안내");
+pass++; console.log("ok  age-pg-안내: pg 소스의 거부 문구는 TIMESTAMPDIFF 를 권하지 않는다");
+//  안쪽 범위에서 같은 이름을 VALUES 별칭으로 다시 쓰면 그 수식이 무엇을 가리키는지 알 수 없다(바깥의 users 인지 VALUES 인지).
+//   허용 쪽 판정(isAgeCol)도 isSensitive 처럼 이름으로 본다 — 같은 이름의 마스킹 컬럼이 전부 age 일 때만 허용 파생이다.
+//   틀렸을 때: 바깥 별칭의 바인딩만 보고 «age 컬럼» 으로 쳐서, 다른 스타일로 가린 같은 이름 컬럼의 파생이 통과한다.
+{
+  const mixed = (): SourcePolicy => { const p = agePolicy(); p.maskedCols.add("pets.birth_date"); return p; };
+  const D = "TIMESTAMPDIFF(YEAR, DATE_FORMAT(u.birth_date, '%Y-%m-01'), '2024-03-01')";
+  rejMy("age-unresolved-1: 해석 불가 별칭 + 같은 이름의 다른 스타일 컬럼 → 허용 파생으로 치지 않는다",
+    `SELECT (SELECT ${D} FROM (VALUES ROW(1)) AS u LIMIT 1) FROM users u JOIN pets p ON true`, /최상위 SELECT 투영/, mixed());
+  okMy("age-unresolved-2: 별칭이 해석되면(바깥 users) 같은 정책에서도 허용 파생", `SELECT ${D} FROM users u JOIN pets p ON true`, mixed());
+  okMy("age-unresolved-3: 해석 불가 별칭이어도 같은 이름 마스킹 컬럼이 전부 age 면 허용",
+    `SELECT (SELECT ${D} FROM (VALUES ROW(1)) AS u LIMIT 1) FROM users u JOIN contracts c ON true`, agePolicy());
+}
 okP("age-pg-투영: pg 에서도 원본 직접 투영은 통과(게이트2 가 만나이로 마스킹)", "SELECT birth_date FROM users", agePolicy(),
   (p) => assert.equal(p.minMaskedOutputs, 1));
 okMy("age-2: 월 첫날 날짜 리터럴 기준 + 미수식 컬럼",

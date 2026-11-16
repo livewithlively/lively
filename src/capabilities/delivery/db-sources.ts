@@ -222,7 +222,7 @@ export const dbSourcesCapabilities: Capability[] = [
       note: z.string().optional().describe("메모"),
     }),
   restOnly("org_db_column_mask_set", "컬럼 마스킹 정책 저장/삭제",
-    "db_query 소스의 컬럼 마스킹(full|partial|email|hash|null|age)을 저장한다. age 는 생년월일 컬럼용 — 결과는 출생월·이번 달을 각각 1일로 묶은 만나이 정수이고, SQL 에서는 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <월 첫날 기준일>) 파생만 허용된다(MySQL). remove=true 면 마스킹 해제. 게이트웨이가 결정론적으로 집행(고객 DB 무수정). 즉시 반영.",
+    "db_query 소스의 컬럼 마스킹(full|partial|email|hash|null|age)을 저장한다. age 는 생년월일 컬럼용 — 결과는 출생월·이번 달을 각각 1일로 묶은 만나이 정수이고, SQL 에서는 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <월 첫날 기준일>) 파생만 허용된다(MySQL 소스만 — 다른 소스에서는 그대로 투영만 된다). ⚠ 기준일은 질의가 고르므로 기준 월을 바꿔 가며 물으면 출생 연·월까지는 알아낼 수 있다(일은 알 수 없다) — 출생 연·월도 가려야 하는 컬럼이면 full·null 을 쓴다. remove=true 면 마스킹 해제. 게이트웨이가 결정론적으로 집행(고객 DB 무수정). 즉시 반영.",
     [{ method: "POST", paths: ["/api/ui/org/db-source/column-mask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const source = slug(input.source, "source");

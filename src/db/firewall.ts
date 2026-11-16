@@ -533,7 +533,8 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
     const col = cn.toLowerCase();
     const tr = refTableName(ref);
     const bound = tr ? scope.get(tr.toLowerCase()) : undefined;
-    const keys = bound
+    //  해석 불가(UNRESOLVED) 바인딩은 미수식과 같이 이름으로 본다 — isSensitive 와 같은 길이어야 «허용» 쪽으로 새지 않는다.
+    const keys = bound && !bound.has(UNRESOLVED)
       ? [...bound].map((t) => `${t}.${col}`).filter((k) => policy.maskedCols.has(k))
       : [...policy.maskedCols].filter((k) => k.endsWith(`.${col}`) && tableNames.includes(k.slice(0, k.indexOf("."))));
     return keys.length > 0 && keys.every((k) => ageCols.has(k));
@@ -542,7 +543,10 @@ export function assertSourcePolicy(stmt: Record<string, unknown>, tableNames: st
   const ageDerived = dialect === "mysql" && ageCols.size > 0 ? collectAgeDerivationRefs(stmt) : new Set<unknown>();
   const allowedAgeRef = (ref: Record<string, unknown>, cn: string, scope: AliasBindings): boolean =>
     ageDerived.has(ref) && isAgeCol(ref, cn, scope);
-  const AGE_HINT = " — 생년월일(age) 컬럼은 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <기준일>) 만나이로만 쓸 수 있고, 기준일은 'YYYY-MM-01' 또는 DATE_FORMAT(<날짜>, '%Y-%m-01') 처럼 월 첫날이어야 합니다";
+  //  안내는 그 소스에서 실제로 되는 것만 말한다 — 허용 파생은 mysql 뿐이라 pg 소스에 TIMESTAMPDIFF 를 권하면 없는 길을 가리킨다.
+  const AGE_HINT = dialect === "mysql"
+    ? " — 생년월일(age) 컬럼은 TIMESTAMPDIFF(YEAR, DATE_FORMAT(<컬럼>, '%Y-%m-01'), <기준일>) 만나이로만 쓸 수 있고, 기준일은 'YYYY-MM-01' 또는 DATE_FORMAT(<날짜>, '%Y-%m-01') 처럼 월 첫날이어야 합니다"
+    : " — 생년월일(age) 컬럼은 이 소스에서 SELECT 에 그대로만 쓸 수 있습니다(값은 만나이로 나갑니다). 나이로 거르거나 묶는 파생은 MySQL 소스에서만 됩니다";
 
   // 허용 위치 = 최상위 투영의 bare column_ref / star (노드 아이덴티티로 판정)
   const allowedRef = new Set<unknown>();
