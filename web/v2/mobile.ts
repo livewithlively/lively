@@ -191,7 +191,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     rows.push(row(tabIcon('bell'), '확인할 것', { href: '#/inbox' }));   // #4180 — 홈 밖에서도 가는 길 하나
     if (LIV_ENTRY_VISIBLE) rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
     for (const a of visibleApps()) { if (skip.has(a.key)) continue; rows.push(row(appIcon(a.icon, 'v2-mtab-ic'), a.title, { href: appHref(a) })); }
-    rows.push(row(tabIcon('link'), '외부 앱 연결', { href: '#/connect' }));
+    //  외부 앱 연결은 #5568 부터 앱 표의 줄이다(위 visibleApps 가 지난 세션 · 휴지통과 함께 세운다) — 여기 따로 세우면 같은 줄이 둘이 된다.
     rows.push(row(tabIcon('apps'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }, 'button'));
     const me: any = state.me || {};
     rows.push(row(tabIcon('gear'), (personName(me) || '나') + '(내 프로필 · 환경설정)', { onclick: () => { closeAll(); openMeModal({}); } }, 'button'));

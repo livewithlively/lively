@@ -152,7 +152,8 @@ ok(webFiles.length > 200, "W0 웹 소스를 실제로 훑었다(경로가 죽으
 //  W10 — 사이드바 두 자리.
 {
   const side = read("web/v2/side.ts");
-  ok((side.match(/trashBadgeN\(/g) || []).length === 2 && (side.match(/, trashExtraCounts\(\)\)/g) || []).length === 2, "W10 ★발치 도크와 트리 행 둘 다 네 탭의 합을 그린다");
+  //  #5568 — 발치 도크는 걷었다(휴지통은 앱이 됐다). 숫자를 그리는 자리는 트리 행 하나다.
+  ok((side.match(/trashBadgeN\(/g) || []).length === 1 && (side.match(/, trashExtraCounts\(\)\)/g) || []).length === 1, "W10 ★트리 행이 네 탭의 합을 그린다(발치 도크는 #5568 에서 걷었다)");
   ok(/watchTrashCounts\(redraw\)/.test(side), "W10b 서버 몫이 도착하면 다시 그린다");
   const bins = read("web/v2/bins.ts");
   ok(/if \(!filesFailed\) setTrashCounts\(extraCountsOf\(extras\.deleted, extras\.files\)\)/.test(bins) && /invalidateTrashCounts\(\)/.test(bins), "W10c 휴지통 화면이 제 목록으로 센 값을 배지에 준다 — 파일 목록을 못 받았으면 주지 않는다");

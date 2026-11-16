@@ -891,6 +891,38 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-aside { grid-row: 1 / -1; }
 }
 
+/* ── #5568 사이드바가 없는 화면(app-ctx)에서도 맨 윗줄을 세우지 않는다(상민님 2026-11-16) ─────────────────────────
+   «사이드바가 안보이는 곳에서는 디폴트로 검색창이 상단 한줄 전체 먹는 방식으로 노출되는데 … 상단 한줄 아예 안보이게해.»
+   사이드바를 손으로 접은 화면(side-closed)은 #5319 4차가 이미 줄을 걷었는데, 사이드바가 없는 앱(app-ctx — 설정 · 확인할 것 · 외부 앱 연결 ·
+   지난 세션 · 휴지통 · 앱 화면 …)은 ①-c(43-v2-topbar-search.css) 그대로 [‹][›][검색] 이 창을 가로질렀다. 같은 배치로 맞춘다:
+   줄은 레일 칸 위 토막만 남고(레일 칸의 자리가 화면마다 오르내리지 않게 — 색은 레일과 같아 레일의 머리로 읽힌다), 본문 · 우측 사이드바는
+   창 맨 위부터 서고, 검색은 레일 맨 위 [검색] 칸(.v2-rail-search)이 맡는다(⌘K 는 그대로).
+   ☰ 는 감춘다 — 그 화면엔 접고 펼 사이드바가 없다(좁은 폭의 .no-side 와 같은 답 · main.ts toggleSideBar).
+   ⚠ 레일까지 숨긴 사람(rail-hidden)에겐 ①-c 전폭 줄이 그대로 선다 — 레일도 사이드바도 없는 화면에서 다른 데로 가는 길이 그 줄뿐이다.
+   ⚠ 데스크톱 앱은 그 줄이 OS 타이틀바(창 버튼 · 끌 자리)라 해당 없다(topbar-web 이 아니다). 좁은 폭(≤900)은 서랍이라 해당 없다. */
+@media (min-width: 901px) {
+  #v2-root.topbar-web.app-ctx:not(.rail-hidden) .v2-rail-search { display: flex; margin: 2px auto 4px; }
+  #v2-root.topbar-web.app-ctx:not(.rail-hidden) .v2-rail-top > .v2-rail-search { align-self: stretch; margin: 2px 6px 4px; }
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar {
+    grid-column: 1 / 3; border-bottom: 0; border-right: 0; background: var(--rail-bg);
+  }
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-side-nav { display: none; }
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-side + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-main,
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-main + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-aside { grid-row: 1 / -1; }
+}
+
+/* ── #5568 사이드바 목록의 스크롤 막대를 감춘다(상민님 2026-11-16) ─────────────────────────────────────────────
+   «홈화면 사이드바에 스크롤바 안보이게 하고. 해당 스크롤바가 차지하고 있던 가로 영역 없애.»
+   종전(40-v2.css .v2-app-list)엔 얇은 막대(scrollbar-width: thin)가 손을 얹을 때만 색을 얻었다. 막대가 자리를 차지하는 환경(윈도우 ·
+   맥 «스크롤 막대 항상 보기» · 마우스)에선 안 보일 때도 그 폭만큼 목록 오른쪽이 비어, 카드의 좌우 여백이 어긋났다.
+   막대를 아예 두지 않는다 — 폭도 0 이다. 굴리는 것은 종전 그대로(휠 · 트랙패드 · 터치 · 키보드).
+   사이드바의 목록은 구역 · 앱이 같은 틀(.v2-app-list)이라 한 벌로 맞춘다(홈만 감추면 구역을 옮길 때 목록 폭이 달라진다). */
+.v2-side .v2-app-list { scrollbar-width: none; }
+.v2-side .v2-app-list::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
 /* ── 워크스페이스 간 옮기기 창(#5458) — 설정 창(v2wss) 틀을 그대로 쓰고 폭만 넓힌다. 값은 전부 토큰 · radius 9/12/999 ── */
 .v2xfer { width: min(760px, 100%); max-height: min(860px, 100%); }
 .v2xfer-h-ic { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--bg-punch); color: var(--ink-sub); }

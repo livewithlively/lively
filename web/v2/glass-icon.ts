@@ -55,7 +55,7 @@ export function installedAppFace(a: { id: string; hasUi: boolean; icon?: AppIcon
 }
 
 /** 색 토큰이 있는 이름. 모르는 이름은 apps 로 그린다. */
-export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell', 'deck', 'builder'] as const;
+export const APP_ICON_NAMES = ['home', 'term', 'chat', 'proj', 'wiki', 'src', 'tags', 'ctx', 'sess', 'sys', 'web', 'learn', 'liv', 'apps', 'bell', 'deck', 'builder', 'link', 'archive', 'trash'] as const;   // link · archive · trash = 외부 앱 연결 · 지난 세션 · 휴지통(#5568)
 
 /** 앱 아이콘의 선 그림(path d). 시험과 그리는 쪽이 함께 쓴다. */
 export function appGlyphPath(icon: string): string {

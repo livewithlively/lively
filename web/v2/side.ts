@@ -1300,33 +1300,13 @@ function footRow(): HTMLElement {
       el('span', { class: 'v2-me-name', text: name }), icon('gear', 'v2-me-ic')));
 }
 
-/** 구역 발치 — 어느 구역에서나 같다: 데스크톱 업데이트 알림(#1838) + **도크 셋**(아카이브 · 휴지통 · 외부 앱 연결).
- *  원준 2026-08-26: "이전에 아래에 있었던 아카이브랑 휴지통은 어디 감? 거기에 외부 앱 연결도 만들자." — 치워 둔 곳과
- *  바깥으로 나가는 문은 **어느 구역에서든 같은 자리**에 있어야 찾는다. 아이콘 아래 이름을 둔다(아이콘만 늘어선
- *  도크는 무엇인지 안 읽혔다 — 종전 도크 여섯의 교훈). */
+/** 구역 발치 — 데스크톱 업데이트 알림(#1838)과, 레일을 숨겼을 때 내려오는 [앱] · [나](footRow)만 선다.
+ *  ★ 도크 셋(지난 세션 · 휴지통 · 외부 앱 연결)은 #5568(상민님 2026-11-16 «모두 앱 안에 넣고 사이드바에선 지워»)에서 걷었다 —
+ *   셋 다 앱이 됐다(apps.ts APPS · apps/builtin/{archive,trash,connect}). 문은 앱 찾기(레일 [앱]) · 통합검색 · 최근 연 앱이고, 독에 고정할 수 있다.
+ *   종전(원준 2026-08-26 «아래에 있었던 아카이브랑 휴지통 … 거기에 외부 앱 연결도»)엔 어느 구역에서나 발치에 세 칸이 섰다.
+ *  이제 구역 발치와 앱 발치는 같은 틀이다(appFoot) — 보이는 게 없으면 발치 줄도 안 선다(47-v2-rail.css .v2-app-foot). */
 function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
-  const data = last ? last.data : null;
-  const ak = last ? last.activeKey() : '';
-  const me = meId();
-  //  휴지통 개수 = 네 탭의 합(#3778) — 화면이 아는 절반(통째로 버린 프로젝트 + 따로 버린 내 세션)에 서버가 센 나머지(자료·지식·
-  //   옛 길로 지운 프로젝트)를 더한다. 종전엔 앞 절반만 세어 지식만 든 휴지통이 «0» 으로 보였다.
-  //  #3870 — 목록을 받기 전엔 숫자를 안 붙인다. 서버가 센 절반이 먼저 와서 «450» 이 섰다가 목록이 오면 «609» 로 바뀌었다.
-  const trashedN = data && sideTruthReady(data) ? trashBadgeN(data.projects.filter((p) => isTrashedProj(p)).length
-    + data.sessions.filter((s) => isLooseTrashedSess(s) && (s.owned || (!!me && String((s.raw && s.raw.owner) || '') === me))).length, trashExtraCounts()) : 0;
-  const dock = (key: 'archive' | 'trash' | 'connect', label: string, n: number, title: string): HTMLElement =>
-    el('a', { class: 'v2-dock-btn' + (ak === key ? ' on' : ''), href: '#/' + key, 'data-nav': key, title, 'aria-label': label + (n ? ` ${n}` : '') },
-      icon(key === 'connect' ? 'link' : key, 'v2-dock-ic'),
-      el('span', { class: 'v2-dock-t', text: label }),
-      n ? el('span', { class: 'v2-dock-n', text: String(n) }) : null);
-  return el('footer', { class: 'v2-side-foot v2-side-foot--apps' }, updateSlot(), ...rows,
-    el('nav', { class: 'v2-app-dock v2-app-dock--3', 'aria-label': '치워 둔 곳 · 연결' },
-      //  ★ 「아카이브」였던 자리 — #3778(원준 2026-09-19)에서 이름도 내용도 「지난 세션」이 됐다. 보관한 프로젝트는
-      //   그 화면 안의 칩 하나로 남는다. 숫자는 안 붙인다: 지난 세션은 늘 수백 건이라(실측 213) 숫자가 «할 일»로 읽힌다.
-      dock('archive', '지난 세션', 0, '지난 세션 — 멈춘 세션과 목록에서 치운 세션. 프로젝트로 묶어 보고 그대로 이어서 열 수 있어요'),
-      dock('trash', '휴지통', trashedN, '휴지통 — 버린 세션·프로젝트·자료·지식을 되돌리거나 완전히 지웁니다'),
-      dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')),
-    //  레일을 숨겼으면 레일 발치의 [앱]·[나]가 여기로 내려온다(안 B).
-    railIsHidden() ? footRow() : null);
+  return appFoot(...rows);
 }
 
 /** 제 사이드바를 그리는 앱(자료 · 분류체계 · 세션 이력 · 앱빌더)의 발치 — **그 앱의 것만** 선다(#4632).

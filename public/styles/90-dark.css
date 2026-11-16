@@ -125,6 +125,7 @@
   --gi-c-sys:   #909EB8;  --gi-c-apps:  #909EB8;  --gi-c-bell:  #D0A1E4;
   --gi-c-deck:  #E8737F;
   --gi-c-builder: #C084FC;
+  --gi-c-link: #2DC5D1;  --gi-c-archive: #D0A862;  --gi-c-trash: #F08A5D;
   --v2-pad-field: rgba(26, 36, 54, .62);
   --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
@@ -251,6 +252,7 @@
   --gi-c-sys:   #909EB8;  --gi-c-apps:  #909EB8;  --gi-c-bell:  #D0A1E4;
   --gi-c-deck:  #E8737F;
   --gi-c-builder: #C084FC;
+  --gi-c-link: #2DC5D1;  --gi-c-archive: #D0A862;  --gi-c-trash: #F08A5D;
   --v2-pad-field: rgba(26, 36, 54, .62);
   --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;

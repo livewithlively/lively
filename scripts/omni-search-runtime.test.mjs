@@ -920,7 +920,8 @@ check(R.sheet?.up === true && R.sheet.opened === 0 && R.sheet.pv === "슬랙 검
   "A18 폰 — 줄을 누르면 판이 올라온다(열지 않는다) · Esc·손잡이는 판만 내린다 · 명령 줄은 바로 한다", JSON.stringify(R.sheet));
 check(R.tabKey?.on === "sess" && R.tabKey.focus === true && JSON.stringify(R.tabKey.badges) === JSON.stringify(["세션"]) && !(R.tabKey.reqs || []).some((l) => /search|similar|sources/.test(l)) && R.tabBack === "all",
   "A8 Tab = 다음 탭(세션) · 다시 묻지 않는다 · 초점은 입력칸 · Shift+Tab = 앞 탭", JSON.stringify({ k: R.tabKey, back: R.tabBack }));
-check(JSON.stringify(R.tabNums) === JSON.stringify({ all: "304", sess: "37", proj: "12", know: "254", src: "" }), "A15 탭 숫자 = 서버가 센 전체 개수(받은 줄 수가 아니다) · «전체» 는 바로 가기 줄(분류 하나)까지 — 자료는 묻기 전이라 비어 있다", JSON.stringify(R.tabNums));
+//  #5568 — 「외부 앱 연결」 이 앱 표의 줄이 되어(설명에 «슬랙») 바로 가기 줄이 하나 늘었다: 분류 하나 + 앱 하나 = 304 → 305.
+check(JSON.stringify(R.tabNums) === JSON.stringify({ all: "305", sess: "37", proj: "12", know: "254", src: "" }), "A15 탭 숫자 = 서버가 센 전체 개수(받은 줄 수가 아니다) · «전체» 는 바로 가기 줄(분류 하나 · 앱 하나)까지 — 자료는 묻기 전이라 비어 있다", JSON.stringify(R.tabNums));
 check(!(R.todayReqs || []).some((l) => /mode=count/.test(l)) && (R.defReqs || []).filter((l) => /mode=count/.test(l)).length === 2, "A15 기간으로 좁혔을 때는 프로젝트·지식 개수를 묻지 않는다(평소엔 둘)", JSON.stringify({ today: R.todayReqs, def: (R.defReqs || []).filter((l) => /mode=count/.test(l)) }));
 check(R.srcTab?.on === "src" && R.srcTab.reqs === 1, "A8 자료 탭은 눌렀을 때 묻는다(한 번)", JSON.stringify(R.srcTab));
 check(JSON.stringify(R.topGuar) === JSON.stringify(["보장 문서 1", "보장 문서 2", "대화로만 맞은 세션"]), "A9 이름에 낱말이 든 지식 셋이 있어도 맨 위 셋의 끝자리에 대화로 맞은 세션이 선다", JSON.stringify(R.topGuar));

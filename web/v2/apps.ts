@@ -30,7 +30,7 @@ export interface AppDef {
   desc: string;       // 한 줄
   route: string;      // 클래식 해시(#/ 뒤) — iframe 에 실릴 경로
   tab: string | null; // navOn 게이팅에 쓸 클래식 탭 키(없으면 항상 노출)
-  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags' | 'builder';
+  icon: 'home' | 'term' | 'chat' | 'proj' | 'wiki' | 'ctx' | 'sys' | 'learn' | 'liv' | 'sess' | 'web' | 'src' | 'tags' | 'builder' | 'link' | 'archive' | 'trash';
   // 무엇으로 그리는가. 없으면 'classic'(같은 index.html 을 ?embed=1 로 iframe).
   //  'browser' = 브라우저 서피스(#1829) — 우리 화면이 아니라 **남의 웹**이라 iframe 이 아니라 `<webview>` 로 띄운다
   //   (사이트가 X-Frame-Options 로 프레임 삽입을 막기 때문 — web/v2/browser-surface.ts 머리말).
@@ -85,6 +85,12 @@ export const APPS: AppDef[] = [
   { key: 'learn', title: '사용 가이드', desc: '처음 시작하는 방법 · 화면별 사용법 · 용어', route: 'learn', tab: null, icon: 'learn', kind: 'native', aka: ['도움말', '설명서', '매뉴얼'] },
   //  앱빌더(#4632, 원준 2026-10-14). 셸이 직접 그리는 native 앱(web/v2/builder.ts). 내가 만든 앱 · 만들던 앱 · 새 앱 — 앱 만들기 여섯 단계가 이 안에 선다.
   { key: 'builder', title: '앱빌더', desc: '내가 만든 앱 고치기 · 만들던 앱 이어서 · 새 앱 만들기', route: 'builder', tab: null, icon: 'builder', kind: 'native', aka: ['앱 빌더', '앱 만들기', '새 앱', '앱 제작'] },
+  //  외부 앱 연결 · 지난 세션 · 휴지통(#5568, 상민님 2026-11-16 «사이드바 하단 지난세션, 휴지통, 외부 앱 연결은 모두 앱 안에 넣고 사이드바에선 지워»).
+  //   종전엔 어느 구역에서나 사이드바 발치 도크 세 칸이 문이었다(side.ts secFoot). 이제 셋 다 셸이 직접 그리는 native 앱이고(화면은 그대로 —
+  //   connect.ts · bins.ts), 문은 앱 찾기 · 통합검색 · 최근 연 앱이다. 주소(#/connect · #/archive · #/trash)는 그대로 정본이다.
+  { key: 'connect', title: '외부 앱 연결', desc: '슬랙 · 노션 · 드라이브 같은 바깥 서비스를 AI 가 쓸 수 있게 잇기', route: 'connect', tab: null, icon: 'link', kind: 'native', aka: ['앱 연결', '연동', '커넥터'] },
+  { key: 'archive', title: '지난 세션', desc: '멈춘 세션과 목록에서 치운 세션 · 그대로 이어서 열기', route: 'archive', tab: null, icon: 'archive', kind: 'native', aka: ['아카이브', '보관함', '치운 세션'] },
+  { key: 'trash', title: '휴지통', desc: '버린 세션 · 프로젝트 · 자료 · 지식을 되돌리거나 완전히 지우기', route: 'trash', tab: null, icon: 'trash', kind: 'native', aka: ['삭제한 것', '지운 것'] },
   //  대시보드(#4554, 원준 2026-10-04). 이름을 「홈(클래식)」에서 바꿨고 기본 앱에서 뺐다 — 앱 찾기의 「워크스페이스 앱」 묶음에 선다.
   //   표의 맨 끝에 둔다: 최근 연 앱이 모자랄 때 채우는 순서가 표 순서라(recentApps · 레일), 맨 앞에 두면 처음 온 사람의
   //   최근 줄 첫 칸이 기본 앱이 아닌 이 앱이 된다. 옛 이름은 검색어(aka)로만 남는다. 키 · 주소(#/app/dashboard)는 그대로다.
@@ -259,6 +265,7 @@ const ICON_PATHS: Record<AppDef['icon'], string> = {
   //  #2016 — 선 아이콘은 icons.ts 한 벌이다. 대시보드(icon 이름은 home)는 위젯 판 넷, 설정은 이빨 있는 톱니.
   home: ICONS.dashboard, term: ICONS.term, chat: ICONS.chat, proj: ICONS.proj, wiki: ICONS.wiki, ctx: ICONS.ctx,
   sys: ICONS.sys, learn: ICONS.learn, liv: ICONS.liv, sess: ICONS.sess, web: ICONS.web, src: ICONS.src, tags: ICONS.tags, builder: ICONS.builder,
+  link: ICONS.link, archive: ICONS.archive, trash: ICONS.trash,   // #5568 외부 앱 연결 · 지난 세션 · 휴지통
 };
 /** 옛 주소 → 새 셸의 정본 주소(#4233). 분류체계는 맥락 관리의 탭(`#/categories` · 그 전의 `#/domainmap`)이었다가 앱이 됐다.
  *  클래식 액자로 싣지 않고 셸이 바로 넘긴다(액자를 싣고 그 안에서 다시 넘기면 한 박자 빈 화면이 선다). */

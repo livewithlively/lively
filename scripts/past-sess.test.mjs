@@ -105,8 +105,9 @@ ok(/text: '지난 세션'/.test(BINS) && !/text: '아카이브'/.test(BINS),
 ok(/chip\(ui\.mode === 'proj', '보관한 프로젝트'/.test(BINS) && /function archivedProjects\(/.test(BINS)
   && /text: '보관 해제'/.test(BINS),
   "W3 보관한 프로젝트는 같은 화면의 칩으로 남는다 — 해제할 길이 사라지면 안 된다");
-ok(/dock\('archive', '지난 세션'/.test(SIDE) && /row\('archive', '지난 세션'/.test(SIDE),
-  "W4 사이드바 두 입구(도크·트리 발치)가 같은 이름을 쓴다");
+//  #5568 — 발치 도크는 걷었다(지난 세션은 앱이 됐다). 입구 둘은 앱 표의 줄(앱 찾기 · 통합검색 · 최근 연 앱)과 옛 트리 발치 행이다.
+ok(!/dock\('archive'/.test(SIDE) && /key: 'archive', title: '지난 세션'/.test(read("web/v2/apps.ts")) && /row\('archive', '지난 세션'/.test(SIDE),
+  "W4 두 입구(앱 표 · 트리 발치)가 같은 이름을 쓴다 — 사이드바 발치 도크는 없다");
 ok(!/아카이브 ▸ 치운 세션/.test(SIDE) && /\[지난 세션\] 화면에서 다시 열거나 되돌릴 수 있어요/.test(SIDE),
   "W5 ★× 툴팁이 가리키는 곳이 「지난 세션」이다 — 이 신고의 본문");
 ok(/if \(p === 'archive'\) return \{ title: '지난 세션'/.test(MAIN) && /renderPast\(/.test(MAIN)
