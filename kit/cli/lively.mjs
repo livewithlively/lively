@@ -624,8 +624,11 @@ async function api(path, { timeoutMs = 15000, method = "GET", body, fromSession 
           : /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|DEPTH_ZERO/.test(code) ? " — TLS 인증서 확인(사내 프록시가 가로채는 환경?)" : "";
       throw new Error(`${e.message}${code ? ` (${code})` : ""}${hint}`);
     }
-    if (res.status === 401 || res.status === 403) throw new Error("접속 열쇠가 유효하지 않습니다(만료·해제됨?) — `lively login` 으로 다시 등록하세요.");
-    if (!res.ok) { let m = ""; try { m = (await res.json())?.error || ""; } catch { /* */ } throw new Error(`게이트웨이 오류 ${res.status}${m ? " — " + m : ""} (${path})`); }
+    // 상태코드를 오류에 **함께 싣는다**(e.status) — 문구만으로는 호출부가 «왜 거절됐는지» 를 가를 수 없다
+    //  (예: 노드 등록 409 + 회전 403 = 같은 이름의 노드가 다른 사람 것. cmd-node.mjs 가 이 둘로 판정한다).
+    const fail = (msg) => Object.assign(new Error(msg), { status: res.status });
+    if (res.status === 401 || res.status === 403) throw fail("접속 열쇠가 유효하지 않습니다(만료·해제됨?) — `lively login` 으로 다시 등록하세요.");
+    if (!res.ok) { let m = ""; try { m = (await res.json())?.error || ""; } catch { /* */ } throw fail(`게이트웨이 오류 ${res.status}${m ? " — " + m : ""} (${path})`); }
     return await res.json();
   } finally { clearTimeout(timer); }
 }

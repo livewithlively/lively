@@ -440,6 +440,60 @@ export function nodeTokenReuse(inp, norm) {
   return { reuse: true };
 }
 
+// ── 노드 이름이 다른 사람 것과 겹칠 때 ───────────────────────────────────────
+//  노드 이름(id)의 기본값은 호스트 이름이고, 한 워크스페이스 안에서 하나뿐이어야 한다. 그런데 회사가 나눠 준
+//  컴퓨터는 호스트 이름이 같은 일이 흔하다(실측 2026-11-16: 맥 두 대가 모두 `acmeui-MacBookAir`).
+//  종전엔 두 번째 사람의 등록이 409, 회전이 403(남의 노드)으로 막히고 «접속 열쇠가 유효하지 않습니다 — lively login
+//  으로 다시 등록하세요» 라는 **틀린 처방**만 남았다. 데스크톱 앱의 [노드 시작] 은 `--id` 를 줄 수 없어 출구도 없었다.
+//  그래서 이름을 직접 주지 않았으면 `<호스트 이름>-<구성원 id>` 로 비켜 등록한다.
+
+/** (순수) 호스트 이름에서 온 노드 id 가 남의 것일 때 쓸 이름 — 서버 규칙(소문자·숫자·하이픈, 64자 이내)에 맞춘다. 못 만들면 null. */
+export function collisionNodeId(slug, memberId) {
+  const clean = (v, max) => String(v ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, max).replace(/-+$/, "");
+  const who = clean(memberId, 23);
+  const host = clean(slug, 40);
+  if (!who || !host) return null;
+  return `${host}-${who}`;
+}
+
+/** (순수) 등록·회전이 이 조합으로 실패했으면 «같은 이름의 노드가 다른 사람 것» 이다 — 등록 409(이미 있다) + 회전 403(본인 노드가 아니다).
+ *  ⚠ 접속 열쇠 자체가 거절된 경우와 섞이지 않는다: 그때는 등록부터 401/403 이다. */
+export function nodeIdTakenByOther(registerErr, rotateErr) {
+  return registerErr?.status === 409 && rotateErr?.status === 403;
+}
+
+/**
+ * (순수) 목록에서 본 그 이름의 노드가 **다른 사람의 개인 컴퓨터**인가 — 회전하기 **전에** 묻는다.
+ *  서버는 관리자에게 남의 노드 회전도 내준다(src/node/routes.ts requireOwn). 그래서 관리자의 컴퓨터는 위 판정(409 + 403)에
+ *  걸리지 않는다: 묻지 않고 회전하면 403 대신 **그 사람 노드의 열쇠가 나온다** — 그 사람의 노드는 끊기고(옛 열쇠 무효),
+ *  그 사람의 세션이 이 컴퓨터에서 열린다.
+ *  ⚠ 모르면 false 다(목록에 없다 · 주인 칸이 비었다 · 내 id 를 모른다) — 종전 길(회전 → 403 이면 비킨다)로 간다.
+ *  ⚠ worker 노드는 관리자들이 함께 다시 앉히는 컴퓨터라 여기서 가르지 않는다(종전처럼 회전).
+ * @param {{owner_member?: string|null, kind?: string|null}|null|undefined} node GET /api/ui/nodes 의 그 이름 행(없으면 undefined)
+ * @param {string|null|undefined} memberId 내 구성원 id
+ */
+export function nodeOwnedByOther(node, memberId) {
+  const owner = String(node?.owner_member ?? "").trim();
+  const me = String(memberId ?? "").trim();
+  if (!owner || !me) return false;
+  return owner !== me && node?.kind !== "worker";
+}
+
+/**
+ * (순수) `--id` 없이 실행했을 때의 노드 id.
+ *  기본은 호스트 이름(slug)이다. 다만 앞선 실행이 **이름이 겹쳐 비켜 등록한** 기록(`<slug>-…`, 같은 게이트웨이)이 있으면 그 이름을 잇는다 —
+ *  안 그러면 실행마다 «호스트 이름으로 등록 → 409 → 비켜 등록 → 열쇠 회전» 을 되풀이한다.
+ *  ⚠ 그 밖의 기록(호스트 이름이 바뀌었다 · 다른 게이트웨이)은 잇지 않는다 — 종전처럼 지금 호스트 이름으로 새로 등록한다(#2161 의 판정 그대로).
+ * @param {{slug: string, prevId?: string|null, prevGw?: string|null, gw: string}} inp
+ * @param {(u: string|null|undefined) => string} [norm] 게이트웨이 주소 정규화 — 실사용에선 CLI 의 normGw.
+ */
+export function defaultNodeId(inp, norm) {
+  const n = norm || ((u) => String(u || "").trim());
+  const prevId = String(inp.prevId || "").trim();
+  if (prevId && prevId.startsWith(inp.slug + "-") && n(inp.prevGw) === n(inp.gw)) return prevId;
+  return inp.slug;
+}
+
 /** 이 기계의 tmux 세션 id — 게이트웨이가 «내 것과 겹치나»를 판정할 재료(겹친 id 는 응답에 안 실린다). */
 function boxSessionIds(tmuxPath) {
   try {
@@ -558,13 +612,19 @@ async function cmdNode(rest) {
   if (parsed.action === "stop") return nodeStop();
   if (parsed.action === "keepawake") return nodeKeepAwake(parsed.rest);   // #1849 — 시스템 잠자기 자체를 끈다(권한 1회)
   const daemon = parsed.daemon;
-  const nodeId = parsed.id || slugHost();
   // ★ 중복 기동 차단은 **등록·번들·기동보다 먼저** 온다(#4006) — 뒤에 두면 막더라도 node-agent.env 가 이미 덮인 뒤다.
   //  daemon 일 때는 프로브조차 돌리지 않는다(상시화는 스스로 교체하므로 물어볼 이유가 없다).
   const dup = foregroundDuplicateBlock({ daemon, running: daemon ? null : nodeStatus().running });
   if (dup.block) die(dup.why, 3);
   const gw = gateway(), tok = token();
   if (!gw || !tok) die("로그인이 필요합니다 — `lively login` 먼저.", 2);
+  // 노드 id — 직접 준 이름이 먼저, 없으면 호스트 이름(이름이 겹쳐 비켜 등록한 적이 있으면 그 이름. defaultNodeId 머리말).
+  const hostSlug = slugHost();
+  let nodeId = parsed.id || defaultNodeId({
+    slug: hostSlug, gw,
+    prevId: readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID"),
+    prevGw: readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL"),
+  }, normGw);
   // tmux 필수 — 웹터미널·위탁 세션이 tmux 로 실행된다. 등록/설치 전에 확보한다(반쪽 상태 방지):
   //  있으면 그 절대경로, 없으면 패키지 매니저로 자동 설치 → 그래도 없으면 안내 후 종료. 절대경로라 데몬(최소 PATH)도 안전.
   const tmuxPath = await ensureTmux();
@@ -596,12 +656,47 @@ async function cmdNode(rest) {
   }
   if (!nodeTok) {
     say(dim(`· 노드 등록: ${nodeId}`));
-    let r = await api("/api/ui/nodes", { method: "POST", body: { id: nodeId, name: hostname() } }).catch((e) => ({ __err: e }));
+    const register = (id) => api("/api/ui/nodes", { method: "POST", body: { id, name: hostname() } });
+    const rotate = (id) => api(`/api/ui/nodes/${encodeURIComponent(id)}/rotate`, { method: "POST", body: {} });
+    // 두 오류를 **다 보여준다** — 회전 실패만 보이면 '왜 등록이 먼저 실패했는지'가 사라져, 진짜 원인(권한·주소·테넌트)을 못 짚는다.
+    const bothFailed = (e1, e2) => die(`노드 등록/회전 실패 — 등록: ${e1.message} · 회전: ${e2.message}`, 1);
+    let r = await register(nodeId).catch((e) => ({ __err: e }));
     if (r.__err) { // 이미 존재 → 토큰 회전으로 새 토큰 확보(본인 노드여야 통과)
       const e1 = r.__err;
-      r = await api(`/api/ui/nodes/${encodeURIComponent(nodeId)}/rotate`, { method: "POST", body: {} })
-        // 두 오류를 **다 보여준다** — 회전 실패만 보이면 '왜 등록이 먼저 실패했는지'가 사라져, 진짜 원인(권한·주소·테넌트)을 못 짚는다.
-        .catch((e2) => die(`노드 등록/회전 실패 — 등록: ${e1.message} · 회전: ${e2.message}`, 1));
+      const takenMsg = `'${nodeId}' 는 다른 구성원이 이미 쓰는 노드 이름입니다 — 다른 이름을 주세요: lively node --id <이름>`;
+      // ★ 회전하기 **전에** 그 이름의 주인을 본다(nodeOwnedByOther 머리말) — 관리자는 남의 노드도 회전이 통과해서,
+      //  묻지 않고 회전하면 호스트 이름이 같은 다른 사람의 노드 열쇠를 가져온다.
+      //  이름을 직접 줬으면(--id) 보지 않는다: 그 노드를 지목해 다시 앉히는 길이다(관리 화면의 `lively node --daemon --id …` 안내).
+      let me = null, rows = [], others = false;
+      if (!parsed.id && e1.status === 409) {
+        // ⚠ 못 읽으면 **멈춘다**(회전하지 않는다) — 주인을 모르는 채 회전하면 관리자의 컴퓨터가 남의 노드 열쇠를 가져올 수 있다.
+        //  다시 실행하면 되는 일이고(등록은 방금 응답했다), 잘못 회전한 것은 그 사람의 노드가 끊긴 뒤에야 드러난다.
+        const ask = (path) => api(path).catch((e) => die(`'${nodeId}' 는 이미 등록된 노드 이름인데, 누구의 것인지 확인하지 못했습니다 — 잠시 뒤 다시 실행하세요. (${e.message})`, 1));
+        me = await ask("/api/ui/me/profile");
+        const listed = await ask("/api/ui/nodes");
+        rows = Array.isArray(listed?.nodes) ? listed.nodes : [];
+        others = nodeOwnedByOther(rows.find((n) => n?.id === nodeId), me?.id);
+      }
+      let e2 = null;
+      if (!others) r = await rotate(nodeId).catch((e) => { e2 = e; return null; });
+      if (others || e2) {
+        if (e2 && !nodeIdTakenByOther(e1, e2)) bothFailed(e1, e2);
+        // 같은 이름의 노드가 **다른 사람 것**이다(호스트 이름이 같은 컴퓨터) — collisionNodeId 머리말.
+        //  이름을 직접 줬으면(--id) 바꿔 등록하지 않는다: 그 이름을 고른 사람에게 다른 이름을 고르라고 말한다.
+        if (parsed.id) die(takenMsg, 1);
+        const alt = collisionNodeId(hostSlug, me?.id);
+        // 비킬 이름을 못 만들었다 — 회전이 거절된 길이면 두 오류를, 회전을 하지 않은 길이면 그 이름이 남의 것이라고 말한다.
+        if (!alt || alt === nodeId) { if (e2) bothFailed(e1, e2); die(takenMsg, 1); }
+        // 비킨 이름마저 남의 것이면(구성원 id 를 이름 규칙에 맞추며 글자가 바뀌거나 잘려 겹칠 수 있다) 여기서 멈춘다 — 그것도 회전하지 않는다.
+        if (nodeOwnedByOther(rows.find((n) => n?.id === alt), me?.id)) die(`'${nodeId}' 와 '${alt}' 모두 다른 구성원이 이미 쓰는 노드 이름입니다 — 이름을 직접 주세요: lively node --id <이름>`, 1);
+        say(dim(`· '${nodeId}' 는 다른 구성원의 컴퓨터가 이미 쓰는 이름입니다(호스트 이름이 같습니다) — '${alt}' 로 등록합니다.`));
+        // 비킨 이름이 **이미 있으면**(409) 그건 내 것이다(앞선 실행이 등록했는데 로컬 기록이 사라진 경우 — 로그아웃 뒤 다시 로그인) → 회전으로 잇는다.
+        //  그 밖의 등록 실패는 회전으로 넘기지 않고 그대로 말한다.
+        r = await register(alt).catch((e3) => (e3.status === 409
+          ? rotate(alt).catch((e4) => bothFailed(e3, e4))
+          : die(`노드 등록 실패 — ${e3.message}`, 1)));
+        nodeId = alt;
+      }
     }
     nodeTok = r.token;
     // 응답에 토큰이 없으면 여기서 멈춘다 — 종전엔 `LIVELY_NODE_TOKEN=undefined` 가 0600 파일에 굳어,
