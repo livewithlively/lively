@@ -15,6 +15,9 @@ import {
 } from "../../org/store.js";
 import { learnGroundTruth } from "../../org/knowledge.js";
 import { actorOf, restRead, restWork, str } from "./shared.js";
+import { registryModeActive } from "../../org/tenancy/state.js";
+import { PRIMARY_TENANT_ID, syncPrimaryWorkspaceName } from "../../org/tenancy/registry.js";
+import { currentTenant } from "../../org/tenant-context.js";
 
 // 세션 주입 섹션 — DB 행 + 코드 기본값 fold.
 type SectionRow = { body_md: string; version: number; sort: number; updated_at: string | null; updated_by: string | null };
@@ -129,7 +132,8 @@ export const orgContentCapabilities: Capability[] = [
 
   // ── 프로필(표시명·게이트웨이 주소·시간대) ──
   restWork("org_update_profile", "조직 프로필 수정",
-    "조직 표시명/게이트웨이 주소/시간대를 수정한다. timezone 은 IANA 존(예 Asia/Seoul) — 스케줄러 cron 의 벽시계 기준이자 웹터미널 세션의 TZ.",
+    "조직 표시명/게이트웨이 주소/시간대를 수정한다. timezone 은 IANA 존(예 Asia/Seoul) — 스케줄러 cron 의 벽시계 기준이자 웹터미널 세션의 TZ. " +
+    "셀프호스트 기본(primary) 워크스페이스의 이름은 이 프로필의 표시명(비면 조직 이름)을 따라간다 — 레일·워크스페이스 목록이 함께 바뀐다.",
     [{ method: "POST", paths: ["/api/ui/org/profile"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const patch: { name?: string; display_name?: string; gateway_url?: string; timezone?: string } = {};
@@ -143,7 +147,18 @@ export const orgContentCapabilities: Capability[] = [
         if (tz && !isValidTimezone(tz)) throw new HttpError(400, `알 수 없는 시간대입니다: '${tz}' (IANA 존 — 예: Asia/Seoul, UTC)`);
         patch.timezone = tz || DEFAULT_TZ;
       }
-      return { profile: await updateOrgProfile(patch, actorOf(user), "web") };
+      const profile = await updateOrgProfile(patch, actorOf(user), "web");
+      // #5524 — 셀프호스트(registry) 기본 워크스페이스의 이름은 이 프로필의 보이는 이름(표시명, 비면 이름)이다.
+      //  레일·워크스페이스 목록은 등록부 primary 행을 그리므로 여기서 함께 맞춘다 — 안 그러면 «저장했어요» 뒤에도
+      //  이름이 그대로다(신고 2026-11-11). 설정 창 · 관리탭 [조직 정보] · MCP 가 모두 이 처리기를 지난다.
+      //  다른 워크스페이스 컨텍스트면 건드리지 않는다 — 그 이름은 workspace_update(owner)가 등록부와 함께 바꾼다.
+      //  맞추기가 실패하면 오류를 그대로 낸다 — 경고로 삼키면 «저장했어요 → 그대로» 가 조용히 돌아온다.
+      //   다시 저장하면 여기를 다시 지나 맞춘다(같은 값이면 쓰지 않는다).
+      if ((patch.name !== undefined || patch.display_name !== undefined) && registryModeActive()
+          && (currentTenant()?.id ?? PRIMARY_TENANT_ID) === PRIMARY_TENANT_ID) {
+        await syncPrimaryWorkspaceName(profile);
+      }
+      return { profile };
     }, {
       name: z.string().optional().describe("조직 이름"),
       display_name: z.string().optional().describe("조직 표시명"),

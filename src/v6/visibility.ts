@@ -16,6 +16,7 @@
 //  리스트는 조직 전체에서 수십 개 규모라, **뷰어의 가시 리스트 집합을 한 번 계산**해 다행(多行) 쿼리에는
 //  세미조인으로 붙이는 편이 압도적으로 싸다. 캐시하지 않는다 — grant 회수가 즉시 반영돼야 하고(요청당 1쿼리),
 //  이 쿼리 자체가 수십 행 스캔이라 저렴하다.
+import pg from "pg";
 import { itemsPool } from "../db/client.js";
 import { axisOn } from "./visibility-axes.js";
 import { q } from "../db/client.js";
@@ -168,29 +169,90 @@ export function listVisible(ids: Set<number> | null, listId: number): boolean {
   return ids === null || ids.has(Number(listId));
 }
 
+// ── 초안 프로젝트(#5522) — 만든 사람과 팀원만 본다 ──────────────────────────────────
+//  세션 첫 지시로 저절로 생긴 프로젝트(project.draft, #4170)는 리스트가 없어 종전엔 «미분류 = 전원» 이었다. 그런데 본문에
+//  **첫 지시 원문**이 들어 있고, 그 세션은 만든 사람과 초대받은 사람만 본다(#1876) — 세션은 닫혀 있는데 첫 지시는
+//  프로젝트로 전원에게 보였다. 그래서 초안인 동안은 **만든 사람(created_by)과 팀원(project_member)** 만 본다.
+//  세션에 초대하면 그 사람이 팀원으로 들어간다(sessions/session-state.ts syncDraftInviteMembers). 무언가를 남겨
+//  초안이 풀리면(v6/project-draft.ts) 그때부터는 리스트 공개범위만 탄다.
+//
+//  ⚠ 판정은 리스트 술어와 **한 함수**(projectVisPredicate)로 나간다. 프로젝트 행을 거르는 자리는 listIdPredicate 를
+//   직접 부르지 않는다 — 그러면 초안이 그 자리에서만 전원에게 보인다(visibility-callsites.test.ts 가 막는다).
+//  ⚠ 프로젝트 축이 꺼져 있거나 · 특권(null)이거나 · 전체 스코프 긴급 열람이면 초안도 거르지 않는다(리스트와 같은 규칙).
+
+/** 프로젝트 행 판정에 필요한 두 가지 — 가시 리스트 집합과, 초안을 누구 기준으로 거를지(null = 초안을 거르지 않는다). */
+export interface ProjectVis { lists: Set<number> | null; draftViewer: string | null }
+/** 필터 없음(특권 · 축 꺼짐 · 전체 긴급 열람). */
+export const PROJECT_VIS_ALL: ProjectVis = { lists: null, draftViewer: null };
+
+/** 이 뷰어의 프로젝트 판정 재료. 다행 쿼리는 이걸 한 번 뽑아 projectVisPredicate 에 넘긴다. */
+export async function projectVisFor(viewer: Viewer): Promise<ProjectVis> {
+  if (viewer === null) return PROJECT_VIS_ALL;
+  if (!(await axisOn("project"))) return PROJECT_VIS_ALL;
+  const bg = await activeBreakGlass(viewer);
+  if (bg.some((b) => !b.kind)) return PROJECT_VIS_ALL;
+  return { lists: await visibleListIds(viewer), draftViewer: viewer };
+}
+
+/** «이 뿌리 프로젝트가 초안이면 viewer 가 만든 사람이거나 팀원이다» — rootIdCol 은 **뿌리 프로젝트 id** 를 가리키는 SQL 식.
+ *  viewer 는 글자로 넣는다(다행 쿼리마다 자리표시자 번호가 달라 술어를 조립할 수 없다) — pg.escapeLiteral 이 따옴표 · 역슬래시를 겹친다. */
+export function draftVisibleSql(rootIdCol: string, viewer: string): string {
+  // ⚠ rootIdCol 은 **별칭이 붙은 식**이어야 한다(`p.id` · `COALESCE(root.id, p.id)`). 맨 `id` 를 넘기면 아래 하위 질의 안에서
+  //  그 이름이 dft.id 로 풀려 `dft.id = dft.id` 가 된다 — «안 보이는 초안이 하나라도 있으면 모든 행이 안 보인다» 로 뒤집힌다
+  //  (2026-11-16 실 PG 시험이 잡았다: 남의 초안이 하나 생기자 내 초안까지 «숨은 프로젝트» 가 됐다). 그래서 형식을 여기서 막는다.
+  if (!/[.(]/.test(rootIdCol)) throw new Error(`draftVisibleSql: rootIdCol 에 별칭이 없다(${rootIdCol}) — 하위 질의의 dft.id 로 풀린다`);
+  const v = pg.escapeLiteral(String(viewer));
+  return `NOT EXISTS (SELECT 1 FROM project dft WHERE dft.id = ${rootIdCol} AND dft.level = 'project' AND dft.draft
+            AND dft.created_by IS DISTINCT FROM ${v}
+            AND NOT EXISTS (SELECT 1 FROM project_member dpm WHERE dpm.project_id = dft.id AND dpm.member_id = ${v}))`;
+}
+
+/**
+ * 프로젝트 행(과 그 태스크)을 거르는 **유일한** SQL 술어 — 리스트 공개범위 ∧ 초안.
+ *  listCol = 뿌리 프로젝트의 list_id 를 가리키는 식 · rootIdCol = 뿌리 프로젝트의 id 를 가리키는 식.
+ *  태스크 행에서 부르면 둘 다 **조상 프로젝트**를 가리켜야 한다(태스크의 list_id · draft 는 비어 있다).
+ */
+export function projectVisPredicate(listCol: string, rootIdCol: string, vis: ProjectVis): string {
+  const list = listIdPredicate(listCol, vis.lists);
+  if (vis.draftViewer === null) return list;
+  return `(${list} AND ${draftVisibleSql(rootIdCol, vis.draftViewer)})`;
+}
+
+// 행(프로젝트 · 태스크 · 서브태스크) → 뿌리 프로젝트. canSeeProjectRow · projectRowListId 가 같은 조인을 쓴다.
+const ROW_ROOT_JOIN = `
+      FROM project p
+      LEFT JOIN project par ON par.id = p.parent_id
+      LEFT JOIN project pr ON pr.id = CASE WHEN p.level = 'subtask' THEN par.parent_id
+                                           WHEN p.level = 'task'    THEN par.id
+                                           ELSE p.id END`;
+
 /**
  * 프로젝트 행(project 테이블) 1건이 이 뷰어에게 보이나.
  *  ⚠ task/subtask 행은 자기 list_id 를 쓰지 않는다(createTask 가 그 컬럼을 채우지 않아 사실상 항상 NULL).
  *   그래서 "list_id NULL = 전원 열람" 규칙을 태스크에 그대로 적용하면 잠긴 프로젝트의 태스크가 전부 새어나간다.
- *   태스크는 부모(→ subtask 면 조부모)를 타고 올라가 **프로젝트 행의 list_id** 로 판정한다.
+ *   태스크는 부모(→ subtask 면 조부모)를 타고 올라가 **프로젝트 행의 list_id · 초안 여부** 로 판정한다.
  */
 export async function canSeeProjectRow(id: number, viewer: Viewer): Promise<boolean> {
   if (viewer === null) return true;
-  const listId = await projectRowListId(id);
-  if (listId === undefined) return true;   // 그런 행이 없다 — 존재 판정은 호출부(404)의 몫
-  if (listId === null) return true;        // 미분류 프로젝트 = 전원
-  return listVisible(await visibleListIds(viewer), listId);
+  return canSeeProjectRowVis(id, await projectVisFor(viewer));
+}
+
+/** 판정 재료를 이미 뽑아 둔 호출자용(여러 행을 잇달아 볼 때 가시 리스트 조회를 되풀이하지 않는다). 다행 술어와 **같은 SQL** 로 판정한다. */
+export async function canSeeProjectRowVis(id: number, vis: ProjectVis): Promise<boolean> {
+  if (vis.lists === null && vis.draftViewer === null) return true;
+  const rows = await q(itemsPool, `
+    SELECT (${projectVisPredicate("COALESCE(pr.list_id, p.list_id)", "COALESCE(pr.id, p.id)", vis)}) AS ok
+      ${ROW_ROOT_JOIN}
+     WHERE p.id = $1`, [id]);
+  if (!rows.length) return true;           // 그런 행이 없다 — 존재 판정은 호출부(404)의 몫
+  return rows[0].ok === true;
 }
 
 /** 프로젝트/태스크/서브태스크 행이 속한 **프로젝트의** list_id. 행이 없으면 undefined. */
 export async function projectRowListId(id: number): Promise<number | null | undefined> {
   const rows = await q(itemsPool, `
     SELECT COALESCE(pr.list_id, p.list_id) AS list_id
-      FROM project p
-      LEFT JOIN project par ON par.id = p.parent_id
-      LEFT JOIN project pr ON pr.id = CASE WHEN p.level = 'subtask' THEN par.parent_id
-                                           WHEN p.level = 'task'    THEN par.id
-                                           ELSE p.id END
+      ${ROW_ROOT_JOIN}
      WHERE p.id = $1`, [id]);
   if (!rows.length) return undefined;
   const v = rows[0].list_id;
@@ -221,12 +283,18 @@ export async function hiddenProjects(viewer: Viewer): Promise<HiddenProjects> {
   if (hit && now - hit.at < HIDDEN_TTL_MS) return hit.v;
   try {
     // v2: admin 이라고 건너뛰지 않는다 — 세션 화면엔 그 프로젝트의 대화·파일이 그대로 흐르고,
-    //  admin 신원을 물려받은 AI 세션이 그걸 읽어 공개 지식으로 되뱉을 수 있다. 긴급열람은 visibleListIds 가 반영한다.
-    const visIds = await visibleListIds(viewer);
-    const rows = await q(itemsPool, `
-      SELECT id, folder FROM project
-       WHERE level='project' AND list_id IS NOT NULL
-         AND NOT (${listIdPredicate("list_id", visIds)})`, []);
+    //  admin 신원을 물려받은 AI 세션이 그걸 읽어 공개 지식으로 되뱉을 수 있다. 긴급열람은 projectVisFor 가 반영한다.
+    // #5522 — 실제 구성원에게는 **남의 초안**도 숨은 프로젝트다(그 세션 · 파일 · 자료가 함께 가려진다).
+    //  ⚠ PUBLIC_VIEWER 는 예외로 리스트만 본다. 그 뷰어로 묻는 자리는 «이 프로젝트가 **잠겼나**» 를 묻는다 —
+    //   세션 기록 범위 파생(write-cap) · 잠긴 폴더 배지 · ClickUp 반출. 초안을 거기 넣으면 새 세션이 전부 «잠긴 프로젝트의
+    //   세션» 이 되어 거기서 남긴 지식이 대상 제한으로 찍힌다(#1876 D2 «세션이 사적이어도 산출물은 공개» 가 뒤집힌다).
+    const vis = viewer === PUBLIC_VIEWER
+      ? { lists: await visibleListIds(viewer), draftViewer: null }
+      : await projectVisFor(viewer);
+    const rows = vis.lists === null && vis.draftViewer === null ? [] : await q(itemsPool, `
+      SELECT hp.id, hp.folder FROM project hp
+       WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft)
+         AND NOT (${projectVisPredicate("hp.list_id", "hp.id", vis)})`, []);
     const v: HiddenProjects = {
       ids: new Set(rows.map((r) => Number(r.id))),
       folders: new Set(rows.map((r) => String(r.folder ?? "")).filter(Boolean)),
