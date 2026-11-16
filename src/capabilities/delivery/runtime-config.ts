@@ -157,8 +157,13 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (s.log_max_mb !== undefined) patchIn.log_max_mb = num(s.log_max_mb, "log_max_mb", 0, 10_000);
         if (s.log_keep !== undefined) patchIn.log_keep = num(s.log_keep, "log_keep", 0, 50);
         if (s.disk_warn_pct !== undefined) patchIn.disk_warn_pct = num(s.disk_warn_pct, "disk_warn_pct", 1, 99);
-        if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 1, 100);
-        if (s.disk_critical_free_gb !== undefined) patchIn.disk_critical_free_gb = num(s.disk_critical_free_gb, "disk_critical_free_gb", 0, 10_000); // #4780 0=끔
+        if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 0, 100); // #5564 0=비율 안 봄
+        if (s.disk_critical_free_gb !== undefined) {
+          // #4780 0=끔 · #5564 소수 둘째 자리까지(0.5 = 512MB) — 다른 칸과 달리 내림하지 않는다.
+          const n = Number(s.disk_critical_free_gb);
+          if (!Number.isFinite(n) || n < 0 || n > 10_000) throw new HttpError(400, "storage_policy.disk_critical_free_gb 는 0~10000 숫자여야 합니다");
+          patchIn.disk_critical_free_gb = Math.round(n * 100) / 100;
+        }
         if (s.mem_warn_pct !== undefined) patchIn.mem_warn_pct = num(s.mem_warn_pct, "mem_warn_pct", 0, 99);       // #1059 0=끔
         if (s.mem_critical_pct !== undefined) patchIn.mem_critical_pct = num(s.mem_critical_pct, "mem_critical_pct", 0, 100); // #1059 0=끔
         if (s.pty_warn_pct !== undefined) patchIn.pty_warn_pct = num(s.pty_warn_pct, "pty_warn_pct", 0, 99);                 // #687 후속 0=끔
@@ -166,8 +171,13 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
         if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
         // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
-        const merged = normalizeStoragePolicy({ ...(await getRuntimeConfig()).storage_policy, ...patchIn });
-        if (patchIn.disk_warn_pct !== undefined && patchIn.disk_warn_pct >= merged.disk_critical_pct) {
+        const stored = (await getRuntimeConfig()).storage_policy;
+        // 비율도 남은 공간도 0 이면 막는 기준이 없다 — normalize 가 바닥을 기본값으로 되돌리기 전에 여기서 알린다.
+        if ((patchIn.disk_critical_pct ?? stored.disk_critical_pct) === 0 && (patchIn.disk_critical_free_gb ?? stored.disk_critical_free_gb) === 0) {
+          throw new HttpError(400, "위험 임계치(%)와 위험 판정 여유(GB)를 둘 다 0 으로 둘 수 없습니다 — 디스크 가드가 꺼집니다");
+        }
+        const merged = normalizeStoragePolicy({ ...stored, ...patchIn });
+        if (patchIn.disk_warn_pct !== undefined && merged.disk_critical_pct > 0 && patchIn.disk_warn_pct >= merged.disk_critical_pct) {
           throw new HttpError(400, `경고 임계치(${patchIn.disk_warn_pct}%)는 위험 임계치(${merged.disk_critical_pct}%)보다 낮아야 합니다`);
         }
         patch.storage_policy = patchIn;
@@ -726,8 +736,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         log_max_mb: z.number().int().min(0).max(10_000).optional().describe("로그 파일 상한(MB)"),
         log_keep: z.number().int().min(0).max(50).optional().describe("보관할 로그 파일 수"),
         disk_warn_pct: z.number().int().min(1).max(99).optional().describe("디스크 경고 임계치(%) — 위험 임계치보다 낮아야 한다"),
-        disk_critical_pct: z.number().int().min(1).max(100).optional().describe("디스크 위험 임계치(%)"),
-        disk_critical_free_gb: z.number().int().min(0).max(10_000).optional().describe("#4780 디스크 위험 판정 여유(GB, 0=끔) — 사용률이 위험 임계를 넘어도 이만큼 이상 남아 있으면 막지 않고 경고로 둔다. 기본 5"),
+        disk_critical_pct: z.number().int().min(0).max(100).optional().describe("디스크 위험 임계치(%). 0 = 비율을 보지 않고 남은 공간(disk_critical_free_gb)이 그 값보다 적을 때만 막는다"),
+        disk_critical_free_gb: z.number().min(0).max(10_000).optional().describe("#4780 디스크 위험 판정 여유(GB, 0=끔, 소수 둘째 자리까지 — 0.5 = 512MB) — 사용률이 위험 임계를 넘어도 이만큼 이상 남아 있으면 막지 않고 경고로 둔다. 기본 5. 위험 임계치와 둘 다 0 으로는 둘 수 없다"),
         mem_warn_pct: z.number().int().min(0).max(99).optional().describe("#1059 메모리 경고 임계(사용%, 0=끔) — box-watch 가 경보 웹훅 발송(디스크와 대칭)"),
         mem_critical_pct: z.number().int().min(0).max(100).optional().describe("#1059 메모리 위험 임계(사용%, 0=끔) — OOM 임박 경보. warn 보다 커야"),
         pty_warn_pct: z.number().int().min(0).max(99).optional().describe("#687후속 PTY 슬롯 경고 임계(사용%, 0=끔) — 기본 70. 고갈되면 ssh 접속까지 막혀 원격 복구 불가"),

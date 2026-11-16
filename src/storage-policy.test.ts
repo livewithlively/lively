@@ -43,6 +43,36 @@ import { sessionCacheEnv, sharedCacheRoot, safeCacheEnv, homeRelocateEnv, dirSiz
   assert.equal(flipped.disk_warn_pct, 79);
 }
 
+// ── #5564 «비율을 보지 않고 남은 공간만» — 위험 비율 0 · 소수 GB 바닥 ──
+//  회귀 대상: ① 0 이 1 로 클램프되고 0.5GB 가 1GB(또는 0)로 반올림돼 500MB 기준을 표현할 수 없던 것
+//   ② 비율 0 에서 «경고 < 위험» 불변식이 경고를 1% 로 끌어내려 늘 경고가 되는 것 ③ 가드가 통째로 사라지는 설정.
+{
+  const G = 1024 ** 3;
+  const abs = normalizeStoragePolicy({ disk_critical_pct: 0, disk_critical_free_gb: 0.5 });
+  assert.equal(abs.disk_critical_pct, 0, "0 = 비율 안 봄 — 1 로 클램프되면 안 된다");
+  assert.equal(abs.disk_critical_free_gb, 0.5, "소수 GB 를 반올림해 버리면 안 된다");
+  assert.equal(abs.disk_warn_pct, DEFAULT_STORAGE_POLICY.disk_warn_pct, "비율 0 이라고 경고 비율을 끌어내리지 않는다");
+  assert.deepEqual(diskThresholds(abs), { warnPct: 85, criticalPct: 0, criticalFreeBytes: 0.5 * G });
+  assert.equal(normalizeStoragePolicy({ disk_critical_free_gb: 0.488 }).disk_critical_free_gb, 0.49, "소수 둘째 자리까지");
+  assert.equal(normalizeStoragePolicy({ disk_critical_free_gb: 7 }).disk_critical_free_gb, 7, "정수는 그대로");
+  // 가드가 사라지는 조합은 만들지 않는다 — 비율 0 이면 바닥이 유일한 기준이다.
+  assert.equal(resolveStoragePolicy({ disk_critical_pct: 0 }).disk_critical_free_gb, 5, "비율만 0 으로 정했으면 기본 바닥을 남긴다(직접 정한 비율 규칙의 예외)");
+  assert.equal(normalizeStoragePolicy({ disk_critical_pct: 0, disk_critical_free_gb: 0 }).disk_critical_free_gb, 5, "둘 다 0 이면 바닥을 기본값으로");
+  // 종전 규칙은 그대로다.
+  assert.equal(normalizeStoragePolicy({ disk_warn_pct: 90, disk_critical_pct: 80 }).disk_warn_pct, 79);
+  assert.equal(resolveStoragePolicy({ disk_critical_pct: 99 }).disk_critical_free_gb, 0);
+  // env 시드 — 노드(사람 컴퓨터)에서 이 기준을 거는 유일한 길.
+  const saved = { pct: process.env.DISK_CRITICAL_PCT, gb: process.env.DISK_CRITICAL_FREE_GB };
+  try {
+    process.env.DISK_CRITICAL_PCT = "0";
+    process.env.DISK_CRITICAL_FREE_GB = "0.5";
+    assert.deepEqual(diskThresholds(resolveStoragePolicy(null)), { warnPct: 85, criticalPct: 0, criticalFreeBytes: 0.5 * G }, "env 로 «남은 공간 512MB 미만일 때만»");
+  } finally {
+    if (saved.pct === undefined) delete process.env.DISK_CRITICAL_PCT; else process.env.DISK_CRITICAL_PCT = saved.pct;
+    if (saved.gb === undefined) delete process.env.DISK_CRITICAL_FREE_GB; else process.env.DISK_CRITICAL_FREE_GB = saved.gb;
+  }
+}
+
 // ── #4780 디스크 위험 판정 여유 바닥 — 기본 5GB · 잡값 · env 시드 · «비율을 직접 정한 곳엔 기본 바닥을 안 붙인다» ──
 {
   const G = 1024 ** 3;

@@ -39,6 +39,8 @@ export interface IntFieldSpec {
    *  "끄는 건 0 으로 명시해야지, '30초'로 끄는 게 아니다"인 노브용. 없으면 평범한 [min,max] 클램프.
    */
   floor?: number;
+  /** 소수 자릿수(기본 0 = 정수). GB 단위 노브에 0.5 처럼 1 미만 값을 받아야 할 때만 쓴다. */
+  decimals?: number;
   /**
    * ⚠ 구정책 호환 전용 — 숫자 해석을 `Number(v)` 직행으로 되돌린다. **새 정책은 쓰지 마라.**
    *  R47 이전 4벌(storage·delegate·session-memory·session-reclaim)이 이 동작이었고, 여기서 strict 로 바꾸면
@@ -96,18 +98,19 @@ function toNumber(v: unknown): number {
 
 /**
  * 잡값 방어 정수 클램프 — 레포 유일 정본(R47 이전엔 4벌이 각자 복사본을 갖고 있었다).
- *  해석 불가면 dflt, 되면 반올림 후 [min,max] 로 접는다. floor 가 있으면 'min 이하는 min(끔), 그 위는 [floor,max]'.
+ *  해석 불가면 dflt, 되면 반올림(decimals 를 주면 그 자릿수까지) 후 [min,max] 로 접는다. floor 가 있으면 'min 이하는 min(끔), 그 위는 [floor,max]'.
  */
 export function clampInt(
   v: unknown,
   min: number,
   max: number,
   dflt: number,
-  opts?: { floor?: number; loose?: boolean },
+  opts?: { floor?: number; loose?: boolean; decimals?: number },
 ): number {
   const raw = opts?.loose ? Number(v) : toNumber(v);
   if (!Number.isFinite(raw)) return dflt;
-  const n = Math.round(raw);
+  const q = 10 ** (opts?.decimals ?? 0);
+  const n = Math.round(raw * q) / q;
   if (opts?.floor !== undefined) {
     if (n <= min) return min;                              // min 이하 = 끔(음수도 끔으로 수렴)
     return Math.min(max, Math.max(opts.floor, n));         // 켰으면 floor~max
