@@ -177,6 +177,22 @@ export function executionSessionId(input = {}, env = process.env) {
   } catch { return; }
   if (!body) return;
 
+  // ── 이름짓기 가능 여부(#5552) — 서버가 답한 «지금 이 세션에 세션 이름짓기가 먹히나» 를 로컬에 받아 둔다. ──
+  //  읽는 쪽은 이름짓기 안내 훅(session-name-ask)이다. 그 훅은 네트워크를 안 쓰고(사람의 프롬프트 앞을 혼자 막고 서는 묶음이라
+  //  조회가 곧 첫 응답 지연이다) pane env(세션을 **연 순간**의 이름 출처)만 봤는데, 그 값은 낡는다 — AI 가 이미 이름을 지었거나
+  //  사람이 웹에서 고친 세션에도 세션 이름짓기를 다시 안내해, 헛 툴콜과 «적용되지 않았습니다(applied:false)» 보고가 붙었다.
+  //  이 훅은 어차피 매 턴 서버에 다녀오고 **앞 묶음**(sort 10 < 30)이라, 안내 훅이 읽을 때 이 파일은 같은 턴의 값이다.
+  //  ⚠ 서버가 모르면(값 없음 · 옛 게이트웨이) 아무것도 안 쓴다 — 안내 훅이 종전 판정(pane env)으로 물러난다.
+  //  ⚠ 매 턴 도는 자리라 값이 같으면 다시 쓰지 않는다. 못 써도 그만이다(다음 턴에 다시 온다).
+  if (typeof body.naming_open === "boolean") {
+    const namingPath = path.join(FLAG_DIR, `${executionId}.naming`);
+    const want = body.naming_open ? "open" : "closed";
+    try {
+      let have = null; try { have = fs.readFileSync(namingPath, "utf8"); } catch { /* 아직 없다 */ }
+      if (have !== want) { fs.mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 }); fs.writeFileSync(namingPath, want); }
+    } catch { /* 비치명 */ }
+  }
+
   // ── 첨부 좌표 — revision(changed) 과 **무관하게 매 턴** 판정한다. 첨부는 아무 턴에나 실려 온다. ──
   const attachPid = Number(body.project_id || 0);
   {

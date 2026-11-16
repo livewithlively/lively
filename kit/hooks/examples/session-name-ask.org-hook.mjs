@@ -15,6 +15,10 @@
 //  그게 곧 첫 응답 지연이다. "이미 이름이 있나"는 서버가 판정한다(걸쇠 = org_session_state.label_source,
 //  session-label-source.ts). 훅은 tmp 플래그로 **세션당 한 번만** 안내하고 그대로 빠진다(실질 0ms).
 //  중복 안내는 걸쇠가 흡수한다(두 번째 session_rename 은 applied:false 로 조용히 무시된다).
+//  ★ #5552 — 그래도 "이미 이름이 있는 세션엔 세션 이름짓기를 안내하지 않는다"는 지킨다. 흡수돼도 **사람에게는 보이기**
+//   때문이다: 헛 툴콜 하나와 «이름 붙이기를 시도했는데 서버가 적용하지 않았습니다(applied:false)» 보고가 답에 붙는다
+//   (윤상민 2026-11-16). 서버에 묻지 않고도 지금 값을 아는 길이 있다 — 앞 묶음의 project-agents-inject 가 매 턴 받아 오는
+//   프로젝트 맥락 응답에 그 답이 실려 오고, 그 훅이 로컬 파일에 적어 둔다(namingOpenLocal 머리말). 이 훅은 그 파일만 읽는다.
 //
 // 불변식: 절대 막지 않는다(additionalContext 만, 어떤 실패든 무출력 exit 0).
 import fs from "node:fs";
@@ -49,9 +53,30 @@ function isWorkSessionEnv(env) {
 //  ②(자동 생성 프로젝트의 이름)는 **남긴다** — 이름을 지어 연 세션이 프로젝트 없이 열리면 서버가 임시 이름(«새 작업»)의
 //  껍데기 프로젝트를 만드는데, 세션 이름이 사람 것이라 승계(①→프로젝트)가 일어나지 않으므로 ②가 그 이름을 지을 유일한 자리다.
 //  rule·id·값 없음(이 env 이전에 뜬 세션·옛 노드)은 종전대로 전부 안내한다 — 이름이 정해져 있으면 서버 걸쇠가 조용히 흡수한다.
+//  ⚠ #5552 — 이 값은 **여는 순간의 스냅샷**이라 이제 폴백이다. 서버가 이번 턴에 답한 값(namingOpenLocal)이 먼저다.
 function alreadyNamedEnv(env) {
   const src = String(env.LIVELY_SESSION_LABEL_SOURCE || "").trim().toLowerCase();
   return src === "human" || src === "agent";
+}
+
+// #5552 — **지금 이 세션에 에이전트의 세션 이름짓기(session_rename)가 먹히나.** 서버가 걸쇠와 같은 표로 낸 답을 읽는다.
+//  값은 project-agents-inject(sort 10 — 이 훅보다 **앞 묶음**이라 같은 턴에 먼저 끝난다)가 프로젝트 맥락 응답의 naming_open 을
+//  `<tmp>/lively-hooks/<세션>.naming` 에 적어 둔 것이다(`open`·`closed`). 이 훅은 파일 하나를 읽을 뿐 네트워크를 안 쓴다.
+//  pane env 만 봐서는 못 막던, 이미 이름이 정해진 세션에 ①(세션 이름짓기)이 새는 자리 셋을 이 값이 막는다:
+//   ⓐ AI 가 첫 턴에 이름을 지은 뒤 아래 «세션당 1회» 플래그가 사라진 pane — 재부팅 · OS 의 tmp 청소(macOS 는 사흘 안 쓴
+//      tmp 파일을 지운다). 며칠씩 이어 쓰는 세션이 그렇다. env 는 여전히 id·rule 이라 전체 안내가 다시 나갔다.
+//      (이 파일도 같이 사라지지만, 앞 묶음이 같은 턴에 다시 적으므로 읽을 때는 있다.)
+//   ⓑ 안내가 나가기 전에 사람이 웹에서 이름을 고친 세션 — env 는 여전히 id·rule.
+//   ⓒ env 가 아예 없는 세션 — 라이블리가 띄우지 않은 외부 실행 세션(`claude-…` — 이름을 담을 행이 없어 session_rename 이
+//      **늘** applied:false 다) · 옛 노드 · env_keep 을 다시 안 깐 sudo 박스.
+//  반환: true(먹힌다 → ①+②) · false(안 먹힌다 → ②만) · null(모른다 → 종전 판정 alreadyNamedEnv 로).
+//  null 이 되는 경우 — 파일이 없다(프로젝트에 안 붙은 세션 · 옛 게이트웨이 · 맥락 훅이 꺼졌거나 이번 턴에 실패) · 모르는 값.
+//  ⚠ 낡은 값이 남아도 안전한 쪽으로만 틀린다: 이름 출처는 순위가 **올라가기만** 해서 `closed` 가 다시 `open` 이 되는 일은 없다.
+function namingOpenLocal(boxId) {
+  try {
+    const v = fs.readFileSync(path.join(FLAG_DIR, `${boxId}.naming`), "utf8").trim();
+    return v === "open" ? true : v === "closed" ? false : null;
+  } catch { return null; }
 }
 
 const readStdin = () => new Promise((resolve) => {
@@ -90,7 +115,7 @@ export function namingPromptOk(promptRaw) {
 // 이름이 이미 정해진 세션용 — ②만(위 alreadyNamedEnv 머리말). 세션 이름짓기 툴은 언급하지 않는다(부를 일이 없다).
 const PROJECT_ONLY_GUIDE =
   "[라이블리 — 이름짓기(세션당 1회): 이 세션이 만든 프로젝트]\n" +
-  "이 세션의 이름은 이미 정해져 있습니다(사람이 지었거나 앞서 지은 이름) — 세션 이름은 따로 짓지 마세요.\n" +
+  "이 세션의 이름은 이미 정해져 있거나(사람이 지었거나 앞서 지은 이름) 따로 두지 않는 세션입니다 — 세션 이름은 짓지 마세요.\n" +
   "② **프로젝트 이름** — 지금 주입된 프로젝트 AGENTS.md 가 이 프로젝트를 «세션의 첫 지시에서·세션을 열 때 **자동 생성**된 " +
   "프로젝트»라고 말하고 있으면(임시 이름 «새 작업» 포함), 이 일 전체를 말하는 이름을 지어 `project_rename_v6 {name: \"…\"}` " +
   "(id 생략 = 이 세션이 붙어 있는 프로젝트)로 한 번 등록하세요.\n" +
@@ -134,8 +159,6 @@ const GUIDE =
   //  보드에서 진짜 작업과 구분되지 않았다. 게다가 배치마다 툴콜이 한 번씩 붙는 순수 낭비였다.
   //  ⚠ 폴백(LIVELY_TASK_WS)을 남겨 둔다 — 이 축이 생기기 **전에 뜬 세션**은 kind 를 안 달고 있다.
   if (!isWorkSessionEnv(process.env)) return;
-  // 이미 이름이 정해진 세션 — ①(세션 이름)은 빼고 ②(자동 생성 프로젝트)만 안내한다(alreadyNamedEnv 머리말).
-  const guide = alreadyNamedEnv(process.env) ? PROJECT_ONLY_GUIDE : GUIDE;
 
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }
@@ -151,6 +174,12 @@ const GUIDE =
     fs.mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
     fs.writeFileSync(flag, "", { flag: "wx" });
   } catch { return; }                              // 이미 누가 만들었다(또는 tmp 를 못 쓴다) — 중복 안내 안 함
+
+  // 이미 이름이 정해진 세션 — ①(세션 이름)은 빼고 ②(자동 생성 프로젝트)만 안내한다.
+  //  판정은 **서버가 이번 턴에 답한 값**이 먼저다(#5552 · namingOpenLocal 머리말). 그 값이 없을 때만 pane env(여는 순간의 값)를 본다.
+  const open = namingOpenLocal(boxId);
+  const named = open === null ? alreadyNamedEnv(process.env) : !open;
+  const guide = named ? PROJECT_ONLY_GUIDE : GUIDE;
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: guide },

@@ -16,6 +16,7 @@ const st = await import(`${DIST}/v6/session-task.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
 const es = await import(`${DIST}/v6/execution-session-store.js`);
 const { relabelSession } = await import(`${DIST}/terminal/session-relabel.js`);
+const { sessionProjectContext } = await import(`${DIST}/terminal/session-project-routes.js`);
 const mp = await import(`${DIST}/v6/mirror/mirror-project.js`);
 const { initSessionsInfra } = await import(`${DIST}/org/schema/sessions-infra.js`);
 
@@ -27,7 +28,9 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__naming_pg_a__";
 const NODE = "__naming_pg_node__";
 const S = (x) => `box-__pgtest-naming-${x}`;
-const ALL_S = Array.from({ length: 40 }, (_, i) => S(i));
+//  #5552 — 라이블리가 띄우지 않은 외부 실행 세션의 id 꼴(`claude-<대화 id>`). 이름을 담을 org_session_state 행이 없다.
+const EXT = (x) => `claude-pgtest-naming-${x}`;
+const ALL_S = [...Array.from({ length: 40 }, (_, i) => S(i)), EXT(1), EXT(2)];
 
 const row = async (id) => (await itemsPool.query(
   `SELECT label, label_source, kind, discovered, root_key FROM org_session_state WHERE id=$1`, [id])).rows[0] ?? null;
@@ -307,6 +310,71 @@ try {
     chk("K1 사람이 세션에 고른 태스크는 출처 human — 그 세션의 이름짓기가 이름을 안 바꾼다",
       mid?.name_source === "human" && r.applied === true && k1?.name === "처음 세션이 만든 태스크 이름" && (await taskIdOf(S(18))) === made.id,
       JSON.stringify({ mid, r, k1 }));
+  }
+
+  // ══ N. 이름짓기 안내 훅에 주는 답(#5552) — 프로젝트 맥락 응답의 naming_open ════════════════════════════════
+  //  약속: naming_open 은 **지금 session_rename 을 부르면 적용되나** 와 같은 값이다(안내와 집행이 갈리지 않는다).
+  //   그래서 진짜 조회(sessionProjectContext)와 진짜 이름짓기(relabelSession)를 같은 행에 차례로 걸어 둘을 맞대 본다.
+  //  🔴 틀리면: (true 로) 이미 이름이 정해진 세션에 세션 이름짓기가 안내돼 헛 툴콜과 «applied:false» 보고가 사람에게 보이고,
+  //            (false 로) 아직 이름 없는 세션이 안내를 못 받는다.
+  {
+    const pid = await mkProject("이름짓기 안내 확인");
+    /** 훅이 부르는 꼴 그대로 — 본문 없이(content=0), known 은 그때그때. */
+    const ctxOf = (sid, known = -1) => sessionProjectContext({ userId: A }, sid, known, undefined, false);
+
+    // N1 — 규칙 이름(첫 지시를 자른 것): 열려 있다 → 이름을 지으면 적용되고 → 닫힌다 → 다시 부르면 안 먹힌다
+    await sessionRow(S(34), "첫 지시를 자른 이름…", "rule"); await bind(S(34), pid);
+    const n1a = await ctxOf(S(34));
+    const n1r = await relabelSession({ userId: A }, S(34), "이름짓기 안내", "agent");
+    const n1b = await ctxOf(S(34));
+    const n1r2 = await relabelSession({ userId: A }, S(34), "다른 이름", "agent");
+    chk("N1 규칙 이름 세션 — 열림(true) → AI 가 지으면 적용 → 닫힘(false) → 다시 부르면 applied:false",
+      n1a.naming_open === true && n1r.applied === true && n1b.naming_open === false && n1r2.applied === false,
+      JSON.stringify({ a: n1a.naming_open, r: n1r.applied, b: n1b.naming_open, r2: n1r2.applied }));
+
+    // N2 — 사람이 지은 이름(태스크에서 연 세션 · 웹에서 고친 이름): 닫혀 있고, 실제로도 안 먹힌다
+    await sessionRow(S(35), "사람이 지은 이름", "human"); await bind(S(35), pid);
+    const n2 = await ctxOf(S(35));
+    const n2r = await relabelSession({ userId: A }, S(35), "AI 이름", "agent");
+    chk("N2 사람이 지은 이름 — 닫힘(false) · 실제 이름짓기도 applied:false",
+      n2.naming_open === false && n2r.applied === false, JSON.stringify({ open: n2.naming_open, applied: n2r.applied }));
+
+    // N3 — 이름 없이 연 세션(id) · 출처 칸이 빈 행(옛 행 · 노드 발견 행): 열려 있다
+    await sessionRow(S(36), S(36), "id"); await bind(S(36), pid);
+    await sessionRow(S(37), "옛 행", null); await bind(S(37), pid);
+    const n3a = await ctxOf(S(36)); const n3b = await ctxOf(S(37));
+    const n3r = await relabelSession({ userId: A }, S(37), "옛 행 다듬기", "agent");
+    chk("N3 id · 출처 없는 행 — 열림(true) · 출처 없는 행에 실제로 적용된다",
+      n3a.naming_open === true && n3b.naming_open === true && n3r.applied === true,
+      JSON.stringify({ id: n3a.naming_open, nul: n3b.naming_open, applied: n3r.applied }));
+
+    // N4 — ★ 본문이 안 바뀐 턴(known = 지금 revision)에도 싣는다. 훅은 매 턴 이 꼴로 부른다 — 여기서 빠지면 첫 턴 값(열림)이
+    //  로컬에 그대로 남아, AI 가 이름을 지은 뒤에도 세션 이름짓기가 다시 안내된다.
+    //  (revision 은 바로 앞에서 다시 읽는다 — 같은 프로젝트에 태스크가 생기면 맥락 revision 이 오른다.)
+    const n4 = await ctxOf(S(34), (await ctxOf(S(34))).revision);
+    chk("N4 본문이 안 바뀐 턴에도 naming_open 을 싣는다",
+      n4.changed === false && n4.naming_open === false, JSON.stringify({ changed: n4.changed, open: n4.naming_open }));
+
+    // N5 — 라이블리가 띄운 세션인데 행이 없다(노드 생성 기록이 아직 안 닿은 틈): **모른다 → 싣지 않는다**(훅이 pane env 로 물러난다).
+    //  닫힘(false)으로 답하면 그 세션은 안내를 못 받아 영영 이름을 못 얻는다.
+    await bind(S(38), pid);
+    const n5 = await ctxOf(S(38));
+    chk("N5 행이 없는 라이블리 세션 — naming_open 을 싣지 않는다(모름)",
+      n5.found === true && !("naming_open" in n5), JSON.stringify(n5));
+
+    // N6 — ★ 행이 없는 외부 실행 세션(`claude-…`): 닫힘. 그리고 그 답이 맞다 — 실제 이름짓기가 applied:false(unknown)다.
+    await bind(EXT(1), pid);
+    const n6 = await ctxOf(EXT(1));
+    const n6r = await relabelSession({ userId: A }, EXT(1), "외부 세션 이름", "agent");
+    chk("N6 행이 없는 외부 실행 세션 — 닫힘(false) · 실제 이름짓기도 applied:false(unknown)",
+      n6.naming_open === false && n6r.applied === false && n6r.reason === "unknown",
+      JSON.stringify({ open: n6.naming_open, applied: n6r.applied, reason: n6r.reason }));
+
+    // N7 — 프로젝트에 안 붙은 세션은 종전 응답 그대로다(행을 읽지 않는다 — 매 턴 모든 세션이 부르는 자리다).
+    await sessionRow(S(39), "안 붙은 세션", "agent");
+    const n7 = await ctxOf(S(39));
+    chk("N7 프로젝트에 안 붙은 세션 — found:false · naming_open 없음(종전 응답)",
+      n7.found === false && !("naming_open" in n7), JSON.stringify(n7));
   }
 } catch (e) {
   bad("예외", e?.stack || String(e));

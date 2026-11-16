@@ -16,19 +16,22 @@ import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
 const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "examples", "session-name-ask.org-hook.mjs");
+const CONTEXT_HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "examples", "project-agents-inject.org-hook.mjs");
+const HOOK_TMP = path.join(os.tmpdir(), "lively-hooks");
 let pass = 0;
 const ok = (name) => { pass++; console.log(`ok  ${name}`); };
 
 const flags = [];
 let seq = 0;
 
-/** 훅을 한 번 돌린다 → stdout. 세션 id 는 매번 새로(훅이 세션당 1회 플래그를 쓴다). */
-async function run(prompt, env = {}) {
+/** 훅을 한 번 돌린다 → stdout. 세션 id 는 매번 새로(훅이 세션당 1회 플래그를 쓴다). stdin 에 더 실을 것은 input 으로. */
+async function run(prompt, env = {}, input = {}) {
   const sid = `box-nametest-${process.pid}-${seq++}`;
   flags.push(path.join(os.tmpdir(), "lively-hooks", `${sid}.sessname`));
   const child = spawn(process.execPath, [HOOK], {
@@ -40,7 +43,7 @@ async function run(prompt, env = {}) {
            LIVELY_SESSION_ID: sid, ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  child.stdin.end(JSON.stringify({ prompt }));
+  child.stdin.end(JSON.stringify({ prompt, ...input }));
   let out = "";
   child.stdout.on("data", (c) => { out += c; });
   // ⚠ 'exit' 이 아니라 'close' — exit 은 stdio 가 다 비워지기 전에 올 수 있어 큰 stdout 이 잘린다.
@@ -124,6 +127,130 @@ try {
       assert.equal(guided(out) && /project_rename_v6/.test(out), true, `출처 ${JSON.stringify(v)} 인데 종전 안내(①+②)가 안 나왔다`);
     }
     ok("★이미 이름이 정해진 세션(human·agent, 대소문자·공백 무관) → ②만 · 세션당 1회 · rule·id·빈 값·모르는 값은 종전대로 ①+②");
+  }
+
+  // ── #5552 — 이름이 정해졌는지는 **서버가 이번 턴에 답한 값**으로 가른다. pane env 는 여는 순간의 스냅샷이라 폴백일 뿐이다. ──
+  //  값은 앞 묶음의 project-agents-inject 가 `<tmp>/lively-hooks/<세션>.naming` 에 적어 둔다(open·closed).
+  //  🔴 없으면: AI 가 이미 이름을 지은 세션(«세션당 1회» 플래그가 사라진 pane) · 사람이 웹에서 이름을 고친 세션 · env 가 없는
+  //   외부 실행 세션에 세션 이름짓기가 다시 안내돼, 그 턴에 헛 툴콜 하나와 «이름 붙이기를 시도했는데 서버가 적용하지
+  //   않았습니다(applied:false)» 보고가 사람에게 보인다(윤상민 2026-11-16).
+  {
+    const full = (out) => guided(out) && /project_rename_v6/.test(out);
+    let n = 0;
+    /** 서버 답이 적힌 세션 하나를 차린다 → 그 세션 id. naming 이 null 이면 파일을 안 만든다. */
+    const sessionWith = async (naming, id = `box-nametest-${process.pid}-nm${n++}`) => {
+      flags.push(path.join(HOOK_TMP, `${id}.sessname`), path.join(HOOK_TMP, `${id}.naming`));
+      await fsp.mkdir(HOOK_TMP, { recursive: true, mode: 0o700 });
+      if (naming !== null) await fsp.writeFile(path.join(HOOK_TMP, `${id}.naming`), naming);
+      return id;
+    };
+
+    // ★ⓐⓑ — env 는 «아직 이름 없음»(id·rule·빈 값)인데 서버는 «이미 정해졌다». 종전 훅은 여기서 ①을 안내했다.
+    for (const v of ["id", "rule", ""]) {
+      const out = await run(REAL, { LIVELY_SESSION_ID: await sessionWith("closed"), LIVELY_SESSION_LABEL_SOURCE: v });
+      assert.equal(projectOnly(out), true, `서버가 이름이 정해졌다고 했는데(env=${JSON.stringify(v)}) 세션 이름짓기가 안내됐다`);
+    }
+    ok("★서버 값 closed → env 가 id·rule·빈 값이어도 세션 이름짓기(①) 없이 ②만");
+
+    // 대조군 — 서버가 «먹힌다» 고 하면 env 가 뭐라든 전체 안내다(서버 값이 먼저다). 위 단언이 «파일만 있으면 ②만» 이 아님을 보인다.
+    for (const v of ["id", "agent", "human"]) {
+      const out = await run(REAL, { LIVELY_SESSION_ID: await sessionWith("open"), LIVELY_SESSION_LABEL_SOURCE: v });
+      assert.equal(full(out), true, `서버 값 open 인데(env=${v}) ①+② 가 안 나왔다`);
+    }
+    ok("대조군 — 서버 값 open → env 와 무관하게 ①+②");
+
+    // 줄바꿈·공백이 붙어도 같은 값이다(손으로 쓴 파일 · 다른 판의 맥락 훅).
+    assert.equal(projectOnly(await run(REAL, { LIVELY_SESSION_ID: await sessionWith("closed\n"), LIVELY_SESSION_LABEL_SOURCE: "id" })), true, "'closed\\n' 을 못 읽었다");
+    assert.equal(full(await run(REAL, { LIVELY_SESSION_ID: await sessionWith(" open \n"), LIVELY_SESSION_LABEL_SOURCE: "human" })), true, "' open \\n' 을 못 읽었다");
+    ok("값 앞뒤 공백·줄바꿈은 무시");
+
+    // ── 폴백 — 서버 값이 없거나 못 읽으면 **종전 판정(pane env)** 그대로다. ──
+    //  🔴 폴백이 «②만» 쪽으로 기울면: 옛 게이트웨이(이 값을 안 주는 판)에 붙은 세션 · 프로젝트에 안 붙은 세션이 전부 이름을 못 얻는다.
+    const UNKNOWN = [["파일 없음", null], ["빈 파일", ""], ["모르는 값", "maybe"], ["JSON 꼴", '{"open":false}'], ["대문자", "CLOSED"]];
+    for (const [label, body] of UNKNOWN) {
+      assert.equal(full(await run(REAL, { LIVELY_SESSION_ID: await sessionWith(body), LIVELY_SESSION_LABEL_SOURCE: "id" })), true, `${label} + env=id → 종전대로 ①+② 여야 한다`);
+      assert.equal(projectOnly(await run(REAL, { LIVELY_SESSION_ID: await sessionWith(body), LIVELY_SESSION_LABEL_SOURCE: "human" })), true, `${label} + env=human → 종전대로 ②만이어야 한다`);
+    }
+    ok(`폴백 ${UNKNOWN.length}종 — 서버 값을 모르면 pane env 로(id → ①+② · human → ②만)`);
+
+    // 남의 세션 값은 안 읽는다 — 파일은 세션 id 로 갈린다.
+    {
+      await sessionWith("closed");                                    // 다른 세션의 값
+      assert.equal(full(await run(REAL, { LIVELY_SESSION_ID: await sessionWith(null), LIVELY_SESSION_LABEL_SOURCE: "id" })), true, "다른 세션의 closed 를 읽었다");
+      ok("값은 세션마다 따로다");
+    }
+
+    // ★ⓒ — 라이블리가 띄우지 않은 외부 실행 세션(LIVELY_SESSION_ID 없음 → `claude-<대화 id>`). env 신호가 아예 없다.
+    {
+      const native = `nametest-${process.pid}-ext`;
+      await sessionWith("closed", `claude-${native}`);
+      const out = await run(REAL, { LIVELY_SESSION_ID: "" }, { session_id: native });
+      assert.equal(projectOnly(out), true, "외부 실행 세션에 세션 이름짓기가 안내됐다(서버 값은 closed 였다)");
+      ok("★외부 실행 세션(claude-<id>) — 서버 값 closed → ②만");
+    }
+
+    // ②만 안내해도 세션당 1회다.
+    {
+      const sid = await sessionWith("closed");
+      const twice = [];
+      for (let i = 0; i < 2; i++) twice.push(await run(REAL, { LIVELY_SESSION_ID: sid, LIVELY_SESSION_LABEL_SOURCE: "id" }));
+      assert.equal(projectOnly(twice[0]), true);
+      assert.equal(twice[1], "", "두 번째 턴에 안내가 또 나갔다");
+      ok("서버 값으로 ②만 안내해도 세션당 1회");
+    }
+
+    // ★ 두 훅을 **실제로 이어** 돌린다 — 맥락 훅이 서버 답을 받아 적고, 안내 훅이 그걸 읽는다(파일 이름·값의 약속이 갈리면
+    //  안내 훅은 조용히 env 로 물러나 고친 것이 통째로 안 돈다. 한쪽씩만 재는 시험으로는 그 어긋남이 안 보인다).
+    //  러너는 묶음을 sort 순서로 차례로 돌린다(맥락 훅 10 → 안내 훅 30). 여기서도 그 순서로 부른다.
+    {
+      let naming;                                                     // 가짜 게이트웨이가 줄 값
+      const srv = http.createServer((req, res) => {
+        if (!/\/project-context(\?|$)/.test(req.url || "")) { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); return; }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ found: true, changed: false, project_id: 7, revision: 3, applied_revision: 3, binding_epoch: 1,
+          ...(naming === undefined ? {} : { naming_open: naming }) }));
+      });
+      await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+      const home = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-nametest-home-"));
+      const turn = async (sid, env) => {
+        // 맥락 훅(앞 묶음) — 실제 훅 프로세스. 빈 홈을 물려 이 기계의 토큰·게이트웨이로 새지 않게 한다.
+        const c = spawn(process.execPath, [CONTEXT_HOOK], {
+          env: { ...process.env, ...offlineLivelyEnv(), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_HOME: home, LVLY_TENANT_SLUG: "",
+                 LIVELY_HARNESS: "claude", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "",
+                 LIVELY_TOKEN: "tok-nametest", LIVELY_GATEWAY_URL: `http://127.0.0.1:${srv.address().port}`, LIVELY_SESSION_ID: sid },
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        c.stdin.end(JSON.stringify({ prompt: REAL }));
+        c.stdout.resume(); c.stderr.resume();
+        assert.equal(await new Promise((r) => c.on("close", r)), 0, "맥락 훅은 exit 0 이어야 한다");
+        return await run(REAL, { LIVELY_SESSION_ID: sid, ...env });   // 안내 훅(뒤 묶음)
+      };
+      try {
+        naming = false;
+        assert.equal(projectOnly(await turn(await sessionWith(null), { LIVELY_SESSION_LABEL_SOURCE: "id" })), true,
+          "서버가 naming_open:false 를 줬는데(env=id) 세션 이름짓기가 안내됐다 — 두 훅의 파일 약속이 갈렸다");
+        naming = true;
+        assert.equal(full(await turn(await sessionWith(null), { LIVELY_SESSION_LABEL_SOURCE: "human" })), true,
+          "서버가 naming_open:true 를 줬는데(env=human) ①+② 가 안 나왔다");
+        naming = undefined;                                           // 옛 게이트웨이 — 값을 안 준다
+        assert.equal(full(await turn(await sessionWith(null), { LIVELY_SESSION_LABEL_SOURCE: "rule" })), true, "서버가 값을 안 줬는데(env=rule) ①+② 가 안 나왔다");
+        assert.equal(projectOnly(await turn(await sessionWith(null), { LIVELY_SESSION_LABEL_SOURCE: "agent" })), true, "서버가 값을 안 줬는데(env=agent) ②만이 아니다");
+        // ★ⓐ 그대로 — 첫 턴에 열려 있던 세션(①+② 안내 → AI 가 이름을 지음) → 플래그가 사라짐 → 다음 턴엔 서버가 닫혔다고 답한다.
+        const sid = await sessionWith(null);
+        naming = true;
+        assert.equal(full(await turn(sid, { LIVELY_SESSION_LABEL_SOURCE: "id" })), true, "첫 턴 — 열린 세션에 ①+② 가 안 나왔다");
+        await fsp.rm(path.join(HOOK_TMP, `${sid}.sessname`), { force: true });   // OS 가 tmp 를 치웠다
+        await fsp.rm(path.join(HOOK_TMP, `${sid}.naming`), { force: true });
+        naming = false;                                                           // 그 사이 AI 가 이름을 지었다
+        assert.equal(projectOnly(await turn(sid, { LIVELY_SESSION_LABEL_SOURCE: "id" })), true,
+          "플래그가 사라진 뒤의 턴 — 이미 이름이 지어진 세션에 세션 이름짓기가 다시 안내됐다");
+        ok("★두 훅을 이어 돌림 — 서버 false → ②만 · true → ①+② · 값 없음 → env · 플래그가 사라진 세션에도 ①이 다시 안 나간다");
+      } finally {
+        srv.closeAllConnections?.();
+        await new Promise((r) => srv.close(r));
+        await fsp.rm(home, { recursive: true, force: true }).catch(() => {});
+      }
+    }
   }
 
   // ── 억제 플래그 — 종전 계약(전역 OFF·읽기전용·인코그니토)이 그대로인지. ──

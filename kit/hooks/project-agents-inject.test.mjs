@@ -68,6 +68,7 @@ async function runHook(cwd, base, env = {}, input = {}) {
   return out;
 }
 const statePathOf = (sid) => path.join(os.tmpdir(), "lively-hooks", `${sid}.projagents`);
+const namingPathOf = (sid) => path.join(os.tmpdir(), "lively-hooks", `${sid}.naming`);   // #5552
 
 async function main() {
   const gw = await startGateway();
@@ -220,11 +221,51 @@ async function main() {
       assert.ok(out.includes(path.join(proj, "old.md")), "구 판 헤더·맨 상대경로도 계속 접어야 한다");
       ok("A4 구 클라이언트 표기 하위호환");
     }
+    {
+      // ── #5552 — 서버가 답한 «이 세션에 세션 이름짓기가 지금 먹히나»(naming_open)를 로컬에 받아 둔다. ──
+      //  읽는 쪽은 뒤 묶음의 이름짓기 안내 훅이다(그 훅은 네트워크를 안 쓴다). 이어 돌린 시험은 session-name-ask.test.mjs.
+      //  🔴 없으면: 안내 훅이 pane env(세션을 연 순간의 값)로만 판정해, 이미 이름이 정해진 세션에 세션 이름짓기를 다시 안내한다.
+      const namingOf = (id) => { try { return fs.readFileSync(namingPathOf(id), "utf8"); } catch { return null; } };
+      const bound = { found: true, project_id: 11, revision: 1, binding_epoch: 1 };
+      const a = sid("n1"); gw.states.set(a, { ...bound, naming_open: false });
+      await runHook(root, gw.base, { LIVELY_SESSION_ID: a });
+      assert.equal(namingOf(a), "closed", "naming_open:false → closed");
+      const b = sid("n2"); gw.states.set(b, { ...bound, naming_open: true });
+      await runHook(root, gw.base, { LIVELY_SESSION_ID: b });
+      assert.equal(namingOf(b), "open", "naming_open:true → open");
+      // ★ 본문이 안 바뀐 턴에도 받는다 — 이름은 AGENTS.md 와 무관하게 바뀐다(첫 턴 뒤 AI 가 이름을 지은 세션이 바로 이 경우다).
+      gw.states.set(b, { ...bound, naming_open: false });
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: b });
+      assert.equal(out.trim(), "", "같은 revision 이라 본문은 다시 안 나간다");
+      assert.equal(namingOf(b), "closed", "본문이 안 바뀐 턴에 값이 안 따라왔다 — open 으로 남으면 세션 이름짓기가 다시 안내된다");
+      // 프로젝트에서 떼어진 세션(project_id null)도 서버가 값을 주면 받는다.
+      const d = sid("n3"); gw.states.set(d, { found: true, project_id: null, revision: 1, binding_epoch: 1, naming_open: false });
+      await runHook(root, gw.base, { LIVELY_SESSION_ID: d });
+      assert.equal(namingOf(d), "closed");
+      // 서버가 모르면(값 없음 · null · 옛 게이트웨이) 아무것도 안 쓴다 — 안내 훅이 종전 판정(pane env)으로 물러난다.
+      for (const [n, v] of [["n4", undefined], ["n5", null], ["n6", "false"], ["n7", 0]]) {
+        const c = sid(n); gw.states.set(c, { ...bound, ...(v === undefined ? {} : { naming_open: v }) });
+        await runHook(root, gw.base, { LIVELY_SESSION_ID: c });
+        assert.equal(namingOf(c), null, `naming_open=${JSON.stringify(v)} 인데 값을 적었다 — 불리언만 믿는다`);
+      }
+      // 서버가 실패한 턴에는 앞서 받은 값을 지우지 않는다(닫힌 것이 다시 열리는 일은 없다).
+      gw.setFail(true);
+      await runHook(root, gw.base, { LIVELY_SESSION_ID: a });
+      gw.setFail(false);
+      assert.equal(namingOf(a), "closed", "서버 실패 턴에 받아 둔 값이 사라졌다");
+      // 외부 실행 세션은 자기 실행 id(`claude-<대화 id>`)로 적는다 — 안내 훅이 같은 id 로 읽는다.
+      const native = `test-${process.pid}-n8`; sids.push(`claude-${native}`);
+      gw.states.set(`claude-${native}`, { ...bound, naming_open: false });
+      await runHook(root, gw.base, {}, { session_id: native });
+      assert.equal(namingOf(`claude-${native}`), "closed", "외부 실행 세션의 값이 그 실행 id 로 안 적혔다");
+      ok("★이름짓기 가능 여부(naming_open) → <세션>.naming 에 open·closed · 본문이 안 바뀐 턴에도 · 불리언만 · 실패 턴엔 유지 · 외부 실행 id");
+    }
     assert.ok(gw.hits.length > 0 && gw.hits.every((h) => h.url.includes("/execution-sessions/")));
     console.log(`\n${pass} passed`);
   } finally {
     gw.server.close();
     for (const s of sids) await fsp.rm(statePathOf(s), { force: true }).catch(() => {});
+    for (const s of sids) await fsp.rm(namingPathOf(s), { force: true }).catch(() => {});
     await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
   }
 }
