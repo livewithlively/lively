@@ -21,12 +21,13 @@ export interface StoragePolicy {
   log_keep: number;
   /** 디스크 경고 임계(%) — /readyz 가 status=degraded 로 알린다(트래픽은 유지). */
   disk_warn_pct: number;
-  /** 디스크 위험 임계(%) — 신규 세션·클론 차단 대상(T5). */
+  /** 디스크 위험 임계(%) — 신규 세션·클론 차단 대상(T5). 0 = 비율을 보지 않고 남은 공간(disk_critical_free_gb)만으로 막는다(#5564). */
   disk_critical_pct: number;
   /**
    * #4780 — 위험 판정의 여유 바닥(GB). 사용률이 위험 임계를 넘어도 **이만큼 이상 남아 있으면** 막지 않고 경고로 둔다.
    *  0 = 끔(사용률만 — 종전). 큰 디스크에서 %만으로 막으면 수십 GB 가 남아도 세션이 안 열린다(ops/health.ts
    *  Thresholds.criticalFreeBytes 머리말). 작은 디스크에선 사용률이 먼저 걸리므로 이 값이 종전보다 일찍 막는 일은 없다.
+   *  소수 둘째 자리까지 받는다(0.5 = 512MB) — 위험 비율을 0 으로 두면 이 값이 유일한 기준이 된다(#5564).
    */
   disk_critical_free_gb: number;
   /** #1059 — 메모리 경고 임계(사용%). 0 = 끔(경보 안 함). box-watch 가 이 이상이면 warn 경보(디스크와 대칭). */
@@ -76,9 +77,9 @@ const policy = definePolicy<StoragePolicy>({
     log_max_mb: { env: "LOG_MAX_MB", min: 0, max: 10_000, loose: true },
     log_keep: { env: "LOG_KEEP", min: 0, max: 50, loose: true },
     disk_warn_pct: { env: "DISK_WARN_PCT", min: 1, max: 99, loose: true },
-    disk_critical_pct: { env: "DISK_CRITICAL_PCT", min: 1, max: 100, loose: true },
+    disk_critical_pct: { env: "DISK_CRITICAL_PCT", min: 0, max: 100, loose: true }, // 0 = 비율 안 봄(#5564)
     // 노드(사람 컴퓨터)엔 DB 가 없어 관리탭 값이 안 닿는다 — 그 컴퓨터에서 바꾸려면 노드 env 의 이 시드뿐이다.
-    disk_critical_free_gb: { env: "DISK_CRITICAL_FREE_GB", min: 0, max: 10_000 },
+    disk_critical_free_gb: { env: "DISK_CRITICAL_FREE_GB", min: 0, max: 10_000, decimals: 2 },
     mem_warn_pct: { env: "MEM_WARN_PCT", min: 0, max: 99, loose: true },
     mem_critical_pct: { env: "MEM_CRITICAL_PCT", min: 0, max: 100, loose: true },
     pty_warn_pct: { env: "PTY_WARN_PCT", min: 0, max: 99, loose: true },
@@ -89,7 +90,10 @@ const policy = definePolicy<StoragePolicy>({
   // 축 사이 불변식 — 한 칸짜리 범위(min/max)로는 표현이 안 되는 것만 남긴다.
   invariant(out) {
     // 경고 ≥ 위험이면 뒤집힌 설정 — 경고를 위험 바로 아래로 끌어내린다(경고 없이 위험만 뜨는 사고 방지).
-    if (out.disk_warn_pct >= out.disk_critical_pct) out.disk_warn_pct = Math.max(1, out.disk_critical_pct - 1);
+    //  위험 비율 0(비율 안 봄 #5564)이면 경고 비율과 견줄 것이 없다 — 경고는 그대로 둔다.
+    if (out.disk_critical_pct > 0 && out.disk_warn_pct >= out.disk_critical_pct) out.disk_warn_pct = Math.max(1, out.disk_critical_pct - 1);
+    // 비율도 바닥도 0 이면 막는 기준이 하나도 없다 — 디스크 가드를 통째로 끄는 설정은 두지 않는다(디스크풀 = 전면 다운).
+    if (out.disk_critical_pct === 0 && out.disk_critical_free_gb === 0) out.disk_critical_free_gb = DEFAULT_STORAGE_POLICY.disk_critical_free_gb;
     // #1059 메모리도 동일 불변식 — 단 0=끔이므로 **둘 다 켜졌을 때만** 강제(한쪽만 켜면 그 한 단계만 동작).
     if (out.mem_warn_pct > 0 && out.mem_critical_pct > 0 && out.mem_warn_pct >= out.mem_critical_pct) {
       out.mem_warn_pct = Math.max(1, out.mem_critical_pct - 1);
@@ -109,7 +113,8 @@ const policy = definePolicy<StoragePolicy>({
 function keepChosenCriticalPct(out: StoragePolicy, raw: unknown): StoragePolicy {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const floorGiven = r.disk_critical_free_gb !== undefined || policy.envSeed().disk_critical_free_gb !== undefined;
-  if (!floorGiven && out.disk_critical_pct !== DEFAULT_STORAGE_POLICY.disk_critical_pct) out.disk_critical_free_gb = 0;
+  //  비율 0(비율 안 봄 #5564)은 예외다 — 그때는 바닥이 유일한 기준이라 떼면 가드가 사라진다.
+  if (!floorGiven && out.disk_critical_pct > 0 && out.disk_critical_pct !== DEFAULT_STORAGE_POLICY.disk_critical_pct) out.disk_critical_free_gb = 0;
   return out;
 }
 

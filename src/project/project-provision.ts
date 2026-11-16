@@ -10,6 +10,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { PROJECT_SHARED_BASE, projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
 import { assertDiskWritable } from "../ops/disk-guard.js"; // #813 T5 — 클론 전에 디스크 확인(꽉 차면 507)
+import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
+import { loadStoragePolicy } from "../org/policies/runtime-loaders.js";
 import { getRepo } from "../domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "../domainmap/core/url-util.js";
 import { HttpError } from "../http-error.js";
@@ -360,7 +362,10 @@ async function ensureBaseClone(
       if (!allowClone) throw new HttpError(409, `레포가 '${repoPath}' 에 없습니다(클론 비활성).`);
       const url = sanitizeCloneUrl(row?.git_url ?? null);
       if (!url) throw new HttpError(409, `레포 '${name}' 의 git 주소가 레지스트리에 없습니다 — 관리탭 ▸ 레포(git) 관리에서 연결하세요.`);
-      await assertDiskWritable(`레포 '${name}' 클론`, [PROJECT_SHARED_BASE]);
+      // #5564 — 세션 가드와 같은 기준으로 판정한다. 종전엔 임계를 안 넘겨 코드 폴백(95% · 5GB)으로만 막아서, 관리탭이나
+      //  노드 env 로 기준을 바꿔도 클론만 옛 기준에 남았다.
+      const sp = await effectiveStoragePolicy(loadStoragePolicy).catch(() => null);
+      await assertDiskWritable(`레포 '${name}' 클론`, [PROJECT_SHARED_BASE], sp ? diskThresholds(sp) : undefined);
       await fsp.mkdir(path.dirname(repoPath), { recursive: true });
       const c = await git(["clone", "--config", "core.sharedRepository=group", url, repoPath], undefined, auth.env);
       if (!c.ok) {

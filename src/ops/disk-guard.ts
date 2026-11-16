@@ -57,9 +57,12 @@ export function invalidateDiskState(): void {
  *   헛걸음이다(2026-10-16 맥미니 노드 실측 문구가 그랬다). 화면에선 다른 컴퓨터로 볼 수 있어 «이 컴퓨터» 대신 이름을 댄다.
  */
 export function diskFullError(what: string, st: DiskState, t?: Thresholds): HttpError {
+  // #5564 — 위험 비율 0 은 «비율을 보지 않는다» 다. 그때 «사용률이 0% 이상이고» 는 뜻 없는 말이라 남은 공간만 말한다.
   const rule = !t ? ""
     : t.criticalFreeBytes
-      ? `사용률이 ${t.criticalPct}% 이상이고 남은 공간이 ${fmtMb(t.criticalFreeBytes)}보다 적으면 새 작업을 막습니다. `
+      ? t.criticalPct > 0
+        ? `사용률이 ${t.criticalPct}% 이상이고 남은 공간이 ${fmtMb(t.criticalFreeBytes)}보다 적으면 새 작업을 막습니다. `
+        : `남은 공간이 ${fmtMb(t.criticalFreeBytes)}보다 적으면 새 작업을 막습니다. `
       : `사용률이 ${t.criticalPct}% 이상이면 새 작업을 막습니다. `;
   const hint = onNode()
     ? `노드 컴퓨터(${os.hostname()})의 디스크에서 공간을 비우세요.`
