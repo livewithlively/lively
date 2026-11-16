@@ -191,6 +191,13 @@ function readRecent(): string[] {
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
   catch { return []; }
 }
+/** 최근 기록에서 뺀다(#5550 레일 최근 칸 우클릭 「독에서 삭제」) — 다시 열면 다시 적힌다. */
+export function forgetAppUse(key: string): void {
+  const cur = readRecent();
+  if (!cur.includes(key)) return;
+  try { localStorage.setItem(RECENT_STORE, JSON.stringify(cur.filter((k) => k !== key))); } catch { return; }
+  shellPrefsPush();
+}
 /** 앱을 열었다 — 맨 앞으로. 같은 앱을 되풀이 열어도 줄이 늘지 않는다. */
 export function noteAppUse(key: string): void {
   if (!key) return;

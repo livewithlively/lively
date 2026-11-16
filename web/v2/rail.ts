@@ -25,7 +25,7 @@
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
 import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
-import { APPS, appHref, installedAppDefs, openLaunchpad, primeInstalledApps, RECENT_STORE_KEY, type AppDef } from './apps.js';
+import { APPS, appHref, forgetAppUse, installedAppDefs, openLaunchpad, primeInstalledApps, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';
@@ -102,21 +102,18 @@ const PIN_STORE = deviceStore('lively_v2_rail_pins');      // 4차의 기억(고
 //   청소했다는 사실이다. 계정에 올리면 다른 기기의 옛 순서를 청소할 기회가 사라진다.
 const SRC_UNPIN_STORE = deviceStore('lively_v2_rail_src_unpinned');
 const RECENT_N = 4;
-//  #5319 — 구역 셋(세션 목록 · 프로젝트 · 위키)을 최근 기록 맨 앞에 **한 번** 끼웠다는 이 기기의 표식. 메인 줄에서 구역 칸이 빠진 날,
-//   이미 쓰던 사람의 최근 칸이 남의 앱 넷으로 차 있으면 세 구역으로 갈 문이 레일에서 한꺼번에 사라진다. 처음엔 그 셋이 칸에 서고,
-//   다른 앱을 열면 하나씩 밀려난다(원준 2026-11-04 «기본 3개도 밀려나게»). 서버 키 목록(src/v6/shell-pref-store)을 늘리지 않으려 기기에 둔다 —
-//   다른 기기에서 처음 열 때 한 번 더 앞으로 오는 것뿐이다.
-const RECENT_SEED_STORE = deviceStore('lively_v2_rail_recent_seed');
-const SEED_APPS = ['terminal', 'projects2', 'knowledge'];
-//  #5319 4차(원준 2026-11-05 «홈과 자료 이거 두 개를 맨 위에 고정된 앱으로 만들자») — 자료를 홈 바로 뒤에 **한 번** 고정했다는 이 기기의 표식.
-//   #2423(2026-08-31)에 자료를 독에서 내렸던 결정을 사람이 되돌렸다. 한 번만 한다 — 그 뒤 사람이 다시 빼면 그 결정이 산다(위 SRC_UNPIN_STORE 와 같은 꼴).
-const SRC_PIN_STORE = deviceStore('lively_v2_rail_src_pinned_5319');
-/** 자료를 홈 바로 뒤(없으면 맨 앞)에 끼운 순서 — 이미 있으면 그대로. */
-function withSourcesPinned(list: readonly string[]): string[] {
-  if (list.includes('sources')) return [...list];
-  const out = [...list];
+//  #5550(원준 2026-11-16 «고정 앱을 <홈>, <수집·증류> 이거만 있게 · 나머지는 다 바둑판 앱 안에 · 최근 앱도 처음엔 아무것도 안 뜨게») —
+//   메인 줄의 기본 고정은 홈 + 수집·증류(context) 둘이다. 자료(#5319 4차에 홈 뒤에 고정했던 것)는 ⊞ 앱 찾기로 내려간다.
+//   ⚠ 종전 #5319 의 두 장치 — 구역 셋(세션 목록 · 프로젝트 · 위키)을 최근 기록에 끼우기 · 자료를 홈 뒤에 고정 — 는 걷었다.
+//   이 기기에서 **한 번** 자료를 내리고 수집·증류를 홈 뒤에 세운다. 그 뒤엔 사람의 결정(끌기 · 독에서 빼기)이 이긴다(SRC_UNPIN_STORE 와 같은 꼴).
+const CTX_PIN_STORE = deviceStore('lively_v2_rail_ctx_pinned_5550');
+const CTX_PIN_KEY = 'context';
+/** 자료를 내리고 수집·증류를 홈 바로 뒤(없으면 맨 앞)에 끼운 순서 — 이미 있으면 그 자리 그대로. */
+function withCtxPinned(list: readonly string[]): string[] {
+  const out = list.filter((k) => k !== 'sources');
+  if (out.includes(CTX_PIN_KEY)) return out;
   const h = out.indexOf('home');
-  out.splice(h >= 0 ? h + 1 : 0, 0, 'sources');
+  out.splice(h >= 0 ? h + 1 : 0, 0, CTX_PIN_KEY);
   return out;
 }
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
@@ -128,19 +125,8 @@ let hooks: RailHooks = {};
 let inited = false;
 //  이번 로드의 init() 이 #2423 '자료 독 내리기' 청소를 실행했나 — 정본이 도착하면 거기에도 한 번 반영한다.
 let cleanedSrcThisLoad = false;
-//  이번 로드의 init() 이 #5319 구역 셋을 최근 기록에 끼웠나 — 같은 까닭으로 정본이 도착하면 거기에도 한 번 더 끼운다.
-let seededRecentThisLoad = false;
-//  이번 로드의 init() 이 #5319 자료 고정을 했나 — 정본(서버)이 도착하면 거기에도 한 번 더 끼우고 올린다.
-let pinnedSrcThisLoad = false;
-/** 구역 셋을 최근 기록 맨 앞에 끼운다(#5319) — 이미 있던 자리는 빼고 앞으로. 캐시만 고친다(올리는 것은 부르는 쪽). */
-function seedRecent(): boolean {
-  let cur: string[] = [];
-  try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) cur = v.filter((x) => typeof x === 'string'); } catch (_) { /* 빈 기록에서 시작 */ }
-  const next = [...SEED_APPS, ...cur.filter((k) => !SEED_APPS.includes(k))].slice(0, 12);   // 12 = apps.ts RECENT_MAX
-  if (JSON.stringify(next) === JSON.stringify(cur)) return false;
-  try { localStorage.setItem(RECENT_STORE_KEY, JSON.stringify(next)); } catch (_) { return false; }
-  return true;
-}
+//  이번 로드의 init() 이 #5550 수집·증류 고정을 했나 — 정본(서버)이 도착하면 거기에도 한 번 더 끼우고 올린다.
+let pinnedCtxThisLoad = false;
 let spaces: Array<{ slug: string; name: string; kind: string; is_primary?: boolean; role?: string | null; member_count?: number | null; kind_effective?: string; pending_invites?: number }> = [];
 let order: string[] = [];   // 메인 그룹 — 구역·리브 키와 고정한 앱 키가 섞여 선다(표시 순서 그대로)
 
@@ -168,21 +154,15 @@ function init(): void {
       cleanedSrcThisLoad = true;   // ⚠ 아래 reloadRailPrefs 주석 — 정본이 도착한 뒤 한 번 더 내려야 실제로 내려간다
       if (order.includes('sources')) { order = order.filter((k) => k !== 'sources'); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
     }
-    //  #5319 4차 — 자료를 홈 뒤에 **한 번** 고정한다. 위 #2423 청소(옛 기본값의 흔적 내리기)보다 **뒤에** 둔다 — 같은 로드에서 청소가 이걸 지우지 않게.
-    if (!localStorage.getItem(SRC_PIN_STORE)) {
-      localStorage.setItem(SRC_PIN_STORE, '1');
-      pinnedSrcThisLoad = true;
-      cleanedSrcThisLoad = false;   // 이번 로드의 #2423 청소는 정본에 다시 하지 않는다(사람이 방금 자료를 고정하라고 했다)
-      if (!order.includes('sources')) { order = normalizeOrder(withSourcesPinned(order)); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
+    //  #5550 — 자료를 내리고 수집·증류를 홈 뒤에 **한 번** 세운다. 위 #2423 청소보다 **뒤에** 둔다.
+    if (!localStorage.getItem(CTX_PIN_STORE)) {
+      localStorage.setItem(CTX_PIN_STORE, '1');
+      pinnedCtxThisLoad = true;
+      cleanedSrcThisLoad = false;   // 자료 내리기는 아래 고정이 함께 한다 — 정본에 따로 다시 하지 않는다
+      const next = normalizeOrder(withCtxPinned(order));
+      if (JSON.stringify(next) !== JSON.stringify(order)) { order = next; localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
     }
     localStorage.removeItem('lively_v2_rail_open');   // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
-    //  #5319 — 구역 셋을 최근 칸의 기본값으로 **한 번** 세운다(위 RECENT_SEED_STORE). 첫 동기 전이라 서버엔 아직 안 올라간다(shellPrefsPush 가드) —
-    //   정본이 도착하면 reloadRailPrefs 가 한 번 더 끼우고 올린다.
-    if (!localStorage.getItem(RECENT_SEED_STORE)) {
-      localStorage.setItem(RECENT_SEED_STORE, '1');
-      seedRecent();
-      seededRecentThisLoad = true;
-    }
   } catch (_) { /* 못 읽어도 홈·보임으로 선다 */ }
   void listWorkspaces().then((rows) => { if (rows.length) { spaces = rows; drawRail(); } });
 }
@@ -208,22 +188,21 @@ export function reloadRailPrefs(): void {
   //   저장 응답(onShellPrefsAdopted)마다 불린다 — 표식이 페이지 내내 서 있으면 그때마다 사람의 고정을 서버에서 지웠다.
   const cleanNow = cleanedSrcThisLoad && !hadSources;
   cleanedSrcThisLoad = false;
-  //  #5319 — 정본이 최근 기록을 덮었다면 구역 셋을 한 번 더 끼우고 올린다(이번 로드에 처음 끼운 경우에만 — 그 뒤엔 사람이 연 순서가 이긴다).
-  const seedNow = seededRecentThisLoad;
-  seededRecentThisLoad = false;
-  if (seedNow && seedRecent()) shellPrefsPush();
   if (cleanNow && order.includes('sources')) {
     order = order.filter((k) => k !== 'sources');
     try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
     shellPrefsPush();   // 정본에도 내려야 다른 기기·다음 로드가 다시 밀어 넣지 않는다
   }
-  //  #5319 4차 — 이번 로드에 처음 자료를 고정했다면 정본에도 한 번(그 뒤 다시 읽기는 사람이 정한 순서를 그대로 둔다).
-  const pinNow = pinnedSrcThisLoad;
-  pinnedSrcThisLoad = false;
-  if (pinNow && !order.includes('sources')) {
-    order = normalizeOrder(withSourcesPinned(order));
-    try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
-    shellPrefsPush();
+  //  #5550 — 이번 로드에 처음 수집·증류를 고정했다면 정본에도 한 번(그 뒤 다시 읽기는 사람이 정한 순서를 그대로 둔다).
+  const pinNow = pinnedCtxThisLoad;
+  pinnedCtxThisLoad = false;
+  if (pinNow) {
+    const next = normalizeOrder(withCtxPinned(order));
+    if (JSON.stringify(next) !== JSON.stringify(order)) {
+      order = next;
+      try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
+      shellPrefsPush();
+    }
   }
   drawRail();
 }
@@ -283,11 +262,14 @@ function recentForRail(n: number): AppDef[] {
   //  hidden(#2199): 문이 다른 곳에 있는 앱 · 구역과 같은 문 · 이미 메인에 고정한 앱 · 꺼진 앱은 설 수 없다.
   //  #4769 설치한 앱(구성원 앱 — 팀 채널 · 장표 수정)도 선다. 앱 표 뒤에 서고, 기록(`i:` 키)에 있는 것만 들어온다(railRecentKeys 가 거른다).
   //  #5011 독에 고정한 설치 앱은 최근 칸에 또 서지 않는다(앱 표의 앱과 같은 규칙).
-  //  #5319 — 구역과 같은 문(세션 목록 · 프로젝트 · 위키)도 이제 최근 칸에 선다. 앱 표 맨 앞이라 기록이 모자라면 그 셋이 먼저 칸을 채운다(처음 온 사람의 기본값).
+  //  #5319 — 구역과 같은 문(세션 목록 · 프로젝트 · 위키)도 이제 최근 칸에 선다. (#5550 부터는 기록에 있을 때만 — 아래.)
   const eligible = [...APPS.filter((a) => !a.hidden && !order.includes(a.key) && (!a.tab || navOn(a.tab))),
     ...installedAppDefs().filter((a) => !order.includes(a.key))];
+  //  #5550 — 기록에 있는 앱만 선다. 기록이 모자라도 표 순서로 **채우지 않는다**(원준 «최근 앱도 처음엔 아무것도 안 뜨게») —
+  //   처음 로그인한 사람의 레일엔 고정한 둘(홈 · 수집·증류)만 선다. 다른 앱은 ⊞ 앱 찾기에서 열면 그때 여기 선다.
   //  칸 순서는 연 순서가 아니라 앱 표 순서다(#3870) — 누를 때마다 칸이 섞이면 방금 누른 자리에 딴 앱이 선다.
-  return railRecentKeys(keys, eligible.map((a) => a.key), n).map((k) => eligible.find((a) => a.key === k) as AppDef);
+  const opened = eligible.map((a) => a.key).filter((k) => keys.includes(k));
+  return railRecentKeys(keys, opened, n).map((k) => eligible.find((a) => a.key === k) as AppDef);
 }
 /** 지금 켜질 칸 하나(#3870) — 앱 화면이면 기억한 구역은 꺼진다. 레일과 구역 드롭다운이 같은 잣대를 쓴다. */
 function litKey(): string {
@@ -748,11 +730,14 @@ function pinApp(key: string, idx = order.length): void {
   saveOrder(next); drawRail();
 }
 function unpinApp(key: string): void { saveOrder(order.filter((k) => k !== key)); drawRail(); }
+/** 최근 칸에서 지운다(#5550) — 최근 기록에서 빼므로 다시 열기 전까지 레일에 안 선다. 앱 자체는 ⊞ 앱 찾기에 그대로 있다. */
+function removeRecent(key: string): void { forgetAppUse(key); drawRail(); }
 function dockMenu(x: number, y: number, a: AppDef, pinned: boolean): void {
   ctxMenu(x, y, [
     { label: '열기', run: () => openRailApp(a) },
     { sep: true, label: '' },
-    pinned ? { label: '독에서 빼기', run: () => unpinApp(a.key) } : { label: '독에 고정', run: () => pinApp(a.key) },
+    ...(pinned ? [{ label: '독에서 빼기', run: () => unpinApp(a.key) }]
+      : [{ label: '독에 고정', run: () => pinApp(a.key) }, { label: '독에서 삭제', run: () => removeRecent(a.key) }]),
   ]);
 }
 
@@ -1072,6 +1057,7 @@ export function drawRail(): void {
   // ② 최근 연 앱 — 헤어라인 아래, 자동(맥 독의 최근 구간). 위로 끌어 올리면 메인에 고정된다.
   const recentZone = el('div', { class: 'v2-rail-recent', 'aria-label': '최근 연 앱' }, ...recentForRail(RECENT_N).map((a) => appItem(a, 'recent')));
 
+  //  ⚠ 최근 칸이 비어도 헤어라인과 칸은 남긴다 — 위로 끌어 올리기 · 아래로 끌어 내리기(끌기 엔진)가 그 자리를 잰다.
   const mid = el('div', { class: 'v2-rail-mid' }, mainZone, el('div', { class: 'v2-rail-hr', role: 'presentation' }), recentZone);
 
   // ③ 발치 — 앱 · 나 (슬랙의 ＋ · 아바타). 여닫는 단추는 여기 없다(머리말).
