@@ -11,6 +11,9 @@ let justFinished = false;
 // 이미 답한 프롬프트 id — **다시 그리지 않는다.**
 //  메인도 답을 받으면 progress.prompt 를 비우지만, 그 사이에 다음 step 이벤트가 먼저 도착하면
 //  옛 prompt 를 든 진행 상태가 한 번 더 그려진다(실측: 답한 카드가 잠깐 되살아났다). 양쪽에서 막는다.
+//  ⚠ 이 기억은 **한 실행 안에서만** 유효하다 — 새 실행이 시작되면 비운다(renderProgress 의 null).
+//   안 비우면 다음 실행이 같은 id 로 묻는 질문이 영영 안 뜬다: 구 CLI 는 실행마다 confirm-1 부터 붙였고,
+//   그래서 앱을 켠 채 다시 로그인하면 신원 확인 카드가 숨어 CLI 가 답을 기다리며 멈췄다(실측 2026-11-16).
 const answeredPrompts = new Set();
 
 function renderState(s) {
@@ -108,7 +111,8 @@ function renderState(s) {
 function renderProgress(p) {
   // 실패는 화면에 남긴다 — 성공만 사라지고 실패가 조용히 없어지면 사람은 무슨 일이 났는지 모른다.
   show($("progress-card"), !!p && (!p.done || p.ok === false));
-  if (!p) return;
+  // null = 새 실행의 시작(메인이 start() 에서 보낸다) 또는 아직 아무것도 안 돌았다 — 지난 실행의 질문·답 기억을 치운다.
+  if (!p) { answeredPrompts.clear(); renderPrompt(null); return; }
   if (p.done && p.ok) justFinished = true;
   $("progress-title").textContent = p.done ? (p.ok ? "완료" : "실패") : "진행 중";
   // 진행률을 모르면(i/n 없음) 바를 채우지 않는다 — 가짜 퍼센트는 멈춘 것처럼 보인다.

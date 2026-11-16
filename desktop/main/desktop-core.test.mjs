@@ -1211,6 +1211,18 @@ t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt
   assert.ok(/send\(IPC\.PROGRESS/.test(seg), '비운 상태를 렌더러에 안 보내면 화면은 그대로다');
 });
 
+t('D6b ★ 새 실행이 시작되면 답한 질문 기억을 비운다 — 안 비우면 다음 실행의 같은 id 질문이 안 뜬다', () => {
+  // 실측(2026-11-16): 앱을 켠 채 로그아웃 → 다시 로그인. 브라우저 승인·토큰 발급은 끝났는데 «…로 로그인됩니다. 계속할까요?»
+  //  카드가 안 떠 CLI 가 답을 기다리며 멈췄다. 그때 CLI 는 실행마다 confirm-1 부터 붙였고, 렌더러는 답한 id 를
+  //  창이 살아 있는 내내 기억했다. 그 기억은 한 실행 안의 경쟁(D6)만 막으면 된다.
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  const startSeg = main.slice(main.indexOf('async function start(kind, opts)'), main.indexOf('await runCli({', main.indexOf('async function start(kind, opts)')));
+  assert.ok(/progress = null;\s*send\(IPC\.PROGRESS, progress\)/.test(startSeg), '메인이 새 실행의 시작(빈 진행 상태)을 렌더러에 안 알린다');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  const rp = js.slice(js.indexOf('function renderProgress(p)'), js.indexOf('function renderPrompt(p)'));
+  assert.ok(/if \(!p\) \{[^}]*answeredPrompts\.clear\(\)/.test(rp), '렌더러가 새 실행에서 답한 id 기억을 안 비운다');
+});
+
 // ── J. 어떻게 띄우나 — Windows `.cmd` 는 그대로 spawn 하면 EINVAL (#1541 실기기) ──
 // 실측: Windows 심은 `lively.cmd` 배치인데 Node 는 CVE-2024-27980 이후 shell 없는 배치 실행을 거부한다.
 //  → 앱이 CLI 를 **한 번도** 못 불렀다(`spawn EINVAL` 반복). 스텁 spawn 단위테스트도, mac 실동작 검증도 못 본다.

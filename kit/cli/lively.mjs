@@ -510,11 +510,23 @@ function ttyIO() {
 //  이 한 줄이 없으면 GUI 로그인이 "비대화형 환경입니다"로 죽어 T3 이 성립하지 않는다.
 const interactive = () => { if (PROMPTER) return true; const t = ttyIO(); const y = !!t.in.isTTY; t.close(); return y; };
 
+// ── 질문 id — **실행마다 달라야 한다** ───────────────────────────────────────
+//  데스크톱 앱은 답한 질문의 id 를 기억해 같은 id 를 다시 그리지 않는다(renderer 의 answeredPrompts — 답한 카드가
+//  되살아나는 경쟁을 막는 장치). 번호만 붙이면 실행마다 confirm-1 부터라, **앱을 켠 채 두 번째로 도는 실행**의
+//  첫 질문이 화면에 뜨지 않고 CLI 는 오지 않을 답을 끝없이 기다린다.
+//  실측(2026-11-16): 로그아웃 뒤 다시 로그인 — 브라우저 승인도 토큰 발급도 끝났는데 «…로 로그인됩니다. 계속할까요?»
+//   카드가 숨어, 화면은 «브라우저에서 승인을 기다리는 중» 에 멈춰 있었다.
+//  그래서 id 에 이 실행만의 꼬리표를 넣는다. 앱은 id 를 그대로 되돌려 주기만 하므로(모양을 읽지 않는다) 계약은 그대로다.
+const PROMPT_RUN = crypto.randomBytes(4).toString("hex");
+let promptSeq = 0;
+/** (순수 — 테스트 seam) 질문 id. 같은 실행 안에선 seq 로, 실행 사이에선 run 으로 갈린다. */
+export const promptId = (kind, seq, run = PROMPT_RUN) => `${kind}-${run}-${seq}`;
+
 // 가림 입력(에코 없음) — 토큰이 화면·스크롤백·화면녹화·셸 히스토리 어디에도 안 남는다. 비대화형이면 null.
 const CTRL_C = "\u0003", CTRL_D = "\u0004", BACKSPACE = "\u007f";
 function askHidden(label) {
   // 이벤트 모드: 가림 입력도 앱이 받는다(비밀은 **이벤트로 나가지 않고 stdin 으로 들어온다** — 방향이 반대라 안전).
-  if (PROMPTER) return PROMPTER.ask("secret", "secret", { label: stripAnsi(label) });
+  if (PROMPTER) return PROMPTER.ask(promptId("secret", ++promptSeq), "secret", { label: stripAnsi(label) });
   const t = ttyIO();
   if (!t.in.isTTY) { t.close(); return Promise.resolve(null); }
   return new Promise((resolve) => {
@@ -542,11 +554,10 @@ function askHidden(label) {
 }
 
 // 예/아니오 — 비대화형이면 기본값을 그대로 쓴다(프롬프트가 자동화를 막지 않게).
-let promptSeq = 0;
 function askYesNo(label, def = true) {
   // 이벤트 모드: GUI 가 물어본다. **답이 안 오고 stdin 이 닫히면 실패한다** — 기본값으로 조용히 승인하면
   //  "이 계정으로 로그인됩니다" 확인이 사람 없이 통과한다(#R2-F1 이 막으려던 바로 그것). fail-closed.
-  if (PROMPTER) return PROMPTER.ask(`confirm-${++promptSeq}`, "confirm", { label: stripAnsi(label), default: !!def });
+  if (PROMPTER) return PROMPTER.ask(promptId("confirm", ++promptSeq), "confirm", { label: stripAnsi(label), default: !!def });
   const t = ttyIO();
   if (!t.in.isTTY) { t.close(); return Promise.resolve(def); }
   return new Promise((resolve) => {
