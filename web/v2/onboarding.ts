@@ -37,6 +37,8 @@ import { mountAiList } from './onboarding-ai.js';
 //  (#5060) 처음 설정에서 고른 파일 — 다른 화면으로 옮겨 가도 계속 올라간다.
 import { bgUploadAdd, bgUploadOnChange, bgUploadState, uploadVerdict } from './bg-upload.js';
 import { startSetupWatch } from './setup-watch.js';
+//  (#5550) 인사 장면의 소개 영상 — 못 읽으면 종전 그림(introArt)으로 되돌아간다.
+import { mountWelcomeFilm } from './welcome-film.js';
 import { upDirSupported, upDropZone, upFromInput, type UpItem } from '../projects/files-upload.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
@@ -170,6 +172,8 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   const KEY = 'lively-ob-v2';
   /** 이 화면이 이미 걷혔나 — 서버를 기다리는 사이에 떠날 수 있다. */
   let destroyed = false;
+  /** 지금 장면이 떠날 때 걷을 것(#5550 — 인사 장면의 소개 영상). */
+  let sceneCleanup: (() => void) | null = null;
   /** 이 화면이 히스토리에 쌓은 걸음 순번 — «뒤로» 와 «나가기» 를 가르는 근거(onPop 참조). */
   let obSeq = 0;
   /** 서버에 «어디까지 하셨나» 를 묻고 기다리는 한도. 넘으면 처음부터 연다 — 못 물었다고 화면이 안 열리면 안 된다. */
@@ -291,7 +295,9 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     /* 인사(#1631) — 무엇을 묻기 전에 **Lively 가 무엇을 하는지**와 이 뒤에서 무엇을 하는지를 먼저 말한다.
      *  ⚠ 아무것도 묻지 않는 장면이다 — BEFORE_ANSWER 에 들어 있어 여기 머문 것은 저장·이어 열기의 대상이 아니다. */
     intro: {
-      html: () => `${introArt()}
+      //  (#5550, 원준님 2026-11-16 «리니어는 온보딩하면 맨 처음에 온보딩 영상 띄워 주잖아») — 그림 자리에 소개 영상이 선다(welcome-film.ts).
+      //   끝까지 안 봐도 [계속하기]는 눌린다. 영상을 못 읽으면 그 자리에 종전 그림이 선다 — 영상 때문에 처음 설정이 막히지 않는다.
+      html: () => `<div class="ob-in-film" id="introFilm"></div>
         <h1 class="ob-q-title ob-in-title">${esc(OB_COPY.introTitle)}</h1>
         <p class="ob-in-p">${esc(OB_COPY.introBody)}</p>
         <p class="ob-in-p ob-in-next">${esc(OB_COPY.introNext)}</p>
@@ -590,9 +596,22 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     col.style.animation = 'none';
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
     col.classList.toggle('ob-intro', key === 'intro');
+    col.classList.remove('ob-has-film');
+    //  앞 장면이 남긴 것(도는 영상 등)을 걷고 갈아 끼운다 — 떼어 낸 영상은 스스로 멈추지 않는다.
+    if (sceneCleanup) { const c = sceneCleanup; sceneCleanup = null; try { c(); } catch (_) { /* 비치명 */ } }
     col.innerHTML = sc.html();
     syncBack();
     sc.bind && sc.bind(col);
+    if (key === 'intro') mountIntroFilm(col);
+  }
+  /** (#5550) 인사 장면의 영상을 세운다 — 못 읽으면 그 자리에 종전 그림(introArt)을 세우고 넓힌 칸도 되돌린다. 떠날 때는 sceneCleanup 이 걷는다. */
+  function mountIntroFilm(col: HTMLElement) {
+    const slot = $('#introFilm', col);
+    if (!slot) return;
+    col.classList.add('ob-has-film');
+    const film = mountWelcomeFilm({ onError: () => { col.classList.remove('ob-has-film'); slot.outerHTML = introArt(); } });
+    slot.append(film.root);
+    sceneCleanup = () => film.destroy();
   }
   /* 뒤로가기는 **지나온 자취**를 되짚는다. */
   function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }
@@ -682,6 +701,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   else void resumeFromServer();
   return { destroy() {
     destroyed = true;
+    if (sceneCleanup) { const c = sceneCleanup; sceneCleanup = null; try { c(); } catch (_) { /* 비치명 */ } }
     if (toastT) clearTimeout(toastT);
     stopAppWatch();
     removeEventListener('popstate', onPop);

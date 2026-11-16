@@ -307,6 +307,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/project-draft.pg-test.mjs
+      # ④-d4 초안 비공개 + 풀리는 조건(#5522) — 목으로는 못 보는 것: **두 규칙이 전부 SQL 이다**.
+      #    «초안은 만든 사람과 팀원만 본다» 는 목록 · 검색 · 단건이 공유하는 술어이고 태스크는 조상까지 타고 올라가야 판정된다.
+      #    «무언가를 남기면 풀린다» 는 UPDATE 의 WHERE(뿌리 해소)와 스윕의 CTE 다. 세션 초대 → 팀원 넣기 · 휴지통 개수도 함께 본다.
+      #    (맨 `id` 를 술어에 넘겨 «남의 초안이 하나 생기면 내 초안까지 숨는» 결함을 이 시험이 잡았다.)
+      - name: 초안 비공개·풀리는 조건 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/project-draft-private.pg-test.mjs
       # 자동 생성 프로젝트 정리(project_gc) — 무엇이 «기록»·«마지막 손길»인지가 후보 SQL 안에 있다(가족 2단계 · 여러 출처의 최댓값).
       #    목 풀로는 가족을 한 단계 덜 봐도 초록이라 실제 테이블에 심고 되읽는다. mode=on 이 웹과 같은 완료·휴지통 핸들러를 타는지도 본다.
       #    tenant 판은 앱 역할 · FORCE RLS 로 남의 워크스페이스 프로젝트가 후보가 아닌지 본다.
@@ -835,6 +844,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/delivery/seed-sort-migrate.pg-test.mjs
+      # ⑤-x 셀프호스트 기본 워크스페이스 이름(#5524) — 목으로는 못 보는 것: 레일·목록이 읽는 등록부 primary 행이 조직 프로필
+      #    저장을 따라가나(모달 · 관리탭 · MCP 가 한 길로 지난다) · 다른 워크스페이스 컨텍스트·단일 모드에선 안 건드리나 ·
+      #    이미 어긋난 박스를 부팅 스텝이 한 번 맞추고 두 번째엔 쓰지 않나(updated_at 을 마이크로초로 대조).
+      - name: 기본 워크스페이스 이름 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/tenancy/primary-workspace-name.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

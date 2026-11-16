@@ -15,7 +15,7 @@
 // ⚠ 내가 한 일은 나에게 알리지 않는다(actor = me 는 전부 제외) — 자기 행위가 배너로 돌아오면 그건 고장이다.
 import { itemsPool } from "../db/client.js";
 import { q } from "../db/client.js";
-import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
+import { projectVisFor, projectVisPredicate, PROJECT_VIS_ALL, type Viewer } from "./visibility.js";
 
 export type NotifyKind = "mention" | "comment" | "invite" | "app";   // app — 워크스페이스 앱이 보낸 알림(#4769, 팀 채널 등)
 
@@ -68,8 +68,8 @@ export async function listMyNotifications(
   const since = opts.since && !Number.isNaN(Date.parse(opts.since))
     ? new Date(opts.since).toISOString()
     : new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const visIds = viewer === undefined ? null : await visibleListIds(viewer);
-  const visWhere = listIdPredicate("COALESCE(root.list_id, p.list_id)", visIds);
+  const pv = viewer === undefined ? PROJECT_VIS_ALL : await projectVisFor(viewer);
+  const visWhere = projectVisPredicate("COALESCE(root.list_id, p.list_id)", "COALESCE(root.id, p.id)", pv);
   const name = String(opts.displayName || "").trim();
 
   // ① 댓글 — 나를 지목한 것(멘션) 또는 내가 참여·담당한 일의 댓글.

@@ -22,6 +22,7 @@ const TYPES: Record<string, string> = {
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf",
   ".map": "application/json; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+  ".mp4": "video/mp4", ".webm": "video/webm",   // #5550 소개 영상(public/media) — 타입이 없으면 브라우저가 영상으로 읽지 않는다
 };
 const ID_CAP = "([a-z0-9][a-z0-9_-]{0,63})";
 export const HTML_REWRITE_CAP = 4 * 1024 * 1024; // 파비콘 치환을 위해 버퍼링할 HTML 상한 — 넘으면 원본 스트리밍으로 되돌린다

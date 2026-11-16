@@ -143,6 +143,40 @@ export async function updateWorkspaceName(id: string, name: string): Promise<voi
   invalidateRegistryCache();
 }
 
+/**
+ * 조직 프로필에서 **사람에게 보이는 이름** — 표시명(display_name)이 먼저, 비면 조직 이름(name).
+ *  제품 전체가 이미 이 규칙으로 조직 이름을 보인다(대화 머리말 · 알림 · 키트 발행 · 단일 모드 레일).
+ *  primary 등록부 행만 이 규칙 밖에 있었다(#5524 — 아래 syncPrimaryWorkspaceName).
+ */
+export function profileVisibleName(p: { name?: string | null; display_name?: string | null } | null | undefined): string {
+  return String(p?.display_name ?? "").trim() || String(p?.name ?? "").trim();
+}
+
+/**
+ * primary 등록부 행의 이름을 조직 프로필의 보이는 이름에 맞춘다(#5524). 바꿨으면 true.
+ *
+ * ★ 왜 필요한가 — 셀프호스트 레일·워크스페이스 목록은 **등록부(gw_workspace)** 의 이름을 그리는데,
+ *  primary 의 이름은 «조직 이름 그 자체»라 저장은 조직 프로필로 간다(#2188). 그런데 등록부 primary 행은
+ *  활성화 순간 프로필을 **한 번** 베껴 심고 그 뒤로 아무도 고치지 않았다 — 그래서 «저장했어요» 뒤 새로 고쳐도
+ *  이름이 그대로였다(상민님 신고 2026-11-11). 설치 직후엔 활성화가 프로필보다 먼저 돌아 «우리 워크스페이스» 로
+ *  굳은 박스도 있다(테스트 박스 실측: 등록부 «우리 워크스페이스» · 프로필 «셀프호스트 테스트»).
+ *  primary 행 이름을 쓰는 길은 활성화 시드와 여기뿐이다 — workspace_update 는 primary 이름을 받지 않는다.
+ *
+ * · 보이는 이름이 비면 건드리지 않는다 — 등록부 이름을 빈칸으로 만들지 않는다.
+ * · 같으면 쓰지 않는다(updated_at 도 그대로) — 부팅마다 불러도 조용하다.
+ * · 호출자가 «registry 모드 · primary 컨텍스트» 를 판정한다(updateOrgProfile · 부팅 스텝).
+ */
+export async function syncPrimaryWorkspaceName(p: { name?: string | null; display_name?: string | null } | null | undefined): Promise<boolean> {
+  const name = profileVisibleName(p);
+  if (!name) return false;
+  const r = await itemsPool.query(
+    `UPDATE gw_workspace SET name=$2, updated_at=now() WHERE id=$1 AND name IS DISTINCT FROM $2`,
+    [PRIMARY_TENANT_ID, name]);
+  if (!r.rowCount) return false;
+  invalidateRegistryCache();
+  return true;
+}
+
 export async function archiveWorkspace(id: string): Promise<void> {
   await itemsPool.query(`UPDATE gw_workspace SET state='archived', updated_at=now() WHERE id=$1`, [id]);
   invalidateRegistryCache();

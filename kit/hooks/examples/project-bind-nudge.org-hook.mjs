@@ -158,7 +158,11 @@ function projectIdFromToolInput(toolName, ti) {
   }
   if (!proj) return;                               // 판정 불가 — 플래그 미소모(다음 쓰기 툴에서 다시 본다)
 
-  const isShell = String(proj.description || "").includes(AUTO_MARK);
+  // #5522 — 껍데기 판정은 **초안 표시**(project.draft)다. 본문의 자동 생성 표식은 정련해도 남아서(append 는 원문을 보존한다),
+  //  표식만 보면 리스트 · 지식 · 태스크가 다 붙은 프로젝트도 «임시 껍데기» 로 안내했다(실측 2026-11-11: 리스트에 들어 있고
+  //  지식 22건이 붙은 프로젝트에 정련 안내가 나갔다). 초안은 제목 · 본문을 고치거나 무언가를 남기면 서버가 내리므로 그 값이 «아직 껍데기인가» 다.
+  //  draft 칸을 안 주는 옛 서버에서는 종전대로 표식으로 본다.
+  const isShell = typeof proj.draft === "boolean" ? proj.draft : String(proj.description || "").includes(AUTO_MARK);
   if (!isShell) {                                  // 사람이 고른 프로젝트 · 이미 정련된 프로젝트 → 할 말 없음
     consume();
     return;
