@@ -116,7 +116,8 @@ const out = (cmd, args, cwd) => sh(cmd, args, { cwd }).stdout.trim();
     const p = await repoPin(c, { repo: "k3" });
     check("K3 ref 없는 핀이 등록 브랜치(main) SHA", headOf(p.pin) === tip("main"), `${p.sha}`);
     check("K3 핀 반환 sha·ref", p.sha === short("main") && p.ref === "main", `${p.sha} ${p.ref}`);
-    check("K3 핀 내용이 배포 코드", readFileSync(join(p.pin, "WHERE"), "utf8") === "main\n");
+    // trim — 윈도우 git 은 체크아웃하며 줄바꿈을 CRLF 로 바꾼다(core.autocrlf).
+    check("K3 핀 내용이 배포 코드", readFileSync(join(p.pin, "WHERE"), "utf8").trim() === "main");
     // develop 핀도 떠 둔다 — 지우기가 «등록 브랜치의 핀» 만 집는지 본다.
     const pd = await repoPin(c, { repo: "k3", ref: "develop" });
     const rm = await repoPinRemove(c, { repo: "k3" });

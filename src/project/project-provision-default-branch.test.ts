@@ -20,6 +20,11 @@ import { execFileSync } from "node:child_process";
 delete process.env.ITEMS_DATABASE_URL;
 const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "prov-defbranch-")));
 process.env.TERMINAL_ROOT_SHARED = ROOT;
+// 홈도 샌드박스로 — provision 은 워크트리를 안 쓰는 레포를 하네스 전역 설정(~/.codex/config.toml)에 등록한다.
+//  이 시험은 그 경로를 타지 않게 짰지만(아래 S6 은 워크트리 모드), 혹시 타더라도 실행한 사람의 실제 설정에 닿지 않게 한다.
+const SANDBOX_HOME = path.join(ROOT, "home");
+fs.mkdirSync(SANDBOX_HOME, { recursive: true });
+process.env.HOME = process.env.USERPROFILE = SANDBOX_HOME;
 
 const { provisionProjectRepos, ensureProvisionBase, refreshSharedRepo, registeredBranchOf, registeredBranchOfRow, resolveRepoInject } = await import("./project-provision.js");
 
@@ -180,7 +185,7 @@ try {
     git(["clone", "-q", url, custom]);
     assert.equal(branchOf(custom), "develop");
     const { provisioned } = await provisionProjectRepos(70006, "project/70006",
-      [{ name: "s6", path: custom, worktree: false, inject: inj("main") }], { clone: true, memberId: null });
+      [{ name: "s6", path: custom, worktree: true, inject: inj("main") }], { clone: true, memberId: null });
     assert.equal(provisioned[0].path, custom, "배선: 지정한 경로가 쓰이지 않았다");
     assert.equal(branchOf(custom), "develop", "직접 지정한 클론의 브랜치를 바꿨다");
     ok("S6 경로를 직접 지정한 기존 클론은 그 사람이 고른 브랜치를 따른다");
@@ -340,6 +345,9 @@ try {
     assert.equal(i.defaultBranch, null);
     ok("N1 노드 주입 묶음(resolveRepoInject)에 defaultBranch 칸이 있다");
   }
+
+  // 배선 — 이 시험이 홈(샌드박스로 돌린 자리 포함)의 하네스 전역 설정을 만들지 않았다.
+  assert.equal(fs.existsSync(path.join(SANDBOX_HOME, ".codex")), false, "시험이 하네스 전역 설정(~/.codex)을 썼다");
 
   console.log(`\n${pass} passed`);
 } finally {
