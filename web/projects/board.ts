@@ -51,6 +51,8 @@ import { pjvMySessionCounts, pjvPrefetchSessions, pjvSessGroupLabel, pjvSessGrou
 
 /** #5522 「초안」 스코프가 비었을 때 — 초안은 무언가를 남기면 풀려 제 리스트 · 「기타 (미분류)」로 간다. */
 const PJV_NO_DRAFTS = '초안이 없습니다. 세션 첫 지시로 생긴 프로젝트가 아무것도 남기기 전까지 여기 섭니다.';
+/** 초안은 있는데 툴바 좁히기(검색 · 필터 · 담당자 · 내 할당만)에 모두 걸러졌을 때 — «초안이 없다» 고 하면 틀린 말이다(격리 리뷰 지적). */
+const PJV_NO_DRAFTS_FILTERED = '이 조건에 맞는 초안이 없습니다. 검색어 · 필터 · 담당자를 바꿔 보세요.';
 
 // ════════════════════════════════════════════
 // 프로젝트(v2) #/projects2 — 맥락 = 카테고리 + 지식 + 프로젝트 중 '프로젝트'(= 맥락의 *변화*).
@@ -565,6 +567,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       ...folderList.filter((f) => !archiveFolderIds.has(Number(f.id))).map((f) => ({ key: 'F' + f.id, has: folderHasVis(f) })),
       ...topLists.map((l) => ({ key: 'L' + l.id, has: listHasVis(l.id) })),
       ...(showUn ? [{ key: '__none__', has: true }] : []),
+      //  #5522 — 초안만 있는 사람(리스트 · 일반 프로젝트 없음)이 빈 「기타」에 착지하지 않게 맨 끝 후보로 둔다.
+      ...(draftsAll.length ? [{ key: '__drafts__', has: true }] : []),
     ];
     // ⭐ 즐겨찾기 우선(#1114) — 즐겨찾기한 리스트가 있으면 트리 순서 대신 그게 기본 진입(사이드바 맨 위 '즐겨찾기' 구역과 같은 순서).
     //  내용(보이는 프로젝트) 있는 즐겨찾기 우선, 전부 비었으면 첫 즐겨찾기 — 사용자가 직접 꽂은 핀이라 빈 리스트여도 트리 휴리스틱보다 앞선다.
@@ -798,7 +802,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       if (!anyL) boardBox.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
     } else if (byStatus) {
       // 컬럼 라벨은 별도 헤더 행이 아니라 첫 상태 그룹 헤더에 합친다(#470). 단일 리스트면 커스텀 상태로 그룹핑(#475).
-      if (draftScope && !shownProjects.length) boardBox.append(el('div', { class: 'pjv-proj-empty', text: PJV_NO_DRAFTS }));
+      if (draftScope && !shownProjects.length) boardBox.append(el('div', { class: 'pjv-proj-empty', text: scopeRaw.length ? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS }));
       else pjvRenderStatusGroups(boardBox, shownProjects, selList, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy, colSort,
         ...(draftScope ? { noAdd: true, draftScope: true } : {}) });
     } else {
@@ -812,7 +816,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
           : (savedCmp || (colSort ? pjvColSortCmp(colSort) : ((a, b) => rank(a) - rank(b) || pjvManualCmp(a, b)))));
       const flatBody = el('div', { class: 'pjv-tgroup-body pjv-flat-body' });
       for (const p of rows) flatBody.append(pjvProjRow(p, reload, null, canDelete, effFields, anchorId, taskCtx));
-      if (!rows.length) flatBody.append(el('div', { class: 'pjv-proj-empty', text: draftScope ? PJV_NO_DRAFTS : mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
+      if (!rows.length) flatBody.append(el('div', { class: 'pjv-proj-empty', text: draftScope ? (scopeRaw.length ? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS) : mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
       if (!mineOnly && !draftScope) flatBody.append(pjvProjAddRow('in_progress', reload, flatBody, null, effFields, null, canDelete, anchorId, meId, taskCtx, listIdForAdd));
       boardBox.append(flatBody);
     }
@@ -1159,7 +1163,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       // 미분류('기타') — 검색 중엔 '기타/미분류' 문자열 매칭 또는 미분류 프로젝트 매칭(#665)일 때.
       //  (#1154) 검색 중 노출 판정은 showUn(툴바 필터를 지난 값)이 아니라 원본 미분류 프로젝트로 한다 —
       //   필터에 걸려 보드에서 빠진 미분류 프로젝트도 트리 검색으로는 찾아갈 수 있어야 한다. 카운트는 그대로 '보이는 수'.
-      const unSearchHit = sideSearchActive() && (sideSearchNorm('기타 미분류').includes(sideQ()) || searchProjsUn.some(projMatchesQ));
+      //  #5522 — 초안은 「기타」 가 아니라 아래 「초안」 줄 밑에서 찾아진다(「기타」 스코프가 초안을 그리지 않으므로).
+      const searchUnReal = searchProjsUn.filter((p) => !isDraftProj(p));
+      const searchDrafts = projects.filter(isDraftProj);
+      const unSearchHit = sideSearchActive() && (sideSearchNorm('기타 미분류').includes(sideQ()) || searchUnReal.some(projMatchesQ));
       if (sideSearchActive() ? unSearchHit : showUn) {
         const unKey = '__none__';
         const uit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === unKey ? ' active' : ''), role: 'button', tabindex: '0' },
@@ -1167,16 +1174,19 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         uit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(unKey); });
         pjvFolderDropTarget(uit, null, reload);
         treeWrap.append(uit);
-        appendProjMatches(searchProjsUn, 1, '__none__');
+        appendProjMatches(searchUnReal, 1, '__none__');
       }
-      //  #5522 「초안」 — 셸 사이드바와 같은 줄. 초안이 있을 때만(지금 보고 있으면 0 이어도) · 검색 중엔 위 「기타」 검색이 초안까지 찾는다.
-      if (!sideSearchActive() && (draftsAll.length || sel === '__drafts__')) {
+      //  #5522 「초안」 — 셸 사이드바와 같은 줄. 초안이 있을 때만(지금 보고 있으면 0 이어도).
+      //   검색 중엔 「초안」 이라는 말이나 초안 프로젝트가 걸릴 때만 서고, 걸린 초안을 그 밑에 둔다(「기타」 와 같은 규칙).
+      const draftSearchHit = sideSearchActive() && (sideSearchNorm(DRAFT_LABEL).includes(sideQ()) || searchDrafts.some(projMatchesQ));
+      if (sideSearchActive() ? draftSearchHit : (draftsAll.length || sel === '__drafts__')) {
         const dKey = '__drafts__';
         const dit = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sel === dKey ? ' active' : ''), role: 'button', tabindex: '0', title: DRAFT_HINT },
           pjvBundleIcon(null, 'draft'), el('span', { class: 'pjv-side-navlabel', text: DRAFT_LABEL }), el('span', { class: 'pjv-side-navcount', text: String(draftsAll.length) }));
         dit.addEventListener('click', (e) => { e.stopPropagation(); selectArea(dKey); });
         dit.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectArea(dKey); } });
         treeWrap.append(dit);
+        appendProjMatches(searchDrafts, 1, dKey);
       }
       // 📦 아카이브(#1067) — 평소엔 늘 고정 노출(휴지통 바로 위), 검색 중엔 안에 매칭이 있을 때만(펼친 채로).
       if (!sideSearchActive() || archiveHasMatch()) renderArchiveNode();

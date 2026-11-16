@@ -27,7 +27,7 @@ import { enterSession, openRouteRow } from './detail-hub-kit.js';
 import { pjvProjStatusMeta, pjvResolveProjStatus } from './status.js';
 import { pjvProjClosedView } from './state.js';
 import { pjvPopover } from './popover.js';
-import { DRAFT_HINT, DRAFT_LABEL, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안을 가려내는 잣대 한 벌(사이드바 수와 맞는다)
+import { DRAFT_HINT, DRAFT_LABEL, draftCountText, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안을 가려내는 잣대 한 벌(사이드바 수와 맞는다)
 
 const PAGE = SESS_TABLE_PAGE;
 // 세션 목록 화면과 같은 두 축(main.ts loadData) — 기록은 서버 상한(2000)까지 한 번에. 실측 384건 · 0.2MB.
@@ -218,7 +218,7 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
   //  거르개 줄 — [세션 목록] 앱 도구줄과 같은 부품(기간 · 사람 · 상태 칩) + 오른쪽에 개수.
   const picks = sessFilterPicks(ui, { owners: ownerCounts(items, q), ownerName, myStateCount: byState, repaint });
   const tools = el('div', { class: 'v2-sa-tools pjv-sl-tools' }, ...picks.filter((x): x is HTMLElement => !!x), el('span', { class: 'sp' }),
-    el('span', { class: 'pjv-sl-count', text: countText(vis.length + drafts.length, inScope.length, inScopeDrafts, splitDrafts ? '프로젝트' : DRAFT_LABEL) }));
+    el('span', { class: 'pjv-sl-count', text: draftCountText(vis.length + drafts.length, inScope.length, inScopeDrafts, splitDrafts ? '프로젝트' : DRAFT_LABEL) }));
   const by = ui.by;
   const groupLabel = (key: string): string => by === 'list' ? (listName.get(Number(key)) || '리스트 없음')
     : by === 'owner' ? ownerName(key)
@@ -238,10 +238,3 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
   host.replaceChildren(...[tools, list, more, !vis.length && !drafts.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null].filter((x): x is HTMLElement => !!x));
 }
 
-/** 오른쪽 위 개수 — 초안은 따로 센다(#5522). 거르개가 아무것도 안 걸렀으면 «프로젝트 N개 · 초안 M개», 걸렀으면 «K개 표시 · 전체 N».
- *  초안만 보는 스코프에선 이름이 «초안 N개» 다(noun). */
-function countText(shown: number, all: number, drafts: number, noun: string): string {
-  const real = all - drafts;
-  if (shown === all) return drafts ? `${noun} ${real}개 · ${DRAFT_LABEL} ${drafts}개` : `${noun} ${all}개`;
-  return `${shown}개 표시 · 전체 ${all}`;
-}
