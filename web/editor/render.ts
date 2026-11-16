@@ -30,7 +30,7 @@ export function createRender(ctx: EditorCtx) {
     const lns = String(mdText).split('\n');
     lns.forEach((l, idx) => {
       if (idx > 0) box.append(el('br'));
-      for (const n of renderInline(l)) box.append(n);
+      for (const n of renderInline(l, { wikiLinks: ctx.opts.wikiLinks || null })) box.append(n);
     });
   }
 

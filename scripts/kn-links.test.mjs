@@ -12,6 +12,7 @@
 //  KL8 plainMd — **굵게** · `코드` 표식만 뗀다 · __ 는 그대로(mcp__lively__tool · __init__) · 짝 없는 표식 그대로 · 빈 값
 //  KL9 dropTitleH1 — 맨 앞 H1 이 제목(짧은 · 원)을 되풀이할 때만 뗀다 · 다른 말이면 둔다 · 한 줄뿐인 본문(경계) · CRLF ·
 //      맨 앞이 아니거나 H2 면 그대로 · 빈 본문 · 제목 칸이 비어도 던지지 않는다
+//  KL10 wikiLinkAt — 지식 화면 렌더러가 자리마다 쓰는 토큰 판정(아래 표) · resolveWikiTarget — 서버가 이어 둔 이름으로 풀기
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,6 +55,34 @@ eq(D("# 개요 설명\n\n본문", ["제목 하나", "제목 하나"]), "# 개요
 eq([D("# 문서 A", ["문서 A"]), D("# 문서 A\r\n\r\n본문", ["문서 A"])], ["", "본문"], "KL9c 한 줄뿐인 본문(경계) · CRLF");
 eq([D("본문\n# 문서 A", ["문서 A"]), D("## 문서 A\n본문", ["문서 A"]), D("", ["x"]), D("# 문서 A\n본문", [null, undefined, ""])],
   ["본문\n# 문서 A", "## 문서 A\n본문", "", "# 문서 A\n본문"], "KL9d 맨 앞이 아니거나 H2 면 그대로 · 빈 본문 · 제목 칸이 비어도 던지지 않는다");
+
+// KL10 — [입력, 자리, 기대 토큰(null = 링크 아님), 이름]
+const AT = [
+  ["[[engineering-onboarding-guide]] 뒤", 0, { raw: "[[engineering-onboarding-guide]]", target: "engineering-onboarding-guide", label: "engineering-onboarding-guide" }, "하이픈 이름"],
+  ["앞 [[회의 메모 (10월)|10월 회의]]", 2, { raw: "[[회의 메모 (10월)|10월 회의]]", target: "회의 메모 (10월)", label: "10월 회의" }, "한글 이름 · | 라벨"],
+  ["[[ kn-a | 라벨 ]]", 0, { raw: "[[ kn-a | 라벨 ]]", target: "kn-a", label: "라벨" }, "앞뒤 공백은 턴다"],
+  ["[[kn-a|]]", 0, { raw: "[[kn-a|]]", target: "kn-a", label: "kn-a" }, "빈 라벨은 이름(서버도 링크로 센다)"],
+  ["[[doc#헤딩]]", 0, { raw: "[[doc#헤딩]]", target: "doc#헤딩", label: "doc#헤딩" }, "헤딩 링크는 target 에 # 를 남긴다(풀기에서 뗀다)"],
+  ["[[a]][[b]]", 5, { raw: "[[b]]", target: "b", label: "b" }, "붙어 있는 두 번째"],
+  ["[[a]]", 1, null, "[[ 자리가 아니다"],
+  ["[[ ]]", 0, null, "빈 이름"],
+  ["[[kn-a", 0, null, "안 닫힘"],
+  ["[[a|x]y]]", 0, null, "라벨에 대괄호"],
+  ["[[a `b` c]]", 0, null, "인라인 코드를 가로지르면 서버도 엣지로 안 센다"],
+  ["[[a\nb]]", 0, null, "줄을 넘기면 아니다"],
+];
+for (const [src, i, want, n] of AT) eq(L.wikiLinkAt(src, i), want, `KL10a wikiLinkAt — ${n}`);
+const known = new Set(["kn-a", "회의-메모-10월", "long-name-cut"]);
+const R = [
+  ["kn-a", known, { name: "kn-a", missing: false }, "그대로 이어져 있다"],
+  ["회의 메모 (10월)", known, { name: "회의-메모-10월", missing: false }, "제목처럼 적은 것은 slug 로 푼다"],
+  ["long-name-cut-", known, { name: "long-name-cut", missing: false }, "꼬리 '-' 를 뗀 slug"],
+  ["kn-a#절", known, { name: "kn-a", missing: false }, "헤딩은 떼고 문서로"],
+  ["no-such", known, { name: "no-such", missing: true }, "못 풀면 적힌 이름 그대로 · 없음"],
+  ["no-such", null, { name: "no-such", missing: false }, "known 이 없으면 판정하지 않는다"],
+  ["#절만", known, null, "문서 이름이 빈 헤딩 링크는 링크가 아니다"],
+];
+for (const [t, k, want, n] of R) eq(L.resolveWikiTarget(t, k), want, `KL10b resolveWikiTarget — ${n}`);
 
 console.log(fail ? `\n${fail}건 실패 · ${pass}건 통과` : `\n${pass}건 통과`);
 process.exit(fail ? 1 : 0);

@@ -11,6 +11,7 @@ import { el } from './dom.js';
 import { relTime } from './format.js';
 import { mermaidFigure } from './mermaid.js';
 import { uiKeyCls } from './uitext.js';
+import { knHref, resolveWikiTarget, wikiLinkAt } from './kn-links.js';
 
 // :::shot 첫 만남 시연을 이미 튼 라우트(#1107 v2) — 같은 페이지에서 한 번만, 재방문에도 다시 안 튼다.
 let shotDemoRoute = '';
@@ -90,7 +91,17 @@ function mdImage(src, alt) {
 //  '눌리는 버튼' 칩과 '부드러운 태그' 칩으로 승격해 가독성을 올린다. renderMarkdown(md, {uiChips:true}) 로만
 //  켜지며(learn.ts docs 렌더), 지식·위키·프로젝트 등 다른 마크다운 소비자엔 영향이 없다.
 let MD_UI_CHIPS = false;
-function renderInline(text, opts?: { noAutolink?: boolean }) {
+// 위키 링크 [[이름]] → 지식 링크. 지식 화면만 켠다(renderMarkdown·renderInline 의 wikiLinks) — 채팅·세션 기록 같은 다른
+//  소비자에선 [[…]] 가 지식 이름이라는 보장이 없다. known = 서버가 이어 둔 이름들(lib/kn-links resolveWikiTarget).
+//  블록 에디터가 저장할 때 원문 그대로 되돌리도록 원문·라벨·주소를 data-wiki-* 에 싣는다(editor/serialize inlineDomToMd).
+export interface WikiLinksOpt { known?: ReadonlySet<string> | null }
+let MD_WIKI: WikiLinksOpt | null = null;
+function renderInline(text, opts?: { noAutolink?: boolean; wikiLinks?: WikiLinksOpt | null }) {
+  if (opts && 'wikiLinks' in opts) {
+    const prev = MD_WIKI;
+    MD_WIKI = opts.wikiLinks || null;
+    try { return renderInline(text, { noAutolink: opts.noAutolink }); } finally { MD_WIKI = prev; }
+  }
   const noAutolink = !!(opts && opts.noAutolink);   // 링크 label 안에선 autolink 끔(중첩 링크·저장 시 [url](url) 재-오토링크 방지)
   const out: any[] = [];
   let buf = '';
@@ -206,6 +217,21 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
           i += raw.length; // trail 은 다시 일반 파서로 흘려 문장부호로 렌더
           continue;
         }
+      }
+    }
+    if (MD_WIKI && ch === '[' && s[i + 1] === '[') {
+      const w = wikiLinkAt(s, i);
+      const r = w && resolveWikiTarget(w.target, MD_WIKI.known);
+      if (w && r) {
+        flush();
+        const href = knHref(r.name);
+        out.push(el('a', {
+          class: 'md-link md-wikilink' + (r.missing ? ' md-wikilink-missing' : ''), href,
+          title: r.missing ? `'${r.name}' 지식을 찾지 못했습니다 — 없거나, 이름이 바뀌었거나, 볼 수 없는 지식입니다` : null,
+          'data-wiki-raw': w.raw, 'data-wiki-target': w.target, 'data-wiki-label': w.label, 'data-wiki-href': href,
+        }, document.createTextNode(w.label)));
+        i += w.raw.length;
+        continue;
       }
     }
     // 링크 [텍스트](url)
@@ -918,6 +944,8 @@ function renderMarkdown(md, opts?: any) {
   if (opts && typeof opts === 'object' && 'uiChips' in opts) MD_UI_CHIPS = !!opts.uiChips;
   const _prevImg = MD_IMG_FETCH;                        // #4582 상대경로 그림 받는 법 — 칩과 같은 저장/복원(중첩 렌더는 상속)
   if (opts && typeof opts === 'object' && 'imgFetch' in opts) MD_IMG_FETCH = typeof opts.imgFetch === 'function' ? opts.imgFetch : null;
+  const _prevWiki = MD_WIKI;
+  if (opts && typeof opts === 'object' && 'wikiLinks' in opts) MD_WIKI = opts.wikiLinks || null;
   const root = el('div', { class: 'md' });
   const lines = String(md == null ? '' : md).replace(/\r\n?/g, '\n').split('\n');
   let i = 0;
@@ -1156,6 +1184,7 @@ function renderMarkdown(md, opts?: any) {
   }
   MD_UI_CHIPS = _prevChips;                             // #1013 복원 — 중첩 렌더는 상속(true 유지), 최상위 docs 호출만 false 로 되돌림
   MD_IMG_FETCH = _prevImg;
+  MD_WIKI = _prevWiki;
   return root;
 }
 

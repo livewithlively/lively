@@ -45,6 +45,16 @@ function escLineStart(l: string): string {
   return l;
 }
 
+// renderInline 이 [[…]] 로 그린 지식 링크(data-wiki-*) → 원문 [[…]]. 링크로 그렸다고 [라벨](#/k/…) 로 저장하면
+//  문서를 열기만 해도 본문이 바뀌고(저장 왕복 깨짐) 서버가 세는 위키링크 문법에서 벗어난다(#4419 와 같은 결과).
+//  라벨을 고쳤으면 [[대상|새 라벨]], 라벨을 비웠으면 링크를 지운 것으로 본다. 주소를 바꾼 링크는 호출부가 일반 링크로 둔다.
+function wikiAnchorToMd(a: any): string {
+  const label = String(a.textContent || '').replace(/​/g, '');
+  if (label === a.dataset.wikiLabel) return a.dataset.wikiRaw;
+  if (!label.trim()) return '';
+  return '[[' + a.dataset.wikiTarget + '|' + label.replace(/[[\]\n`]/g, '') + ']]';
+}
+
 // 인라인 DOM → markdown. renderInline 의 역함수(strong/em/del/u/mark/code/a/img/br).
 //  이웃한 텍스트 노드는 이어 붙인 뒤 한 번에 이스케이프한다 — 편집하면 텍스트 노드가 쪼개지는데('[[' | 'name]]'),
 //  노드별로 보면 경계에 걸친 위키링크·'~~'·'++' 를 못 알아본다.
@@ -61,6 +71,10 @@ function inlineDomToMd(node: any): string {
     if (tag === 'IMG') {
       const src = c.dataset && c.dataset.mdSrc ? c.dataset.mdSrc : (c.getAttribute('src') || '');
       out += '![' + String(c.getAttribute('alt') || '').replace(/\]/g, '') + '](' + src + ')';
+      continue;
+    }
+    if (tag === 'A' && c.dataset && c.dataset.wikiRaw && c.getAttribute('href') === c.dataset.wikiHref) {
+      out += wikiAnchorToMd(c);
       continue;
     }
     const inner = inlineDomToMd(c);

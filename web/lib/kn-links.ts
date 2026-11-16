@@ -35,6 +35,47 @@ export function dropTitleH1(md: string, titles: Array<string | null | undefined>
   return titles.some((t) => !!t && plainMd(t).trim() === h) ? s.slice(m[0].length).replace(/^\s*\n/, '') : s;
 }
 
+// 지식 화면(#/k/…)은 본문을 renderMarkdown 과 블록 에디터로 그리는데 둘 다 [[…]] 를 글자로 뒀다 — 에이전트가 쓴 지식은
+//  연결을 거의 전부 [[이름]] 으로 적으니 문서 사이를 걸어 다닐 수가 없었다(신규 입사 온보딩에서 신고). 그래서 렌더러가
+//  자리마다 토큰 하나를 판정하는 wikiLinkAt 과, 서버가 이미 해소해 둔 연결 목록으로 이름을 푸는 resolveWikiTarget 을 둔다.
+//  · 이름 · 라벨에 ` 가 들면 링크로 치지 않는다 — 서버 판정(src/v6/wikilink.ts mapProseSegments)이 인라인 코드를 먼저 떼므로
+//    `…` 를 가로지르는 [[…]] 는 엣지가 아니다. 렌더러가 링크로 그리면 «연결 안 된 링크» 가 생긴다.
+const WIKI_AT = /^\[\[([^\[\]|\n`]+?)(?:\|([^\[\]\n`]*?))?\]\]/;
+
+export interface WikiLinkToken { raw: string; target: string; label: string }
+
+/** s 의 i 자리에서 시작하는 [[이름]] · [[이름|라벨]] 하나(아니면 null). target = 이름(앞뒤 공백 뗌, #헤딩 포함), label = 라벨 또는 이름. */
+export function wikiLinkAt(s: string, i: number): WikiLinkToken | null {
+  if (s[i] !== '[' || s[i + 1] !== '[') return null;
+  const m = WIKI_AT.exec(s.slice(i));
+  if (!m) return null;
+  const target = m[1].trim();
+  if (!target) return null;
+  return { raw: m[0], target, label: (m[2] || '').trim() || target };
+}
+
+/** 서버 slugify(src/v6/knowledge-common.ts)와 같은 식 — 링크 대상이 이름 대신 제목처럼 적혔을 때 서버가 푸는 두 번째 후보. */
+export function knSlug(s: string): string {
+  return (String(s || 'untitled').toLowerCase().trim()
+    .replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64)) || 'untitled';
+}
+
+/** 링크 대상 → 열 지식 이름과 «없음» 여부. null = 링크가 아니다([[#헤딩]] 처럼 문서 이름이 빈 것).
+ *  known = 서버가 이 문서에서 실제로 이어 둔 지식 이름(links.outgoing). 서버 해소 순서(pickKnowledgeName: 그대로 → slug →
+ *  꼬리 '-' 뗀 slug)를 known 안에서 밟는다. known 이 없으면 판정하지 않고 적힌 이름 그대로 연다.
+ *  ⚠ «없음» 은 «이 문서와 이어져 있지 않음» 이다 — 볼 수 없는 지식, 저장 뒤에 새로 생겨 아직 엣지가 안 붙은 지식도 여기 든다. */
+export function resolveWikiTarget(target: string, known: ReadonlySet<string> | null | undefined): { name: string; missing: boolean } | null {
+  const base = String(target || '').split('#')[0].trim();
+  if (!base) return null;
+  if (!known) return { name: base, missing: false };
+  if (known.has(base)) return { name: base, missing: false };
+  const slug = knSlug(base);
+  if (known.has(slug)) return { name: slug, missing: false };
+  const cut = slug.replace(/-+$/, '');
+  if (known.has(cut)) return { name: cut, missing: false };
+  return { name: base, missing: true };
+}
+
 /** 본문의 [[이름]] · [[이름|라벨]] 을 [라벨](#/k/이름) 으로. 코드 안은 건드리지 않는다. */
 export function wikiLinksToMd(md: string): string {
   const s = String(md || '');
