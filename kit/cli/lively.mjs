@@ -2524,6 +2524,8 @@ async function cmdStatus(opts) {
 //  자격을 내려 주지 않아(repo-worktree-core authNote 머리말) 첫 클론이 호스트키 미등록·키 미등록으로 막히는데, 그 실패는
 //  코드 작업을 시작한 뒤에야 보였다. 등록 레포의 ssh 호스트마다 대화 없이(BatchMode) 시험 접속해 미리 알려 준다.
 //  판정 못 한 것(네트워크·타임아웃·ssh 없음)은 체크를 만들지 않는다 — 모르는 것을 실패로 단정하지 않는다.
+//  ssh 도 이 파일의 다른 외부 명령처럼 spawnSync 래퍼(host-effects 가드)로 띄운다. 가드 없는 spawn 은 deny·sandbox 정책에서도
+//  ssh 를 실제로 내보냈다(PR #1734 리뷰 실측). 가드가 막으면(throw) 항목 없이 끝낸다 — 정책 때문에 진단이 죽으면 안 된다.
 //  키가 거부됐을 때 고치는 길은 자리마다 다르다 — 박스는 라이블리에 등록한 키, 내 PC 는 이 컴퓨터의 키(authNote 와 같은 갈래).
 function sshDeniedFix(place, t) {
   const box = `me_git_credential_get 으로 공개키를 보고 ${t.host} 계정 SSH 키에 등록(없으면 me_git_credential_set {kind:"ssh", host:"${t.host}"})`;
@@ -2535,8 +2537,14 @@ async function doctorGitSsh(chk) {
   try { core = await import(new URL("./repo-worktree-core.mjs", import.meta.url)); } catch { return; }   // 설치 전(부트스트랩 단일 파일)
   try { repos = (await api("/api/ui/repos", { timeoutMs: 8000 }))?.domainmapRepos || []; } catch { return; }
   for (const t of core.sshProbeTargets(repos)) {
-    const r = nodeSpawnSync("ssh", ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ...(t.port ? ["-p", t.port] : []), `${t.user}@${t.host}`],
-      { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+    let r;
+    try {
+      r = spawnSync("ssh", ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ...(t.port ? ["-p", t.port] : []), `${t.user}@${t.host}`],
+        { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      if (e?.code === "LIVELY_HOST_EFFECT_DENIED") return;   // 정책이 ssh 를 막았다 — 다른 호스트도 같다
+      throw e;
+    }
     if (r.error && r.error.code === "ENOENT") return;      // ssh 없음 — 다른 호스트도 같다
     if (r.error) continue;                                 // 타임아웃 등 — 이 호스트만 판정 못 함
     const kind = core.classifySshProbe(r.status, `${r.stdout || ""}\n${r.stderr || ""}`);
