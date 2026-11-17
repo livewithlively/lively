@@ -41,6 +41,13 @@
 //     이미 root 와 같다)과 컨테이너 프로세스의 처음 env(/proc/<pid>/environ — 컨테이너 안의 같은 uid · 격리 박스면 박스 위 그 계정의 프로세스)에 남는다.
 //     부트는 한 번만 받으므로 읽어도 얻는 것은 그 작업을 «시작 실패» 로 끝내는 것뿐이다(runner 머리말 · boot-failed).
 //  하네스 실행 파일은 게이트웨이 계정의 리눅스 claude(네이티브 설치 — 한 파일 실행 파일)를 읽기 전용으로 붙인다(LIVELY_AGENT_JOB_CLAUDE_BIN 이 먼저).
+//  Claude 관리 설정 폴더(/etc/claude-code — 사용자 설정으로 덮을 수 없는 조직 정책, 예 forceLoginOrgUUID 로 조직 밖 계정 토큰을 막는다)는 구독 작업에만,
+//   박스에 실제 폴더로 있으면 같은 자리에 읽기 전용으로 붙인다 — 루트가 읽기 전용인 이미지라 붙이지 않으면 박스 위 사람 세션에 걸린 정책이 작업에는 없다.
+//   API 키 작업에는 붙이지 않는다 — 게이트웨이 프록시 토큰(ANTHROPIC_AUTH_TOKEN · ANTHROPIC_BASE_URL — ai-runs/service bootEnvForJob)으로 돌아
+//   forceLoginOrgUUID 아래에서는 claude 가 시작을 거부하고(org_pin_api_key_conflict), 컨테이너에 로그인 토큰이 없어 막을 대상도 없다
+//   띄울 때마다 본다(박스 판정 기억과 따로 — 정책을 켠 직후의 작업도 받게). 폴더나 그 안(직속 항목 · managed-settings.d/ 의 직속 항목)에 링크가 있거나
+//   폴더가 아니면 띄우지 않는다 — 도커는 원본의 링크를 따라가 붙이고, 안의 링크는 컨테이너에서 끊겨 정책 없이 돈다(정책을 켠 박스에서 확인하지 못한
+//   채 정책 없이 돌지 않게). 정책을 켜지 않은 박스(폴더 없음)에는 붙이지 않는다.
 //   이미지는 node 가 든 이미지(판 부트 · 본체가 node 로 돈다 — LIVELY_AGENT_JOB_IMAGE · 기본 앱 서버 이미지 node:22-bookworm-slim · git · python 없음).
 //   이미지가 박스에 없으면 첫 작업이 받는다(같은 때 여럿이 물어도 한 번) — 받는 시간도 시작 상한(180초 · 자리를 받은 때부터) 안에 든다.
 //   느린 박스는 관리자가 처음 켤 때 docker pull 로 받아 둔다(deploy/env.example).
@@ -73,6 +80,8 @@ export const JOB_CONTAINER_LABEL = "lvly.agent-job";
 /** 컨테이너 안 하네스 실행 파일 자리(읽기 전용 마운트) — PATH 맨 앞이다. */
 export const JOB_CLAUDE_TARGET = "/opt/lively-job/bin/claude";
 const JOB_PATH = "/opt/lively-job/bin:/usr/local/bin:/usr/bin:/bin";
+/** Claude Code 가 리눅스에서 관리 설정을 읽는 자리 — 컨테이너 안 자리이자 박스 위 원본 자리(머리말 «Claude 관리 설정 폴더»). */
+export const JOB_CLAUDE_MANAGED_DIR = "/etc/claude-code";
 /** 설정 폴더를 붙이지 않는 작업의 HOME(빈 tmpfs). */
 export const JOB_BARE_HOME = "/home/lively-job";
 /** 컨테이너 로캘 — 이미지(bookworm)에 늘 있는 값(게이트웨이 로캘 ko_KR · en_US 는 slim 이미지에 없다). */
@@ -287,6 +296,8 @@ export interface JobContainerPlan {
   workHost: string;
   workdir: string;
   claudeBin: string;
+  /** 박스 위 Claude 관리 설정 폴더 — JOB_CLAUDE_MANAGED_DIR 에 읽기 전용으로 붙인다. null 이면 붙이지 않는다. */
+  managedHost: string | null;
   envFile: string;
 }
 
@@ -327,6 +338,7 @@ export function jobContainerArgs(p: JobContainerPlan): string[] {
     ...hidden.dirs.flatMap((d) => ["--tmpfs", `${d}:rw,noexec,nosuid,nodev,size=${JOB_CLAUDE_HIDE_MB}m,mode=0700,uid=${place.uid},gid=${place.gid}`]),
     ...hidden.files.flatMap((f) => bindMount(HIDE_FILE_SOURCE, f, false)),
     ...bindMount(p.claudeBin, JOB_CLAUDE_TARGET, true),
+    ...(p.managedHost ? bindMount(p.managedHost, JOB_CLAUDE_MANAGED_DIR, true) : []),
     "--env-file", p.envFile,
     "--workdir", p.workdir, "--stop-timeout", "10",
     "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1",
@@ -340,13 +352,14 @@ const exact = (s: string): RegExp => new RegExp(`^${esc(s)}$`);
 /**
  * (순수) 작업 컨테이너의 검사 정책 — 인자를 지은 값이 아니라 자리의 사실로 짓는다(머리말 «막이»): 작업 폴더는 그 자리(apps · shared) 뿌리 아래의
  *  정확한 원본을 행의 작업 폴더 자리에, Claude 설정 폴더는 그 홈(프로필 뿌리) 아래의 정확한 원본 하나를, 하네스 실행 파일은 그 파일 하나를 읽기
- *  전용으로, env 파일은 작업 런타임 폴더 아래만, tmpfs(exec 포함)는 /tmp 와 HOME 만, 계정 · 그룹은 jobIdentities 의 것만.
+ *  전용으로, Claude 관리 설정 폴더는 박스에 실제 폴더로 있을 때 그 폴더 하나를 읽기 전용으로, env 파일은 작업 런타임 폴더 아래만,
+ *  tmpfs(exec 포함)는 /tmp 와 HOME 만, 계정 · 그룹은 jobIdentities 의 것만.
  */
 export function jobContainerPolicy(f: {
   image: string;
   work: { root: string; source: string; target: string };
   claude: { root: string; source: string; target: string; hide: readonly string[] } | null;
-  claudeBin: string; envRoot: string; home: string; users: string[]; groups: number[];
+  claudeBin: string; managedHost: string | null; envRoot: string; home: string; users: string[]; groups: number[];
 }): DockerRunPolicy {
   if (!WORK_TARGET_RE.test(f.work.target)) throw new Error(`작업 폴더 꼴이 아닙니다: ${f.work.target.slice(0, 80)}`);
   const hidden = f.claude ? claudeHideTargets(f.claude.target, f.claude.hide) : { dirs: [], files: [] };
@@ -358,6 +371,7 @@ export function jobContainerPolicy(f: {
       ...(f.claude ? [{ root: f.claude.root, rw: true, targets: exact(f.claude.target), source: f.claude.source }] : []),
       ...hidden.files.map((t) => ({ root: HIDE_FILE_SOURCE, rw: true, targets: exact(t), source: HIDE_FILE_SOURCE })),
       { root: f.claudeBin, rw: false, targets: exact(JOB_CLAUDE_TARGET), source: f.claudeBin },
+      ...(f.managedHost ? [{ root: f.managedHost, rw: false, targets: exact(JOB_CLAUDE_MANAGED_DIR), source: f.managedHost }] : []),
     ],
     envFiles: [f.envRoot],
     users: f.users,
@@ -367,6 +381,9 @@ export function jobContainerPolicy(f: {
 
 /** 고칠 길 — 상한을 못 걸 때 접수 실패 · 관리자 보기에 같은 글로 싣는다. */
 const DOCKER_CAP_FIX = "박스의 스왑 계정(cgroup v2 · swapaccount)을 켜거나, 상한 없이 돌리려면 관리자가 agent_job_limits_set 으로 memory_max_mb 를 0 으로 바꿉니다";
+
+/** Claude 관리 설정 폴더 상태 — 실제 폴더 · 없음 · 그 밖(폴더 · 안의 항목이 링크 · 폴더 아님). */
+export type ClaudeManagedState = "dir" | "missing" | "bad";
 
 /** 작업 폴더 상태 — 실제 폴더 · 링크(또는 실제 경로가 다른 자리) · 폴더 아님 · 없음(checkWork). */
 export type WorkDirState = "ok" | "link" | "notdir" | "missing";
@@ -390,6 +407,8 @@ export interface DockerLaunchDeps {
   checkWork(work: { abs: string; base: string }): Promise<WorkDirState>;
   /** 작업 메모리 상한(작업 정책 memory_max_mb · 0 = 없음). */
   memoryMaxMb(): Promise<number>;
+  /** 박스 위 Claude 관리 설정 폴더와 그 상태(claudeManagedState) — 구독 작업을 띄울 때마다 본다. */
+  claudeManaged(): Promise<{ host: string; state: ClaudeManagedState }>;
   ensureImage(image: string): Promise<void>;
   /** env 파일을 런타임 폴더에 0600 으로 쓰고 경로를 돌려준다(root = 그 폴더 — 검사기 뿌리). */
   writeEnvFile(name: string, text: string): Promise<{ file: string; root: string }>;
@@ -404,6 +423,8 @@ export interface DockerLaunchDeps {
   /** 작업 오류 글에서 처음부터 가릴 박스 위 자리(런타임 폴더 · 홈 뿌리 · 프로필 뿌리 · 게이트웨이 홈) — 없으면 띄우며 알게 된 자리만 가린다. */
   boxRoots?(): string[];
 }
+
+const MANAGED_REFUSAL = `이 박스의 Claude 관리 설정 자리(${JOB_CLAUDE_MANAGED_DIR})에 링크가 있거나 폴더가 아니라 작업 컨테이너를 띄우지 않습니다 — 조직 정책을 확인하지 못한 채 정책 없이 돌지 않게. 관리자가 그 자리와 안의 파일을 링크가 아닌 실제 폴더 · 파일로 두어야 합니다`;
 
 const WORK_REFUSAL: Readonly<Record<Exclude<WorkDirState, "ok" | "missing">, string>> = {
   link: "작업 폴더가 링크이거나 실제 경로가 그 자리가 아니라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
@@ -429,8 +450,8 @@ export function hideBoxPaths(msg: string, paths: Iterable<string>): string {
 }
 
 /**
- * 작업 컨테이너를 띄운다 — 도커 · 하네스 → 메모리 상한 → 자리(누구로 · 무엇을 붙이나) → 작업 폴더(만들고 · 확인) → 이미지 → env 파일 → docker run.
- *  다시 해도 안 될 것(세션 id · 홈 없는 작업의 조건 · 실행 계정 · 작업 폴더 꼴 · 상한을 걸 수 없음 · 붙일 수 없는 Claude 폴더 · 작업 폴더가 링크 ·
+ * 작업 컨테이너를 띄운다 — 도커 · 하네스 → 메모리 상한 → 자리(누구로 · 무엇을 붙이나) → 관리 설정 폴더 → 작업 폴더(만들고 · 확인) → 이미지 → env 파일 → docker run.
+ *  다시 해도 안 될 것(세션 id · 홈 없는 작업의 조건 · 실행 계정 · 작업 폴더 꼴 · 상한을 걸 수 없음 · 붙일 수 없는 Claude 폴더 · 관리 설정 자리가 링크 · 작업 폴더가 링크 ·
  *  검사기 거절)은 JobLaunchError, 인프라가 잠깐 막힌 것(도커 · OS 계정 · 작업 폴더 · 이미지 · 띄우기)은 일시 실패다(launch.stepFailure).
  *  실패 글은 앱이 받는다(배차가 job.error 로 남기고 앱 AI 실행 오류로 돌려준다) — 띄우는 동안 알게 된 박스 위 자리(폴더 · 홈 · 실행 파일 · env 파일)는
  *  가리고(hideBoxPaths), 원문은 게이트웨이 로그에만 남긴다. 오류의 종류 · 일시 표시는 그대로 둔다(글만 바꾼다).
@@ -492,6 +513,17 @@ async function launchDockerJobIn(
   let place: JobPlacement;
   try { place = jobPlacement({ homeless, subscription, box, member, profile }); }
   catch (e) { throw new JobLaunchError(String((e as Error)?.message ?? e)); }
+  //  관리 설정은 구독 로그인 정책이다 — API 키 작업은 보지도 붙이지도 않는다(머리말 «Claude 관리 설정 폴더»).
+  let managedHost: string | null = null;
+  if (subscription) {
+    let managed: { host: string; state: ClaudeManagedState };
+    try { managed = await d.claudeManaged(); } catch (e) { throw stepFailure("ensure", e); }
+    if (managed.state === "bad") {
+      logger.warn({ job: job.id, managed: managed.host }, "[agent-job] Claude 관리 설정 자리에 링크가 있거나 폴더가 아니다 — 작업 컨테이너를 띄우지 않는다");
+      throw new JobLaunchError(MANAGED_REFUSAL);
+    }
+    if (managed.state === "dir") { managedHost = managed.host; known.push(managedHost); }
+  }
   const work = await d.resolveWork(user, dir, box.isolated ? (osUser ?? HOMELESS_OS_USER) : null).catch((e) => { throw stepFailure("workdir", e); });
   known.push(work.abs, work.base);
   //  박스 위 자리가 행의 작업 폴더(그 앱 · 그 프로젝트)와 맞아야 한다 — 검사기 정책의 원본이 이 값이라, 형제 폴더를 고르는 잘못은 여기서만 걸린다.
@@ -522,7 +554,7 @@ async function launchDockerJobIn(
   const memoryMb = dockerMemoryMb(policyMb, box.memMb);
   const labels: Record<string, string> = { [JOB_CONTAINER_LABEL]: "1", [`${JOB_CONTAINER_LABEL}.id`]: String(job.id), ...(slug ? { "lvly.tenant": slug } : {}) };
   try {
-    const args = jobContainerArgs({ name, image: box.image, labels, place, memoryMb, workHost: work.abs, workdir: job.cwd, claudeBin: box.claudeBin, envFile: env.file });
+    const args = jobContainerArgs({ name, image: box.image, labels, place, memoryMb, workHost: work.abs, workdir: job.cwd, claudeBin: box.claudeBin, managedHost, envFile: env.file });
     //  정책의 사실 — 자리 판정(place)이 아니라 박스 · 그 계정 · 프로필 사실에서 따로 짓는다(머리말 «막이»).
     const claudeFacts = !subscription || homeless ? null
       : box.isolated ? (member ? { root: member.home, source: path.join(member.home, ".claude"), target: path.join(member.home, ".claude"), hide: hideList(member.hide) } : null)
@@ -530,7 +562,7 @@ async function launchDockerJobIn(
     const ids = jobIdentities(box, member);
     const policy = jobContainerPolicy({
       image: box.image, work: { root: work.base, source: work.abs, target: job.cwd }, claude: claudeFacts,
-      claudeBin: box.claudeBin, envRoot: env.root, home: place.home, users: ids.users, groups: ids.groups,
+      claudeBin: box.claudeBin, managedHost, envRoot: env.root, home: place.home, users: ids.users, groups: ids.groups,
     });
     //  이미지 받기 · env 파일 사이에 작업 폴더 이름을 링크로 바꿔치기했을 수 있다 — 붙이기 바로 앞에서 다시 본다(긴 틈을 좁힌다 —
     //   확인과 도커가 마운트를 잡는 사이의 짧은 틈은 남는다 · 머리말 «붙이는 원본은 링크면 안 된다»).
@@ -545,7 +577,7 @@ async function launchDockerJobIn(
     //  docker run 은 env 파일을 띄울 때 한 번 읽는다(--restart no) — 곧바로 지워 비밀을 디스크에 남기지 않는다.
     await d.removeEnvFile(env.file).catch(() => undefined);
   }
-  logger.info({ job: job.id, session: sid, container: name, runsAs: place.runsAs, uid: place.uid, memoryMb, claudeDir: !!place.claude, sharedSeat: o.sharedSeat === true, appServerOwn: o.appServerOwn === true, homeless },
+  logger.info({ job: job.id, session: sid, container: name, runsAs: place.runsAs, uid: place.uid, memoryMb, claudeDir: !!place.claude, claudeManaged: !!managedHost, sharedSeat: o.sharedSeat === true, appServerOwn: o.appServerOwn === true, homeless },
     "[agent-job] 작업 컨테이너를 띄웠다(도커)");
   return { container: name };
 }
@@ -805,6 +837,22 @@ export async function workDirState(work: { abs: string; base: string }): Promise
   return (await fsp.realpath(work.abs)) === path.join(await fsp.realpath(work.base), rel) ? "ok" : "link";
 }
 
+/**
+ * Claude 관리 설정 폴더 상태 — 폴더 · 직속 항목 · managed-settings.d/ 의 직속 항목 중 링크가 하나라도 있으면 bad
+ *  (도커는 원본의 링크를 따라가 붙이고 · 안의 링크는 컨테이너에서 끊겨 claude 가 정책 없이 돈다 — 머리말 «Claude 관리 설정 폴더»).
+ */
+export async function claudeManagedState(dir: string): Promise<ClaudeManagedState> {
+  const fsp = await import("node:fs/promises");
+  const st = await fsp.lstat(dir).catch((e: NodeJS.ErrnoException) => { if (e.code === "ENOENT") return null; throw e; });
+  if (!st) return "missing";
+  if (!st.isDirectory()) return "bad";
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  if (entries.some((e) => e.isSymbolicLink())) return "bad";
+  if (!entries.some((e) => e.name === "managed-settings.d" && e.isDirectory())) return "dir";
+  const drop = await fsp.readdir(path.join(dir, "managed-settings.d"), { withFileTypes: true });
+  return drop.some((e) => e.isSymbolicLink()) ? "bad" : "dir";
+}
+
 /** 이미지 받기 — 박스에 없을 때만(«No such image») · 이미지마다 한 번(같은 때 여럿이 물어도 한 번 받는다). 실패하면 잊어 다음에 다시 받는다. */
 const images = new Map<string, Promise<void>>();
 export function ensureImageOnce(image: string): Promise<void> {
@@ -879,6 +927,7 @@ export async function liveDockerDeps(): Promise<DockerLaunchDeps> {
       const store = await import("./store.js");
       return (await pol.effectiveAgentJobPolicy(async () => pol.resolveAgentJobPolicy(await store.agentJobPolicyRow()))).memory_max_mb;
     },
+    claudeManaged: async () => ({ host: JOB_CLAUDE_MANAGED_DIR, state: await claudeManagedState(JOB_CLAUDE_MANAGED_DIR) }),
     ensureImage: (image) => ensureImageOnce(image),
     writeEnvFile: async (name, text) => {
       await fsp.mkdir(runDir, { recursive: true, mode: 0o700 });
