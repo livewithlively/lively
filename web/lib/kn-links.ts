@@ -61,8 +61,9 @@ export function knSlug(s: string): string {
 }
 
 /** 링크 대상 → 열 지식 이름과 «없음» 여부. null = 링크가 아니다([[#헤딩]] 처럼 문서 이름이 빈 것).
- *  known = 서버가 이 문서에서 실제로 이어 둔 지식 이름(links.outgoing). 서버 해소 순서(pickKnowledgeName: 그대로 → slug →
- *  꼬리 '-' 뗀 slug)를 known 안에서 밟는다. known 이 없으면 판정하지 않고 적힌 이름 그대로 연다.
+ *  known = 서버가 이 문서에서 실제로 이어 둔 지식 이름(links.outgoing). 서버 해소 순서(src/v6/knowledge-links.ts
+ *  resolveWikiLinkTargets: 그대로 → slug)를 known 안에서 밟는다 — 서버에 없는 단계를 더하면 서버가 잇지 않은 문서로
+ *  링크가 걸린다. known 이 없으면 판정하지 않고 적힌 이름 그대로 연다.
  *  ⚠ «없음» 은 «이 문서와 이어져 있지 않음» 이다 — 볼 수 없는 지식, 저장 뒤에 새로 생겨 아직 엣지가 안 붙은 지식도 여기 든다. */
 export function resolveWikiTarget(target: string, known: ReadonlySet<string> | null | undefined): { name: string; missing: boolean } | null {
   const base = String(target || '').split('#')[0].trim();
@@ -71,8 +72,6 @@ export function resolveWikiTarget(target: string, known: ReadonlySet<string> | n
   if (known.has(base)) return { name: base, missing: false };
   const slug = knSlug(base);
   if (known.has(slug)) return { name: slug, missing: false };
-  const cut = slug.replace(/-+$/, '');
-  if (known.has(cut)) return { name: cut, missing: false };
   return { name: base, missing: true };
 }
 

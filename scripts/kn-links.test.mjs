@@ -72,11 +72,15 @@ const AT = [
   ["[[a\nb]]", 0, null, "줄을 넘기면 아니다"],
 ];
 for (const [src, i, want, n] of AT) eq(L.wikiLinkAt(src, i), want, `KL10a wikiLinkAt — ${n}`);
-const known = new Set(["kn-a", "회의-메모-10월", "long-name-cut"]);
+//  64자 절단 — 63자 + " b" 의 slug 는 63자 + "-"(slugify 가 떼기 → 자르기 순서라 꼬리 '-' 가 남는다).
+const A63 = "a".repeat(63);
+const known = new Set(["kn-a", "회의-메모-10월", "long-name-cut", A63]);
 const R = [
   ["kn-a", known, { name: "kn-a", missing: false }, "그대로 이어져 있다"],
   ["회의 메모 (10월)", known, { name: "회의-메모-10월", missing: false }, "제목처럼 적은 것은 slug 로 푼다"],
-  ["long-name-cut-", known, { name: "long-name-cut", missing: false }, "꼬리 '-' 를 뗀 slug"],
+  ["long-name-cut-", known, { name: "long-name-cut", missing: false }, "slug 가 꼬리 '-' 를 뗀다"],
+  [`${A63} b`, known, { name: `${A63} b`, missing: true },
+    "서버(resolveWikiLinkTargets)는 그대로 → slug 두 단계뿐 — 잘려서 '-' 로 끝난 slug 의 '-' 를 떼어 다른 문서로 잇지 않는다"],
   ["kn-a#절", known, { name: "kn-a", missing: false }, "헤딩은 떼고 문서로"],
   ["no-such", known, { name: "no-such", missing: true }, "못 풀면 적힌 이름 그대로 · 없음"],
   ["no-such", null, { name: "no-such", missing: false }, "known 이 없으면 판정하지 않는다"],
