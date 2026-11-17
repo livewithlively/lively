@@ -5,7 +5,7 @@ import { deviceStore } from './shell-prefs.js';
 import { dropUnsaved, peekUnsaved, stashUnsaved } from '../lib/unsaved-text.js';
 
 const UNSAVED_KEY = deviceStore('lively_v2_unsaved_text');   // 글의 내용이 든다 — 워크스페이스마다 갈린다
-export type UnsavedSlot = 'body' | 'rules';
+export type UnsavedSlot = 'body' | 'rules' | 'newtask';   // newtask = 곁칸에서 쓰다 만 새 태스크(제목·본문 JSON, #5581)
 const idOf = (projectId: number, slot: UnsavedSlot): string => `p${projectId}:${slot}`;
 
 export const keepUnsaved = (projectId: number, slot: UnsavedSlot, text: string): boolean => stashUnsaved(localStorage, UNSAVED_KEY, idOf(projectId, slot), text);
