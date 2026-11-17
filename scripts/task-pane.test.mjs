@@ -132,7 +132,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   //  상태기계의 행위는 scripts/autosave.test.mjs 가 잰다. 여기선 **부르는 쪽이 그 결과를 실제로 쓰는지**만 본다.
   eq(/await bodySaver\.flush\(\);[\s\S]{0,160}if \(bodySaver\.dirty\(\)\) \{[^\n]*return false; \}/.test(tk), true,
     "W12 본문 고치기는 flush 뒤에도 못 남긴 글이 있으면 읽기로 돌아가지 않는다(돌아가면 그 글은 글칸과 함께 사라진다)");
-  eq((tk.match(/if \(rowSaver\?\.dirty\(\)\) return;/g) || []).length >= 2, true, "W13 태스크 본문도 같다 — 못 저장한 글이 있으면 줄을 접거나 읽기로 돌아가지 않는다");
+  eq((tk.match(/void flushEdit\(\)\.then\(\(ok\) => \{ if \(!ok\) return;/g) || []).length >= 2, true, "W13 태스크 제목·본문도 같다 — 못 저장한 글이 있으면 줄을 접거나 다른 줄을 고치러 가지 않는다(#5581 — 고친 글은 edits 에 남는다)");
   eq(/if \(bodyEdit && bodySaver\?\.dirty\(\)\) \{[\s\S]{0,200}keepUnsaved\(ctx\.id, 'body', ta\.value\)/.test(tk), true,
     "W14 칸이 걷힐 때(탭 닫기·화면 떠남) 못 남긴 본문은 글칸 밖에 둔다");
   const ps2 = read("web/v2/proj-settings.ts");
@@ -224,6 +224,12 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
     [false, true, true, true, true, true],
     "K12 새 태스크: 맨 아래 칸 없음 · 목록 머리(.pj-top) 바로 밑 · 제목+본문을 한 번에 보낸다 · 그 칸에서 치는 동안에도 목록은 그린다 · 한글 조합 중 Enter 는 보내지 않는다 · 방금 더한 것은 맨 위");
   eq([/textAct\('입력칸에 넣기'/.test(tk), /'## 태스크 본문'/.test(tk)], [true, true], "K13 목록엔 제목만 · AI 입력칸에 넣을 땐 본문까지 함께(taskPromptText)");
+  //  #5581 고치기 — 이미 더한 태스크도 제목·본문을 한 칸에서 · 칸 밖 누름은 저장 · 같은 저장을 두 번 보내지 않는다 · 안내 문구는 짧게(원준 2026-11-17)
+  eq([/JSON\.stringify\(\{ name, description: description \|\| null \}\)/.test(tk), /if \(editSaving\) return editSaving;/.test(tk),
+      /if \(edits\.has\(tid\)\) void saveEdit\(t\); else closeEdit\(tid, false\);/.test(tk), /label: '고치기', icon: 'pencil'/.test(tk),
+      /placeholder: '제목' \}/.test(tk), /placeholder: '본문 \(선택\)' \}/.test(tk), /rowSaver/.test(tk)],
+    [true, true, true, true, true, true, false],
+    "K14 고치기: 제목·본문을 한 번에 저장 · 도는 저장은 하나 · 칸 밖을 누르면 고친 것 저장 · ⋯ 메뉴에 고치기 · 짧은 자리표시 글 · 옛 본문 자동저장 없음");
   const css = read("public/styles/49-v2-projpane.css");
   eq([/\.pj-rdopen \{ max-height: [^;]+; overflow: auto;/.test(css), /iconBtn\('ext'/.test(tk), /'띄워 읽기'/.test(tk), /\.pj-body \{[^}]*background: var\(--bg-tint\)/.test(css)], [true, false, true, false],
     "K10 편 본문은 제 안에서 스크롤(접기 단추가 머리에 남는다) · 본문 머리에 프로젝트 창 단추 없음 · 창 띄우기는 글자 단추 · 본문 바탕은 파랑 틴트가 아니다");
