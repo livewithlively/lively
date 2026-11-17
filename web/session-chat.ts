@@ -886,18 +886,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintAxis('effort', selEffort, chipEffort, obsEffort, (v) => '추론강도 · ' + effortKo(v), effortKo);
     paintRunHead();
   }
-  //  알약 내용 — 왼쪽부터 '무엇이(하네스) · 어떤 모델로 · 어느 강도로 · 어디서(노드)'.
+  //  알약 내용 — 왼쪽부터 '무엇이(하네스) · 어떤 모델로 · 어느 강도로'.
   //   · 모델·추론강도는 **이 세션에 대해 아는 값만** 적는다 — 대화 파일 관측이 먼저고, 없으면 열 때 넘긴 플래그다.
   //     둘 다 없으면(플래그 없이 연 세션) 그 칸을 비운다: 빈 자리가 틀린 값보다 낫다(카탈로그 기본값을 적으면
   //     실제로 도는 것과 어긋난다 — 하네스가 자기 설정으로 뜬 것을 화면이 알 길이 없다).
   //   · 그 둘은 **터미널을 보고 있을 때만** 넣는다(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
-  //     하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다 — 알약이 통째로 사라지지 않는 이유다.
+  //   · ★ 어느 컴퓨터에서 도는지(노드)는 **머리줄에 싣지 않는다**(#5577, 원준 2026-11-17 «화면에 칩을 띄우지 마. 그거는
+  //     들어가서 보면 돼»). 종전엔 멤버 PC 세션에만 노드 칩이 서고 중앙 컴퓨터 세션엔 안 서서(#4904), 칩이 없는 것이
+  //     «중앙이라서» 인지 «칸이 좁아서» 인지 화면에서 갈리지 않았다. 그 사실은 [⋯ ▸ 이 세션 설정] 의 «돌아가는 컴퓨터»
+  //     줄 하나가 말한다 — 중앙 컴퓨터 세션도 «중앙 컴퓨터» 로 적는다(openMore).
   function paintRunHead(): void {
-    // ⭐ 상단 선택기가 서면 **그것이 말하는 것만** 뺀다 — 알약을 통째로 숨기지 않는다(원준 2026-08-27
-    //  "이거 지금 어느 노드에서 실행되고있는지가 원래 세션상단에 표시되지않았나? 그거 복구해").
-    //  #1870 이 선택기를 넣으며 `runEl.hidden = true; return;` 로 알약을 통째로 껐는데, 그 알약이 **노드**도
-    //  싣고 있었다. 선택기는 하네스·모델·강도만 말한다 — **어느 컴퓨터에서 도는지는 아무도 말하지 않게 됐다.**
-    //  바로 아래 머리말이 "하네스·노드는 그 바가 말하지 않으므로 두 모드에서 늘 남는다"고 적어 둔 그대로여야 한다.
+    // ⭐ 상단 선택기가 서면 **그것이 말하는 것만** 뺀다 — 알약을 통째로 숨기는 이른 반환을 두지 않는다(#1870 회귀 형태).
     //  ★ '윗줄이 이미 말한 축'의 판정은 **선택기만이 아니라 읽기 전용 칩도** 본다(원준 2026-08-27 "Anthropic ·
     //   Claude Code 위에 이상한 도형이랑 겹치네"). 남의 세션·멈춘 세션엔 선택기 대신 칩이 서는데, 종전엔
     //   selectorsUp 만 봐서 알약이 하네스·모델·강도를 한 벌 더 썼다 — 넓은 화면에선 같은 말이 두 번, 좁은
@@ -906,25 +905,18 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4794 — «터미널을 보고 있나» 는 모드로 본다(sc-mode-term). termHost.hidden 은 숨겨 붙이는 동안(sc-term-warm)에도 거짓이다.
     //   ⚠ `mode` 변수를 쓰지 않는다 — 그건 아래(setMode 근처)에 선언돼 마운트 중 이른 호출에서 TDZ 가 된다(wrap 은 위에 있다).
     const onTerm = wrap.classList.contains('sc-mode-term');
-    //  cls: 노드 이름만 줄어드는 칸이다 — 나머지 셋은 짧고 폭이 고정이라 잘리면 '무엇으로 도는지'를 못 읽는다.
-    const vals: Array<{ v: string; cls?: string }> = [
-      { v: said(chipProv, selHarness) ? '' : String(target.raw?.harness || '') },
-      { v: !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(nowVal('model')) : '' },
-      { v: !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(nowVal('effort')) : '' },
-      // ⚠ 노드는 **윗줄과 무관하게 늘 싣는다** — 어느 컴퓨터에서 도는지는 칩도 선택기도 말하지 않는다.
-      //  #4904 — 세션 호스트는 «도는 컴퓨터» 가 아니다(중앙과 같다) — 인스턴스 id 를 머리줄에 내지 않는다.
-      { v: remoteNode() ?? '', cls: 'sc-run-node' },
-    ].filter((x) => !!x.v);
-    runEl.replaceChildren(...vals.flatMap((x, i) => {
-      const cell = el('span', x.cls ? { class: x.cls, text: x.v, title: x.v } : { text: x.v });
+    const vals: string[] = [
+      said(chipProv, selHarness) ? '' : String(target.raw?.harness || ''),
+      !said(chipModel, selModel) && onTerm ? ((m) => (m ? prettyModel(m) : ''))(nowVal('model')) : '',
+      !said(chipEffort, selEffort) && onTerm ? ((e) => (e ? effortKo(e) : ''))(nowVal('effort')) : '',
+    ].filter((v) => !!v);
+    runEl.replaceChildren(...vals.flatMap((v, i) => {
+      const cell = el('span', { text: v });
       return i ? [el('span', { class: 'sc-sep', text: '·' }), cell] : [cell];
     }));
-    // 윗줄이 나머지를 다 말해 노드만 남았으면 그 칸이 무엇인지 말해 준다 — 컴퓨터 이름만 덩그러니 있으면 못 읽는다.
-    runEl.title = vals.length && vals.every((x) => x.cls === 'sc-run-node')
-      ? '이 세션이 도는 컴퓨터(노드)예요.'
-      : onTerm && (obsModel || obsEffort)
-        ? '이 세션이 무엇으로 돌고 있는지예요 — 모델·추론강도를 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.'
-        : '이 세션이 무엇으로 돌고 있는지예요.';
+    runEl.title = onTerm && (obsModel || obsEffort)
+      ? '이 세션이 무엇으로 돌고 있는지예요 — 모델·추론강도를 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.'
+      : '이 세션이 무엇으로 돌고 있는지예요.';
     runEl.hidden = !vals.length;
   }
   //  tip = 칩에 걸 원문(줄인 모델 이름의 전체). 드롭다운이 서는 세션에선 칩이 숨으므로 안 쓰인다.
@@ -1851,10 +1843,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '무엇으로 도나' }),
           el('span', { class: 'm', text: 'AI · 모델 · 추론강도 — 고르면 그 자리에서 바뀝니다' })),
         runHost),
-      remoteNode() ? el('div', { class: 'v2set-row' },   // #4904 — 세션 호스트는 «돌아가는 컴퓨터» 가 아니다(머리줄 칩과 같은 판단)
+      //  «돌아가는 컴퓨터» — 이 사실을 말하는 **유일한 자리**다(머리줄엔 싣지 않는다 · #5577). 그래서 모든 세션에 선다.
+      //   멤버 PC 세션은 그 컴퓨터 이름, 아니면 «중앙 컴퓨터» — 좌표가 없는 세션과 세션 호스트(#4904 — 이 게이트웨이의 세션)가 그쪽이다.
+      //   «중앙 컴퓨터» 는 새 세션의 실행 위치 칸이 쓰는 이름 그대로다(web/v2/run-prefs.ts).
+      el('div', { class: 'v2set-row' },
         el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '돌아가는 컴퓨터' }),
-          el('span', { class: 'm', text: String(remoteNode()) })),
-        el('span', { class: 'v2set-ro', text: '읽기 전용' })) : null,
+          el('span', { class: 'm', text: remoteNode() ?? '중앙 컴퓨터' })),
+        el('span', { class: 'v2set-ro', text: '읽기 전용' })),
       note('칸이 좁아지면 머리줄의 칩이 물러납니다 — 그때도 여기서 바꿀 수 있어요.'),
     ] });
 
