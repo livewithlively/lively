@@ -2,8 +2,10 @@
 //  게이트웨이의 nas_list(폴더 목록)·/api/ui/me/nas/file(내려받기)을 그 구성원 토큰으로 부른다. 볼 수 있는 범위는 게이트웨이가
 //  그 구성원 본인 FTP 계정으로 정한다 — 여기선 권한을 판단하지 않는다.
 //
-//  · 받는 자리는 홈 아래만이다. 상대 경로는 ~/NAS사본 기준이다. 웹 세션의 작업 폴더(프로젝트 공유폴더)는 같은 프로젝트의
-//    다른 구성원도 보는 자리라, 거기에 받으면 그 사람의 NAS 권한 밖 파일이 넘어간다.
+//  · 받는 자리는 기본 폴더 ~/NAS사본 아래만이다(그 폴더 자체 포함 — resolveDest). 이 도구는 사람 확인 없이 도는 자동승인 도구이고
+//    받는 자리(dest)와 파일 이름(target.path)을 AI 가 정한다. 홈 아래 아무 데나 받게 두면 NAS 문서에 심은 지시만으로
+//    ~/.ssh/authorized_keys·~/.zshrc·~/Library/LaunchAgents 가 NAS 내용으로 덮인다. 웹 세션의 작업 폴더(프로젝트 공유폴더)도
+//    같은 프로젝트의 다른 구성원이 보는 자리라 받지 않는다 — 거기에 받으면 그 사람의 NAS 권한 밖 파일이 넘어간다.
 //  · MCP 호출은 하네스를 붙잡는 동기 호출이라(lively-mcp-local.mjs 머리말) budgetMs 를 넘기면 새 파일을 시작하지 않고 멈춘다. 폴더 나열도 이 예산 안이다
 //    — 예산은 파일 사이에서 본다. 이미 시작한 파일 하나는 끝나거나 FILE_TIMEOUT_MS 에 걸릴 때까지 가므로 한 호출의 상한은 budgetMs + FILE_TIMEOUT_MS 다
 //    (파일을 예산에 맞춰 끊으면 반쪽 파일은 이어받지 않으므로 예산보다 오래 걸리는 큰 파일은 영영 못 받는다).
@@ -75,18 +77,19 @@ const segmentsOf = (displayPath) => String(displayPath ?? "").split("/").filter(
 export const pOfPath = (path) => Buffer.from(String(path).startsWith("/") ? String(path) : `/${path}`, "utf8").toString("base64url");
 
 /**
- * 받을 자리를 정한다. 상대 경로는 home/NAS사본 기준, 절대 경로는 그대로. 결과가 home 밖이면 거부한다.
- *  home 이 심볼릭 링크일 수 있어(맥 /Users → /private/...) 실제 경로로 비교한다.
+ * 받을 자리를 정한다 — 기본 폴더(home/NAS사본) 아래만 된다(그 폴더 자체 포함). 상대 경로는 기본 폴더 기준, 절대 경로는 그대로 풀되
+ *  실제 경로가 기본 폴더 아래일 때만 받는다(안의 링크가 밖을 가리키는 길도 여기서 막힌다). 그 밖이면 거부한다 — 머리말의 자동승인 까닭.
+ *  기본 폴더 자체가 링크면(다른 디스크로 옮겨 둔 경우) 그 실제 경로가 기준이다.
+ *  home 이 심볼릭 링크일 수 있어(맥 /var → /private/var) 실제 경로로 비교한다.
  */
 export function resolveDest(dest, home) {
-  const homeReal = realpathSync(home);
-  const base = join(homeReal, DEFAULT_DEST_DIR);
+  const base = join(realpathSync(home), DEFAULT_DEST_DIR);
+  const baseReal = realOfNearest(base);
   const raw = dest ? (isAbsolute(dest) ? resolve(dest) : resolve(base, dest)) : base;
   const real = realOfNearest(raw);
-  if (real !== homeReal && !real.startsWith(homeReal + sep)) {
-    throw new Error(`받을 폴더는 홈(${homeReal}) 아래만 됩니다: ${raw}`);
+  if (!insideOrSame(real, baseReal)) {
+    throw new Error(`받을 폴더는 ${baseReal} 아래만 됩니다(기본 ~/${DEFAULT_DEST_DIR}) — dest 는 그 안의 상대 경로(예: «프로젝트A»)로 주세요: ${raw}`);
   }
-  if (real === homeReal) throw new Error("홈 폴더 자체에는 받지 않습니다 — 하위 폴더를 지정하세요");
   return real;
 }
 
@@ -143,7 +146,7 @@ export async function pullFiles(files, destRootIn, download, { budgetMs = DEFAUL
     if (!segs.length || segs.some((s) => s === null)) { out.failed.push({ path: f.path, error: "이 기계에 쓸 수 없는 이름" }); continue; }
     const target = join(destRoot, ...segs);
     try {
-      // 받는 폴더 안에 이미 있는 링크를 따라 홈 밖에 쓰지 않는다 — 폴더는 실제 경로로, 파일 자리는 링크 여부로 본다
+      // 받는 폴더 안에 이미 있는 링크를 따라 그 밖에 쓰지 않는다 — 폴더는 실제 경로로, 파일 자리는 링크 여부로 본다
       if (lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) { out.failed.push({ path: f.path, error: "그 자리에 링크가 있어 받지 않음" }); continue; }
       const parent = dirname(target);
       if (!insideOrSame(realOfNearest(parent), destRoot)) { out.failed.push({ path: f.path, error: "받는 폴더 밖으로 이어지는 링크" }); continue; }

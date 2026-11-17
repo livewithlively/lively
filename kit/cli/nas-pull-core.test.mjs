@@ -81,16 +81,88 @@ test("resolveDest: dest 없으면 <home 실제경로>/NAS사본, 폴더는 만�
   assert.equal(exists(path.join(home, "NAS사본")), false);
 });
 
-test("resolveDest: 상대 경로는 <home>/NAS사본 기준, 절대 경로(home 안)는 그대로", async () => {
+test("resolveDest: 기본 폴더(<home>/NAS사본) 자체와 그 아래는 받는다 — 상대 경로는 그 기준, 절대 경로는 그대로, 폴더는 만들지 않음", async () => {
   const home = mkTmp();
+  const base = path.join(home, "NAS사본");
   const rows = [
-    ["x/y", path.join(real(home), "NAS사본", "x", "y")],
-    ["../형제", path.join(real(home), "형제")],
-    [path.join(home, "abs", "dir"), path.join(real(home), "abs", "dir")],
+    [".", base],
+    ["x/y", path.join(base, "x", "y")],
+    ["x/../y", path.join(base, "y")],
+    [base, base],
+    [path.join(base, "abs", "dir"), path.join(base, "abs", "dir")],
   ];
   for (const [dest, want] of rows) assert.equal(await resolveDest(dest, home), want, dest);
-  assert.equal(exists(path.join(home, "NAS사본")), false);
-  assert.equal(exists(path.join(home, "abs")), false);
+  assert.equal(exists(base), false);
+});
+
+// 받는 자리는 기본 폴더 아래만 — 이 도구는 자동승인이라 dest·파일 이름을 AI 가 고른다(nas-pull-core.mjs 머리말).
+//  홈의 다른 자리를 받게 두면 NAS 문서에 심은 지시만으로 사람 확인 없이 ~/.ssh/authorized_keys 같은 파일을 덮는다(리뷰 재현).
+const OUTSIDE_BASE = [
+  ["절대 ~/.ssh(authorized_keys 자리)", (h) => path.join(h, ".ssh")],
+  ["절대 ~/.lively(라이블리 토큰 자리)", (h) => path.join(h, ".lively")],
+  ["절대 ~/Documents", (h) => path.join(h, "Documents")],
+  ["절대 ~/Library/LaunchAgents(로그인 때 실행)", (h) => path.join(h, "Library", "LaunchAgents")],
+  ["절대 ~/bin", (h) => path.join(h, "bin")],
+  ["절대 홈 자체", (h) => h],
+  ["상대 ..(기본 폴더의 부모 = 홈)", () => ".."],
+  ["상대 ../x(기본 폴더 밖 형제)", () => "../x"],
+  ["상대 x/../../y(안으로 들어갔다 밖으로)", () => "x/../../y"],
+  ["상대 ../NAS사본x(이름 앞부분이 같은 형제 — 접두 비교 경계)", () => "../NAS사본x"],
+  ["절대 ~/NAS사본x(이름 앞부분이 같은 형제)", (h) => path.join(h, "NAS사본x")],
+];
+for (const [label, destOf] of OUTSIDE_BASE) {
+  test(`resolveDest 거부: ${label}`, async () => {
+    const home = mkTmp();
+    for (const d of [".ssh", ".lively", "Documents", path.join("Library", "LaunchAgents"), "bin"]) fs.mkdirSync(path.join(home, d), { recursive: true });
+    const dest = destOf(home);
+    assert.ok(await throws(() => resolveDest(dest, home)), `거부되어야 함: ${dest}`);
+  });
+}
+
+test("resolveDest 거부: 기본 폴더 안의 링크가 홈의 다른 자리(~/.ssh)나 홈 밖을 가리키면", async () => {
+  const home = mkTmp();
+  const outside = mkTmp("naspull-out-");
+  const base = path.join(home, "NAS사본");
+  fs.mkdirSync(path.join(home, ".ssh"));
+  fs.mkdirSync(base);
+  fs.symlinkSync(path.join(home, ".ssh"), path.join(base, "keys"), "junction");
+  fs.symlinkSync(outside, path.join(base, "out"), "junction");
+  for (const dest of ["keys", "keys/sub", path.join(base, "keys"), "out", "out/sub"]) {
+    assert.ok(await throws(() => resolveDest(dest, home)), `거부되어야 함: ${dest}`);
+  }
+});
+
+test("resolveDest: 기본 폴더 자체가 링크면(다른 디스크로 옮겨 둔 경우) 그 실제 경로가 기준 — 그 아래는 받는다", async () => {
+  const home = mkTmp();
+  const moved = mkTmp("naspull-moved-");
+  fs.symlinkSync(moved, path.join(home, "NAS사본"), "junction");
+  const rows = [
+    [undefined, moved],
+    ["x", path.join(moved, "x")],
+    [path.join(moved, "y"), path.join(moved, "y")],
+    [path.join(home, "NAS사본", "z"), path.join(moved, "z")],
+  ];
+  for (const [dest, want] of rows) assert.equal(await resolveDest(dest, home), want, String(dest));
+});
+
+test("resolveDest 거부: 기본 폴더가 링크여도 홈의 다른 자리·링크 대상의 부모와 형제는 거부", async () => {
+  const home = mkTmp();
+  const holder = mkTmp("naspull-moved-");
+  const moved = path.join(holder, "nas");
+  fs.mkdirSync(moved);
+  fs.symlinkSync(moved, path.join(home, "NAS사본"), "junction");
+  for (const dest of [path.join(home, ".ssh"), "..", "../.ssh", holder, path.join(holder, "sibling")]) {
+    assert.ok(await throws(() => resolveDest(dest, home)), `거부되어야 함: ${dest}`);
+  }
+});
+
+test("resolveDest: home 이 링크여도(맥 /var → /private/var) 실제 경로 기준 — 기본 폴더 아래만 받는다", async () => {
+  const realHome = mkTmp();
+  const home = path.join(mkTmp("naspull-link-"), "home");
+  fs.symlinkSync(realHome, home, "junction");
+  assert.equal(await resolveDest(undefined, home), path.join(realHome, "NAS사본"));
+  assert.equal(await resolveDest(path.join(home, "NAS사본", "x"), home), path.join(realHome, "NAS사본", "x"));
+  assert.ok(await throws(() => resolveDest(path.join(home, ".ssh"), home)), "링크 홈의 ~/.ssh 도 거부");
 });
 
 test("resolveDest: home 밖·home 자체·.. 탈출은 Error", async () => {
@@ -577,6 +649,25 @@ test("nasPull: truncated 가 있으면 remaining 0 이어도 done=false", async 
   assert.equal(r.remaining, 0);
   assert.ok(r.truncated, "truncated 사유가 있어야 함");
   assert.equal(r.done, false);
+});
+
+test("nasPull: dest 가 기본 폴더 밖(~/.ssh·../.ssh)이면 요청도 쓰기도 없이 거부 — 있던 authorized_keys 는 그대로", async () => {
+  // 리뷰 재현: NAS 문서에 심은 지시를 따른 AI 가 dest 를 ~/.ssh 로 주자 NAS 파일 내용이 authorized_keys 를 덮었다(자동승인이라 사람 확인 없음)
+  const home = mkTmp();
+  const keys = path.join(home, ".ssh", "authorized_keys");
+  fs.mkdirSync(path.dirname(keys));
+  fs.writeFileSync(keys, "ORIGINAL\n");
+  const target = { p: "pk", type: "file", path: "/x/authorized_keys", size: 99 };
+  for (const dest of [path.join(home, ".ssh"), "../.ssh"]) {
+    const { ctx, apiCalls } = mkCtx({});
+    const { fetchImpl, calls } = mkFetch({ pk: "ssh-ed25519 ATTACKER\n" });
+    assert.ok(await throws(() => nasPull(ctx, { targets: [target], dest }, { home, fetchImpl, budgetMs: 1e9, now: () => 0 })), `거부되어야 함: ${dest}`);
+    assert.deepEqual(apiCalls, [], dest);
+    assert.deepEqual(calls, [], dest);
+  }
+  assert.equal(read(keys), "ORIGINAL\n");
+  assert.deepEqual(fs.readdirSync(path.join(home, ".ssh")), ["authorized_keys"]);
+  assert.equal(exists(path.join(home, "NAS사본")), false);
 });
 
 // ───────────────────────── runner ─────────────────────────
