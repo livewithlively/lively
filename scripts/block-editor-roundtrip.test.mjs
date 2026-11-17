@@ -225,6 +225,13 @@ assert.equal(inl(txt("~"), txt("~취소 아님")), "\\~~취소 아님");
 ok("⑥ 쪼개진 텍스트 노드는 이어 붙인 뒤 이스케이프(노드 경계에 걸친 ~~ 도 막힌다)");
 assert.equal(RE_WIKI_WEB.source, RE_WIKI.source, "웹 직렬화의 위키링크 문법이 서버 src/v6/wikilink.ts RE_WIKI 와 어긋났다 — 한쪽만 고치면 다시 링크가 끊긴다");
 ok("⑥ 웹 직렬화의 위키링크 문법 = 서버 RE_WIKI(드리프트 차단)");
+{
+  //  지식 화면이 [[제목처럼 적은 이름]] 을 서버와 같은 이름으로 풀려면 knSlug 가 서버 slugify 와 같아야 한다(lib/kn-links resolveWikiTarget).
+  const { slugify } = await import(join(root, "dist/v6/knowledge-common.js"));
+  const { knSlug } = await import(join(root, "public/app/lib/kn-links.js"));
+  for (const s of ["회의 메모 (10월)", "Foo_Bar  baz!", "--a--", "", "x".repeat(70) + "-y", "a".repeat(63) + " b"]) assert.equal(knSlug(s), slugify(s), `knSlug ≠ 서버 slugify: ${JSON.stringify(s)}`);
+  ok("⑥ 웹 knSlug = 서버 slugify(드리프트 차단)");
+}
 
 // 증상 그대로 — 편집기 DOM → 저장 md → 서버가 뽑는 링크 대상. 원문에 있던 링크가 저장 뒤에도 전부 잡혀야 한다.
 {
@@ -239,6 +246,25 @@ ok("⑥ 웹 직렬화의 위키링크 문법 = 서버 RE_WIKI(드리프트 차�
   assert.deepEqual(extractWikiLinkTargets(md), want);
   assert.deepEqual(extractWikiLinkTargets(round(md)), want);
   ok("⑥ 편집기 저장 → 서버 위키링크 추출: 문단·목록·제목의 링크 4건이 그대로 잡히고 재왕복에도 불변");
+}
+
+// ⑦ 지식 화면이 [[…]] 를 링크(A + data-wiki-*)로 그려도 저장은 원문 [[…]] 그대로 — 열기만 해도 본문이 바뀌면 안 된다.
+//  [이름, A 의 글자, A 의 href, 기대 md]. 그릴 때 실은 값: raw · target · label · href(=#/k/…)
+{
+  const wiki = (raw, target, label, href) => ({ dataset: { wikiRaw: raw, wikiTarget: target, wikiLabel: label, wikiHref: href } });
+  const W = [
+    ["손대지 않으면 원문 그대로(공백 · 헤딩까지)", "kn-a", "#/k/kn-a", wiki("[[ kn-a#절 ]]", "kn-a#절", "kn-a", "#/k/kn-a"), "[[ kn-a#절 ]]"],
+    ["라벨 링크도 원문 그대로", "10월 회의", "#/k/x", wiki("[[x|10월 회의]]", "x", "10월 회의", "#/k/x"), "[[x|10월 회의]]"],
+    ["라벨을 고치면 [[대상|새 라벨]]", "새 이름", "#/k/kn-a", wiki("[[kn-a]]", "kn-a", "kn-a", "#/k/kn-a"), "[[kn-a|새 이름]]"],
+    ["캐럿 패딩 ZWSP 는 라벨 비교 전에 뗀다", "kn-a\u200B", "#/k/kn-a", wiki("[[kn-a]]", "kn-a", "kn-a", "#/k/kn-a"), "[[kn-a]]"],
+    ["라벨을 다 지우면 링크도 지운 것", "", "#/k/kn-a", wiki("[[kn-a]]", "kn-a", "kn-a", "#/k/kn-a"), ""],
+    ["주소를 바꾼 링크는 일반 링크", "kn-a", "https://x.y", wiki("[[kn-a]]", "kn-a", "kn-a", "#/k/kn-a"), "[kn-a](https://x.y)"],
+  ];
+  for (const [n, label, href, extra, want] of W) {
+    const a = elem("A", { href, ...extra }, txt(label));
+    assert.equal(inl(txt("앞 "), a, txt(" 뒤")), want ? `앞 ${want} 뒤` : "앞  뒤", n);
+    ok(`⑦ 위키 링크 A → md — ${n}`);
+  }
 }
 
 // escInline / escLineStart 단위
