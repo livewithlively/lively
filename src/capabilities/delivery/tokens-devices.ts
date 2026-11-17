@@ -7,7 +7,7 @@ import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "../scopes.js";
 import type { LivelyUser } from "../../context.js";
 import { getMember, mintToken, listTokens, revokeToken, mintSessionCode } from "../../org/store.js";
 import { resolveTokenHandle, MIN_HANDLE_LEN, TOKEN_HASH_LEN } from "../../org/store/tokens.js";
-import { hasCredential, verifyOwnPassword } from "../../auth/local-accounts.js";
+import { stepUpMethodFor, verifyStepUp } from "./step-up.js";
 import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../../org/auth/device-auth.js";
 import {
   listClients as listOAuthClients, saveClient as saveOAuthClient, disableClient as disableOAuthClient,
@@ -129,6 +129,22 @@ export const deviceAuthCapabilities: Capability[] = [
     },
     false, { code: z.string() }),   // mcp:false 여도 parse 산출을 선언(#1403 — types.ts input 규약)
 
+  // ── 승인 화면이 «어느 비밀번호를 물을지» 를 묻는 창구(#3970). 판정은 step-up.ts(서버 검증과 같은 함수축). ──
+  //  ⚠ 화면 전용이라 관대하게 답한다: CP 가 일시적으로 안 잡히면 «cp» 로 두고 칸을 보여준다(degraded).
+  //   여기서 «none» 으로 떨어뜨리면 칸이 사라졌다가 승인 때 502 가 나서, 사람은 무엇을 채워야 하는지 모른 채 막힌다.
+  //   관문 자체는 화면이 아니라 device_approve 의 verifyStepUp 이 잡는다(fail-closed).
+  restRead("device_stepup_info", "디바이스 승인 재확인 수단",
+    "CLI 승인 화면이 물어야 할 재확인 수단 — cp(라이블리 계정 비밀번호) | local(이 워크스페이스 비밀번호) | none(물을 것 없음).",
+    [{ method: "GET", paths: ["/api/ui/cli/device/stepup-info"], parse: () => ({}) }],
+    async (_input: Record<string, unknown>, user: LivelyUser) => {
+      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+      try {
+        return { method: await stepUpMethodFor(user), degraded: false };
+      } catch {
+        return { method: "cp" as const, degraded: true };
+      }
+    }),
+
   restRead("device_approve", "디바이스 로그인 승인",
     "브라우저에서 CLI 로그인을 승인한다. member_id·scope 는 principal 강제. include_control_plane=true(관리권한 포함)는 비밀번호 재확인(step-up) 필요.",
     [{ method: "POST", paths: ["/api/ui/cli/device/approve"], parse: (req) => req.body ?? {} }],
@@ -140,11 +156,13 @@ export const deviceAuthCapabilities: Capability[] = [
       const includeControlPlane = input.include_control_plane === true;
       // step-up: control-plane 을 실제로 실을 수 있는 멤버(위험 scope 보유)만 비밀번호 재확인. 비번 없는 멤버
       //  (프로비저닝·향후 SSO)는 세션 자체가 신선도 증거 → 통과(비번을 유일 게이트로 두면 잠김, 설계 R2-F3).
+      //  ⚠ **어느 비밀번호인가**는 여기서 정하지 않는다 — 매니지드에선 라이블리 계정(CP) 비번이고 셀프호스트에선
+      //   이 게이트웨이의 로컬 비번이다. 그 판정은 화면과 같은 값을 써야 하므로 step-up.ts 한 곳에 있다(#3970).
       const memberScopes = Array.isArray(user.scopes) ? user.scopes : [];
       const hasDangerous = memberScopes.some((s) => DANGEROUS_SCOPES.has(s as Scope));
-      if (includeControlPlane && hasDangerous && await hasCredential(user.userId)) {
+      if (includeControlPlane && hasDangerous) {
         const pw = typeof input.password === "string" ? input.password : "";
-        if (!pw || !(await verifyOwnPassword(user.userId, pw))) {
+        if (!(await verifyStepUp(user, pw))) {
           throw new HttpError(403, "관리 권한 포함 승인은 비밀번호 재확인이 필요합니다.");
         }
       }
