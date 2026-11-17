@@ -112,7 +112,8 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   const side = MAIN.slice(MAIN.indexOf("function sideInstances(): SideInstance[] {"), MAIN.indexOf("async function closeSideRow(key: string)"));
   //  #4158 — 판정 한 줄은 homeRowVerdict 한 자리로 올라갔다([AI 세션] 전체 목록이 홈과 **같은 함수**로 재도록). ① 은 그걸 부른다.
   const verdictFn = MAIN.slice(MAIN.indexOf("function homeRowVerdict("), MAIN.indexOf("function sideInstances(): SideInstance[] {"));
-  ok(/verdictStands\(homeRowVerdict\(s, facts\)\)/.test(side)
+  //  #5579 — ① 은 판정을 한 번 재어 두고(AI가 연 세션은 kept 만 선다) 같은 값으로 서기를 정한다.
+  ok((/verdictStands\(homeRowVerdict\(s, facts\)\)/.test(side) || /const verdict = homeRowVerdict\(s, facts\);[\s\S]{0,2400}?verdictStands\(verdict\)/.test(side))
     && /sessRowVerdict\(\{ ids: \[s\.id, s\.logId \|\| '', \.\.\.\(s\.altIds \|\| \[\]\)\]/.test(verdictFn)
     && !/if \(!liveNow && \(s\.lastSeen \|\| 0\) < workDayStart\(now\)\) continue;/.test(side),
     "W1 ① 이 날짜 컷 대신 보임 축 판정을 쓴다 — 세션의 모든 이름으로(판정은 homeRowVerdict 한 자리, #4158)");
@@ -166,7 +167,8 @@ ok(V({ lastSeen: DAY - 1 }) === "cut",
   pruneHolds(holds, present);
   ok(!holds.has("sess:box-a") && holds.has("sess:box-b"),
     "W11 붙들려 있던 세션을 치우면 목록 이탈로 자물쇠가 풀린다 · 목록에 둔 세션의 자물쇠는 그대로");
-  const cut = side.indexOf("if (!verdictStands(homeRowVerdict(");   // #4158 — 판정은 homeRowVerdict 한 자리(W1)
+  //  #4158 — 판정은 homeRowVerdict 한 자리(W1). #5579 — ① 은 그 값을 verdict 로 받아 둔다(AI가 연 세션 거르기가 같은 값을 쓴다).
+  const cut = Math.max(side.indexOf("if (!verdictStands(homeRowVerdict("), side.indexOf("if (!verdictStands(verdict)) continue;"));
   const prune = side.indexOf("pruneHolds(holds, rows);");
   ok(cut > 0 && prune > cut,
     "W11′ 배선 — 치운 세션을 거르는 줄이 자물쇠 정리(pruneHolds(holds, rows)) 앞에 있다(행에 안 들어가야 풀린다)");

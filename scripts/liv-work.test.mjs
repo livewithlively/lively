@@ -49,12 +49,21 @@ try {
 ok(!!L && !!P && !!F, "V0 잣대가 잎 모듈(lib/liv-work · home-pins · sess-fold)에 있다");
 
 if (L && P && F) {
-  const { taskMarkOf, standingProjectId, sideProjectId, placeLivWork, isLooseLivWork, livWorkName, livWorkNote, LIV_BUCKET_NAME, LIV_CARD } = L;
-  const full = { id: 41, originSession: "box-a-12345678", originLabel: "결제 백오프", originProject: 4551, cron: null };
+  const { taskMarkOf, standingProjectId, sideProjectId, placeLivWork, isLooseLivWork, livWorkName, livWorkNote, isMachineOpened, livWorkWhy, LIV_BUCKET_NAME, LIV_CARD } = L;
+  const full = { id: 41, originSession: "box-a-12345678", originLabel: "결제 백오프", originProject: 4551, cron: null, ask: null, cronLabel: null };
   eq(taskMarkOf(full), full, "T1 온전한 표식은 그대로 읽는다");
-  eq(taskMarkOf({ id: "41" }), { id: 41, originSession: null, originLabel: null, originProject: null, cron: null }, "T1 번호 문자열도 숫자로 · 빠진 칸은 null");
+  eq(taskMarkOf({ id: "41" }), { id: 41, originSession: null, originLabel: null, originProject: null, cron: null, ask: null, cronLabel: null }, "T1 번호 문자열도 숫자로 · 빠진 칸은 null");
   ok([null, undefined, "task", 7, {}, { id: 0 }, { id: -3 }, { id: "x" }].every((v) => taskMarkOf(v) === null), "T2 ★ 표식이 아니면 null — 옛 서버의 행은 종전 그대로 선다");
-  eq(taskMarkOf({ id: 1, originSession: "", originLabel: "   ", originProject: 0, cron: "" }), { id: 1, originSession: null, originLabel: null, originProject: null, cron: null }, "T3 빈 문자열 · 공백 · 0 은 null");
+  eq(taskMarkOf({ id: 1, originSession: "", originLabel: "   ", originProject: 0, cron: "", ask: " ", cronLabel: "" }), { id: 1, originSession: null, originLabel: null, originProject: null, cron: null, ask: null, cronLabel: null }, "T3 빈 문자열 · 공백 · 0 은 null");
+
+  // ── #5579 AI · 예약 작업이 연 세션 — 판정 · 왜 열렸나 ──
+  ok(isMachineOpened({ task: full }) && !isMachineOpened({}) && !isMachineOpened({ task: null }), "M1 ★ 위탁 표식이 있으면 AI가 연 세션, 없으면 사람이 연 세션");
+  eq(livWorkWhy({ ...full, ask: "로그를 정리해 줘" }), "«결제 백오프» 세션의 AI가 맡긴 일이에요 · 로그를 정리해 줘", "M2 시킨 세션 이름 · 맡긴 일(첫 줄)");
+  eq(livWorkWhy(full), "«결제 백오프» 세션의 AI가 맡긴 일이에요", "M3 맡긴 일을 모르면(남의 워커 · 옛 서버) 시킨 세션만");
+  eq(livWorkWhy({ ...full, originLabel: null }), "다른 세션의 AI가 맡긴 일이에요", "M4 시킨 세션 이름도 모르면(남의 세션) 이름 없이");
+  eq([livWorkWhy({ ...full, cron: "distill", cronLabel: "자료 증류" }), livWorkWhy({ ...full, cron: "distill" })],
+    ["예약 작업이 연 세션이에요 · 자료 증류", "예약 작업이 연 세션이에요 · distill"], "M5 예약 작업은 잡 이름(없으면 잡 id)");
+  ok(![full, { ...full, cron: "x" }].some((m) => /리브가 (만들|열)/.test(livWorkWhy(m))), "M6 «리브가 만들었다» 고 쓰지 않는다(연 것은 그 세션의 AI · 예약 작업이다)");
   eq([taskMarkOf({ id: 1, originProject: -5 }).originProject, taskMarkOf({ id: 1, originProject: "abc" }).originProject, taskMarkOf({ id: 1, originProject: "12" }).originProject], [null, null, 12], "T3 프로젝트 번호 — 음수 · 쓰레기는 null, 숫자 문자열은 숫자");
 
   eq(standingProjectId(7, full), 7, "P1 ★ 제 소속이 이긴다(사람이 그 워커를 옮겼으면 그 결정이 앞선다)");
@@ -167,7 +176,7 @@ else {
     const mark = { id: 9, originSession: null, originLabel: null, originProject: null, cron: 'weekly' };
     const sess = (id, o) => Object.assign({ id, label: 'PAST-' + id, projectId: null, node: null, live: false, alive: false, owned: true, stateKey: 'offline', stateLabel: 'x', lastSeen: 1600000000000, raw: {} }, o || {});
     const data = { projects: [{ id: 5, name: 'PROJ-5' }], lists: [], folders: [], loadedAt: 1700000000000,
-      sessions: [sess('pw1', { task: mark, label: '위탁 #9' }), sess('pw2', { task: mark, label: '위탁 #9' }), sess('ph1')] };   // worker default label
+      sessions: [sess('pw1', { task: mark, label: '위탁 #9' }), sess('pw2', { task: mark, label: '위탁 #9' }), sess('ph1'), sess('ph2', { projectId: 5 }), sess('pw5', { task: mark, projectId: 5, label: '위탁 #9' })] };   // worker default label
     const hooks = { section: () => 'home', instances: () => rows, navHost: () => null, railHidden: () => false };
     Side.drawSide(host, data, () => '', hooks); await sleep(40);
     const axis = host.querySelector('.v2-axisbtn'); if (!axis) throw new Error('no axis button');
@@ -201,12 +210,29 @@ else {
     const w1 = R.liv && R.liv.rows.find((r) => r[0] === "ROW-w1"), h1 = R.none && R.none.rows.find((r) => r[0] === "ROW-h1");
     ok(!!w1 && !!h1 && !!w1[1] && w1[1] !== h1[1] && !R.liv.headIc && !R.none.headIc && !R.p5.headIc,
       "R3 워커 줄은 다른 줄과 다른 그림(리브)이다 · 카드 머리엔 그림이 없다(#5522 — 리브 카드는 이름이 말한다)");
-    ok(!!R.liv && ["리브 작업 #9"].every((n) => names(R.liv).filter((x) => x === n).length === 2) && !names(R.liv).includes("PAST-ph1")
-      && !!R.none && names(R.none).includes("PAST-ph1") && !names(R.none).some((n) => /리브 작업/.test(n)),
-      "R4 ★★ 접힘 — 끝난 워커는 리브 카드에만(«리브 작업 #N» 이름으로), 끝난 사람 세션은 「기타」 카드에만", JSON.stringify([names(R.liv), names(R.none)]));
+    //  #5579(원준 2026-11-17 «세션 안에서 서브에이전트가 열거나 한 세션은 좌측 사이드바에 표시하지 않았으면 좋겠고») — 종전(#4551)엔 끝난 워커가
+    //   리브 카드의 「지난 세션」 접힘에 «리브 작업 #N» 으로 들었다. 이제 **어느 카드의 접힘에도 안 든다** — 사람이 연 줄(위 rows)만 선다.
+    ok(!!R.liv && !names(R.liv).some((n) => /리브 작업|PAST-pw/.test(n)) && !names(R.liv).includes("PAST-ph1")
+      && !!R.none && names(R.none).includes("PAST-ph1") && !names(R.none).some((n) => /리브 작업|PAST-pw/.test(n))
+      && !!R.p5 && names(R.p5).includes("PAST-ph2") && !names(R.p5).some((n) => /리브 작업|PAST-pw/.test(n)),
+      "R4 ★★ #5579 접힘 — 끝난 AI · 예약 작업 세션은 어느 카드의 「지난 세션」에도 안 든다(끝난 사람 세션은 그대로 제 카드에)", JSON.stringify([names(R.liv), names(R.none), names(R.p5)]));
     ok(!!R.p5 && names(R.p5).includes("ROW-w5") && names(R.p5).includes("ROW-s5") && !names(R.liv).includes("ROW-w5"),
       "R5 ★ 시킨 프로젝트가 있는 워커는 그 프로젝트 카드 안에 선다", JSON.stringify(names(R.p5)));
   }
+}
+
+// ───────────────────────── #5579 배선 — AI · 예약 작업이 연 세션은 사이드바에 스스로 안 선다 ─────────────────────────
+{
+  const sideI = (() => { const a = MAIN.indexOf("function sideInstances(): SideInstance[] {"); return a < 0 ? "" : MAIN.slice(a, MAIN.indexOf("async function closeSideRow(key: string)", a)); })();
+  ok(/const verdict = homeRowVerdict\(s, facts\);\s*if \(isMachineOpened\(s\) && verdict !== 'kept'\) continue;\s*[\s\S]{0,1600}?if \(!verdictStands\(verdict\)\) continue;/.test(sideI),
+    "X1 ★★ 홈 ① — AI가 연 세션은 사람이 한 번 연 것(kept)만 선다 · «도는 것 · 오늘 것» 으로는 안 선다");
+  ok(/const dismissedNow = hostVerdict === 'dismissed';\s*if \(isMachineOpened\(s\) && hostVerdict !== 'kept'\) continue;/.test(sideI), "X1b 초대한 세션 줄기(①‴)도 같은 규칙 — AI가 연 세션은 사람이 한 번 연 것만");
+  ok(/if \(isTrashedSess\(s\) \|\| isMachineOpened\(s\)\) continue;/.test(SIDE) && /data\.sessions\.filter\(\(s\) => !isTrashedSess\(s\) && !isMachineOpened\(s\)\)/.test(SIDE)
+    && /last\?\.data\.sessions\?\.filter\(\(s\) => !isMachineOpened\(s\)\)/.test(SIDE),
+    "X2 ★ 사이드바의 다른 길(프로젝트 트리 · 카드 수 · 「지난 세션」 접힘)도 같은 술어로 거른다");
+  const CHAT = code(read("web/session-chat.ts"));
+  ok(/text: '열린 까닭' \}\),\s*el\('span', \{ class: 'm', text: livWorkWhy\(mk\) \}\)\),[\s\S]{0,120}?: null\)\)\(taskMarkOf\(target\.raw\?\.task\)\)/.test(CHAT),
+    "X3 세션 설정 창 «열린 까닭» 줄 — 위탁 표식이 있는 세션에만 서고 문구는 livWorkWhy 한 벌");
 }
 
 console.log(`\n#4551 위탁 워커 = 리브가 한 일: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

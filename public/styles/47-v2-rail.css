@@ -552,6 +552,8 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-row .c-name .v2-bin-fold { color: var(--muted-2); }
 .v2-sa-row .c-name .t { font-size: 15px; font-weight: 600; color: var(--ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .v2-sa-row .c-name .t.un { color: var(--muted); font-weight: 500; }
+/* #5579 — AI · 예약 작업이 연 세션의 «왜 열렸나» 한 줄. 이름 다음 자리에서 남는 폭만 쓰고 넘치면 말줄임(전문은 title). */
+.v2-sa-row .c-name .v2-sa-why { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
 .v2-sa-row.dism .c-name .t { color: var(--ink-sub); }
 .v2-sa-row .c-proj { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; color: var(--ink-sub); padding-right: 12px; }
 .v2-sa-row .c-proj span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

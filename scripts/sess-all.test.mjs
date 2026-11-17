@@ -68,6 +68,15 @@ if (lib) {
   eq(ownerCounts(rows, Q({ proj: 2 })), [{ key: "u2", n: 1 }], "V15 사람 칸은 걸린 프로젝트 **안에서** 센다");
   eq(ownerCounts(rows, Q({ proj: 2, owner: "u3" })), [{ key: "u2", n: 1 }, { key: "u3", n: 0 }],
     "V16 ★고른 사람은 0 이어도 칸이 남는다 — 사라지면 걸린 거르개를 끌 길이 없다");
+
+  // ── #5579 — 연 주체 축: 사람이 연 세션 / AI · 예약 작업이 연 세션 ──
+  const mrows = [...rows, S("w1", { machine: true }), S("w2", { machine: true, projectId: null, owner: "u2", lastSeen: NOW - 2 * DAY })];
+  eq(ids(selectAllSess(mrows, Q())), ["a", "d", "b", "f", "c"], "MA1 ★★ 기본 보기 — AI가 연 세션은 빠진다(machine 칸이 없는 줄은 사람이 연 것)");
+  eq(ids(selectAllSess(mrows, Q({ machine: false }))), ["a", "d", "b", "f", "c"], "MA1 false 도 기본과 같다");
+  eq(ids(selectAllSess(mrows, Q({ machine: true }))), ["w1", "w2"], "MA2 ★ 칩을 켜면 AI가 연 세션만 — 섞어 보지 않는다");
+  eq(ids(selectAllSess(mrows, Q({ machine: true, owner: "me", proj: 1 }))), ["w1"], "MA3 다른 축과 AND 다");
+  eq(ownerCounts(mrows, Q()), [{ key: "me", n: 2 }, { key: "u2", n: 2 }, { key: "u3", n: 1 }], "MA4 사람 칸도 지금 보는 쪽만 센다(기본 보기엔 AI가 연 세션이 안 든다)");
+  eq(ownerCounts(mrows, Q({ machine: true })), [{ key: "me", n: 1 }, { key: "u2", n: 1 }], "MA4 칩을 켜면 그쪽만 센다");
 }
 
 // ───────────────────────── S. 배선 — 사이드바 · 가운데 · 셸 ─────────────────────────
@@ -104,7 +113,7 @@ ok(/else if \(isSessAllRoute\(at\.route\)\) paintSessAll\(at\);/.test(cut(MAIN, 
 const paint = code(cut(MAIN, "function paintSessAll(", "\nfunction repaintSessAll"));
 const sideI = code(cut(MAIN, "function sideInstances(): SideInstance[] {", "async function closeSideRow(key: string)"));
 ok(/const facts = homeVisFacts\(Date\.now\(\)\);/.test(paint) && /homeRowVerdict\(s, facts\)/.test(paint)
-  && /const facts = homeVisFacts\(now\);/.test(sideI) && /verdictStands\(homeRowVerdict\(s, facts\)\)/.test(sideI),
+  && /const facts = homeVisFacts\(now\);/.test(sideI) && /const verdict = homeRowVerdict\(s, facts\);/.test(sideI) && /verdictStands\(verdict\)/.test(sideI),
   "S8 ★«홈에 서 있나 · 치웠나» 는 홈과 **같은 재료(homeVisFacts)·같은 함수(homeRowVerdict)** 로 잰다 — 판정이 두 벌이 아니다");
 ok(/verdict: \(s\) => \(s\.owned && !isTrashedSess\(s\) \? homeRowVerdict\(s, facts\) : null\)/.test(paint),
   "S9 남의 세션은 재지 않는다 — 홈 ① 이 세우는 것도 내 세션뿐이다");
@@ -136,6 +145,12 @@ ok(/hooks\.verdict\(it\.s\) === 'dismissed' \? el\('span', \{ class: 'v2-bin-tag
   "S16 치운 세션은 「치움」 꼬리표로 그대로 서고, 치우기는 홈에 서 있는 줄에만 — 홈 판정(verdictStands)으로 가른다");
 ok(/hooks\.onOpen\(s\)/.test(all) && !/window\.open|openSessionWindow|terminalUrl/.test(all),
   "S17 줄을 누르면 셸의 문(hooks.onOpen)으로만 연다 — 새 터미널 창을 따로 열지 않는다");
+//  #5579 — 「AI가 연 세션」 칩: 줄마다 연 주체를 싣고, 칩이 그 축을 바꾸고, 수는 같은 잣대로 센다. 그 줄은 «왜 열렸나» 를 단다.
+ok(/const machine = isMachineOpened\(s\);/.test(all) && /machine: ui\.machine \}/.test(all) && /selectAllSess\(items, \{ \.\.\.q, machine: true \}\)\.length/.test(all),
+  "S18 ★ 가운데 목록 — 줄마다 연 주체(isMachineOpened)를 싣고 칩 상태로 거른다 · 칩의 수는 같은 잣대로 센다");
+ok(/'data-pick': 'machine'/.test(all) && /AI가 연 세션 \$\{o\.machineCount \|\| 0\}/.test(all) && /o\.machineCount === undefined \? null/.test(all),
+  "S19 「AI가 연 세션」 칩 — 수를 받은 자리에만 선다(프로젝트 보드엔 없다)");
+ok(/it\.machine && it\.s\.task \? el\('span', \{ class: 'v2-sa-why', text: livWorkWhy\(it\.s\.task\)/.test(all), "S20 AI가 연 세션 줄은 «왜 열렸나» 한 줄을 단다");
 
 
 // ───────────────────────── #4233 안 A — 묶기 · 상태 거르개 · 「지금 볼 것」 카드 · 이름 없는 세션 · 배선 ─────────────────────────

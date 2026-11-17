@@ -89,7 +89,7 @@ import { refreshUnread, startNotificationBanners, startUnreadWatch } from './not
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
 import { startBrowserHost } from './browser-host.js';   // #4993 AI 와 사람이 같이 쓰는 브라우저 — 게이트웨이 명령을 받는 자리
 import { NO_PROJECT_NAME, isSpentLoginSess, isCollectSessRow } from '../lib/proj-none.js';
-import { isLooseLivWork, livWorkName, livWorkNote, placeLivWork, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
+import { isLooseLivWork, isMachineOpened, livWorkName, livWorkNote, placeLivWork, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
 //  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
@@ -2629,13 +2629,22 @@ function sideInstances(): SideInstance[] {
     for (const s of data.sessions) {
       if (!s.owned || isTrashedSess(s) || !isHostingSess(s)) continue;
       const liveNow = s.live && s.alive;
-      const dismissedNow = sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: false, lastSeen: 0, dayStart: 0, kept, dismissed: gone }) === 'dismissed';
+      const hostVerdict = sessRowVerdict({ ids: [s.id, s.logId || '', ...(s.altIds || [])], live: false, lastSeen: 0, dayStart: 0, kept, dismissed: gone });
+      const dismissedNow = hostVerdict === 'dismissed';
+      if (isMachineOpened(s) && hostVerdict !== 'kept') continue;   // #5579 — AI · 예약 작업이 연 세션은 사람이 한 번 연 것만 선다(① 머리말)
       if (!invitedRowStands({ live: liveNow, lastSeen: s.lastSeen || 0, now, dismissed: dismissedNow })) continue;
       put('sess:' + s.id, '#/s/' + encodeURIComponent(s.id), s.lastSeen || 0, liveNow ? s.stateKey : (s.stopDot || ''), false, undefined, !liveNow && s.stopPast !== false, false, true);
     }
   }
   for (const s of data.sessions) {                                   // ① 내 세션 — 목록에 둔 것 + 도는 것 + 오늘 쓴 것
     if (!s.owned || isTrashedSess(s)) continue;
+    //  ★ #5579(원준 2026-11-17 «내가 직접 +로 해서 새로 연 세션이 아니고 세션 안에서 서브에이전트가 열거나 한 세션은 좌측 사이드바에
+    //   표시하지 않았으면 좋겠고, 특별히 원할 때만 접근할 수 있게») — 세션 안의 AI(위탁)나 예약 작업이 연 세션은 «도는 것 · 오늘 것»
+    //   규칙으로 **스스로 서지 않는다.** 사람이 한 번 연 것(«목록에 둠» kept)만 선다 — 위탁은 인스턴스를 안 세우고(spawnTaskSession 은
+    //   registerSessionInstance 를 안 탄다), 화면에서 #/s/:id 를 열 때 비로소 생긴다(아래 ensureSessionAppInstance). 그래서 kept 는
+    //   «사람이 원해서 열었다» 는 뜻이다 — [AI 세션] 목록의 「AI가 연 세션」 칩에서 열거나, 시킨 세션의 링크를 눌렀을 때다. × 로 치우면 다시 물러난다.
+    const verdict = homeRowVerdict(s, facts);
+    if (isMachineOpened(s) && verdict !== 'kept') continue;
     const liveNow = s.live && s.alive;
     //  ★ 종전엔 도는 것만 세웠다. 그래서 오늘 쓰고 끝낸 세션이 목록에서 통째로 빠졌다 —
     //   실측(2026-08-27, 상민님 계정): 오늘 활동한 내 세션 16건 중 **5건만** 섰고 나머지 11건(offline·종료)은
@@ -2648,7 +2657,7 @@ function sideInstances(): SideInstance[] {
     //  ★ #3855 — 위 규칙(도는 것 + 오늘 것)은 이제 **화면에서 한 번도 안 연 세션에만** 쓴다. 먼저 «내가 치웠나» 를 본다
     //   (sess-visibility.ts 머리말): 목록에 둔 세션은 회수로 멈췄어도·어제 것이어도 서고, 치운 세션은 상태가 바뀌어도
     //   안 선다. 종전엔 사람이 안 닫은 사실(org_app_instance active)이 서버에 있는데도 여기서 날짜로 잘려 아침마다 사라졌다.
-    if (!verdictStands(homeRowVerdict(s, facts))) continue;
+    if (!verdictStands(verdict)) continue;
     //  지난 세션엔 상태 점을 주지 않는다 — 점은 '지금 벌어지는 일'을 말하는 자리다(#1954 §4).
     //   구분은 영역이 아니라 행이 진다(past → .v2-app-inst--past, 원준 지시 2026-08-27).
     //  ★ #4783 — 다만 «지난 세션» 은 **사람이 끝낸 것**이다(상민님 2026-10-16). 시스템이 끈 세션(하네스 종료 규칙 — 일이 끝나고 안 보면

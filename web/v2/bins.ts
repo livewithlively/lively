@@ -18,6 +18,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
 import { confirmSessionPurge, confirmSessionPurgeLocal, confirmSessionPurgeMany, confirmSessionTrash, purgeSessionRecord, purgedToast, sessionNames, sessionTrashOp, setTrashConfirmSkipped, trashConfirmSkipped, trashProjectsFlow, eulReul } from '../session-actions.js';
 import { sessText, sidePeople } from './side.js';
+import { isMachineOpened, livWorkName, livWorkWhy } from '../lib/liv-work.js';   // #5579 — AI · 예약 작업이 연 세션은 「AI가 연 세션」 칩으로만 · 왜 열렸나
 import { dotCls, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isTrashedProj, isTrashedSess, projName, type Proj, type Sess, type V2Data } from './views.js';
 import { listDismissedSessions, restoreDismissedSessions, type DismissedSession } from './app-instance.js';   // #3857 「치운 세션」
 import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
@@ -951,6 +952,8 @@ export interface SessAllHooks {
 /** 화면 상태 — 모듈 수준인 이유는 pastUi 와 같다(셸의 결이 render 를 통째로 다시 부른다). 기억하지 않는다(페이지 수명). */
 const allUi = {
   period: 'all' as PastPeriod, owner: '', state: '', q: '', searching: false,
+  /** #5579 — 「AI가 연 세션」 칩. 꺼져 있으면(기본) 사람이 연 세션만, 켜면 AI · 예약 작업이 연 세션만 보인다(lib/sess-all machine 축). */
+  machine: false,
   shown: PAGE,
   /** 마지막으로 그린 사이드바 선택(기준 · 카드 · 줄) — 바뀌면 [더 보기]는 처음부터. */
   scopeKey: '',
@@ -974,16 +977,19 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const listOf = new Map(data.projects.map((p) => [p.id, p.list_id ?? null]));
   const items = data.sessions.map((s) => {
     const t = sessText(s, projName(data, s.projectId));
+    const machine = isMachineOpened(s);
     return {
       s, projectId: s.projectId, trashedAt: s.trashedAt || null, lastSeen: s.lastSeen, stateKey: s.stateKey,
       listId: s.projectId != null ? (listOf.get(s.projectId) ?? null) : null,
       owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''),
-      name: t.main || s.label || s.id, untitled: t.untitled,
+      //  #5579 — AI · 예약 작업이 연 세션의 이름은 사이드바와 같은 규칙(«리브 작업 #N» — 기본 이름 «위탁 #N» 은 사람이 읽을 이름이 아니다).
+      name: machine && s.task ? livWorkName(s.label, s.task) : (t.main || s.label || s.id), untitled: machine ? false : t.untitled,
+      machine,
     };
   });
   const meId = String((state.me && state.me.userId) || '');
   const ownerName = (k: string): string => (k === 'me' ? '나' : (people[k] && people[k].display_name) || k || '알 수 없음');
-  const q = { proj: sc.proj, group: sc.group !== null ? { by: sc.by, key: sc.group } : null, period: ui.period, owner: ui.owner, state: ui.state, now };
+  const q = { proj: sc.proj, group: sc.group !== null ? { by: sc.by, key: sc.group } : null, period: ui.period, owner: ui.owner, state: ui.state, now, machine: ui.machine };
   const inProj = selectAllSess(items, { ...q, period: 'all', owner: '', state: '' });
   const needle = ui.q.trim().toLowerCase();
   const vis = selectAllSess(items, q).filter((it) => !needle
@@ -997,7 +1003,9 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
 
   // ── 2행 도구줄 — 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션(묶기는 사이드바 머리의 드롭다운) ──
   //  기간 · 사람 · 상태 칩은 sess-table.ts 한 벌(#4865 — 프로젝트 보드 「리스트」 뷰도 같은 것을 쓴다).
-  const picks = sessFilterPicks(ui, { owners: ownerCounts(items, q), ownerName, myStateCount: byState, repaint });
+  //  #5579 — 「AI가 연 세션」 칩의 수: 지금 걸린 다른 거르개(프로젝트 · 기간 · 사람 · 상태 · 카드) 안에서 AI · 예약 작업이 연 세션 수.
+  const machineCount = selectAllSess(items, { ...q, machine: true }).length;
+  const picks = sessFilterPicks(ui, { owners: ownerCounts(items, q), ownerName, myStateCount: byState, machineCount, repaint });
   const search = ui.searching || ui.q
     ? el('input', { class: 'v2-sa-q', type: 'search', placeholder: '세션 이름 · 프로젝트 찾기', 'data-pick': 'q', value: ui.q,
         oninput: (e: Event) => { ui.q = (e.target as HTMLInputElement).value; ui.shown = PAGE; repaint(); },
@@ -1019,10 +1027,14 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     //  치우기는 **홈 목록에 서 있는 내 세션**에만 — 안 서 있는 줄에서 «목록에서 치우기» 는 뜻이 없다(홈의 × 도 선 줄에만 있다).
     menuRows: (it) => { const s = it.s; const v = hooks.verdict(s); return v && verdictStands(v) ? [{ label: '홈에서 치우기', hint: '세션은 그대로 돌아요', run: () => hooks.onDismiss(s) }] : []; },
     rowClass: (it) => (hooks.verdict(it.s) === 'dismissed' ? ' dism' : ''),
-    rowTag: (it) => (hooks.verdict(it.s) === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
+    //  #5579 — AI · 예약 작업이 연 세션은 이름 옆에 «왜 열렸나» 한 줄(원준 «그리고 그 세션이 왜 열렸는지»). 치운 꼬리표보다 앞선다 — 이 칩을
+    //   켠 사람이 줄마다 알고 싶은 것은 그 세션이 무슨 일로 섰나다.
+    rowTag: (it) => (it.machine && it.s.task ? el('span', { class: 'v2-sa-why', text: livWorkWhy(it.s.task), title: livWorkWhy(it.s.task) })
+      : hooks.verdict(it.s) === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
     repaint,
   });
-  const empty = !inProj.length
+  const empty = ui.machine ? '이 조건에 맞는 AI가 연 세션이 없어요. 칩을 끄면 사람이 연 세션으로 돌아가요.'
+    : !inProj.length
     ? (sc.group === null && sc.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '고른 묶음에 세션이 없어요.')
     : '이 조건에 맞는 세션이 없어요. 기간 · 사람 · 상태를 바꿔 보세요.';
 
