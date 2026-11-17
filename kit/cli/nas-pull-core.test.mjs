@@ -11,6 +11,9 @@ import { safeSegment, pOfPath, resolveDest, planFiles, pullFiles, nasPull, modeH
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
+// 세션 모드는 시험마다 env 로 준다 — 인코그니토·읽기전용 세션 pane 에서 이 파일을 직접 돌려도 같은 결과가 나오게.
+delete process.env.LIVELY_MODE;
+
 const tmpDirs = [];
 // 실제 경로로 돌려준다 — 맥 기본 TMPDIR(/var/folders → /private/var/folders)는 링크라, 실제 경로를 돌려주는 코드와 비교가 갈린다.
 const mkTmp = (prefix = "naspull-") => {
@@ -478,6 +481,11 @@ const authOf = (opts) => {
   if (!h) return undefined;
   return typeof h.get === "function" ? h.get("authorization") : (h.authorization ?? h.Authorization);
 };
+const headerOf = (opts, name) => {
+  const h = opts?.headers;
+  if (!h) return undefined;
+  return typeof h.get === "function" ? (h.get(name) ?? undefined) : h[name];
+};
 
 function fixtureTree() {
   const root = "/공유/B";
@@ -668,6 +676,55 @@ test("nasPull: dest 가 기본 폴더 밖(~/.ssh·../.ssh)이면 요청도 쓰�
   assert.equal(read(keys), "ORIGINAL\n");
   assert.deepEqual(fs.readdirSync(path.join(home, ".ssh")), ["authorized_keys"]);
   assert.equal(exists(path.join(home, "NAS사본")), false);
+});
+
+test("nasPull: 인코그니토 세션이면 폴더 나열·내려받기 요청을 하나도 보내지 않고 거부, 받을 폴더도 만들지 않는다", async () => {
+  // 게이트웨이는 모드 머리글이 실린 내려받기만 막는다 — 폴더 나열(ctx.api)엔 머리글이 없어 이름 목록이 나가던 길
+  const home = mkTmp();
+  const fx = fixtureTree();
+  const cases = [
+    [{ LIVELY_MODE: "incognito" }, { path: fx.root, dest: "out" }], // 형을 몰라 나열로 판별하는 길
+    [{ LIVELY_MODE: " Incognito " }, { targets: [{ p: "pf2", path: "/공유/B/c/y.txt", type: "file", size: 2 }] }], // 나열 없이 곧장 받는 길
+  ];
+  for (const [env, args] of cases) {
+    const { ctx, apiCalls } = mkCtx(fx.listings);
+    const { fetchImpl, calls } = mkFetch(fx.bodies);
+    assert.ok(await throws(() => nasPull(ctx, args, { home, fetchImpl, budgetMs: 1e9, now: () => 0, env })), `거부되어야 함: ${JSON.stringify(env)}`);
+    assert.deepEqual(apiCalls, [], JSON.stringify(env));
+    assert.deepEqual(calls, [], JSON.stringify(env));
+  }
+  assert.equal(exists(path.join(home, "NAS사본")), false);
+});
+
+test("nasPull: env 를 안 주면 process.env 의 세션 모드를 본다 — 실제 도구 경로도 인코그니토면 요청 없이 거부", async () => {
+  const home = mkTmp();
+  const fx = fixtureTree();
+  const { ctx, apiCalls } = mkCtx(fx.listings);
+  const { fetchImpl, calls } = mkFetch(fx.bodies);
+  process.env.LIVELY_MODE = "incognito";
+  let rejected;
+  try { rejected = await throws(() => nasPull(ctx, { path: fx.root, dest: "out" }, { home, fetchImpl, budgetMs: 1e9, now: () => 0 })); }
+  finally { delete process.env.LIVELY_MODE; }
+  assert.ok(rejected, "거부되어야 함");
+  assert.deepEqual(apiCalls, []);
+  assert.deepEqual(calls, []);
+});
+
+test("nasPull: 세션 모드를 실제 내려받기 요청마다 x-lively-mode 로 싣는다 — 읽기전용은 받고, 모드가 없으면 머리글도 없다", async () => {
+  const fx = fixtureTree();
+  const ro = mkFetch(fx.bodies);
+  const r = await nasPull(mkCtx(fx.listings).ctx, { path: fx.root, dest: "out" },
+    { home: mkTmp(), fetchImpl: ro.fetchImpl, budgetMs: 1e9, now: () => 0, env: { LIVELY_MODE: " ReadOnly " } });
+  assert.equal(r.downloaded, 2);
+  assert.equal(ro.calls.length, 2, "내려받기 요청이 실제로 나갔다");
+  for (const c of ro.calls) {
+    assert.equal(headerOf(c.opts, "x-lively-mode"), "readonly", c.url);
+    assert.equal(authOf(c.opts), `Bearer ${TOKEN}`, c.url);
+  }
+  const plain = mkFetch(fx.bodies);
+  await nasPull(mkCtx(fx.listings).ctx, { path: fx.root, dest: "out" }, { home: mkTmp(), fetchImpl: plain.fetchImpl, budgetMs: 1e9, now: () => 0, env: {} });
+  assert.equal(plain.calls.length, 2, "내려받기 요청이 실제로 나갔다");
+  for (const c of plain.calls) assert.equal(headerOf(c.opts, "x-lively-mode"), undefined, c.url);
 });
 
 // ───────────────────────── runner ─────────────────────────

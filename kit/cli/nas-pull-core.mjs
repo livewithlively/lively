@@ -6,6 +6,7 @@
 //    받는 자리(dest)와 파일 이름(target.path)을 AI 가 정한다. 홈 아래 아무 데나 받게 두면 NAS 문서에 심은 지시만으로
 //    ~/.ssh/authorized_keys·~/.zshrc·~/Library/LaunchAgents 가 NAS 내용으로 덮인다. 웹 세션의 작업 폴더(프로젝트 공유폴더)도
 //    같은 프로젝트의 다른 구성원이 보는 자리라 받지 않는다 — 거기에 받으면 그 사람의 NAS 권한 밖 파일이 넘어간다.
+//  · 인코그니토 세션이면 아무 요청도 보내지 않는다(nasPull 첫머리).
 //  · MCP 호출은 하네스를 붙잡는 동기 호출이라(lively-mcp-local.mjs 머리말) budgetMs 를 넘기면 새 파일을 시작하지 않고 멈춘다. 폴더 나열도 이 예산 안이다
 //    — 예산은 파일 사이에서 본다. 이미 시작한 파일 하나는 끝나거나 FILE_TIMEOUT_MS 에 걸릴 때까지 가므로 한 호출의 상한은 budgetMs + FILE_TIMEOUT_MS 다
 //    (파일을 예산에 맞춰 끊으면 반쪽 파일은 이어받지 않으므로 예산보다 오래 걸리는 큰 파일은 영영 못 받는다).
@@ -64,7 +65,10 @@ function exclusiveWriteStream(file) {
   return createWriteStream(file, { flags: "wx" });
 }
 
-/** 세션 모드(#1007) — MCP 프록시와 같은 머리글(x-lively-mode)을 싣는다. 게이트웨이가 인코그니토 세션의 내려받기를 막는다. */
+/**
+ * 세션 모드(#1007) — MCP 프록시와 같은 머리글(x-lively-mode)을 싣는다. 게이트웨이가 인코그니토 세션의 내려받기를 막는다.
+ *  ⚠ 폴더 나열(ctx.api)에는 이 머리글이 실리지 않는다 — 인코그니토는 nasPull 이 첫 요청 전에 멈춘다.
+ */
 export const modeHeader = (env = process.env) => {
   const mode = String(env.LIVELY_MODE ?? "").trim().toLowerCase();
   return mode ? { "x-lively-mode": mode } : {};
@@ -181,10 +185,14 @@ export async function pullFiles(files, destRootIn, download, { budgetMs = DEFAUL
 }
 
 /**
- * MCP 도구 본체. ctx 는 lively-mcp-local.mjs makeCtx 의 것(api·gateway·token), fetchImpl 은 그 파일의 fetch.
+ * MCP 도구 본체. ctx 는 lively-mcp-local.mjs makeCtx 의 것(api·gateway·token), fetchImpl 은 그 파일의 fetch. env 는 세션 모드를 읽는 자리(시험 주입용).
  *  args: { targets?: [{p, type?, path?, size?}], path?: string, dest?: string }
  */
-export async function nasPull(ctx, args, { home, fetchImpl, budgetMs = DEFAULT_BUDGET_MS, now = Date.now } = {}) {
+export async function nasPull(ctx, args, { home, fetchImpl, budgetMs = DEFAULT_BUDGET_MS, now = Date.now, env = process.env } = {}) {
+  // 인코그니토는 폴더 나열·내려받기 어느 요청도 보내기 전에 멈춘다(#1007). 게이트웨이는 모드 머리글이 실린 내려받기만 막고
+  //  폴더 나열(ctx.api)엔 머리글이 없어 이름 목록이 나간다. 읽기전용은 받는다 — NAS 를 읽기만 한다.
+  const mode = modeHeader(env);
+  if (mode["x-lively-mode"] === "incognito") throw new Error("인코그니토 세션에서는 NAS 에서 받지 않습니다(#1007)");
   const started = now();
   const deadline = started + budgetMs;
   const destRoot = resolveDest(args.dest, home);
@@ -246,7 +254,7 @@ export async function nasPull(ctx, args, { home, fetchImpl, budgetMs = DEFAULT_B
   await saveCache({ plan: { files: plan.files, failed: plan.failed, truncated: plan.truncated, dirs: plan.dirs, state: null } });
 
   const download = (p) => fetchImpl(`${ctx.gateway}/api/ui/me/nas/file?p=${encodeURIComponent(p)}`, {
-    headers: { authorization: `Bearer ${ctx.token}`, ...modeHeader() },
+    headers: { authorization: `Bearer ${ctx.token}`, ...mode },
     signal: AbortSignal.timeout(FILE_TIMEOUT_MS),
   });
   const r = await pullFiles(plan.files, destRoot, download, { budgetMs: Math.max(0, deadline - now()), now });
