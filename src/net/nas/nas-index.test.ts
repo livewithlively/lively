@@ -125,6 +125,101 @@ await t("crawl: maxDirs·maxEntries·deadlineMs 에 닿으면 멈추고 truncate
   }
 });
 
+// 여러 lister — 세션 하나가 LIST 를 하나씩만 하는 FTP 를 흉내 낸다: lister 마다 동시 호출이 겹치면 실패로 표시한다.
+function poolFs(tree: Record<string, string[]>, n: number, delayMs = 2) {
+  const calls: string[] = [];
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let overlapped = false;
+  const used = new Set<number>();
+  const listers = Array.from({ length: n }, (_, i) => {
+    let busy = false;
+    return async (rawDir: string): Promise<string> => {
+      if (busy) overlapped = true;
+      busy = true;
+      used.add(i);
+      calls.push(rawDir);
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      try {
+        await new Promise((r) => setTimeout(r, delayMs));
+        const lines = tree[rawDir];
+        if (!lines) throw new Error(`550 ${rawDir}`);
+        return ["total 1", ...lines].join("\r\n") + "\r\n";
+      } finally {
+        concurrent--;
+        busy = false;
+      }
+    };
+  });
+  return { listers, calls, used, get maxConcurrent() { return maxConcurrent; }, get overlapped() { return overlapped; } };
+}
+
+// 깊이 3, 폴더마다 하위 폴더 3개·파일 1개 — 1+3+9+27 = 40 폴더
+const DEEP: Record<string, string[]> = {};
+(function build(dir: string, depth: number) {
+  const kids = depth < 3 ? ["x", "y", "z"] : [];
+  DEEP[dir] = [...kids.map(dirLine), fileLine(`f${depth}.txt`)];
+  for (const k of kids) build(dir === "/" ? `/${k}` : `${dir}/${k}`, depth + 1);
+})("/", 0);
+const DEEP_DIRS = Object.keys(DEEP).length;
+
+await t("crawl: lister 여러 개면 동시에 열되 한 lister 는 한 번에 하나만, 결과는 lister 하나일 때와 같다", async () => {
+  const one = await crawl(fakeFs(DEEP).list, "/", NO_LIMITS);
+  const pool = poolFs(DEEP, 4);
+  const r = await crawl(pool.listers, "/", NO_LIMITS);
+  assert.equal(pool.overlapped, false, "한 lister 에 호출이 겹쳤다");
+  assert.ok(pool.maxConcurrent > 1, `동시 호출이 없었다(max ${pool.maxConcurrent})`);
+  assert.equal(pool.used.size, 4);
+  assert.deepEqual([...pool.calls].sort(), Object.keys(DEEP).sort(), "폴더마다 정확히 한 번");
+  assert.deepEqual(r.entries.map((e) => e.raw).sort(), one.entries.map((e) => e.raw).sort());
+  assert.equal(r.dirs, DEEP_DIRS);
+  assert.equal(r.truncated, null);
+  assert.equal(r.failedDirs, 0);
+});
+
+await t("crawl: lister 하나의 접속이 죽으면(fatal) 그 폴더를 다른 lister 가 이어 받아 끝까지 훑는다", async () => {
+  const dead = Object.assign(new Error("FTP 제어 연결이 닫혔습니다"), { fatal: true });
+  const pool = poolFs(DEEP, 3);
+  let deadCalls = 0;
+  const dying = async (dir: string): Promise<string> => { deadCalls++; void dir; throw dead; };
+  const r = await crawl([dying, ...pool.listers], "/", NO_LIMITS);
+  assert.equal(deadCalls, 1, "죽은 lister 는 다시 쓰지 않는다");
+  assert.deepEqual([...pool.calls].sort(), Object.keys(DEEP).sort());
+  assert.equal(r.dirs, DEEP_DIRS);
+  assert.equal(r.failedDirs, 0, "죽은 접속은 권한 없는 폴더로 세지 않는다");
+  assert.equal(r.truncated, null);
+});
+
+await t("crawl: lister 가 전부 죽으면 거부된다", async () => {
+  const dead = Object.assign(new Error("FTP 제어 연결이 닫혔습니다"), { fatal: true });
+  const pool = poolFs(DEEP, 1);
+  const dying = async (): Promise<string> => { throw dead; };
+  // 하나는 루트를 열고 나서 죽게 해서, 하위 폴더가 큐에 남은 채 전부 죽는 경우를 만든다
+  let n = 0;
+  const diesAfterRoot = async (dir: string): Promise<string> => { if (n++ === 0) return pool.listers[0](dir); throw dead; };
+  await assert.rejects(() => crawl([dying, diesAfterRoot], "/", NO_LIMITS), (e: unknown) => e === dead);
+});
+
+await t("crawl: lister 여러 개여도 maxDirs 를 넘겨 열지 않고 truncated 에 까닭", async () => {
+  const pool = poolFs(DEEP, 4);
+  const r = await crawl(pool.listers, "/", { ...NO_LIMITS, maxDirs: 10 });
+  assert.ok(pool.calls.length <= 10, `opened ${pool.calls.length}`);
+  assert.equal(r.dirs, pool.calls.length);
+  assert.match(r.truncated ?? "", /폴더 10개 상한/);
+});
+
+await t("crawl: lister 여러 개여도 maxEntries 를 넘겨 담지 않는다", async () => {
+  const pool = poolFs(DEEP, 4);
+  const r = await crawl(pool.listers, "/", { ...NO_LIMITS, maxEntries: 15 });
+  assert.equal(r.entries.length, 15);
+  assert.match(r.truncated ?? "", /항목 15개 상한/);
+});
+
+await t("crawl: lister 가 없으면 거부된다", async () => {
+  await assert.rejects(() => crawl([], "/", NO_LIMITS));
+});
+
 const E = (raw: string, type: "file" | "dir" = "file", mtime = "2024-01-01"): NasEntry =>
   ({ raw, path: raw, type, size: 1, mtime }) as NasEntry;
 
