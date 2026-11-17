@@ -22,6 +22,7 @@ import { anchoredPopover, api, apiUrl, el, personDisplayName, personFace, replac
 import { faceRoster } from './lib/face-roster.js';   // #3870 — 얼굴 줄 = 초대 명단(보는 사람은 진하게)
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
+import { livWorkWhy, taskMarkOf } from './lib/liv-work.js';   // #5579 — AI · 예약 작업이 연 세션의 «열린 까닭» 한 문장
 import { remoteNodeOf } from './lib/node-coord.js';   // #4904 — 노드 좌표가 «정말 다른 컴퓨터» 인가(세션 호스트는 아니다)
 import { createChatView, TERM_PREFS_EVENT, termMobile, type ChatTurn, type ChatView } from './chat-view.js';
 import { ccModelName, ctxFeed, ctxNew, ctxTokens, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
@@ -1850,6 +1851,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '돌아가는 컴퓨터' }),
           el('span', { class: 'm', text: remoteNode() ?? '중앙 컴퓨터' })),
         el('span', { class: 'v2set-ro', text: '읽기 전용' })),
+      //  #5579(원준 2026-11-17 «그 세션이 왜 열렸는지») — 세션 안의 AI(위탁)나 예약 작업이 연 세션에만 선다. 사람이 연 세션엔 없다.
+      //   무엇을 맡겼는지(지시 첫 줄)는 서버가 그 세션 주인에게만 싣는다(src/node/task-origin.ts applyTaskMarks).
+      ((mk) => (mk ? el('div', { class: 'v2set-row' },
+        el('div', { class: 'v2set-t' }, el('span', { class: 'n', text: '열린 까닭' }),
+          el('span', { class: 'm', text: livWorkWhy(mk) })),
+        el('span', { class: 'v2set-ro', text: '읽기 전용' })) : null))(taskMarkOf(target.raw?.task)),
       note('칸이 좁아지면 머리줄의 칩이 물러납니다 — 그때도 여기서 바꿀 수 있어요.'),
     ] });
 

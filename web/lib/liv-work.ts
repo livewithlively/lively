@@ -25,6 +25,10 @@ export interface TaskMark {
   originLabel: string | null;
   originProject: number | null;
   cron: string | null;
+  /** #5579 — 무엇을 맡겼나(지시 첫 줄). 서버는 그 워커의 주인이 볼 때만 싣는다. 없으면 null. */
+  ask: string | null;
+  /** #5579 — 크론이 띄웠으면 그 잡의 이름. 없으면 null. */
+  cronLabel: string | null;
 }
 
 /** 서버 행의 `task` 칸 → 표식. 모양이 아니면 null(옛 서버는 이 칸을 안 싣는다 — 그때 화면은 종전 그대로다). */
@@ -35,7 +39,31 @@ export function taskMarkOf(raw: unknown): TaskMark | null {
   if (!Number.isFinite(id) || id <= 0) return null;
   const str = (v: unknown): string | null => { const s = typeof v === 'string' ? v.trim() : ''; return s || null; };
   const proj = Number(t.originProject);
-  return { id, originSession: str(t.originSession), originLabel: str(t.originLabel), originProject: Number.isFinite(proj) && proj > 0 ? proj : null, cron: str(t.cron) };
+  return { id, originSession: str(t.originSession), originLabel: str(t.originLabel), originProject: Number.isFinite(proj) && proj > 0 ? proj : null, cron: str(t.cron),
+    ask: str(t.ask), cronLabel: str(t.cronLabel) };
+}
+
+/**
+ * #5579(원준 2026-11-17) — **사람이 [＋]로 연 세션이 아니라** 세션 안의 AI(위탁)나 예약 작업이 연 세션인가.
+ *  «내가 직접 +로 해서 새로 연 세션이 아니고 세션 안에서 서브에이전트가 열거나 한 세션은 좌측 사이드바에 표시하지 않았으면 좋겠고,
+ *   특별히 원할 때만 접근할 수 있게. 분류 자체가 일반적인 AI세션이 아니도록. 병렬 에이전트가 세션 잔뜩 열면 그게 왼쪽을 잔뜩 차지해.»
+ *  실측(원준 계정 2026-11-15~16): 이틀 동안 원준 이름으로 열린 위탁 40건 중 38건이 예약 작업(자료 증류), 2건이 세션 안의 AI 였다.
+ *  ⇒ 홈 사이드바는 이 세션을 **스스로 세우지 않는다**(main.ts sideInstances) — 사람이 연 창 · 고정한 것만 선다.
+ *   [AI 세션] 전체 목록은 기본 보기에서 빼고 「AI가 연 세션」 칩으로만 보인다(lib/sess-all machine 축).
+ *  판정은 서버가 얹는 위탁 표식(task) 하나다 — 표식은 `org_task` 기록이 있는 워커에만 붙는다(src/node/task-origin.ts).
+ */
+export function isMachineOpened(s: { task?: TaskMark | null }): boolean {
+  return !!s.task;
+}
+
+/**
+ * #5579 — 이 세션이 **왜 열렸나** 한 문장. 목록 줄 아래 · 세션 설정 창 «열린 까닭» 줄이 쓴다.
+ *  ⚠ «리브가 만들었다» 라고 쓰지 않는다(livWorkNote 머리말과 같은 이유) — 연 것은 그 세션의 AI 나 예약 작업이다.
+ */
+export function livWorkWhy(mark: TaskMark): string {
+  if (mark.cron) return `예약 작업이 연 세션이에요 · ${mark.cronLabel || mark.cron}`;
+  const who = mark.originLabel ? `«${mark.originLabel}» 세션의 AI가 맡긴 일이에요` : '다른 세션의 AI가 맡긴 일이에요';
+  return mark.ask ? `${who} · ${mark.ask}` : who;
 }
 
 /**

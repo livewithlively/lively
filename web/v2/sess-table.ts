@@ -61,12 +61,16 @@ const IC_MORE = 'M5 12h.01 M12 12h.01 M19 12h.01';
 export const IC_PLUS = 'M12 5v14 M5 12h14';
 
 // ── 도구줄의 거르개 셋 — 기간 · 사람 · 상태 칩. [세션 목록] 과 보드 리스트 뷰가 같은 것을 쓴다. ──
-export interface SessPickUi { period: PastPeriod; owner: string; state: string }
+export interface SessPickUi { period: PastPeriod; owner: string; state: string;
+  /** #5579 — 「AI가 연 세션」 칩이 켜졌나(lib/sess-all AllSessQuery.machine). 이 칩을 안 쓰는 자리(프로젝트 보드)는 없다. */
+  machine?: boolean }
 export function sessFilterPicks(ui: SessPickUi & { shown: number }, o: {
   owners: Array<{ key: string; n: number }>;
   ownerName: (k: string) => string;
   /** 내 세션 중 그 상태 수(칩 숫자). */
   myStateCount: (k: string) => number;
+  /** #5579 — 지금 걸린 다른 거르개 안에서 AI · 예약 작업이 연 세션 수. 없으면 「AI가 연 세션」 칩을 안 그린다(프로젝트 보드). */
+  machineCount?: number;
   repaint: () => void;
 }): Array<HTMLElement | null> {
   const period = el('select', { class: 'v2-sa-pick', 'aria-label': '기간', 'data-pick': 'period',
@@ -86,7 +90,16 @@ export function sessFilterPicks(ui: SessPickUi & { shown: number }, o: {
       title: on ? '거르기를 풉니다' : `내 세션 중 ${label}만 봅니다`,
       onclick: () => { ui.state = on ? '' : key; ui.shown = SESS_TABLE_PAGE; o.repaint(); } }, el('span', { text: `${label} ${n}` }));
   };
-  return [period, who, chip('waiting', '확인 필요', 'warn'), chip('busy', '작업 중', 'blue')];
+  //  #5579 — 「AI가 연 세션」: 세션 안의 AI(위탁)나 예약 작업이 연 세션은 기본 보기에 없고 이 칩을 켜야 보인다(원준 «특별히 원할 때만 접근»).
+  //   0개면 칩도 없다 — 상태 칩과 같은 규율(켜 둔 채 0 이 되면 끌 길이 있어야 하니 남긴다).
+  const machine = o.machineCount === undefined ? null : (() => {
+    const on = !!ui.machine;
+    if (!o.machineCount && !on) return null;
+    return el('button', { class: `v2-sa-chip${on ? ' on' : ''}`, type: 'button', 'aria-pressed': String(on), 'data-pick': 'machine',
+      title: on ? '사람이 연 세션으로 돌아갑니다' : '세션 안의 AI나 예약 작업이 연 세션만 봅니다',
+      onclick: () => { ui.machine = !on; ui.shown = SESS_TABLE_PAGE; o.repaint(); } }, el('span', { text: `AI가 연 세션 ${o.machineCount || 0}` }));
+  })();
+  return [period, who, chip('waiting', '확인 필요', 'warn'), chip('busy', '작업 중', 'blue'), machine];
 }
 
 export interface SessTableOpts<T extends SessTableItem> {

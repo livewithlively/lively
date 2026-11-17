@@ -906,7 +906,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         const miss = missingOrigins(merged, origins);
         const states = miss.length ? await getSessionStates(miss) : new Map<string, SessionState>();
         //  ⚠ 내 세션(주인 · 초대)만 푼다 — 남의 세션 이름 · 프로젝트가 표식으로 새지 않게(visibleOriginStates 머리말).
-        applyTaskMarks(merged as Array<(typeof merged)[number] & OriginRowLike>, origins, visibleOriginStates(states, idOf(userOf(req))));
+        //  #5579 — 보는 사람을 넘겨 «무엇을 맡겼나» 는 그 워커의 주인에게만 싣는다(applyTaskMarks 머리말).
+        const viewer = idOf(userOf(req));
+        applyTaskMarks(merged as Array<(typeof merged)[number] & OriginRowLike>, origins, visibleOriginStates(states, viewer), viewer);
       }
     } catch (e) { logger.warn({ err: e }, "세션 목록 위탁 표식 실패 — 표식 없이 나간다(비치명)"); }
     res.json({ sessions: merged });

@@ -29,6 +29,8 @@ export interface AllSessLike {
   stateKey?: string;
   /** #4233 2안 — 이 세션 프로젝트의 리스트 id(프로젝트 탭 트리). 없으면(리스트 없는 프로젝트 · 프로젝트 없는 세션) «리스트 없음». */
   listId?: number | null;
+  /** #5579 — 사람이 아니라 세션 안의 AI(위탁)나 예약 작업이 연 세션인가(lib/liv-work isMachineOpened). 없으면 사람이 연 것으로 본다. */
+  machine?: boolean;
 }
 
 export interface AllSessQuery {
@@ -41,6 +43,9 @@ export interface AllSessQuery {
   state?: string;
   /** #4233 2안 — 사이드바에서 고른 카드(그 기준의 묶음 key). null · 없음 = 거르지 않음. */
   group?: { by: SessGroupBy; key: string } | null;
+  /** #5579 — 어느 쪽 세션을 볼까. 없음 · false = 사람이 연 세션만(기본 보기) · true = AI · 예약 작업이 연 세션만(「AI가 연 세션」 칩).
+   *  ★ 둘을 섞어 보는 값은 일부러 없다 — 원준 «분류 자체가 일반적인 AI세션이 아니도록». 병렬 위탁 수십 개가 기본 보기를 덮지 않는다. */
+  machine?: boolean;
 }
 
 /** 이 세션이 고른 프로젝트에 드는가. ★ 0 은 «프로젝트 없음» 묶음이지 빈 값이 아니다(null 만 «전체»). */
@@ -49,7 +54,7 @@ export function inProjPick(projectId: number | null | undefined, pick: SessProjP
   return (Number(projectId) || 0) === pick;
 }
 
-/** 다섯 축(프로젝트 · 기간 · 사람 · 상태 · 사이드바 카드)으로 거르고 **최근 순**으로 — 목록은 원장이라 순서의 정본은 마지막 활동 시각이다. */
+/** 여섯 축(프로젝트 · 기간 · 사람 · 상태 · 사이드바 카드 · 연 주체 #5579)으로 거르고 **최근 순**으로 — 목록은 원장이라 순서의 정본은 마지막 활동 시각이다. */
 export function selectAllSess<T extends AllSessLike>(rows: readonly T[] | null | undefined, q: AllSessQuery): T[] {
   return (rows || [])
     .filter((s) => !s.trashedAt
@@ -57,6 +62,7 @@ export function selectAllSess<T extends AllSessLike>(rows: readonly T[] | null |
       && inPastPeriod(Number(s.lastSeen) || 0, q.now, q.period)
       && (!q.owner || s.owner === q.owner)
       && (!q.state || s.stateKey === q.state)
+      && !!s.machine === !!q.machine
       && (!q.group || sessGroupKey(s, q.group.by, q.now) === q.group.key))
     .sort((a, b) => (Number(b.lastSeen) || 0) - (Number(a.lastSeen) || 0));
 }
