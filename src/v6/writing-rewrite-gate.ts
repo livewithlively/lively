@@ -18,13 +18,18 @@ export const AUTO_FIX_RULES: readonly WritingRuleId[] = [
 ];
 const AUTO_FIX = new Set<WritingRuleId>(AUTO_FIX_RULES);
 
+/** 자동 정리에서 뺀 규칙인가 — 고치려면 사실 판단이 필요해, 에이전트가 직접 고치면 지어낸다. 사람에게 물어 고친다. */
+export function needsHumanJudgment(rule: WritingRuleId): boolean {
+  return !AUTO_FIX.has(rule);
+}
+
 // 이보다 긴 본문은 LLM 이 전문을 되쓰는 동안 손대지 말아야 할 문장을 깨뜨릴 확률이 커진다(전사 드리프트) —
 //  그래서 통째로 쓰지 않고 섹션 단위로 나눠 쓴다(splitSections).
 export const REWRITE_BODY_MAX_CHARS = 15000;
 
 // 형식을 고치면 글자는 줄어든다(기호·볼드·반복 제목). 그 이상 줄면 서술이 빠진 것이다.
 const SHRINK_MIN_RATIO = 0.7;
-const RECENT_EDIT_MS = 24 * 60 * 60 * 1000;
+export const RECENT_EDIT_MS = 24 * 60 * 60 * 1000;
 const DETAIL_MAX = 5;
 
 export interface RewriteDoc {
@@ -359,6 +364,14 @@ export function ownEditVersions(lines: Iterable<string>): Map<string, number> {
   return out;
 }
 
+/** 사람 편집 보호 창 안인가 — 시각을 못 읽으면 최근으로 본다(보수적으로 건너뛴다). 자동 정리 대상 선정과
+ *  에이전트의 형식 정리 저장(knowledge_save style_fix)이 같은 기준을 쓴다. */
+export function isRecentlyEdited(updatedAt: string | Date | null | undefined, now: Date | number): boolean {
+  const nowMs = typeof now === "number" ? now : now.getTime();
+  const upd = updatedAt instanceof Date ? updatedAt.getTime() : updatedAt ? Date.parse(updatedAt) : NaN;
+  return !Number.isFinite(upd) || nowMs - upd < RECENT_EDIT_MS;
+}
+
 export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | number, opts: EligibilityOptions = {}): Eligibility {
   const no = (reason: IneligibleReason): Eligibility => ({ eligible: false, reason, targetRules: [], findings: [] });
   // 외부 미러(observed)는 원본 소유가 밖이라 여기서 고쳐도 다음 동기화가 덮는다.
@@ -367,11 +380,9 @@ export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | 
   if (k.is_folder) return no("folder");
   const body = String(k.body_md ?? "");
   // 방금 사람이 고친 글은 그 사람이 아직 손보는 중일 수 있다 — 자동 재작성이 편집을 덮으면 안 된다.
-  //  시각을 못 읽으면 최근으로 본다(보수적으로 건너뛴다). 배치 자신의 반영은 보호할 사람 편집이 아니다 —
+  //  배치 자신의 반영은 보호할 사람 편집이 아니다 —
   //  그것까지 세면 결정적 정리(--autofix) 직후 24시간 동안 LLM 재작성이 전부 막힌다(2026-10-01 적용 1,839건).
-  const nowMs = typeof now === "number" ? now : now.getTime();
-  const upd = k.updated_at ? Date.parse(k.updated_at) : NaN;
-  if (!opts.lastEditIsOwn && (!Number.isFinite(upd) || nowMs - upd < RECENT_EDIT_MS)) return no("recently_edited");
+  if (!opts.lastEditIsOwn && isRecentlyEdited(k.updated_at, now)) return no("recently_edited");
   const findings = lintWriting({ title: k.title, body_md: body }, forceEnabled(fmt)).filter((x) => AUTO_FIX.has(x.rule));
   if (!findings.length) return no("nothing_to_fix");
   // 긴 문서는 통째로 재작성하면 대조 정확도가 떨어져 섹션 단위로 나눠 고친다.
