@@ -32,6 +32,7 @@ import {
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
 import { assertNoContentSecrets, assertNoSecretKeys } from "../content-secrets.js";
 import { checkWriting, isHumanWriter, rejectWriting } from "../writing-style.js";
+import { assertExpectedVersion, assertStyleFixSafe } from "./save-guard.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -107,6 +108,10 @@ const knowledgeSaveInput = {
     .describe("이 지식이 나온 자료(source) id 목록 — **자료를 지식으로 증류할 땐 반드시 싣는다**. 저장과 원본 연결(derived_from)과 공개범위를 서버가 한 번에 한다(source_link_knowledge 를 따로 부를 필요 없다). "
       + "잠긴 자료(볼 수 있는 사람만)가 섞이면 이 지식도 그 사람들만 보게 된다. 그래서 **잠긴 자료를 이미 더 넓게 보이는 기존 지식에 합치는 저장은 거절된다(409)** — 그땐 새 이름으로 따로 저장하라. "
       + "볼 수 있는 사람이 서로 안 겹치는 잠긴 자료를 한 지식에 모으는 것도 거절된다(아무도 못 보게 되므로 — 자료별로 나눠라). 증류 배치 세션에서는 이 칸 없는 저장이 거절된다."),
+  style_fix: z.boolean().optional()
+    .describe("서술 형식만 고치는 저장이면 true — 서버가 원문과 대조해 코드·수치·링크·표 값·분량이 그대로인지 보고, 바뀌었으면 422 로 받지 않는다. 다른 사람이 24시간 안에 고친 지식이면 409 로 받지 않는다. 내용을 바꾸는 저장엔 보내지 않는다."),
+  expected_version: z.number().int().positive().optional()
+    .describe("읽었을 때의 version(knowledge_get 의 knowledge.version). 보내면 지금 판과 다를 때 저장하지 않고 409(current_version 포함)로 알린다 — 그 사이 남이 고친 내용을 덮지 않게 한다."),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
 export const knowledgeSave: Capability = {
@@ -134,7 +139,8 @@ export const knowledgeSave: Capability = {
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
     "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라. " +
-    "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라.",
+    "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라. " +
+    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. ask_human 이 붙은 위반은 사람에게 확인한 뒤 고친다.",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -169,6 +175,14 @@ export const knowledgeSave: Capability = {
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
         const lifecycle = b.lifecycle ? String(b.lifecycle) : undefined;   // #638 자동 인입 pending 저장(사람 web 저작은 미전송=active)
         if (lifecycle && !["active", "pending"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending (신규 저장)");
+        // style_fix 도 같은 이유로 boolean 만 받는다 — "true" 같은 값을 버리면 형식 정리 저장이 대조 없이 통과한다.
+        if (b.style_fix !== undefined && typeof b.style_fix !== "boolean") throw new HttpError(400, "style_fix 는 boolean");
+        // REST 는 zod 를 안 타므로 여기서 거른다 — 숫자가 아닌 값을 조용히 버리면 CAS 를 요청한 호출이 대조 없이 덮어쓴다.
+        let expected_version: number | undefined;
+        if (b.expected_version != null && b.expected_version !== "") {
+          expected_version = Number(b.expected_version);
+          if (!Number.isInteger(expected_version) || expected_version < 1) throw new HttpError(400, "expected_version 은 1 이상의 정수");
+        }
         const category = b.category != null
           ? String(Array.isArray(b.category) ? (b.category[0] ?? "") : b.category) : undefined;  // 단일(#290), 배열 오면 첫 1개
         // #5169 검색 제외 — 불리언만 받는다. 문자열 "false" 를 조용히 버리면 «검색에서 빼라» 를 실은 저장이 검색에 그대로 남는다.
@@ -189,6 +203,8 @@ export const knowledgeSave: Capability = {
           //  상한 지점이라야 REST 호출자도 '잘렸다'는 사실을 응답 capped 로 받는다(여기서 자르면 조용히 사라진다).
           change_note: b.change_note ? String(b.change_note) : undefined,
           derived_from: parseDerivedFrom(b.derived_from),                  // #4824 저장 + 원본 연결 한 번에
+          style_fix: b.style_fix as boolean | undefined,
+          expected_version,
         };
       } }],
   },
@@ -199,6 +215,10 @@ export const knowledgeSave: Capability = {
     //  조정된 값을 보게 하려면 여기여야 한다. capped(조정 보고)는 성공 return 마다 실어 호출자가 반드시 본다.
     //  MCP·REST 어느 경로로 와도 같은 판정을 받는다(REST 는 zod 를 안 타므로 이 자리가 유일한 상한 지점).
     const capped = applySoftCaps("knowledge_save", input, CAPS);
+    // append 는 원문 끝에 조각을 붙이는 저장이라 «형식만 고침»일 수 없다 — 불변식이 늘어난 수치·링크를 전부 위반으로 센다.
+    if (input.style_fix && input.mode === "append") {
+      throw new HttpError(400, "style_fix 는 replace·edit 에서만 쓸 수 있습니다 — append 는 내용을 덧붙이는 저장이라 형식 정리가 아닙니다.");
+    }
     // #1442 name 정규화 — 소프트캡 **다음에**(위에서 보낸 길이를 먼저 보고해야 하므로). store 가 upsert 직전
     //  slugify 로 정규화·절단하므로, 정규화를 store 에만 맡기면 아래 인입 게이트·공개범위 검사는 **원본 이름**을
     //  보고 store 는 **잘린 이름**을 쓰는 불일치가 생긴다: 65자 이름이면 게이트는 그 이름의 문서가 없으니 '신규'로
@@ -251,6 +271,8 @@ export const knowledgeSave: Capability = {
     //   edit·append 의 provenance 가드보다 앞이라, 좌표가 있는 미러는 이 문구로 거절된다.
     const mirrorDenied = denyMirrorContentWrite(gate.before, "save");
     if (mirrorDenied) throw new HttpError(400, mirrorDenied);
+    // CAS — edit·append 를 기존 본문 위에 계산하기 전에 본다(어긋난 판 위에 계산한 결과는 저장할 이유가 없다).
+    assertExpectedVersion(gate.before, input.expected_version);
 
     // ── #921 append — body_md('조각')를 기존 본문 끝에 붙인 **전문**으로 바꿔 아래 경로 전체가 종전처럼 전문만 다루게 한다. ──
     //  이 자리에서 한 번만 병합하는 게 핵심이다: 리비전 제안(next.body_md)에 조각이 들어가면 승인 시
@@ -319,6 +341,11 @@ export const knowledgeSave: Capability = {
       }
       saveInput = { ...input, body_md: merged };
     }
+
+    assertStyleFixSafe({
+      styleFix: input.style_fix, human: isHumanWriter(user), actor: writeCtx.actor, before: gate.before,
+      after: { title: input.title ?? gate.before?.title, body_md: saveInput.body_md }, now: Date.now(),
+    });
 
     // 서술 형식 — 최종 제목·본문을 조직 형식에 비춰 본다. reject 규칙에 **이번 저장이 새로 만든** 위반이 있으면 받지 않는다.
     //  판정이 서버에 있으므로 클라이언트(훅·키트) 버전과 무관하게 걸린다. 기존 문서에 원래 있던 위반은 거부 사유가 아니다 —

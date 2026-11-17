@@ -45,6 +45,9 @@ export interface GateBefore {
   /** 외부 좌표(미러 표식) — 있으면 재싱크가 제목·본문을 원본으로 덮는다(capabilities/knowledge/mirror-guard.ts). */
   external_system: string | null;
   external_url: string | null;
+  /** 형식 정리 저장의 사람 편집 보호 창(save-guard) — 마지막 편집 시각·편집자. */
+  updated_at?: string | Date | null;
+  updated_by?: string | null;
 }
 
 export interface KnowledgeGate {
@@ -66,7 +69,7 @@ export async function resolveKnowledgeGate(input: GateSaveInput, ctx?: { source?
 
   const before = name
     ? (await one(itemsPool,
-      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url
+      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url, updated_at, updated_by
          FROM knowledge WHERE name=$1`, [name])) as GateBefore | undefined
     : undefined;
   const isCreate = !before;
