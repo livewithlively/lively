@@ -35,7 +35,7 @@ if (!existsSync(gatePath) || !existsSync(fmtPath) || !existsSync(autofixPath)) {
   console.error(`빌드 산출물이 없습니다(${gatePath}). 먼저 빌드하세요.`);
   process.exit(2);
 }
-const { isEligible, isOwnLastEdit, ownEditVersions, checkRewrite, checkInvariants, splitSections, sectionFindings, sectionHeadingOk, REWRITE_BODY_MAX_CHARS, normalizeJudgement, meaningVerdict, meaningFeedback } = await import(pathToFileURL(gatePath).href);
+const { isEligible, isOwnLastEdit, ownEditVersions, checkRewrite, checkInvariants, splitSections, sectionFindings, sectionHeadingOk, unrewrittenOutcome, REWRITE_BODY_MAX_CHARS, normalizeJudgement, meaningVerdict, meaningFeedback } = await import(pathToFileURL(gatePath).href);
 const { resolveWritingFormat } = await import(pathToFileURL(fmtPath).href);
 const { autofixWriting, autofixBlocking } = await import(pathToFileURL(autofixPath).href);
 
@@ -363,9 +363,10 @@ async function judgeMeaning(before, after) {
     if (!items) return { parseError: `판정 ${i + 1} JSON 아님` };
     runs.push(items);
     // 사실 변화를 한 번이라도 보고하면 더 돌릴 필요가 없다 — 통과는 전원 일치일 때만이다.
-    if (items.some((x) => x.fact_changed)) break;
+    //  이동 대조(재작성본 전문에 원문 대목이 그대로 있나)를 거친 뒤의 사실 변화로 본다 — 안 그러면 두 번째 판정을 못 받는다.
+    if (meaningVerdict([items], 0, after).factual.length) break;
   }
-  const v = meaningVerdict(runs, JUDGE_RUNS);
+  const v = meaningVerdict(runs, JUDGE_RUNS, after);
   return { meaning: { factual: v.factual, ignored: v.ignored }, pass: v.pass, runs: runs.length };
 }
 
@@ -462,8 +463,8 @@ async function processSections(k, el, fmt, common) {
   const withAfter = { ...common, rules, mode: "sections", sections: report, after_title: after.title, chars_after: chars(after.body_md) };
   const dryBody = args.apply ? {} : { after_body: after.body_md };
   // 조각 결과 키는 status 가 아니라 section 이다 — 같은 키를 쓰면 리포트를 status 로 세는 집계가 조각을 문서로 센다.
-  const rewritten = report.filter((r) => r.section === "rewritten").length;
-  if (!rewritten) return { ...withAfter, status: "rejected", reason: "no_section_passed" };
+  const none = unrewrittenOutcome(report);
+  if (none) return { ...withAfter, ...none };
   // 합친 문서 전체로 한 번 더 — 조각별 검사가 못 보는 제목↔첫 조각 결합과 새로 생긴 위반을 본다.
   const full = checkRewrite(src, after, fmt).violations;
   const blocking = full.filter((v) => !v.kind.startsWith("lint:"));

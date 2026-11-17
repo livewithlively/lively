@@ -105,6 +105,25 @@ t("numbers: 시각 12:30 은 두 토큰", () =>
   assert.deepEqual(bag(inv(CLEAN_TITLE, "마감은 12:30 이다.").numbers), ["12", "30"]));
 t("numbers: 줄 머리 번호 목록 표지(1. / 2) )는 세지 않는다", () =>
   assert.deepEqual(bag(inv(CLEAN_TITLE, "절차는 다음과 같다.\n\n1. 요청을 받는다\n2) 검토한다").numbers), []));
+t("numbers: 헤딩 머리 번호 표지(### 1) / ## 2. )는 세지 않는다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "### 1) 준비\n\n## 2. 실행\n\n#### 3) 확인").numbers), []));
+t("numbers: 볼드 머리 번호 표지(**1) / **1. / **1.**)는 세지 않는다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "**1) 준비**\n**2.** 실행\n**3. 확인**\n### **4)** 정리").numbers), []));
+t("numbers: 문장 중간의 번호는 헤딩·볼드 안이라도 센다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "단계는 1) 준비 2) 실행 순서다.\n### 준비 3) 단계\n이건 **4)** 이다").numbers), ["1", "2", "3", "4"]));
+t("numbers: 목록이 되지 않게 이스케이프한 줄머리 번호(2\\. )도 표지다(볼드 번호를 풀며 생긴다)", () => {
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "2\\. 복원 절차\n**3\\.** 참조").numbers), []);
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n**2. 복원 (미집행 확인 후)**\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n2\\. 복원 (미집행 확인 후)\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
+t("numbers: 줄머리·헤딩·볼드 머리의 소수는 번호 표지가 아니다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "1.5배로 늘었다\n### 2.5 단계\n**3.5배** 이다").numbers), ["1.5", "2.5", "3.5"]));
+t("numbers: 헤딩의 번호 표지를 지운 재작성은 숫자 변경이 아니다(howto-263 계열)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n### 1) 수기 보정 대상\n\n대상은 40 건이다.\n\n### **2)** 보정 절차\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n### 수기 보정 대상\n\n대상은 40 건이다.\n\n### 보정 절차\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
+});
 t("numbers: 인라인 코드와 펜스 안 숫자는 세지 않는다", () =>
   assert.deepEqual(bag(inv(CLEAN_TITLE, "상수는 `42` 이다.\n\n```\nlimit = 99\n```\n").numbers), []));
 t("numbers: 제목의 숫자도 센다", () =>
@@ -174,7 +193,7 @@ t("동일한 깨끗한 문서는 ok·violations 없음", () => {
 
 const FIELD_CASES: Array<{ field: string; from: string; drop: string; add: string }> = [
   { field: "codeBlocks", from: "```\nconst limit = 3;\n```", drop: "", add: "```\nconst limit = 3;\n```\n\n```\nconst extra = true;\n```" },
-  { field: "inlineCode", from: "`retry_max`", drop: "retry_max", add: "`retry_max` 와 `retry_gap`" },
+  { field: "inlineCode", from: "`retry_max`", drop: "재시도 상한 키", add: "`retry_max` 와 `retry_gap`" },
   { field: "numbers", from: "기준 수치는 40 이다.", drop: "기준 수치는 정해져 있다.", add: "기준 수치는 40 과 55 이다." },
   { field: "urls", from: "https://example.com/retry/guide", drop: "예시 사이트", add: "https://example.com/retry/guide 와 https://example.org/other" },
   { field: "wikilinks", from: "[[payment-retry-policy]]", drop: "결제 정책 문서", add: "[[payment-retry-policy]] 와 [[payment-limit-policy]]" },
@@ -243,9 +262,54 @@ t("inlineCode: 본문 중간의 다른 코드로 바꿔치기하면 violation(�
   const after = doc(CLEAN_TITLE, `${LEAD}\n\n기본은 \`retry_min\`, 상한도 \`retry_max\`, 하한은 \`retry_min\` 이다.\n\n${FILLER}`);
   assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
 });
-t("inlineCode: 백틱을 벗기면 violation", () => {
+t("inlineCode: 같은 글자에 백틱만 벗기면 violation 아님", () => {
   const before = doc(CLEAN_TITLE, `${LEAD}\n\n키는 \`retry_max\` 이다.\n\n${FILLER}`);
   const after = doc(CLEAN_TITLE, `${LEAD}\n\n키는 retry_max 이다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 같은 글자에 백틱만 씌우면 violation 아님(compute 의 +`OCR-A`)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n문서 인식은 OCR-A 와 OCR-C 가 맡는다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n문서 인식은 \`OCR-A\` 와 \`OCR-C\` 가 맡는다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 백틱 안 내용이 바뀌면 violation(\\\" → \")", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n본문은 "요청" 으로 감싸 \`{\\"a\\":1}\` 처럼 쓴다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n본문은 "요청" 으로 감싸 \`{"a":1}\` 처럼 쓴다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 원문 평문보다 많이 백틱을 씌우면 violation(새 코드 표기를 만든 것)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n문서 인식은 OCR-A 가 맡는다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n문서 인식은 \`OCR-A\` 가 맡는다. 예비도 \`OCR-A\` 다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 지운 코드가 평문 단어 속 글자로만 남으면 violation(`id` → identity)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n필드 \`id\` 를 보낸다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n필드를 보낸다. identity 를 확인한다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 새 코드가 사라진 평문 단어 속 글자로만 있었으면 violation(data → `a`)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\ndata 를 저장한다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n\`a\` 를 저장한다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 한글 조사가 붙은 평문으로 백틱만 벗기면 violation 아님(retry_max이다)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n키는 \`retry_max\` 이다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n키는 retry_max이다.\n\n${FILLER}`);
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 구두점뿐인 코드를 지우면 문장부호가 늘어도 violation(`.` 소실)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n구분자는 \`.\` 다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n구분자는 없다(참고). 추가 문장이다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 구두점뿐인 코드를 지우면 공백 사이 같은 기호가 늘어도 violation(`/` 소실)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n구분자는 \`/\` 다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n구분자는 없다. A / B 로 적는다.\n\n${FILLER}`);
+  assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
+});
+t("inlineCode: 한글 낱말 속에 든 한글 코드는 백틱 벗김으로 보지 않는다(가한글키)", () => {
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n키는 \`한글키\` 다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `${LEAD}\n\n키는 가한글키 다.\n\n${FILLER}`);
   assert.ok(hasKind(checkRewrite(before, after, fmt), "invariant:inlineCode"));
 });
 t("numbers: 식별자 안의 숫자(EC2)를 결론에 한 번 더 써도 violation 없음", () => {

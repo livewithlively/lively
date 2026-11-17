@@ -1,7 +1,7 @@
 // 긴 문서 섹션 단위 재작성 — 사양 C 절(splitSections·checkInvariants·sectionFindings·isEligible mode)의 행위를 한 줄씩 잠근다.
 // 실행: npx tsx src/v6/writing-rewrite-sections.test.ts
 import assert from "node:assert/strict";
-import { splitSections, checkInvariants, sectionFindings, isEligible, sectionHeadingOk, REWRITE_BODY_MAX_CHARS } from "./writing-rewrite-gate.js";
+import { splitSections, checkInvariants, sectionFindings, isEligible, sectionHeadingOk, unrewrittenOutcome, REWRITE_BODY_MAX_CHARS } from "./writing-rewrite-gate.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
 let pass = 0;
@@ -284,4 +284,16 @@ t("checkInvariants: 중간 조각(allowLeadRepeat=false)은 첫 줄 반복 허�
   assert.ok(!checkInvariants(before, after, { requireTitle: false }).some((v) => v.kind === "invariant:numbers"));
 });
 t("sectionHeadingOk: 재작성본 앞의 빈 줄은 무시한다", () => assert.equal(sectionHeadingOk("## 배경", "\n\n## 배경\n본문"), true));
+
+// 재작성된 조각이 0개일 때 — 고칠 조각이 애초에 없던 것(건너뜀)과 고치려다 전부 떨어진 것(거부)을 가른다.
+t("unrewrittenOutcome: 조각이 clean·oversized 뿐이면 대상 없음으로 건너뛴다", () => {
+  assert.deepEqual(unrewrittenOutcome([{ section: "oversized" }]), { status: "skipped", reason: "no_section_target" });
+  assert.deepEqual(unrewrittenOutcome([{ section: "clean" }, { section: "oversized" }]), { status: "skipped", reason: "no_section_target" });
+});
+t("unrewrittenOutcome: 시도한 조각이 전부 떨어졌으면 거부다", () => {
+  assert.deepEqual(unrewrittenOutcome([{ section: "clean" }, { section: "kept" }]), { status: "rejected", reason: "no_section_passed" });
+});
+t("unrewrittenOutcome: 재작성된 조각이 하나라도 있으면 결과 없음(합친 문서 검사로 넘어간다)", () => {
+  assert.equal(unrewrittenOutcome([{ section: "kept" }, { section: "rewritten" }]), null);
+});
 console.log(`writing-rewrite-sections: ${pass} passed`);
