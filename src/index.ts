@@ -31,7 +31,7 @@ import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
-import { registerNasDownloadRoute } from "./net/nas/nas-download-route.js";
+import { registerNasDownloadRoute, registerNasUploadRoute } from "./net/nas/nas-download-route.js";
 import { registerTransferRoutes } from "./transfer/routes.js";
 import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
@@ -175,6 +175,14 @@ app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
 //  보낸 바이트 그대로여야 한다(JSON 이면 전역 파서가 먼저 먹는다). 문은 앞단 기계 헤더(x-lvly-app-front) — 사람 로그인을 타지 않는다(apps/app-front-routes.ts).
 app.use("/api/app-front/server", ...appFrontServerRouter());
 
+// 토큰 검증기 — 바로 아래 NAS 올리기가 전역 파서 앞에서 쓰므로 여기서 만든다(그 뒤의 인증 경로들도 이 하나를 쓴다).
+const verifier = new BearerVerifier();
+// NAS 올리기(PUT /api/ui/me/nas/upload — lively_local_nas_push). 역시 전역 express.json() **이전**: PUT 본문이 그대로 파일 바이트라
+//  `Content-Type: application/json` 이면 전역 파서가 먼저 본문을 먹어, Content-Length 가 없으면 0바이트 파일이 «성공»(200 size 0)으로 남고
+//  덮기(overwrite=1)면 기존 파일이 비워진다(1MB 넘는 JSON 은 413). 문(쿠키·Bearer · context 권한 · 앱 동의 nas_manage · 세션 모드)은 라우트 안에 있다.
+//  내려받기(GET)는 본문이 없어 아래 제자리(registerNasDownloadRoute)에 둔다.
+registerNasUploadRoute(app, verifier);
+
 // 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
 //  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.
 app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
@@ -198,7 +206,6 @@ app.use("/api/ui/transfer/export",
   express.json({ limit: "4mb" }));
 app.use(express.json({ limit: "1mb" }));
 
-const verifier = new BearerVerifier();
 //  #4488 LLM 프록시 — 실행 토큰 · 앱 서버 토큰(고급 길)으로 Anthropic Messages API 를 흘려 보낸다(ai-runs/routes.ts).
 registerLlmProxyRoutes(app, verifier);
 // /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가

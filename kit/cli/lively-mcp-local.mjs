@@ -309,14 +309,14 @@ registerTool({
   handler: async (args, ctx) => ctx.json(await repoPin(ctx, args)),
 });
 
-// NAS 파일·폴더 받기 — nas_find·nas_list(게이트웨이)가 찾은 것을 이 기계의 홈 아래 폴더로 받는다. 본체는 nas-pull-core.mjs.
+// NAS 파일·폴더 받기 — nas_find·nas_list(게이트웨이)가 찾은 것을 이 기계의 ~/NAS사본 아래로 받는다(자동승인이라 그 밖은 거부 — nas-pull-core.mjs resolveDest).
 //  dynamic import 인 이유: 코어 파일이 없는 설치(구버전 설치기)에서도 이 서버 전체가 부팅에 실패하지 않게(#905 회귀와 같은 함정).
 registerTool({
   name: "lively_local_nas_pull",
   title: "NAS 파일·폴더를 이 기계로 받기",
   description: "NAS(본인 FTP 계정 권한)에서 파일이나 폴더를 통째로 이 기계의 폴더로 내려받는다. 받은 뒤 그 파일을 직접 열어 내용을 본다. "
     + "대상은 nas_find·nas_list 결과 항목(p·type·path·size)을 targets 로 그대로 넘긴다(여러 개 가능). 폴더는 그 폴더 이름부터 하위 구조를 유지한다. "
-    + "dest 는 홈 아래만 되고 상대 경로는 ~/NAS사본 기준이다(예: dest «프로젝트A» → ~/NAS사본/프로젝트A). 같은 크기로 이미 받은 파일은 건너뛴다. "
+    + "받는 자리는 ~/NAS사본 아래만 된다 — dest 는 그 안의 상대 경로로 준다(예: dest «프로젝트A» → ~/NAS사본/프로젝트A, 절대 경로도 ~/NAS사본 아래만). 같은 크기로 이미 받은 파일은 건너뛴다. "
     + "한 번에 약 50초만 받고 멈춘다 — remaining 이 남았거나 폴더 목록을 만드는 중이면(note) 같은 호출을 다시 하고, truncated 가 상한이면 같은 호출을 반복하지 말고 하위 폴더로 나눠 부른다.",
   inputSchema: {
     type: "object",
@@ -333,7 +333,7 @@ registerTool({
         },
       },
       path: { type: "string", description: "targets 대신 NAS 경로 하나(사람이 읽는 꼴, 예: /공유/2026 계약)" },
-      dest: { type: "string", description: "받을 폴더. 상대 경로는 ~/NAS사본 기준, 절대 경로는 홈 아래만. 기본 ~/NAS사본" },
+      dest: { type: "string", description: "받을 폴더 — ~/NAS사본 아래만 된다. 상대 경로는 ~/NAS사본 기준, 절대 경로도 ~/NAS사본 아래여야 한다. 기본 ~/NAS사본" },
     },
     additionalProperties: false,
   },

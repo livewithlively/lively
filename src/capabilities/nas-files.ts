@@ -1,6 +1,6 @@
 // NAS 파일명 검색 — 구성원 본인 FTP 계정으로 «어디에 무슨 파일이 있나»를 찾는다.
-//  이 도구들은 본문을 돌려주지 않는다. 본문은 결과의 p 를 로컬 도구 lively_local_nas_pull 에 넘겨 그 기계의 홈 아래
-//  (기본 ~/NAS사본)로 받은 뒤 AI 가 연다(nas-download-route.ts — 쿠키·Bearer 둘 다). download_url 은 사람이 브라우저로 받는 링크다.
+//  이 도구들은 본문을 돌려주지 않는다. 본문은 결과의 p 를 로컬 도구 lively_local_nas_pull 에 넘겨 그 기계의 ~/NAS사본
+//  아래로(그 밖은 거부) 받은 뒤 AI 가 연다(nas-download-route.ts — 쿠키·Bearer 둘 다). download_url 은 사람이 브라우저로 받는 링크다.
 //  경계·자격 설계는 net/nas/nas-access.ts · net/nas/nas-index.ts 머리주석.
 import { z } from "zod";
 import type { Capability } from "./types.js";

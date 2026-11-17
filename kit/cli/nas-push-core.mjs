@@ -5,7 +5,8 @@
 //  · 같은 이름이 NAS 에 있으면 기본은 덮지 않는다(overwrite:true 일 때만). 크기가 같으면 «이미 올림»으로 세고, 다르면 conflicts 로 알린다.
 //  · budgetMs 를 넘기면 새 파일을 시작하지 않고 멈춘다(nas-pull-core.mjs 와 같은 이유·같은 상한 — 예산 + 파일 하나의 FILE_TIMEOUT_MS).
 //    다시 부르면 이미 올린 것은 같은 크기로 건너뛰어 이어 올린다.
-//  · 올릴 수 있는 자리는 받기(resolveDest)와 대칭으로 홈 아래만이다. 숨김 마디(.ssh·.aws·.git·.env …)와 운영체제 비밀 자리는 거부하고,
+//  · 올릴 수 있는 자리는 홈 아래만이다(받기는 그보다 좁은 ~/NAS사본 아래만 — 받기는 사람 확인 없는 자동승인 도구라 쓰는 자리를 좁혔다,
+//    nas-pull-core.mjs resolveDest). 숨김 마디(.ssh·.aws·.git·.env …)와 운영체제 비밀 자리는 거부하고,
 //    폴더를 펼칠 때도 숨김 항목은 건너뛴다 — NAS 문서에 심은 지시가 자격 증명을 올리게 하지 못하게(이 도구는 사람 확인을 받지만 겹으로 막는다).
 //  · 로컬 링크는 따라가지 않는다 — 폴더 링크가 고리를 만들거나 의도하지 않은 자리(홈 밖)를 통째로 올리지 않게.
 import { lstatSync, readdirSync, createReadStream, realpathSync } from "node:fs";
