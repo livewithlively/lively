@@ -14,6 +14,12 @@ import { connectNas, nasErrorReply, openNasSession, resolveNasAccess, nasIndexCa
 
 /** 첫 색인을 기다리는 최대 시간. 넘으면 «만드는 중»으로 답하고 색인은 뒤에서 계속 만든다(MCP 호출을 오래 붙잡지 않게). */
 export const FIRST_INDEX_WAIT_MS = 20_000;
+/**
+ * 색인 하나를 만들 때 여는 FTP 세션 수. 동시 색인 수(INDEX_MAX_CONCURRENT_BUILDS)와 곱한 만큼 NAS 에 접속이 열린다.
+ *  ⚠ 접속은 전부 게이트웨이 IP 하나에서 나간다 — NAS 의 IP당 접속 상한(vsftpd max_per_ip 등)이 이 곱보다 낮으면
+ *   색인이 도는 동안 다른 구성원의 nas_list·내려받기·올리기 접속이 거절된다. 올리기 전에 그 상한을 본다.
+ */
+export const NAS_CRAWL_SESSIONS = 4;
 
 const BODY_NOTE = "파일 내용이 필요하면 항목(p·path·type·size)을 lively_local_nas_pull 의 targets 로 넘겨 ~/NAS사본 아래로 받은 뒤 연다. 프로젝트 공유 폴더에는 받지 않는다(다른 구성원도 본다). download_url 은 사람이 브라우저로 받는 링크다.";
 
@@ -85,13 +91,21 @@ const nasFind: Capability = {
       // 키를 만든 그 서버·계정으로 색인한다 — 사이에 설정이 바뀌어도 다른 서버의 색인이 이 키에 담기지 않게
       const building = nasIndexCache.build(key, async () => {
         try {
-          const session = await connectNas(server, login);
+          const started = Date.now();
+          // 첫 세션은 자격 오류(530)를 그대로 올려야 해서 따로 연다. 나머지는 열리는 만큼만 쓴다 — 못 열려도 느려질 뿐 색인은 된다.
+          //  세션마다 키를 만든 그 서버·계정(server·login)으로 연다.
+          const first = await connectNas(server, login);
+          const extra = await Promise.allSettled(Array.from({ length: NAS_CRAWL_SESSIONS - 1 }, () => connectNas(server, login)));
+          const sessions = [first, ...extra.flatMap((x) => (x.status === "fulfilled" ? [x.value] : []))];
+          const rejected = extra.filter((x): x is PromiseRejectedResult => x.status === "rejected");
+          // 보조 세션이 다 막히면 한 세션 속도로 떨어져 시간 상한에 걸린다 — 잘린 까닭을 로그에서 찾을 수 있게 남긴다
+          if (rejected.length) logger.warn({ member: memberId, failed: rejected.length, err: rejected[0].reason }, "[nas] 보조 FTP 세션 열기 실패");
           try {
-            const r = await crawl((dir) => session.list(dir));
-            logger.info({ member: memberId, dirs: r.dirs, entries: r.entries.length, failedDirs: r.failedDirs, truncated: r.truncated }, "[nas] 파일명 색인 완료");
+            const r = await crawl(sessions.map((s) => (dir: string) => s.list(dir)));
+            logger.info({ member: memberId, dirs: r.dirs, entries: r.entries.length, failedDirs: r.failedDirs, truncated: r.truncated, sessions: sessions.length, ms: Date.now() - started }, "[nas] 파일명 색인 완료");
             return r;
           } finally {
-            await session.close();
+            await Promise.allSettled(sessions.map((s) => s.close()));
           }
         } catch (e) {
           // 뒤에서 다시 만들다 실패하면 기다리는 호출이 없을 수 있다 — 원문은 여기서 로그로만 남긴다(상태엔 분류 문구만)
