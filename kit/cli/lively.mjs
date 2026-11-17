@@ -2520,10 +2520,52 @@ async function cmdStatus(opts) {
   if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold(addHint()));
 }
 
+// git 접속(ssh) — lively_local_repo_worktree · `lively repo worktree` 는 이 컴퓨터의 git 으로 클론한다. 내 PC 는 라이블리가
+//  자격을 내려 주지 않아(repo-worktree-core authNote 머리말) 첫 클론이 호스트키 미등록·키 미등록으로 막히는데, 그 실패는
+//  코드 작업을 시작한 뒤에야 보였다. 등록 레포의 ssh 호스트마다 대화 없이(BatchMode) 시험 접속해 미리 알려 준다.
+//  판정 못 한 것(네트워크·타임아웃·ssh 없음)은 체크를 만들지 않는다 — 모르는 것을 실패로 단정하지 않는다.
+//  ssh 도 이 파일의 다른 외부 명령처럼 spawnSync 래퍼(host-effects 가드)로 띄운다. 가드 없는 spawn 은 deny·sandbox 정책에서도
+//  ssh 를 실제로 내보냈다(PR #1734 리뷰 실측). 가드가 막으면(throw) 항목 없이 끝낸다 — 정책 때문에 진단이 죽으면 안 된다.
+//  키가 거부됐을 때 고치는 길은 자리마다 다르다 — 박스는 라이블리에 등록한 키, 내 PC 는 이 컴퓨터의 키(authNote 와 같은 갈래).
+function sshDeniedFix(place, t) {
+  const box = `me_git_credential_get 으로 공개키를 보고 ${t.host} 계정 SSH 키에 등록(없으면 me_git_credential_set {kind:"ssh", host:"${t.host}"})`;
+  const pc = `이 컴퓨터의 공개키(~/.ssh/id_ed25519.pub, 없으면 ssh-keygen -t ed25519)를 ${t.host} 계정 SSH 키에 등록(키에 암호가 있으면 ssh-add, macOS 는 ssh-add --apple-use-keychain) 후 ${t.cmd}`;
+  return place === "box" ? box : place === "pc" ? pc : `라이블리 박스면 ${box} · 내 PC 면 ${pc}`;
+}
+async function doctorGitSsh(chk) {
+  let core, repos;
+  try { core = await import(new URL("./repo-worktree-core.mjs", import.meta.url)); } catch { return; }   // 설치 전(부트스트랩 단일 파일)
+  try { repos = (await api("/api/ui/repos", { timeoutMs: 8000 }))?.domainmapRepos || []; } catch { return; }
+  for (const t of core.sshProbeTargets(repos)) {
+    let r;
+    try {
+      r = spawnSync("ssh", ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", ...(t.port ? ["-p", t.port] : []), `${t.user}@${t.host}`],
+        { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      if (e?.code === "LIVELY_HOST_EFFECT_DENIED") return;   // 정책이 ssh 를 막았다 — 다른 호스트도 같다
+      throw e;
+    }
+    if (r.error && r.error.code === "ENOENT") return;      // ssh 없음 — 다른 호스트도 같다
+    if (r.error) continue;                                 // 타임아웃 등 — 이 호스트만 판정 못 함
+    const kind = core.classifySshProbe(r.status, `${r.stdout || ""}\n${r.stderr || ""}`);
+    if (!kind) continue;
+    //  advisory — 레포 목록은 조직 전체라 코드를 안 만지는 구성원에게도 뜬다. 보여 주되 «N건 문제» · exit 1 로 세지 않는다.
+    chk(`git 접속 ${t.host}`, kind === "ok",
+      kind === "ok" ? "ssh 인증 OK"
+        : kind === "hostkey" ? "호스트키가 known_hosts 에 없습니다 — 클론이 지문 확인을 물을 수 없어 실패합니다"
+        : kind === "hostkey-changed" ? "저장된 호스트키와 서버 키가 다릅니다 — 서버 키 교체이거나 중간자일 수 있습니다"
+        : "ssh 키가 거부됐습니다 — 공개키가 그 계정에 없거나, 키에 암호가 걸려 ssh-agent 에 안 올라가 있습니다",
+      kind === "hostkey" ? `${t.cmd}  (지문을 대조하고 yes)`
+        : kind === "hostkey-changed" ? `${t.host} 관리자에게 키 교체 여부를 확인한 뒤에만 ${t.forgetCmd} 후 ${t.cmd}`
+        : sshDeniedFix(core.gitAuthPlace(t.host), t),
+      { advisory: true });
+  }
+}
+
 async function cmdDoctor(opts) {
   const st = await gatherStatus();
   const checks = [];
-  const chk = (name, pass, detail, fix) => checks.push({ name, pass, detail, fix: fix || null });
+  const chk = (name, pass, detail, fix, { advisory = false } = {}) => checks.push({ name, pass, detail, fix: fix || null, ...(advisory ? { advisory: true } : {}) });
 
   // 버전만이 아니라 **어느 런타임에서 도는지**를 말한다 — #1068 이 정확히 그 축에서 터졌고(시스템 구버전 node),
   //  전용 런타임이 실제로 쓰이고 있는지는 여기 말고는 확인할 데가 없다.
@@ -2535,6 +2577,7 @@ async function cmdDoctor(opts) {
   const tokFile = readLively("token");
   chk("토큰", !!token(), tokFile ? "~/.lively/token" : (token() ? "LIVELY_TOKEN 환경변수 (파일 없음)" : "없음"), "lively login");
   chk("토큰 유효", st.account.authenticated, st.account.authenticated ? (st.account.name || st.account.id || "인증됨") : "미인증", "lively login");
+  if (st.account.authenticated) await doctorGitSsh(chk);
   // #2617 — 아래 #916 신원 검사의 **주소 축**. gateway() 는 이제 파일 우선이라 CLI·lively-local MCP 는
   //  파일을 쓴다(그래서 이건 ✗ 여도 위 두 줄은 정상이다) — 그럼에도 알리는 이유는, 이 셸에 남은 옛 env 를
   //  **직접 읽는 것**(스크립트·LIVELY_GATEWAY_URL 을 그대로 쓰는 도구)이 있으면 그쪽만 옛 게이트웨이로 가기 때문이다.
@@ -2709,10 +2752,10 @@ async function cmdDoctor(opts) {
   const w = Math.max(...checks.map((x) => cols(x.name)));
   for (const x of checks) {
     const pad = " ".repeat(Math.max(0, w - cols(x.name)));
-    say(`  ${x.pass ? green("✓") : red("✗")} ${x.name}${pad}   ${x.pass ? dim(x.detail) : x.detail}`);
+    say(`  ${x.pass ? green("✓") : x.advisory ? yellow("!") : red("✗")} ${x.name}${pad}   ${x.pass ? dim(x.detail) : x.detail}`);
     if (!x.pass && x.fix) say(`    ${dim("→ 해결: ")}${bold(x.fix)}`);
   }
-  const bad = checks.filter((x) => !x.pass);
+  const bad = checks.filter((x) => !x.pass && !x.advisory);
   say("");
   if (!bad.length) say(green("  모두 정상입니다."));
   else { say(yellow(`  ${bad.length}건 문제 — 위 '해결' 을 순서대로 실행하세요.`)); process.exitCode = 1; }

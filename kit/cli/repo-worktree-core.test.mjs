@@ -41,7 +41,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   process.env.LIVELY_REPOS_DIR = SB;                     // reposDir() → SB ⇒ base = SB/base
   process.env.TMPDIR = join(SB, "ostmp");                // os.tmpdir() → SB/ostmp (핀 기본경로를 샌드박스 안으로 — 실제 tmp 오염 방지)
   mkdirSync(join(SB, "ostmp"), { recursive: true });
-  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf, sessionKey } = await import(pathToFileURL(join(HERE, "repo-worktree-core.mjs")));
+  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf, sessionKey, sshTargetOf, gitAuthPlace, classifySshProbe, sshProbeTargets } = await import(pathToFileURL(join(HERE, "repo-worktree-core.mjs")));
 
   // ── 0) REPO_NAME_RE — 레포명은 경로 컴포넌트라 점세그먼트(traversal) 거부, 이름 속 점은 허용(#932 후속) ──
   check("REPO_NAME_RE: '..' 거부(traversal)", REPO_NAME_RE.test("..") === false, "'..' 통과");
@@ -183,26 +183,124 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   //  판정은 stderr 문자열이라 느슨하다(호스트마다 문구가 다르다) — 오탐의 대가가 안내 한 줄이라 넓게 잡되,
   //   무관 실패까지 걸리면 안 되므로 그 경계를 아래 표로 고정한다.
   check("① 공개키 거부 + scp형 → 안내와 호스트",
-    /me_git_credential_set/.test(authNote("git@git.example.com: Permission denied (publickey).", "git@git.example.com:acme-dev/example-one.git"))
-    && authNote("Permission denied (publickey).", "git@git.example.com:acme-dev/example-one.git").includes("git.example.com"), "미탐");
-  check("① 안내는 셸 ssh-keygen 우회를 말린다",
-    /ssh-keygen/.test(authNote("Permission denied (publickey).", "git@h.kr:o/r.git")), "우회 경고 없음");
+    /me_git_credential_set/.test(authNote("git@git.example.com: Permission denied (publickey).", "git@git.example.com:acme-dev/example-one.git", "box"))
+    && authNote("Permission denied (publickey).", "git@git.example.com:acme-dev/example-one.git", "box").includes("git.example.com"), "미탐");
+  check("① 박스의 안내는 셸 ssh-keygen 우회를 말린다",
+    /셸에서 ssh-keygen 으로 직접 만들지 마세요/.test(authNote("Permission denied (publickey).", "git@h.kr:o/r.git", "box")), "우회 경고 없음");
   check("② Username 못 읽음(HTTPS) → 안내와 호스트",
-    /me_git_credential_set/.test(authNote("fatal: could not read Username for 'https://git.x.kr': terminal prompts disabled", "https://git.x.kr/o/r.git"))
+    /me_git_credential_set/.test(authNote("fatal: could not read Username for 'https://git.x.kr': terminal prompts disabled", "https://git.x.kr/o/r.git", "box"))
     && gitHostOf("https://git.x.kr/o/r.git") === "git.x.kr", "미탐");
   check("③ 자격·포트 포함 https 에서 호스트만 추출",
     gitHostOf("https://user@git.example.com:443/o/r.git") === "git.example.com", gitHostOf("https://user@git.example.com:443/o/r.git"));
   check("④ 자격과 무관한 실패엔 안 붙는다",
     authNote("fatal: destination path 'x' already exists and is not an empty directory.", "https://github.com/o/r.git") === "", "오탐");
   {
-    const n = authNote("Permission denied (publickey).", "");   // 주소 파싱 불가
+    const n = authNote("Permission denied (publickey).", "", "box");   // 주소 파싱 불가
     check("⑤ 호스트 미상이어도 안내는 나온다", /me_git_credential_set/.test(n) && n.includes("그 호스트"), n);
     check("⑤ 빈 호스트가 안내에 새지 않는다", !/host:\s*""/.test(n), n);
   }
   check("⑥ 실패 원문이 비었거나 부재면 안 붙고 깨지지도 않는다",
     authNote("", "https://github.com/o/r.git") === "" && authNote(undefined, undefined) === "" && gitHostOf(undefined) === "", "빈/부재 처리 실패");
   check("⑦ 토큰 만료 계열도 자격 문제로 본다(공개키 거부만 잡으면 안 됨)",
-    /me_git_credential_set/.test(authNote("fatal: Authentication failed for 'https://git.x.kr/o/r.git'", "https://git.x.kr/o/r.git")), "미탐");
+    /me_git_credential_set/.test(authNote("fatal: Authentication failed for 'https://git.x.kr/o/r.git'", "https://git.x.kr/o/r.git", "box")), "미탐");
+  // ⑨ 자리마다 길이 다르다 — 내 PC 는 라이블리가 자격을 내려 주지 않으므로 me_git_credential_set 을 길로 주면 막다른 길이다
+  //  (신규 입사 온보딩에서 그 안내대로 등록했는데 노트북 클론이 계속 막혔다). 처음 붙는 호스트의 호스트키 실패는 따로 안내한다.
+  {
+    const DENIED = "git@git.example.com: Permission denied (publickey).";
+    const URL_SSH = "git@git.example.com:acme-dev/example-one.git";
+    const pc = authNote(DENIED, URL_SSH, "pc");
+    check("⑨ 내 PC: 이 컴퓨터의 ssh 키 등록과 확인 명령을 준다",
+      /ssh-keygen -t ed25519/.test(pc) && pc.includes("ssh -T git@git.example.com") && pc.includes("박스 세션 전용"), pc);
+    check("⑨ 내 PC: me_git_credential_set 을 해결 경로로 주지 않는다", !/로 등록하면/.test(pc), pc);
+    const pcHttps = authNote("fatal: Authentication failed for 'https://git.x.kr/o/r.git'", "https://git.x.kr/o/r.git", "pc");
+    check("⑨ 내 PC + https 주소: 토큰을 credential helper 에", /credential helper/.test(pcHttps) && !/ssh-keygen/.test(pcHttps), pcHttps);
+    const unk = authNote(DENIED, URL_SSH, "unknown");
+    check("⑨ 가를 수 없으면 두 길을 다 적는다", /me_git_credential_set \{/.test(unk) && /ssh-keygen -t ed25519/.test(unk), unk);
+    const HOSTKEY = [
+      ["Host key verification failed.\nfatal: Could not read from remote repository.", "OpenSSH 기본 문구"],
+      ["No ED25519 host key is known for git.example.com and you have requested strict checking.", "strict 문구"],
+    ];
+    for (const [err, n] of HOSTKEY) {
+      const note = authNote(err, URL_SSH, "pc");
+      check(`⑨ 호스트키 미등록(${n}) → known_hosts 안내 · 자격 안내가 아니다`,
+        /known_hosts/.test(note) && note.includes("ssh -T git@git.example.com") && !/ssh-keygen/.test(note), note);
+    }
+    const changed = authNote("WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.", URL_SSH, "pc");
+    check("⑨ 바뀐 호스트키는 «처음 붙는 호스트» 로 안내하지 않는다(관리자 확인 후 ssh-keygen -R)",
+      /관리자에게/.test(changed) && changed.includes("ssh-keygen -R git.example.com") && !/yes 로 받아/.test(changed), changed);
+    check("⑨ 사용자 없는 scp 주소도 호스트를 안내에 쓴다", authNote(DENIED, "h.kr:o/r.git", "pc").includes("h.kr 계정"), "호스트 누락");
+    check("⑨ ssh 포트가 있으면 확인 명령에 -p",
+      authNote("Host key verification failed.", "ssh://git@h.kr:2222/o/r.git", "pc").includes("ssh -T -p 2222 git@h.kr"), "포트 누락");
+    // ⑪ 바뀐 호스트키를 지우는 이름 — OpenSSH 는 22 가 아닌 포트를 known_hosts 에 `[host]:port` 로 적는다. `ssh-keygen -R h.kr` 로는
+    //  그 줄이 안 지워져 안내대로 해도 계속 막힌다. 대괄호는 셸 글롭 문자라 따옴표로 감싼다.
+    const CHANGED = "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.";
+    const p2222 = authNote(CHANGED, "ssh://git@h.kr:2222/o/r.git", "pc");
+    check("⑪ 22 가 아닌 포트의 바뀐 호스트키는 [host]:port 로 지운다",
+      p2222.includes('ssh-keygen -R "[h.kr]:2222"') && !p2222.includes("ssh-keygen -R h.kr"), p2222);
+    const p22 = authNote(CHANGED, "ssh://git@h.kr:22/o/r.git", "pc");
+    check("⑪ 22 번은 known_hosts 에 이름만 적힌다 — 대괄호를 붙이지 않는다",
+      p22.includes("ssh-keygen -R h.kr") && !p22.includes("[h.kr]"), p22);
+    // ⑫ 안내에 넣는 호스트는 sshTargetOf 와 같은 이름 규칙을 통과한 값만 — '-' 로 시작하면 ssh 가 옵션으로 읽는다.
+    //  sshTargetOf 가 걸러도 원문 호스트로 되돌아가 `ssh -T git@-oProxyCommand=x` 를 복붙 명령으로 안내했다(PR #1734 리뷰 실측).
+    const EVIL = "ssh://git@-oProxyCommand=x/o/r";
+    const evil = [
+      ["호스트키 미등록", authNote("Host key verification failed.", EVIL, "pc")],
+      ["바뀐 호스트키", authNote(CHANGED, EVIL, "pc")],
+      ["키 거부 · 박스", authNote(DENIED, EVIL, "box")],
+      ["키 거부 · 자리 모름", authNote(DENIED, EVIL, "unknown")],
+      ["https 주소", authNote("fatal: Authentication failed for 'https://$(id)/o/r.git'", "https://$(id)/o/r.git", "box")],
+    ];
+    for (const [n, note] of evil) {
+      check(`⑫ 이름 규칙 밖 호스트는 안내에 안 싣고 «그 호스트» 로 말한다(${n})`,
+        !!note && !/ProxyCommand|\$\(id\)/.test(note) && note.includes("그 호스트"), note);
+      check(`⑫ 이름 규칙 밖 호스트면 명령 예시를 주지 않는다(${n})`, !/`ssh -T|ssh-keygen -R|host:"/.test(note), note);
+    }
+  }
+  {
+    // sshTargetOf — [주소, 기대]
+    const T = [
+      ["git@git.example.com:acme/r.git", { user: "git", host: "git.example.com", port: null }],
+      ["deploy@h.kr:o/r.git", { user: "deploy", host: "h.kr", port: null }],
+      ["h.kr:o/r.git", { user: "git", host: "h.kr", port: null }],
+      ["ssh://git@h.kr:2222/o/r.git", { user: "git", host: "h.kr", port: "2222" }],
+      ["ssh://h.kr/o/r.git", { user: "git", host: "h.kr", port: null }],
+      ["https://u@h.kr:443/o/r.git", null],
+      ["file:///srv/r.git", null],
+      ["C:/repos/r", null],
+      ["/srv/r.git", null],
+      ["git+ssh://git@h.kr/o/r.git", { user: "git", host: "h.kr", port: null }],
+      ["-oProxyCommand=x@h.kr:o/r", null],
+      ["$(id)@h.kr:o/r", null],
+      ["git@h.kr;rm:o", null],
+      ["", null],
+    ];
+    for (const [u, want] of T) check(`⑩ sshTargetOf ${JSON.stringify(u)}`, JSON.stringify(sshTargetOf(u)) === JSON.stringify(want), JSON.stringify(sshTargetOf(u)));
+    // gitAuthPlace — 내려 준 자격 파일이 있으면 박스, 없으면 OS 로
+    const at = (files, platform) => gitAuthPlace("git.example.com", { platform, home: "/h", exists: (p) => files.includes(p) });
+    check("⑩ gitAuthPlace: 내려 준 ssh 키(id_lively_<호스트>)가 있으면 박스",
+      at([join("/h", ".ssh", "id_lively_git_example_com")], "linux") === "box" && at([join("/h", ".ssh", "id_lively_git_example_com")], "darwin") === "box", "판정 오류");
+    check("⑩ gitAuthPlace: 내려 준 https 자격이 있으면 박스", at([join("/h", ".lively", "git-credentials")], "linux") === "box", "판정 오류");
+    check("⑩ gitAuthPlace: 없으면 macOS·Windows 는 내 PC, Linux 는 모름",
+      at([], "darwin") === "pc" && at([], "win32") === "pc" && at([], "linux") === "unknown", [at([], "darwin"), at([], "win32"), at([], "linux")].join(","));
+    // classifySshProbe — [종료코드, 출력, 기대]
+    const P = [
+      [0, "Welcome to GitLab, @newbie!", "ok"],
+      [1, "Hi newbie! You've successfully authenticated, but GitHub does not provide shell access.", "ok"],
+      [255, "Host key verification failed.", "hostkey"],
+      [255, "git@h.kr: Permission denied (publickey).", "denied"],
+      [255, "@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nOffending ED25519 key in /u/.ssh/known_hosts:3\nHost key verification failed.", "hostkey-changed"],
+      [255, "ssh: connect to host h.kr port 22: Operation timed out", null],
+      [255, "ssh: Could not resolve hostname h.kr", null],
+    ];
+    for (const [code, out, want] of P) check(`⑩ classifySshProbe ${JSON.stringify(out.slice(0, 30))}`, classifySshProbe(code, out) === want, String(classifySshProbe(code, out)));
+    const targets = sshProbeTargets([{ clone_url: "git@h.kr:a/x.git" }, { clone_url: "git@h.kr:b/y.git" }, { clone_url: "https://h.kr/c.git" }, { clone_url: null }, { clone_url: "ssh://git@h.kr:2222/d.git" }]);
+    check("⑩ sshProbeTargets: ssh 주소만 · user@host:port 당 한 번 · 확인 명령 동봉",
+      JSON.stringify(targets.map((t) => t.cmd)) === JSON.stringify(["ssh -T git@h.kr", "ssh -T -p 2222 git@h.kr"]), JSON.stringify(targets));
+    //  호스트 이름은 대소문자를 가리지 않는다 — 대소문자만 다른 주소를 따로 세면 같은 서버를 두 번 시험하고 두 줄로 보인다.
+    const cased = sshProbeTargets([{ clone_url: "git@GitHub.com:a/x.git" }, { clone_url: "git@github.com:b/y.git" }]);
+    check("⑩ sshProbeTargets: 호스트 대소문자만 다르면 한 번 · 소문자로",
+      cased.length === 1 && cased[0].host === "github.com" && cased[0].cmd === "ssh -T git@github.com", JSON.stringify(cased));
+  }
   {
     // ⑧ 배선 — 안내를 만드는 능력이 있어도 **실패 지점에서 안 불리면 없는 것과 같다**. 실제 클론 경로로 태운다.
     const calls = [];
