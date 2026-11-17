@@ -19,7 +19,7 @@ import { one } from "../db/client.js";
 import { actorKindOf } from "./content-audit.js";
 import { resolveIngestPolicy, type CreateAction, type UpdateAction } from "../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../org/ingest/ingest-policy-load.js";
-import { slugify } from "./knowledge-store.js";
+import { resolveKnowledgeName } from "./knowledge-store.js";
 
 export interface GateSaveInput {
   name?: string;
@@ -45,6 +45,9 @@ export interface GateBefore {
   /** 외부 좌표(미러 표식) — 있으면 재싱크가 제목·본문을 원본으로 덮는다(capabilities/knowledge/mirror-guard.ts). */
   external_system: string | null;
   external_url: string | null;
+  /** 형식 정리 저장의 사람 편집 보호 창(save-guard) — 마지막 편집 시각·편집자. */
+  updated_at?: string | Date | null;
+  updated_by?: string | null;
 }
 
 export interface KnowledgeGate {
@@ -62,11 +65,11 @@ export interface KnowledgeGate {
 export async function resolveKnowledgeGate(input: GateSaveInput, ctx?: { source?: string; agent?: string }): Promise<KnowledgeGate> {
   const actor_kind = actorKindOf(ctx?.source ?? null);
   const agent = ctx?.agent ?? null;
-  const name = input.name ? slugify(input.name) : null;
+  const name = input.name ? await resolveKnowledgeName(input.name) : null;
 
   const before = name
     ? (await one(itemsPool,
-      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url
+      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url, updated_at, updated_by
          FROM knowledge WHERE name=$1`, [name])) as GateBefore | undefined
     : undefined;
   const isCreate = !before;

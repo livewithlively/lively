@@ -19,6 +19,9 @@ import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   /
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
+import { readStyleHint } from "../writing-style.js";
+import type { KnowledgeRow } from "../../v6/knowledge-store.js";
+import type { WritingFormat } from "../../org/policies/writing-format.js";
 
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
@@ -398,7 +401,7 @@ export const knowledgeGet: Capability = {
   name: "knowledge_get",
   title: "지식 상세",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(grep→get 루프 왕복 0)
-  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악.",
+  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악. 조직 서술 형식에 어긋난 지식이면 style(count·findings·note)이 함께 온다.",
   scope: "memory",
   input: knowledgeGetInput,
   expose: {
@@ -433,20 +436,35 @@ export const knowledgeGet: Capability = {
         },
       }
       : {};
-    if (input.offset == null && input.limit == null) return { knowledge, ...revInfo };
-    // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
-    const lines = (knowledge.body_md ?? "").split("\n");
-    const from = Math.max(1, input.offset ?? 1);
-    const count = Math.min(input.limit ?? 200, 2000);
-    const slice = lines.slice(from - 1, from - 1 + count);
-    const to = from - 1 + slice.length;
-    return {
-      knowledge: { ...knowledge, body_md: slice.join("\n") },
-      body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
-      ...revInfo,
-    };
+    return knowledgeGetResult(knowledge, input, revInfo, { staged: pendingRev?.mode === "staged" });
   },
 };
+
+/** 조회한 지식으로 상세 응답을 조립한다(부분읽기·형식 신호). DB 를 다시 읽지 않는다. */
+export async function knowledgeGetResult(
+  knowledge: KnowledgeRow,
+  input: { offset?: number; limit?: number },
+  revInfo: Record<string, unknown>,
+  opts: { staged: boolean },
+  loadFormat?: () => Promise<WritingFormat>,
+): Promise<Record<string, unknown>> {
+  // 형식 신호는 부분읽기로 자르기 전 전문으로 판정한다 — 잘린 범위만 보면 뒤쪽 위반을 놓친다.
+  //  검토 대기 중인 수정 제안(staged)이 있으면 싣지 않는다. 그동안 edit·제목 변경이 409 로 막혀 안내를 따를 수 없다.
+  const styleInfo = opts.staged ? {} : await readStyleHint(knowledge, loadFormat);
+  if (input.offset == null && input.limit == null) return { knowledge, ...revInfo, ...styleInfo };
+  // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
+  const lines = (knowledge.body_md ?? "").split("\n");
+  const from = Math.max(1, input.offset ?? 1);
+  const count = Math.min(input.limit ?? 200, 2000);
+  const slice = lines.slice(from - 1, from - 1 + count);
+  const to = from - 1 + slice.length;
+  return {
+    knowledge: { ...knowledge, body_md: slice.join("\n") },
+    body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
+    ...revInfo,
+    ...styleInfo,
+  };
+}
 
 // 정적 REST 경로(/knowledge/search·/knowledge/semantic·/knowledge/similar·/knowledge-graph·/knowledge-tree)
 //  — /knowledge/:name 계열보다 **먼저** 마운트돼야 한다.
