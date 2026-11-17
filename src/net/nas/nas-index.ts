@@ -111,6 +111,8 @@ export interface IndexState {
   building: Promise<CrawlResult> | null;
   /** 마지막 실패를 errorText 로 분류한 문구(원문 아님). nas_find 응답의 last_error 로 그대로 나간다. */
   error: string | null;
+  /** 색인을 만드는 도중 NAS 가 바뀌었다 — 그 색인은 완성돼도 낡은 것으로 본다. */
+  staleOnBuild?: boolean;
 }
 
 /**
@@ -168,8 +170,9 @@ export class NasIndexCache {
   build(key: string, run: () => Promise<CrawlResult>): Promise<CrawlResult> {
     const s = this.get(key);
     if (s.building) return s.building;
+    s.staleOnBuild = false; // 이전 build 가 실패해 남은 표시를 새 build 로 넘기지 않는다(그 전의 markStale 은 builtAt=null 로 이미 반영)
     const p = this.slot(run).then(
-      (r) => { s.result = r; s.builtAt = this.now(); s.error = null; return r; },
+      (r) => { s.result = r; s.builtAt = s.staleOnBuild ? null : this.now(); s.error = null; return r; },
       (e: unknown) => { s.error = this.errorText(e); throw e; },
     ).finally(() => { s.building = null; });
     p.catch(() => {}); // 기다리는 쪽이 없을 수 있다(첫 호출이 시간 안에 못 받고 돌아간 경우)
@@ -178,6 +181,14 @@ export class NasIndexCache {
   }
 
   drop(key: string): void { this.states.delete(key); }
+
+  /** NAS 를 바꾼 뒤 부른다 — 다음 검색이 색인을 다시 만든다(그동안은 직전 색인으로 답한다). */
+  markStale(key: string): void {
+    const s = this.states.get(key);
+    if (!s) return;
+    s.builtAt = null;
+    if (s.building) s.staleOnBuild = true;
+  }
 
   // 상한은 키 수로 센다. 진행 중인 키는 버리지 않으므로 잠깐 넘을 수 있다(동시 색인 수만큼).
   // keep = 방금 넣은 키. 아직 builtAt 이 없어 «가장 오래된 것»으로 보이지만, 곧 색인을 만들 자리라 버리면 안 된다.

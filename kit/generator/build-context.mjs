@@ -586,6 +586,8 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   //  ⚠ 여기서 빠지면 설치기(user-install.mjs)의 복사가 조용히 건너뛰어 구성원 PC 에서 그 툴만 매번 실패한다.
   copyMjsWithHeader(kitAbs("cli/nas-pull-core.mjs"), join(target, "cli", "nas-pull-core.mjs"), "kit/cli/nas-pull-core.mjs", orgLabel);
   copied.push("cli/nas-pull-core.mjs");
+  copyMjsWithHeader(kitAbs("cli/nas-push-core.mjs"), join(target, "cli", "nas-push-core.mjs"), "kit/cli/nas-push-core.mjs", orgLabel);
+  copied.push("cli/nas-push-core.mjs");
   // 서브커맨드 모듈(#1313 R52) — lively.mjs 가 `node`·`delegate`·`resume/backfill/share` 에서 dynamic import.
   //  번들 동봉(lively.mjs 옆에 둬야 import 해결) → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
   for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs"]) {

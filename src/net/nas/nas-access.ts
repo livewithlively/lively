@@ -132,9 +132,10 @@ export async function connectNas(server: NasServer, login: NasLogin, deps: NasCo
   return connect({ host: address, port: server.port, user: login.username, password: login.password });
 }
 
-export async function openNasSession(memberId: string): Promise<{ session: FtpSession; username: string }> {
+export async function openNasSession(memberId: string): Promise<{ session: FtpSession; username: string; server: NasServer }> {
   const { server, login } = await resolveNasAccess(memberId);
-  return { session: await connectNas(server, login), username: login.username };
+  //  server 도 돌려준다 — 쓰기·올리기 뒤 색인 낡음 표시(markStale)가 nasIndexKey 의 서버 칸을 같은 값으로 채우게.
+  return { session: await connectNas(server, login), username: login.username, server };
 }
 
 // ── 오류 분류 ────────────────────────────────────────────────────────────────────────────────
@@ -166,6 +167,8 @@ export const nasIndexKey = (memberId: string, username: string, server: NasServe
   [currentTenant()?.id ?? "_", memberId, username, `${server.host}:${server.port}`].join("\u0000");
 
 export const NAS_DOWNLOAD_PATH = "/api/ui/me/nas/file";
+/** 올리기 — PUT, 쿼리 dir(폴더 p)·name(새 이름, UTF-8)·overwrite(1 이면 덮기). 본문은 파일 바이트 그대로. */
+export const NAS_UPLOAD_PATH = "/api/ui/me/nas/upload";
 
 /** 사람이 브라우저에서 여는 내려받기 경로(게이트웨이 기준 상대). 절대 주소는 호출부가 붙인다. */
 export function nasDownloadPath(raw: string): string {

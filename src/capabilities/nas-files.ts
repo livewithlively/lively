@@ -7,9 +7,10 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { logger } from "../log.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { parseListing, displayPath, encodeRawPath, decodeRawPath, isSafeRawPath } from "../net/ftp/ftp-list.js";
+import { FtpError } from "../net/ftp/ftp-client.js";
+import { parseListing, displayPath, encodeRawPath, decodeRawPath, isSafeRawPath, rawOfDisplayPath, childRawPath, parentRawPath } from "../net/ftp/ftp-list.js";
 import { crawl, searchEntries, type NasEntry, type CrawlResult } from "../net/nas/nas-index.js";
-import { connectNas, nasErrorReply, openNasSession, resolveNasAccess, nasIndexCache, nasIndexKey, nasDownloadPath } from "../net/nas/nas-access.js";
+import { connectNas, nasErrorReply, openNasSession, resolveNasAccess, nasIndexCache, nasIndexKey, nasDownloadPath, type NasServer } from "../net/nas/nas-access.js";
 
 /** 첫 색인을 기다리는 최대 시간. 넘으면 «만드는 중»으로 답하고 색인은 뒤에서 계속 만든다(MCP 호출을 오래 붙잡지 않게). */
 export const FIRST_INDEX_WAIT_MS = 20_000;
@@ -142,15 +143,8 @@ const nasList: Capability = {
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const i = z.object(listInput).parse(input ?? {});
-    let raw: string | null;
-    if (i.p) raw = decodeRawPath(i.p);
-    else {
-      const path = (i.path ?? "/").trim() || "/";
-      raw = Buffer.from(path.startsWith("/") ? path : `/${path}`, "utf8").toString("latin1");
-    }
-    if (raw && raw.length > 1) raw = raw.replace(/\/+$/, "");
-    if (!raw || !isSafeRawPath(raw)) throw new HttpError(400, "폴더 경로가 올바르지 않습니다");
-    const dir = raw;
+    const dir = rawTarget(i.p, i.path ?? "/");
+    if (!dir) throw new HttpError(400, "폴더 경로가 올바르지 않습니다");
     let body: string;
     try {
       const { session } = await openNasSession(user.userId);
@@ -165,4 +159,120 @@ const nasList: Capability = {
   },
 };
 
-export const nasFileCapabilities: Capability[] = [nasFind, nasList];
+// p(서버가 준 원본 경로) 가 있으면 그것, 없으면 사람이 읽는 경로(UTF-8). 끝 / 는 뗀다. 쓸 수 없는 경로면 null.
+function rawTarget(p: string | undefined, path: string | undefined): string | null {
+  let raw = p ? decodeRawPath(p) : path !== undefined ? rawOfDisplayPath(path) : null;
+  if (raw && raw.length > 1) raw = raw.replace(/\/+$/, "");
+  return raw && isSafeRawPath(raw) ? raw : null;
+}
+
+// 쓰기 실패의 서버 응답을 사람 말로. vsftpd 는 «없음»·«권한 없음»·«이름 불가»를 550·553 으로 섞어 준다(올리기 경로와 같은 403).
+function rethrowWrite(e: unknown, memberId: string, op: string): never {
+  if (e instanceof FtpError && (e.code === 550 || e.code === 553)) {
+    const what = op === "delete" ? "대상이 없거나 파일이 아니거나(폴더는 rmdir) 내 FTP 계정에 그 작업 권한이 없습니다"
+      : op === "rmdir" ? "폴더가 없거나 비어 있지 않거나 내 FTP 계정에 그 작업 권한이 없습니다"
+      : "대상이 없거나 이미 있거나 내 FTP 계정에 그 작업 권한이 없습니다";
+    throw new HttpError(403, what);
+  }
+  return rethrow(e, memberId);
+}
+
+export interface ManageInput { op: "mkdir" | "delete" | "rmdir" | "rename"; p?: string; path?: string; name?: string; to_dir?: string; to_dir_path?: string; to_name?: string; overwrite?: boolean }
+
+/**
+ * nas_manage 입력 → 다룰 원본 경로(raw)와 결과 경로(target). 거부할 입력이면 { error }.
+ *  rename 에 새 이름이 없으면 원래 이름의 원본 바이트를 그대로 옮긴다 — 옛 EUC-KR 이름도 깨지지 않게.
+ *  rename 은 overwrite(같은 이름 대상을 덮어도 되나)를 함께 싣는다. 다른 op 에 overwrite 를 주면 거부한다.
+ */
+export function planManage(i: ManageInput): { raw: string; target: string; overwrite?: boolean } | { error: string } {
+  const raw = rawTarget(i.p, i.path);
+  if (!raw) return { error: "대상 경로(p 또는 path)가 올바르지 않습니다" };
+  if (i.overwrite !== undefined && i.op !== "rename") return { error: "overwrite 는 rename 에만 씁니다" };
+  if (i.op === "mkdir") {
+    const child = i.name ? childRawPath(raw, i.name) : null;
+    return child ? { raw, target: child } : { error: "새 폴더 이름(name)이 올바르지 않습니다" };
+  }
+  if (raw === "/") return { error: "맨 위 폴더는 지우거나 옮길 수 없습니다" };
+  if (i.op !== "rename") return { raw, target: raw };
+  if (!i.to_dir && i.to_dir_path === undefined && !i.to_name) return { error: "rename 은 to_dir(또는 to_dir_path)이나 to_name 이 필요합니다" };
+  const toParent = i.to_dir || i.to_dir_path !== undefined ? rawTarget(i.to_dir, i.to_dir_path) : parentRawPath(raw);
+  if (!toParent) return { error: "옮길 폴더(to_dir)가 올바르지 않습니다" };
+  const moved = i.to_name ? childRawPath(toParent, i.to_name) : `${toParent.replace(/\/+$/, "")}/${raw.slice(raw.lastIndexOf("/") + 1)}`;
+  if (!moved || !isSafeRawPath(moved)) return { error: "새 이름(to_name)이 올바르지 않습니다" };
+  if (moved === raw) return { error: "같은 자리로는 옮길 수 없습니다" };
+  if (moved.startsWith(raw + "/")) return { error: "폴더를 자기 안으로는 옮길 수 없습니다" };
+  return { raw, target: moved, overwrite: i.overwrite === true };
+}
+
+/**
+ * RNTO 는 같은 이름 대상이 있으면 서버가 말없이 덮는다 — overwrite 가 아니면 먼저 SIZE 로 보고 있으면 옮기지 않는다(올리기와 같은 규칙).
+ *  ⚠ SIZE 는 폴더면 null 이라 폴더 대상은 못 가른다. 그때는 서버가 판정한다(파일을 폴더 자리로·비지 않은 폴더 자리로 옮기기는 서버가 거부한다).
+ */
+export async function renameUnlessExists(
+  ops: { size(raw: string): Promise<number | null>; rename(fromRaw: string, toRaw: string): Promise<void> },
+  raw: string, target: string, overwrite: boolean,
+): Promise<{ kind: "exists"; size: number } | { kind: "renamed"; overwritten: boolean }> {
+  const existing = await ops.size(target);
+  if (existing !== null && !overwrite) return { kind: "exists", size: existing };
+  await ops.rename(raw, target);
+  return { kind: "renamed", overwritten: existing !== null };
+}
+
+const manageInput = {
+  op: z.enum(["mkdir", "delete", "rmdir", "rename"]).describe("mkdir=폴더 만들기 · delete=파일 지우기 · rmdir=빈 폴더 지우기 · rename=이름 바꾸기·옮기기"),
+  p: z.string().max(4096).optional().describe("대상 — nas_find·nas_list 결과의 p. mkdir 이면 새 폴더를 만들 부모 폴더"),
+  path: z.string().max(1024).optional().describe("p 대신 사람이 읽는 경로(UTF-8 이름만). p 가 있으면 p 가 우선"),
+  name: z.string().max(255).optional().describe("mkdir 의 새 폴더 이름"),
+  to_dir: z.string().max(4096).optional().describe("rename: 옮길 폴더의 p(생략하면 같은 폴더)"),
+  to_dir_path: z.string().max(1024).optional().describe("rename: to_dir 대신 옮길 폴더 경로(사람이 읽는 꼴)"),
+  to_name: z.string().max(255).optional().describe("rename: 새 이름(생략하면 그 이름 그대로 to_dir 로 옮긴다)"),
+  overwrite: z.boolean().optional().describe("rename: 같은 이름 파일이 있으면 덮는다. 생략하면 덮지 않고 409 — 덮기 전에 사람에게 확인받는다"),
+};
+
+const nasManage: Capability = {
+  name: "nas_manage",
+  title: "NAS 파일·폴더 조작",
+  description:
+    "NAS(FTP)에서 폴더 만들기·파일 지우기·빈 폴더 지우기·이름 바꾸기/옮기기를 한다. 내 FTP 계정 권한 안에서만 된다. " +
+    "rename 은 같은 이름 파일이 있으면 덮지 않고 409 를 돌려준다(덮으려면 overwrite:true). " +
+    "되돌릴 수 없는 작업(delete·rmdir·overwrite rename)은 사람에게 대상을 확인받고 부른다. 파일 올리기는 lively_local_nas_push.",
+  scope: "context",
+  mutates: true,
+  input: manageInput,
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/me/nas/manage"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    const i = z.object(manageInput).parse(input ?? {});
+    const memberId = user.userId;
+    const plan = planManage(i);
+    if ("error" in plan) throw new HttpError(400, plan.error);
+    const { raw, target } = plan;
+    let username: string;
+    let server: NasServer;
+    let renamed: Awaited<ReturnType<typeof renameUnlessExists>> | null = null;
+    try {
+      const { session, username: u, server: sv } = await openNasSession(memberId);
+      username = u;
+      server = sv;
+      try {
+        if (i.op === "mkdir") await session.mkd(target);
+        else if (i.op === "delete") await session.dele(raw);
+        else if (i.op === "rmdir") await session.rmd(raw);
+        else renamed = await renameUnlessExists(session, raw, target, plan.overwrite === true);
+      } finally { await session.close(); }
+    } catch (e) { rethrowWrite(e, memberId, i.op); }
+    if (renamed?.kind === "exists") {
+      throw new HttpError(409, "같은 이름의 파일이 있어 옮기지 않았습니다 — 덮으려면 사람에게 확인받고 overwrite:true 로 다시 부르세요",
+        { body: { exists: true, size: renamed.size, path: displayPath(target), p: encodeRawPath(target) } });
+    }
+    nasIndexCache.markStale(nasIndexKey(memberId, username, server));
+    logger.info({ member: memberId, ftpUser: username, op: i.op, ...(renamed ? { overwritten: renamed.overwritten } : {}) }, "[nas] 파일 조작");
+    const shown = i.op === "delete" || i.op === "rmdir" ? raw : target;
+    return {
+      ok: true, op: i.op, path: displayPath(shown), p: encodeRawPath(shown),
+      ...(i.op === "rename" ? { from: displayPath(raw), overwritten: renamed?.kind === "renamed" && renamed.overwritten } : {}),
+    };
+  },
+};
+
+export const nasFileCapabilities: Capability[] = [nasFind, nasList, nasManage];

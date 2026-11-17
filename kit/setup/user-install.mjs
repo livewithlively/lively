@@ -414,6 +414,8 @@ function installCli() {
   // NAS 받기 코어 — lively-mcp-local.mjs 의 lively_local_nas_pull 이 dynamic import 한다(없으면 그 툴만 실패).
   const nasPullCore = cloneAbs(join("cli", "nas-pull-core.mjs"));
   if (existsSync(nasPullCore)) { copyFileSync(nasPullCore, join(lib, "nas-pull-core.mjs")); chmodSync(join(lib, "nas-pull-core.mjs"), 0o755); }
+  const nasPushCore = cloneAbs(join("cli", "nas-push-core.mjs"));
+  if (existsSync(nasPushCore)) { copyFileSync(nasPushCore, join(lib, "nas-push-core.mjs")); chmodSync(join(lib, "nas-push-core.mjs"), 0o755); }
   // 워크스페이스 회수 코어(#2621) — lively.mjs(`lively reclaim`)가 dynamic import 한다. 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
   //  ⚠ 빠지면 `lively reclaim` 만 ERR_MODULE_NOT_FOUND 로 못 뜬다(dynamic import 라 다른 명령은 정상).
   const reclaimCore = cloneAbs(join("cli", "workspace-reclaim-core.mjs"));

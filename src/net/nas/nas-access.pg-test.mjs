@@ -15,6 +15,11 @@
 //      context 권한이 있어야 한다 — context 없는 Bearer 는 403, context 있는 Bearer 는 인증·경로 검사를 지나 NAS 접속에서 502
 //      쿠키도 같다 — context 없는 구성원의 쿠키는 403. 앱 세션 토큰(appId)은 그 앱 동의 도구에 nas_list 가 있어야 한다 — 동의 없으면 403
 //      인코그니토 세션(x-lively-mode=incognito)은 403 — 능력 REST 와 같은 모드 게이트
+//   R3u 올리기(PUT NAS_UPLOAD_PATH) — 내려받기와 같은 문에 쓰기 판정을 더한다: 인증 없음 401 · context 없는 Bearer 403 ·
+//      앱 세션 토큰은 동의 도구에 nas_manage 가 없으면 403 · 읽기전용 세션(x-lively-mode=readonly) 403 · 그 밖은 NAS 접속 단계(502)까지
+//   R3g 앱 동의 도구 이름 — 동의에 nas_list 만 있는 앱은 내려받기 통과(502)·올리기 403, nas_manage 만 있는 앱은 그 반대.
+//      라우트가 도구 이름을 바꿔 넘기는 회귀를 잡는다
+//   R6 nas_manage 는 행 없이도, 운영자가 노출만 바꿔 행이 생겨도(auto_approve 미지정 upsert) 자동승인 목록에 오르지 않는다
 //   R4 매니지드 게이트웨이에서는 로그인한 쿠키 · 정상 경로여도 내려받기가 자체 호스팅 안내(501)
 //   R5 nas_find — 이전 색인이 있는데 다시 만들기가 실패하면(DNS 실패 — 원문에 호스트 이름) 이전 결과로 답하고,
 //      last_error 는 분류 문구이며 응답 어디에도 원문 조각이 없다
@@ -27,11 +32,13 @@ const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { initAllSchemas } = await import(`${DIST}/boot/schemas.js`);
 const store = await import(`${DIST}/org/credentials/member-secret-store.js`);
 const nas = await import(`${DIST}/net/nas/nas-access.js`);
-const { registerNasDownloadRoute } = await import(`${DIST}/net/nas/nas-download-route.js`);
+const { registerNasDownloadRoute, registerNasUploadRoute } = await import(`${DIST}/net/nas/nas-download-route.js`);
 const { BearerVerifier } = await import(`${DIST}/auth/bearer.js`);
 const { nasFileCapabilities } = await import(`${DIST}/capabilities/nas-files.js`);
 const { createSession } = await import(`${DIST}/auth/sessions.js`);
 const tok = await import(`${DIST}/org/store/tokens.js`);
+const tools = await import(`${DIST}/org/store/tools.js`);
+const { resolveAutoApproveToolIds } = await import(`${DIST}/org/delivery/auto-approve.js`);
 const express = (await import("express")).default;
 
 let pass = 0, fail = 0;
@@ -44,6 +51,8 @@ const settle = (fn) => Promise.resolve().then(fn).then((v) => ({ v }), (e) => ({
 const MID = "__nas1678_member__";
 const MID_NOCTX = "__nas1678_noctx__";
 const APP = "__nas1678_app__";
+const APP_LIST = "__nas1678_app_list__";
+const APP_MANAGE = "__nas1678_app_manage__";
 const G = store.GATEWAY_OWNER;
 const M = store.memberOwner(MID);
 const ACTOR = MID;
@@ -57,6 +66,8 @@ async function cleanup() {
     await itemsPool.query(`DELETE FROM auth_token WHERE member_id=$1 OR user_id=$1`, [id]);
     await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [id]);
   }
+  await itemsPool.query(`DELETE FROM org_app WHERE id = ANY($1::text[])`, [[APP_LIST, APP_MANAGE]]);
+  await itemsPool.query(`DELETE FROM org_tool WHERE name='nas_manage'`);
   await itemsPool.query(`DELETE FROM org_content_audit WHERE actor=$1`, [ACTOR]).catch(() => {});
 }
 
@@ -113,8 +124,16 @@ try {
   const minted = await tok.mintToken({ userId: MID, scopes: ["memory"], label: "nas1678", memberId: MID }, ACTOR, "pgtest");
   const mintedCtx = await tok.mintToken({ userId: MID, scopes: ["memory", "context"], label: "nas1678-ctx", memberId: MID }, ACTOR, "pgtest");
   const mintedApp = await tok.mintToken({ userId: MID, scopes: ["memory", "context"], label: "nas1678-app", memberId: MID, appId: APP }, ACTOR, "pgtest");
+  for (const [app, granted] of [[APP_LIST, ["nas_list"]], [APP_MANAGE, ["nas_manage"]]]) {
+    await itemsPool.query(`INSERT INTO org_app(id, title, status, enabled) VALUES($1,'NAS 시험 앱','active',true)`, [app]);
+    await itemsPool.query(`INSERT INTO org_app_grant(app_id, member_id, scopes, tools) VALUES($1,$2,'["context"]'::jsonb,$3::jsonb)`, [app, MID, JSON.stringify(granted)]);
+  }
+  const mintedAppList = await tok.mintToken({ userId: MID, scopes: ["memory", "context"], label: "nas1678-app-list", memberId: MID, appId: APP_LIST }, ACTOR, "pgtest");
+  const mintedAppManage = await tok.mintToken({ userId: MID, scopes: ["memory", "context"], label: "nas1678-app-manage", memberId: MID, appId: APP_MANAGE }, ACTOR, "pgtest");
   const app = express();
-  registerNasDownloadRoute(app, new BearerVerifier());
+  const verifier = new BearerVerifier();
+  registerNasUploadRoute(app, verifier);
+  registerNasDownloadRoute(app, verifier);
   server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}${nas.NAS_DOWNLOAD_PATH}`;
   const p = (raw) => Buffer.from(raw, "latin1").toString("base64url");
@@ -142,6 +161,12 @@ try {
     chk("R3b4 인코그니토 세션은 context 권한이 있어도 403", r4.status === 403, `status=${r4.status} body=${JSON.stringify(r4.body)}`);
   }
   {
+    const ok1 = await get("/docs/a.txt", { authorization: `Bearer ${mintedAppList.token}` });
+    chk("R3g1 동의 도구에 nas_list 가 있는 앱 토큰은 내려받기 문을 지난다(502)", ok1.status === 502, `status=${ok1.status} body=${JSON.stringify(ok1.body)}`);
+    const no1 = await get("/docs/a.txt", { authorization: `Bearer ${mintedAppManage.token}` });
+    chk("R3g2 ★ 동의 도구에 nas_manage 만 있는 앱 토큰은 내려받기 403", no1.status === 403, `status=${no1.status} body=${JSON.stringify(no1.body)}`);
+  }
+  {
     const r = await get("/docs/a.txt", { cookie: `lively_sess=${sessionNoCtx}` });
     chk("R3b5 ★ 쿠키도 context 권한이 없는 구성원이면 403", r.status === 403, `status=${r.status} body=${JSON.stringify(r.body)}`);
   }
@@ -152,6 +177,29 @@ try {
     chk("R3c0 (배선) 같은 쿠키·정상 경로는 인증·경로 검사를 지난다(그 뒤 NAS 접속 실패 502)", passed.status === 502,
       `status=${passed.status} body=${JSON.stringify(passed.body)}`);
   }
+  {
+    const upBase = `http://127.0.0.1:${server.address().port}${nas.NAS_UPLOAD_PATH}?dir=${p("/docs")}&name=a.txt`;
+    const put = async (headers = {}) => {
+      const res = await fetch(upBase, { method: "PUT", headers: { "content-type": "application/octet-stream", ...headers }, body: "abc" });
+      return { status: res.status, body: await res.json().catch(() => null) };
+    };
+    const bearer = (t) => ({ authorization: `Bearer ${t}` });
+    const r0 = await put();
+    chk("R3u0 올리기: 쿠키·Bearer 없음 401", r0.status === 401, `status=${r0.status}`);
+    const r1 = await put(bearer(minted.token));
+    chk("R3u1 올리기: context 권한 없는 Bearer 403", r1.status === 403, `status=${r1.status} body=${JSON.stringify(r1.body)}`);
+    const r2 = await put(bearer(mintedApp.token));
+    chk("R3u2 ★ 올리기: 앱 세션 토큰은 그 앱 동의 도구에 nas_manage 가 없으면 403", r2.status === 403, `status=${r2.status} body=${JSON.stringify(r2.body)}`);
+    const r3 = await put({ ...bearer(mintedCtx.token), "x-lively-mode": "readonly" });
+    chk("R3u3 ★ 올리기: 읽기전용 세션은 context 권한이 있어도 403", r3.status === 403, `status=${r3.status} body=${JSON.stringify(r3.body)}`);
+    const g1 = await put(bearer(mintedAppManage.token));
+    chk("R3g3 동의 도구에 nas_manage 가 있는 앱 토큰은 올리기 문을 지난다(502)", g1.status === 502, `status=${g1.status} body=${JSON.stringify(g1.body)}`);
+    const g2 = await put(bearer(mintedAppList.token));
+    chk("R3g4 ★ 동의 도구에 nas_list 만 있는 앱 토큰은 올리기 403", g2.status === 403, `status=${g2.status} body=${JSON.stringify(g2.body)}`);
+    const r4 = await put(bearer(mintedCtx.token));
+    chk("R3u4 (배선) 올리기: context 권한 있는 그 구성원의 Bearer 는 문을 지난다(그 뒤 NAS 접속 실패 502)", r4.status === 502,
+      `status=${r4.status} body=${JSON.stringify(r4.body)}`);
+  }
   process.env.LIVELY_TENANT_HEADER_SECRET = "nas1678-managed";
   try {
     const r = await get("/docs/a.txt", cookie);
@@ -159,6 +207,21 @@ try {
       r.status === 501 && r.body?.error === nas.NAS_MANAGED_OFF, `status=${r.status} body=${JSON.stringify(r.body)}`);
   } finally {
     delete process.env.LIVELY_TENANT_HEADER_SECRET;
+  }
+
+  // ── R6 nas_manage 자동승인 기본값 — 행 없음 · 노출만 바꾼 행 ─────────────────────────────────
+  {
+    const cands = [{ name: "nas_manage", defaultExposed: true }];
+    await itemsPool.query(`DELETE FROM org_tool WHERE name='nas_manage'`);
+    chk("R6a 행이 없으면 nas_manage 는 자동승인 목록에 없다", !resolveAutoApproveToolIds(cands, await tools.listTools()).includes("mcp__lively__nas_manage"));
+    await tools.upsertTool({ name: "nas_manage", kind: "builtin", enabled: true }, { actor: ACTOR, source: "pgtest" });
+    const row = await tools.getTool("nas_manage");
+    chk("R6b ★ auto_approve 없이(노출만) 저장한 행도 nas_manage 를 자동승인하지 않는다",
+      row?.auto_approve === false && !resolveAutoApproveToolIds(cands, await tools.listTools()).includes("mcp__lively__nas_manage"),
+      `row.auto_approve=${row?.auto_approve}`);
+    await tools.upsertTool({ name: "nas_manage", kind: "builtin", auto_approve: true }, { actor: ACTOR, source: "pgtest" });
+    chk("R6c 운영자가 auto_approve 를 명시로 켜면 자동승인한다", resolveAutoApproveToolIds(cands, await tools.listTools()).includes("mcp__lively__nas_manage"));
+    await itemsPool.query(`DELETE FROM org_tool WHERE name='nas_manage'`);
   }
 
   // ── R5 nas_find — 이전 색인 + 다시 만들기 실패 ────────────────────────────────────────────

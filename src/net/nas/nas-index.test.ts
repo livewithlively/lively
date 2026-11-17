@@ -1,4 +1,4 @@
-// NAS 색인 사양 검증 — 너비 우선 crawl·한도·실패 폴더, 이름 검색(AND·under·type·정렬·limit), 키별 색인 캐시.
+// NAS 색인 사양 검증 — 너비 우선 crawl·한도·실패 폴더, 이름 검색(AND·under·type·정렬·limit), 키별 색인 캐시(markStale 포함).
 // 실행: npm run build && node dist/net/nas/nas-index.test.js
 import assert from "node:assert/strict";
 import { crawl, searchEntries, NasIndexCache, type NasEntry, type CrawlResult } from "./nas-index.js";
@@ -309,6 +309,52 @@ await t("NasIndexCache.build: 동시에 도는 색인 만들기는 상한(2)까�
   while (gates.length) gates.shift()!();
   await Promise.all(ps);
   assert.equal(peak, 2);
+});
+
+await t("NasIndexCache.markStale: 색인이 있는 키는 isFresh=false 가 되고 result 는 그대로", async () => {
+  const c = new NasIndexCache(() => 0);
+  const r = result("r");
+  await c.build("k", async () => r);
+  assert.equal(c.isFresh("k"), true);
+  c.markStale("k");
+  assert.equal(c.isFresh("k"), false);
+  assert.equal(c.get("k").result, r);
+  c.markStale("none"); // 없는 키도 오류가 아니다
+  assert.equal(c.isFresh("none"), false);
+});
+
+await t("NasIndexCache.markStale: build 진행 중에 부르면 그 build 가 끝나 result 가 채워져도 isFresh=false", async () => {
+  const c = new NasIndexCache(() => 0);
+  const d = deferred<CrawlResult>();
+  const p = c.build("k", () => d.promise);
+  c.markStale("k");
+  const r = result("r");
+  d.resolve(r);
+  await p;
+  assert.equal(c.get("k").result, r);
+  assert.equal(c.isFresh("k"), false);
+});
+
+await t("NasIndexCache.markStale: 뒤에 다시 build 하면 fresh 로 돌아온다", async () => {
+  const c = new NasIndexCache(() => 0);
+  await c.build("k", async () => result("old"));
+  c.markStale("k");
+  const r = result("new");
+  await c.build("k", async () => r);
+  assert.equal(c.isFresh("k"), true);
+  assert.equal(c.get("k").result, r);
+});
+
+await t("NasIndexCache.markStale: 진행 중 build 가 실패해도 그 표시가 다음 성공 build 를 낡게 만들지 않는다", async () => {
+  // 회귀: 표시를 성공 때만 내려서 실패 뒤 다음 성공 색인이 곧바로 낡은 것이 됐다
+  const c = new NasIndexCache(() => 0);
+  const d = deferred<CrawlResult>();
+  const p = c.build("k", () => d.promise);
+  c.markStale("k");
+  d.reject(new Error("x"));
+  await p.catch(() => {});
+  await c.build("k", async () => result("ok"));
+  assert.equal(c.isFresh("k"), true);
 });
 
 console.log(`\n${pass} passed, ${failed.length} failed`);

@@ -92,7 +92,7 @@ import { browserCapabilities } from "./browser.js";
 import { transferCapabilities } from "./transfer.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
-import type { ToolCandidate } from "../mcp/mcp-surface.js";
+import { builtinAutoApproveDefault, type ToolCandidate } from "../mcp/mcp-surface.js";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
@@ -351,11 +351,12 @@ export function buildToolCandidates(): ToolCandidate[] {
       name: cap.name, title: cap.title, description: cap.description,
       defaultExposed: cap.expose.mcp, kind: "capability", inputSchema: toInputSchema(cap.input),
       alwaysLoadDefault: cap.meta?.["anthropic/alwaysLoad"] === true,
+      autoApproveDefault: builtinAutoApproveDefault(cap.name),
     });
   }
   for (const d of DB_TOOLS) out.push({
     name: d.name, title: d.title, description: d.description,
-    defaultExposed: true, kind: "db", inputSchema: d.inputSchema, alwaysLoadDefault: false,
+    defaultExposed: true, kind: "db", inputSchema: d.inputSchema, alwaysLoadDefault: false, autoApproveDefault: builtinAutoApproveDefault(d.name),
   });
   return out;
 }
