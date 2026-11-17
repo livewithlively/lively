@@ -534,4 +534,48 @@ const healthy: CronJobHealth = { id: "j1", action: "agent_headless", last_status
   stopCronWatch();
 }
 
-console.log("cron-watch.test.ts ok — 상태 판정(정상/관측없음/실패) · 전이시만 알림(침묵·첫관측·경고·복구) · last_summary 사유 추출(우선순위·공백/타입건너뜀·개행접기·300자 상한) · detail 필드 · 상태기계(재통지 금지·미발송 복구 침묵·skipped 보존·접수창 요동 없음·레인 회차 판정·관리 잡 요동 없음·조회 실패 보존·사라진 잡 폐기·재시작 뒤 오래된 실패 이어받기·재시작 뒤 끝난 레인의 실패 알림) · warn 정상 · 사유 가림");
+{
+  //  이어받기는 «재시작 뒤 첫 스캔» 에 이미 켜져 있던 잡에만 건다. 그 뒤에 목록에 들어온 잡(다시 켬·새로 만듦)은 직전
+  //   프로세스가 지켜보던 잡이 아니다. 수집기·커넥터 싱크 잡은 다시 켤 때 updated_at 을 올리지 않아(org/store/collectors.ts ·
+  //   connectors.ts 의 ON CONFLICT … enabled=true) 행 시각이 옛 실패에 머문다 — 거기에 이어받기를 걸면 고치지 못한 채 다시 켠
+  //   수집기가 계속 실패해도 경보가 한 번도 나가지 않는다.
+  const BOOT = Date.now() - 3600_000;   // 한 시간 전에 뜬 프로세스
+  const old = new Date(BOOT - 24 * 3600_000).toISOString();
+  const sync: CronJobHealth = { id: "sync-slack", action: "connector_sync", last_status: "error", last_summary: { error: "401" }, updated_at: old };
+  for (const firstScanList of [[], [{ ...sync, last_status: "ok", last_summary: {} }]] as CronJobHealth[][]) {
+    stopCronWatch();
+    const sent: BoxAlert[] = [];
+    let jobs: CronJobHealth[] = firstScanList;
+    const d: Parameters<typeof tickOnce>[0] = { listJobs: async () => jobs, send: async (a) => { sent.push(a); return true; }, bootedAt: BOOT };
+    await tickOnce(d);              // 재시작 뒤 첫 스캔 — 꺼져 있었거나(목록에 없음) 정상이었다
+    jobs = [];
+    await tickOnce(d);              // 사람이 껐다(관측 상태 폐기)
+    jobs = [sync];
+    await tickOnce(d);              // 다시 켰다 — 행은 하루 전 실패 그대로
+    assert.equal(sent.length, 1, `다시 켠 잡이 실패해 있으면 알린다(첫 스캔 목록 ${firstScanList.length}건)`);
+    assert.equal(sent[0].severity, "warn");
+    await tickOnce(d);
+    assert.equal(sent.length, 1, "알린 뒤엔 상태 그대로라 침묵");
+  }
+  stopCronWatch();
+}
+{
+  //  목록을 못 읽은 tick(null)은 첫 스캔을 소비하지 않는다 — 읽기에 성공한 다음 tick 이 첫 스캔이라 오래된 실패를 이어받는다.
+  const BOOT = Date.now() - 3600_000;
+  const old = new Date(BOOT - 24 * 3600_000).toISOString();
+  stopCronWatch();
+  const sent: BoxAlert[] = [];
+  let jobs: CronJobHealth[] | null = null;
+  const d: Parameters<typeof tickOnce>[0] = {
+    listJobs: async () => jobs,
+    taskStates: async () => new Map([["5", { status: "failed", error: "timeout", finished_at: old }]]),
+    send: async (a) => { sent.push(a); return true; }, bootedAt: BOOT,
+  };
+  await tickOnce(d);
+  jobs = [{ ...failing, updated_at: old }];
+  await tickOnce(d);
+  assert.equal(sent.length, 0, "목록 읽기에 실패한 tick 뒤의 첫 성공 스캔도 첫 스캔이다");
+  stopCronWatch();
+}
+
+console.log("cron-watch.test.ts ok — 상태 판정(정상/관측없음/실패) · 전이시만 알림(침묵·첫관측·경고·복구) · last_summary 사유 추출(우선순위·공백/타입건너뜀·개행접기·300자 상한) · detail 필드 · 상태기계(재통지 금지·미발송 복구 침묵·skipped 보존·접수창 요동 없음·레인 회차 판정·관리 잡 요동 없음·조회 실패 보존·사라진 잡 폐기·재시작 뒤 오래된 실패 이어받기·재시작 뒤 끝난 레인의 실패 알림·첫 스캔 뒤 다시 켠 잡은 이어받지 않음·읽기 실패 tick 은 첫 스캔이 아님) · warn 정상 · 사유 가림");

@@ -64,6 +64,9 @@ const CHECK_MS = Math.max(60_000, Number(process.env.CRON_WATCH_INTERVAL_MS) || 
 // 마지막으로 관측한 상태 + **실제로 보낸 문제 경보가 있었나**. 키는 워크스페이스 ⊕ 잡 id —
 //  워크스페이스마다 같은 id 의 잡이 따로 산다(스케줄러가 순회하는 것과 같은 이유).
 const seen = new Map<string, { phase: CronPhase; problemSent: boolean }>();
+//  이 프로세스에서 잡 목록을 읽는 데 성공한 첫 스캔을 마친 워크스페이스(scope). 재시작 이어받기(inheritsAlertedFailure)는
+//   그 첫 스캔에 이미 켜져 있던 잡에만 건다 — 그 뒤에 목록에 들어온 잡(다시 켬·새로 만듦)은 직전 프로세스가 지켜보던 잡이 아니다.
+const firstScanned = new Set<string>();
 const KEY_SEP = "\u0000";
 let timer: NodeJS.Timeout | null = null;
 //  tick 중첩 방지 — 워크스페이스가 많고 웹훅이 느리면 한 tick 이 주기를 넘길 수 있다. 두 tick 이 같은 `seen` 을
@@ -265,6 +268,8 @@ export function failureRecordedAt(
  *  DB 에 남겨야 한다.
  *  행이 주기마다 다시 쓰이는 잡(엔진이 회차마다 updated_at 을 올린다 — 주기가 두 감시 주기 이하인 비위탁 잡)은 이 판정에
  *  안 걸려 재시작마다 종전처럼 다시 알린다. 알리는 쪽 오차다.
+ *  호출부(scanOne)는 이 판정을 재시작 뒤 그 워크스페이스의 **첫 스캔**에 이미 켜져 있던 잡에만 쓴다 — «직전 프로세스가
+ *  지켜보던 잡» 이라는 전제가 그 잡에서만 선다.
  */
 export function inheritsAlertedFailure(recordedAt: number | null, bootedAt: number, checkMs: number = CHECK_MS): boolean {
   return recordedAt !== null && recordedAt < bootedAt - 2 * checkMs;
@@ -295,6 +300,12 @@ async function scanOne(deps: CronWatchDeps): Promise<void> {
   const jobs = await (deps.listJobs ?? loadJobs)();
   if (!jobs) return;   // 못 읽었다 — 관측 없음. 상태도 그대로 둔다(아래 폐기 단계를 건너뛴다).
   const scope = (currentTenant()?.id ?? "") + KEY_SEP;
+  //  재시작 이어받기는 이 워크스페이스의 첫 스캔에서만 건다. 첫 스캔 뒤에 목록에 들어온 잡은 처음 보는 실패로 알린다 —
+  //   수집기·커넥터 싱크 잡은 다시 켤 때 updated_at 을 올리지 않아(org/store/collectors.ts·connectors.ts 의
+  //   ON CONFLICT … enabled=true) 행 시각이 옛 실패에 머물고, 그대로 이어받으면 고치지 못한 채 다시 켠 잡이 계속 실패해도
+  //   경보가 한 번도 나가지 않는다. 목록을 못 읽은 tick 은 위에서 돌아가므로 첫 스캔을 소비하지 않는다.
+  const firstScan = !firstScanned.has(scope);
+  firstScanned.add(scope);
   const alive = new Set<string>();
   for (const job of jobs) {
     const key = scope + job.id;
@@ -304,7 +315,7 @@ async function scanOne(deps: CronWatchDeps): Promise<void> {
     const cur = cronPhaseOf(job.last_status, job.last_summary, states);
     if (cur === null) continue;   // 관측 없음 — 이전 상태를 그대로 둔다(중립)
     const prev = seen.get(key);
-    if (!prev && cur === "failing"
+    if (firstScan && !prev && cur === "failing"
       && inheritsAlertedFailure(failureRecordedAt(job, work, states), deps.bootedAt ?? BOOTED_AT)) {
       seen.set(key, { phase: "failing", problemSent: true });   // 복구 알림은 그대로 나가게 «보냈음» 으로 잇는다
       continue;
@@ -358,6 +369,7 @@ export function startCronWatch(deps: CronWatchDeps): void {
 export function stopCronWatch(): void {
   if (timer) { clearInterval(timer); timer = null; }
   seen.clear();
+  firstScanned.clear();
 }
 
 /** 테스트 전용 — 한 tick 을 즉시 돌린다(주기를 기다리지 않고 전이 규칙을 검증). */
