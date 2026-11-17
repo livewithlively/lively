@@ -474,7 +474,7 @@
       input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=file], [type=color], [type=image], [type=hidden], [readonly]):focus)) > .v2-mtabs { display: none; }
   #v2-root.m-aside .v2-main > .v2-tabpane:not([hidden]) .pn-pane[data-zone="side"]:has(:is(.pn-sessapp.pn-kb:not([hidden]), textarea:not([readonly]):focus, [contenteditable]:not([contenteditable="false"]):focus,
       input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=file], [type=color], [type=image], [type=hidden], [readonly]):focus)) { bottom: 0; }
-  .pn-tk-add input.pn-tk-add-in, .pj-slot input.pj-slot-q, input.pn-web-in, .pn-frow2 input.pn-frename, input.pn-frename, textarea.pn-tk-ta, textarea.pn-ed-ta { font-size: 16px; }   /* 42-v2-panes · 49-v2-projpane 의 «칸 안의 입력» 규칙(특이도 0,2,0)을 이긴다 */
+  .pn-tk-add input.pn-tk-add-in, .pj-add input.pj-add-t, .pj-add textarea.pj-add-b, .pj-slot input.pj-slot-q, input.pn-web-in, .pn-frow2 input.pn-frename, input.pn-frename, textarea.pn-tk-ta, textarea.pn-ed-ta { font-size: 16px; }   /* 42-v2-panes · 49-v2-projpane 의 «칸 안의 입력» 규칙(특이도 0,2,0)을 이긴다 */
 }
 /* 폰 · 눕힌 폰(HANDSET_MQ)의 «크게 보기»(붙은 앱 ⋯ 메뉴, app-ui.ts openAppUi)는 화면 전체다. 종전 창(여백 24px · 최대 88vh)은 폰에서
    서랍(402×569)보다 작았다(352×538 실측). «앱 UI» 배지는 남긴다: 화면 전체가 샌드박스 앱이 된 자리에서 이 머리줄만이 셸의 것이고,

@@ -26,7 +26,7 @@ execFileSync(
   { stdio: "inherit" },
 );
 const { bodyExcerpt, taskOfSession, groupTasks, doneOpenByDefault, seedTasksTab,
-  stripLeadNotice, sessionTaskOrder, sessionNumbers, sessionColor, externalTasks, moveInOrder, hashQuery, hashMatches } = await import(path.join(out, "task-pane.js"));
+  stripLeadNotice, sessionTaskOrder, sessionNumbers, sessionColor, externalTasks, moveInOrder, pinFirst, hashQuery, hashMatches } = await import(path.join(out, "task-pane.js"));
 
 let pass = 0;
 const eq = (got, want, name) => { assert.deepEqual(got, want, name); pass++; console.log(`ok  ${name}`); };
@@ -118,7 +118,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/import \{ tasksPart \} from '\.\/panes-tasks\.js';/.test(parts) && !/function tasksPart\(/.test(parts), true, "W5 부품은 한 벌 — 옛 tasksPart 가 남아 있지 않다");
   const tk = read("web/v2/panes-tasks.ts");
   eq(/description: text \|\| null, description_base: bodyBase/.test(tk), true, "W6 곁칸 본문 저장은 고치기 시작한 글을 함께 보낸다(세션의 덧붙임을 지우지 않게)");
-  eq(/if \(\(typingIn\(list\) \|\| typingIn\(top\)\) && !top\.querySelector\('\.pj-slot-q:focus'\)\) \{ listDirty = true; return; \}/.test(tk), true, "W7 글칸에 손이 가 있는 동안은 목록을 다시 그리지 않는다(8초 틱이 쓰던 글을 날리지 않게) — 빈 칸 찾기만 예외(쳐야 후보가 바뀐다)");
+  eq(/if \(\(typingIn\(list\) \|\| typingIn\(topDyn\)\) && !topDyn\.querySelector\('\.pj-slot-q:focus'\)\) \{ listDirty = true; return; \}/.test(tk), true, "W7 글칸에 손이 가 있는 동안은 목록을 다시 그리지 않는다(8초 틱이 쓰던 글을 날리지 않게) — 빈 칸 찾기만 예외(쳐야 후보가 바뀐다) · 새 태스크 칸은 다시 그리는 칸(topDyn) 밖이라 막지 않는다(#5581)");
   eq(/description: md \|\| null, description_base: descBase/.test(read("web/v2/proj-settings.ts")), true, "W8 프로젝트 설정의 본문 저장도 같은 가드를 탄다");
   // B11·B12 — 합치기·충돌의 **행위**는 실 SQL 로 잰다(src/v6/project-body-guard.pg-test.mjs). 여기선 REST 로 나가는 모양만 본다:
   //  화면은 상태코드로 가른다(409 = 덮지 않고 사람에게 묻는다). 500 으로 새면 «저장하지 못했어요» 만 뜨고 1.2초마다 되풀이한다.
@@ -184,6 +184,10 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
 
   eq([moveInOrder([1, 2, 3], 2, 0), moveInOrder([1, 2, 3], 0, 1), moveInOrder([1, 2, 3], 0, 9)], [[3, 1, 2], [2, 1, 3], [2, 3, 1]], "M1 옮기기(to = 옮긴 뒤 자리) · 범위를 넘으면 끝");
   eq(moveInOrder([1, 2], 5, 0), [1, 2], "M2 없는 자리에서 옮기면 그대로");
+  //  #5581 방금 더한 태스크 — 더한 순서대로 맨 앞, 나머지는 원래 순서
+  const PF = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+  eq([pinFirst(PF, []).map((t) => t.id), pinFirst(PF, [4, 2]).map((t) => t.id), pinFirst(PF, [9, 3]).map((t) => t.id), pinFirst([{ id: "7" }, { id: "8" }], [8]).map((t) => t.id)],
+    [[1, 2, 3, 4], [4, 2, 1, 3], [3, 1, 2, 4], ["8", "7"]], "F1 비었으면 그대로 · 더한 순서대로 맨 앞 · 목록에 없는 id 는 건너뜀 · 문자열 id 도");
 
   eq([hashQuery("할 일 #알림", 7), hashQuery("#", 1), hashQuery("a#b", 3), hashQuery("#알림 끝", 6)], [{ start: 4, q: "알림" }, { start: 0, q: "" }, null, null],
     "H1·H2 커서 앞의 `#` 토큰만(줄 처음·빈칸 뒤) — 낱말 가운데 # 이나 이미 빈칸을 친 뒤는 아니다");
@@ -209,8 +213,17 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(/else if \(o\) act = textAct\('세션으로 →'/.test(tk) && /else act = textAct\('이 세션에 넣기 \+'/.test(tk), true, "K6 세션이 있으면(멈춤 포함) [세션으로], 없을 때만 [이 세션에 넣기]");
   eq([/pn-tk-st/.test(ct.slice(ct.indexOf("function paint()"), ct.indexOf("function dropIndex"))), /TASK_DRAG_TYPE/.test(tk)], [false, true],
     "K7 글칸 배지엔 상태 아이콘이 없다(원준 2026-09-27) · 곁칸 줄을 끌어 글칸 배지 줄에 놓을 수 있다");
-  eq([/root\.append\(head, top, list, addBox\);/.test(tk), /replaceKids\(top, \.\.\.tops\);/.test(tk), /tops\.push\(sec\);/.test(tk), /tops\.push\(groupHead\('외부 태스크'/.test(tk)], [true, true, true, true],
+  eq([/root\.append\(head, top, list\);/.test(tk), /replaceKids\(topDyn, \.\.\.tops\);/.test(tk), /tops\.push\(sec\);/.test(tk), /tops\.push\(groupHead\('외부 태스크'/.test(tk)], [true, true, true, true],
     "K9 위(머리·본문·이 세션의 태스크·목록 머리)는 서 있고 스크롤은 아래 목록 안에서만(원준 2026-09-27)");
+  //  #5581 새 태스크 — 맨 아래 입력칸이 아니라 목록 머리 바로 밑의 흐린 줄 · 제목과 본문을 따로 · 다시 그려도 칸은 그대로
+  eq([/pn-tk-add/.test(tk), /top\.append\(topDyn\);/.test(tk) && /top\.append\(addRow\);/.test(tk),
+      /JSON\.stringify\(description \? \{ name, description \} : \{ name \}\)/.test(tk),
+      /typingIn\(list\) \|\| typingIn\(topDyn\)\)/.test(tk) && !/typingIn\(top\)/.test(tk),
+      /const imeEnter = \(e: KeyboardEvent\): boolean => e\.isComposing \|\| e\.keyCode === 229;/.test(tk),
+      /pinFirst\(ext\.open, justAdded\)/.test(tk)],
+    [false, true, true, true, true, true],
+    "K12 새 태스크: 맨 아래 칸 없음 · 목록 머리(.pj-top) 바로 밑 · 제목+본문을 한 번에 보낸다 · 그 칸에서 치는 동안에도 목록은 그린다 · 한글 조합 중 Enter 는 보내지 않는다 · 방금 더한 것은 맨 위");
+  eq([/textAct\('입력칸에 넣기'/.test(tk), /'## 태스크 본문'/.test(tk)], [true, true], "K13 목록엔 제목만 · AI 입력칸에 넣을 땐 본문까지 함께(taskPromptText)");
   const css = read("public/styles/49-v2-projpane.css");
   eq([/\.pj-rdopen \{ max-height: [^;]+; overflow: auto;/.test(css), /iconBtn\('ext'/.test(tk), /'띄워 읽기'/.test(tk), /\.pj-body \{[^}]*background: var\(--bg-tint\)/.test(css)], [true, false, true, false],
     "K10 편 본문은 제 안에서 스크롤(접기 단추가 머리에 남는다) · 본문 머리에 프로젝트 창 단추 없음 · 창 띄우기는 글자 단추 · 본문 바탕은 파랑 틴트가 아니다");
