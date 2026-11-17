@@ -13,12 +13,12 @@
 //   H3 〃 · 질의 대기 → [기본 선택으로 답하기]·[거부] · [거부] → deny 키 요청
 //   H4 〃 · 대화창에서 보내기 → 상태 줄에 «그 컴퓨터» 없음 · 보낸 뒤 큐를 다시 묻는다
 //   H5 〃 · 기록 아직 없음 → 빈 안내에 «그 컴퓨터»·«중앙 기록» 없음 · 박스 기록을 다시 묻고 중앙 기록은 폴링하지 않는다
-//   H6 〃 · 머리줄 → 노드 칩 없음
+//   H6 〃 · 머리줄 → 노드 칩 없음 · 설정 창 «돌아가는 컴퓨터 — 중앙 컴퓨터»(#5577)
 //   H7 옛 축 세션 호스트(sesshost-46e3) · 멈춤 → H2 와 같다
 //   H9 〃 · 못 읽는 하네스(409 문장) · 목록 갱신 세 번 → 기록을 다시 열지 않는다(같은 답)
 //   P1~P6 멤버 PC(laibeulliui-macmini) · 같은 장면 → 종전 그대로(큐 안 물음 · «멈출 턴이 없어요.» · 단추 없음 · «그 컴퓨터로 전달했어요…» ·
-//          중앙 기록 폴링 · 칩에 노드 이름)
-//   N1 좌표 없음(중앙) · 열기 · 멈춤 → 큐를 묻고 interrupt 키 요청(회귀 가드)
+//          중앙 기록 폴링) · 단 #5577 부터 머리줄 노드 칩은 없다 — 설정 창 «돌아가는 컴퓨터» 에만 그 이름
+//   N1 좌표 없음(중앙) · 열기 · 멈춤 → 큐를 묻고 interrupt 키 요청(회귀 가드) · 설정 창 «돌아가는 컴퓨터 — 중앙 컴퓨터»(#5577)
 //
 //  가짜는 «서버»(기록 · 중앙 기록 · 큐 · 키 · 보내기 응답)뿐이다. 세션 화면은 실제 모듈(web/session-chat.ts)을 싣는다.
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다.
@@ -110,6 +110,7 @@ async function PAGE_MAIN() {
         ...JSON.parse(JSON.stringify(H(t.id))),
         note: (q(".livc-note") || {}).textContent || "",
         chip: (q(".sc-run-node") || {}).textContent || "",
+        head: (q(".sc-head") || {}).textContent || "",
         aria: (q("textarea") || { getAttribute: () => "" }).getAttribute("aria-label") || "",
         waitBtns: [...box.querySelectorAll(".sc-wait button")].map((b) => b.textContent.trim()),
         qstates: [...box.querySelectorAll(".dt-qstate")].map((x) => x.innerText.trim()).filter(Boolean),
@@ -262,8 +263,8 @@ check(h.sent && eq(h.sent.prompt, ["새로 보내는 말"]) && h.sent.qstates.le
 check(h.sentEarly && eq(h.sentEarly.prompt, ["새로 보내는 말"]) && h.sentEarly.qstates.every(noRemoteWords),
   "H4 세션 호스트 · 보낸 직후 큐 응답 전에도 상태 줄에 «그 컴퓨터로 전달했어요» 가 뜨지 않는다", h.sentEarly);
 check(h.opened && h.opened.chip === "", "H6 세션 호스트 · 머리줄에 노드 칩(인스턴스 id)이 없다", h.opened);
-check(h.opened && Array.isArray(h.opened.settings) && h.opened.settings.some((r) => r.includes("무엇으로 도나")) && !h.opened.settings.some((r) => r.includes("돌아가는 컴퓨터")),
-  "H6 세션 호스트 · 설정 창에 «돌아가는 컴퓨터» 줄이 없다(창은 떴다)", h.opened && h.opened.settings);
+check(h.opened && Array.isArray(h.opened.settings) && h.opened.settings.some((r) => r.includes("돌아가는 컴퓨터") && r.includes("중앙 컴퓨터") && !r.includes("sesshost")),
+  "H6 세션 호스트 · 설정 창 «돌아가는 컴퓨터» 줄이 «중앙 컴퓨터» 라고 말한다(인스턴스 id 아님 · #5577)", h.opened && h.opened.settings);
 check(h.opened && h.opened.aria === "이 세션에 보내기", "H4 세션 호스트 · 입력칸 이름에 «그 컴퓨터로 전달» 이 없다", h.opened && h.opened.aria);
 const hf = R.hostFirst || {};
 check(hf.said && hf.qstates.every(noRemoteWords) && noRemoteWords(hf.empty),
@@ -289,7 +290,7 @@ check(p.opened && p.opened.outbox === 0 && !p.opened.failed, "P1 멤버 PC · �
 check(p.stopped && p.stopped.keys.length === 0 && p.stopped.note === "멈출 턴이 없어요.", "P2 멤버 PC · 멈춤 → 키 요청 없음 · «멈출 턴이 없어요.»(종전)", p.stopped);
 check(p.sent && p.sentEarly.qstates.some((s) => s.includes("그 컴퓨터로 전달했어요")) && p.sent.qstates.some((s) => s.includes("그 컴퓨터로 전달했어요")) && p.later.outbox === 0,
   "P4 멤버 PC · 보내기 → «그 컴퓨터로 전달했어요…» · 큐는 안 묻는다(종전)", { sentEarly: p.sentEarly, sent: p.sent, later: p.later });
-check(p.opened && p.opened.chip === "laibeulliui-macmini", "P6 멤버 PC · 머리줄 칩에 그 컴퓨터 이름(종전)", p.opened);
+check(p.opened && p.opened.chip === "" && !p.opened.head.includes("laibeulliui-macmini"), "P6 멤버 PC · 머리줄에 노드 칩이 없다(#5577 — 설정 창에서 본다)", p.opened);
 check(p.opened && Array.isArray(p.opened.settings) && p.opened.settings.some((r) => r.includes("돌아가는 컴퓨터") && r.includes("laibeulliui-macmini")),
   "P6 멤버 PC · 설정 창에 «돌아가는 컴퓨터 — 그 이름»(종전)", p.opened && p.opened.settings);
 check(p.opened && p.opened.aria === "이 세션에 보내기(그 컴퓨터로 전달)", "P4 멤버 PC · 입력칸 이름 «(그 컴퓨터로 전달)»(종전)", p.opened && p.opened.aria);
@@ -304,6 +305,8 @@ check(pw.first && !pw.first.waitBtns.includes("거부") && !pw.first.waitBtns.in
 
 check(c.opened && c.opened.outbox >= 1 && c.opened.failed && c.opened.chip === "" && c.stopped && eq(c.stopped.keys, ["interrupt"]),
   "N1 좌표 없음(중앙) · 큐를 묻고 · 멈춤은 interrupt 키 요청(회귀 가드)", { opened: c.opened, stopped: c.stopped });
+check(c.opened && Array.isArray(c.opened.settings) && c.opened.settings.some((r) => r.includes("돌아가는 컴퓨터") && r.includes("중앙 컴퓨터")),
+  "N1 좌표 없음(중앙) · 설정 창 «돌아가는 컴퓨터» 줄이 «중앙 컴퓨터» 라고 말한다(#5577 — 종전엔 줄이 없었다)", c.opened && c.opened.settings);
 
 check(!(R.pageErrors || []).length, "페이지 오류 없음", R.pageErrors);
 console.log(`\n${pass} passed, ${fail} failed — 대화창 노드 좌표(#4904)`);

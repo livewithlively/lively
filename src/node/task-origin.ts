@@ -19,6 +19,28 @@ export interface TaskOrigin {
   originSession: string | null;
   /** 크론이 띄운 위탁이면 그 잡 id. */
   cronJobId: string | null;
+  /** #5579 — 무엇을 맡겼나(지시의 첫 줄 · 짧게). 지시를 못 읽었으면 없다. ⚠ 목록에 실을 땐 세션 주인에게만(applyTaskMarks). */
+  ask?: string | null;
+  /** #5579 — 크론이 띄웠으면 그 잡의 이름(org_cron.label). */
+  cronLabel?: string | null;
+}
+
+/** #5579 — 이 길이를 넘는 지시 첫 줄은 «…» 로 자른다. 목록 한 줄 · 설정 창 한 줄에 들어가는 길이다. */
+export const ASK_HEAD_MAX = 80;
+
+/**
+ * 순수 — 지시 원문 → «무엇을 맡겼나» 한 줄(#5579). 첫 번째 빈 줄 아닌 줄을 쓰고, 마크다운 머리 기호(# > - * 숫자.)를 떼고,
+ *  공백을 하나로 접고, ASK_HEAD_MAX 를 넘으면 자른다. 쓸 글이 없으면 null.
+ *  ⚠ 요약하지 않는다(모델 호출 없음) — 목록을 그릴 때마다 도는 자리다. 위탁 지시는 AI 가 쓴 문장이라 첫 줄이 곧 할 일이다.
+ */
+export function askHeadOf(prompt: unknown): string | null {
+  if (typeof prompt !== "string") return null;
+  for (const raw of prompt.split(/\r?\n/)) {
+    const line = raw.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*•]\s+|\d+[.)]\s+)/, "").replace(/\s+/g, " ").trim();
+    if (!line) continue;
+    return line.length > ASK_HEAD_MAX ? line.slice(0, ASK_HEAD_MAX - 1).trimEnd() + "…" : line;
+  }
+  return null;
 }
 
 /** 순수 — `requester_session` 값이 «시킨 세션 id» 인가. 크론 표식 · 빈 값 · 세션 id 꼴이 아닌 것은 null. */
@@ -29,9 +51,12 @@ export function originSessionOf(requesterSession: string | null | undefined): st
   return EXECUTION_SESSION_ID_RE.test(v) ? v : null;
 }
 
-/** 순수 — 위탁 행 → 출처. */
-export function taskOriginOf(row: { id: number | string; requester_session?: string | null }): TaskOrigin {
-  return { taskId: Number(row.id), originSession: originSessionOf(row.requester_session), cronJobId: cronJobIdOf(row.requester_session) };
+/** 순수 — 위탁 행 → 출처. 지시 머리(`prompt_head`)가 실려 오면 «무엇을 맡겼나» 도 함께 든다(#5579). */
+export function taskOriginOf(row: { id: number | string; requester_session?: string | null; prompt_head?: string | null }): TaskOrigin {
+  const o: TaskOrigin = { taskId: Number(row.id), originSession: originSessionOf(row.requester_session), cronJobId: cronJobIdOf(row.requester_session) };
+  const ask = askHeadOf(row.prompt_head);
+  if (ask) o.ask = ask;
+  return o;
 }
 
 //  위탁 워커의 작업 폴더 — 스케줄러가 `…/delegated/task-<번호>[/<레포>]` 로 잡는다(src/node/tasks.ts). 사람이 고를 수 없는 자리다.
@@ -58,7 +83,7 @@ export interface WorkerRowLike { id: string; dir?: string | null; owner?: string
  */
 export function originsForRows(
   rows: readonly WorkerRowLike[],
-  tasks: ReadonlyArray<{ id: number | string; session_id?: string | null; requester?: string | null; requester_session?: string | null }>,
+  tasks: ReadonlyArray<{ id: number | string; session_id?: string | null; requester?: string | null; requester_session?: string | null; prompt_head?: string | null }>,
 ): Map<string, TaskOrigin> {
   const out = new Map<string, TaskOrigin>();
   const bySession = new Map<string, (typeof tasks)[number]>();
@@ -83,13 +108,24 @@ export async function taskOriginsForRows(rows: readonly WorkerRowLike[]): Promis
   const ids = [...new Set(rows.map((r) => r.id).filter(Boolean))];
   if (!ids.length) return new Map();
   const taskIds = [...new Set(rows.map((r) => taskIdFromDir(r.dir)).filter((n): n is number => n != null))];
+  //  #5579 — 지시는 첫 몇백 자만 읽는다(위탁 지시는 2만 자까지 간다 — 목록마다 통째로 끌어오지 않는다).
   const r = await itemsPool.query(
-    `SELECT id, session_id, requester, requester_session FROM org_task WHERE session_id = ANY($1::text[]) OR id = ANY($2::bigint[])`, [ids, taskIds]);
-  return originsForRows(rows, r.rows as Array<{ id: number; session_id: string | null; requester: string | null; requester_session: string | null }>);
+    `SELECT id, session_id, requester, requester_session, left(prompt, 400) AS prompt_head FROM org_task WHERE session_id = ANY($1::text[]) OR id = ANY($2::bigint[])`, [ids, taskIds]);
+  const out = originsForRows(rows, r.rows as Array<{ id: number; session_id: string | null; requester: string | null; requester_session: string | null; prompt_head: string | null }>);
+  //  #5579 — 크론이 띄운 워커는 «왜 열렸나» 를 잡 이름으로 말한다(잡 id 는 사람이 읽는 이름이 아니다). 조회 실패는 이름 없이 간다.
+  const jobs = [...new Set([...out.values()].map((o) => o.cronJobId).filter((x): x is string => !!x))];
+  if (jobs.length) {
+    try {
+      const c = await itemsPool.query(`SELECT id, label FROM org_cron WHERE id = ANY($1::text[])`, [jobs]);
+      const label = new Map((c.rows as Array<{ id: string; label: string | null }>).map((x) => [x.id, String(x.label || "").trim()]));
+      for (const o of out.values()) { const l = o.cronJobId ? label.get(o.cronJobId) : ""; if (l) o.cronLabel = l; }
+    } catch { /* 이름 없이 — 잡 id 로 말한다 */ }
+  }
+  return out;
 }
 
 /** 목록의 한 행이 이 붙이기에 내놓는 것. */
-export interface OriginRowLike { id: string; projectId?: number | null; label?: string | null; kind?: string; task?: TaskMark }
+export interface OriginRowLike { id: string; projectId?: number | null; label?: string | null; owner?: string | null; kind?: string; task?: TaskMark }
 
 /** 목록 행에 얹는 위탁 표식 — 화면이 이것으로 워커를 시킨 프로젝트 아래에 세우고 리브가 한 일로 그린다. */
 export interface TaskMark {
@@ -100,6 +136,11 @@ export interface TaskMark {
   originProject: number | null;
   /** 크론이 띄웠으면 그 잡 id. */
   cron: string | null;
+  /** #5579 — 무엇을 맡겼나(지시 첫 줄). **그 워커 세션의 주인이 볼 때만** 싣는다 — 위탁이 프로젝트 폴더에서 돌면 그 프로젝트 사람들도
+   *  워커 줄을 보는데, 지시 글은 시킨 사람의 것이다. 없으면 칸이 없다(옛 화면 · 남의 워커). */
+  ask?: string;
+  /** #5579 — 크론이 띄웠으면 그 잡의 이름(org_cron.label). 없으면 칸이 없다. */
+  cronLabel?: string;
 }
 
 /**
@@ -112,6 +153,8 @@ export interface TaskMark {
 export function applyTaskMarks<T extends OriginRowLike>(
   rows: T[], origins: ReadonlyMap<string, TaskOrigin>,
   fallback: ReadonlyMap<string, { projectId?: number | null; label?: string | null }> = new Map(),
+  /** #5579 — 보는 사람. 워커 주인과 같을 때만 지시 첫 줄(ask)을 싣는다. 모르면 싣지 않는다. */
+  viewer = "",
 ): T[] {
   if (!origins.size) return rows;
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -125,6 +168,9 @@ export function applyTaskMarks<T extends OriginRowLike>(
       originLabel: src && src.label ? String(src.label) : null,
       originProject: src && Number(src.projectId) > 0 ? Number(src.projectId) : null,
     };
+    const me = String(viewer || "").trim();
+    if (o.ask && me && String(r.owner || "") === me) r.task.ask = o.ask;
+    if (o.cronLabel) r.task.cronLabel = o.cronLabel;
   }
   return rows;
 }

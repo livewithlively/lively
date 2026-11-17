@@ -74,7 +74,7 @@ import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
 import { DRAFT_HINT, DRAFT_LABEL, DRAFTS_SHOWN_KEY, draftsShown, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 — 「초안」 줄 · 「초안 보기」 토글이 보드와 같은 잣대로 센다
 import { screenLangOn, setScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — «EN» 알약은 #5319 에서 걷었다(켜 둔 채 남은 것만 끈다)
-import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
+import { LIV_BUCKET_NAME, isLooseLivWork, isMachineOpened, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -253,7 +253,8 @@ function buildRows(data: V2Data): Row[] {
   const byProj = new Map<number, Sess[]>();
   const noProj: Sess[] = [];
   // 휴지통에 있는 세션(#1851)은 트리의 재료가 아니다 — 휴지통 화면에만 있다.
-  for (const s of data.sessions) { if (isTrashedSess(s)) continue; if (s.projectId) { const arr = byProj.get(s.projectId) || []; arr.push(s); byProj.set(s.projectId, arr); } else noProj.push(s); }
+  //  #5579 — AI · 예약 작업이 연 세션은 트리의 재료가 아니다(main.ts sideInstances ① 머리말).
+  for (const s of data.sessions) { if (isTrashedSess(s) || isMachineOpened(s)) continue; if (s.projectId) { const arr = byProj.get(s.projectId) || []; arr.push(s); byProj.set(s.projectId, arr); } else noProj.push(s); }
   const lastOf = (arr: Sess[]) => arr.reduce((m, s) => Math.max(m, s.lastSeen || 0), 0);
   const rows: Row[] = data.projects.map((p) => {
     const all = byProj.get(p.id) || [];
@@ -1001,7 +1002,9 @@ function projGrpCard(g: ProjGrp, o: RowOpts, searching = false, standingSess?: R
   //  ★ 한 프로젝트에 「지난 세션」 접힘은 **한 번**(#4551) — 어느 카드가 드는지는 잎 모듈이 정한다(planNowCards 의 fold).
   const extra = !g.fold ? { rows: [], total: 0 }
     //  프로젝트에 안 붙은 세션은 둘로 갈린다 — 위탁 워커는 「리브가 한 일」 카드가, 나머지는 「기타 (미분류)」 카드가 든다.
-    : projectPastRows(last?.data.sessions as Array<Sess & PastRowLike> | undefined, g.id, standing, MAX_SESS, g.id ? undefined : (s) => isLooseLivWork(s) === g.liv);
+    //  #5579 — 끝난 AI · 예약 작업 세션은 「지난 세션」 접힘에도 안 든다(홈 사이드바는 그 세션을 스스로 세우지 않는다 — main.ts ① 머리말).
+    //   사람이 한 번 연 워커는 ① 줄(«목록에 둠»)로 이 카드에 그대로 선다(리브가 한 일 카드 · 시킨 프로젝트 카드).
+    : projectPastRows(last?.data.sessions?.filter((s) => !isMachineOpened(s)) as Array<Sess & PastRowLike> | undefined, g.id, standing, MAX_SESS, g.id ? undefined : (s) => isLooseLivWork(s) === g.liv);
   const extraRows = extra.rows.map((s) => sessAsInst(s as unknown as Sess, true, ''));
   const folded = [...fold.folded, ...extraRows];
   //  ★ **앞면이 하나도 없으면 접힘을 펴 둔다**(#3778 5판) — foldCardRows 의 "본문이 없으면 덮을 것이 없다" 와
@@ -1718,7 +1721,8 @@ function renderSessions(): void {
 
   const now = Date.now();
   const projOf = new Map(data.projects.map((p) => [p.id, p]));
-  const items = data.sessions.filter((s) => !isTrashedSess(s)).map((s) => {
+  //  #5579 — 사이드바 카드의 수는 가운데 목록의 **기본 보기**와 같은 것을 센다 — AI · 예약 작업이 연 세션은 빠진다(「AI가 연 세션」 칩으로 본다).
+  const items = data.sessions.filter((s) => !isTrashedSess(s) && !isMachineOpened(s)).map((s) => {
     const p = s.projectId != null ? projOf.get(s.projectId) : undefined;
     return { projectId: s.projectId, trashedAt: s.trashedAt || null, lastSeen: s.lastSeen, stateKey: s.stateKey,
       owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''), listId: p ? (p.list_id ?? null) : null };

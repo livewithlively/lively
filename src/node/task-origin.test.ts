@@ -31,7 +31,7 @@
 //   G7 한 세션에 위탁이 둘이면 번호가 큰(나중) 것 / G8 폴더 번호의 위탁이 조회 결과에 없으면 안 찍는다
 //   X1 missingOrigins — 목록에 없는 시킨 세션만, 겹치지 않게. 크론 · 목록에 있는 것은 안 나온다
 import assert from "node:assert/strict";
-import { applyTaskMarks, missingOrigins, originSessionOf, originsForRows, taskIdFromDir, taskOriginOf, visibleOriginStates, type OriginRowLike, type TaskOrigin } from "./task-origin.js";
+import { ASK_HEAD_MAX, applyTaskMarks, askHeadOf, missingOrigins, originSessionOf, originsForRows, taskIdFromDir, taskOriginOf, visibleOriginStates, type OriginRowLike, type TaskOrigin } from "./task-origin.js";
 
 const SID = "box-wonjoon-jang-8923ed5b";
 
@@ -180,6 +180,32 @@ for (const d of ["/work/shared/project/3516", "/x/delegated/task-abc", "/x/deleg
   assert.equal(o.size, 7, "G9 찍힌 것은 일곱뿐이다");
   assert.equal(originsForRows([], tasks).size, 0, "G10 행이 없으면 빈 결과");
   assert.equal(originsForRows(rows, []).size, 0, "G11 위탁이 없으면 빈 결과");
+}
+
+// ── A. #5579 «무엇을 맡겼나» — 지시 첫 줄 · 주인에게만 · 크론 이름 ──
+{
+  assert.equal(askHeadOf("회의 녹음 1건을 한국어로 전사해서 라이블리 공유 폴더에 올려 줘. 다른 일은 하지 마.\n\n세부: ..."),
+    "회의 녹음 1건을 한국어로 전사해서 라이블리 공유 폴더에 올려 줘. 다른 일은 하지 마.", "A1 첫 줄이 곧 할 일이다");
+  assert.equal(askHeadOf("\n\n  ## 할 일\n- 둘째"), "할 일", "A2 빈 줄을 건너뛰고 마크다운 머리 기호를 뗀다");
+  assert.equal(askHeadOf("1. 첫 단계"), "첫 단계", "A2 번호 목록 기호도 뗀다");
+  assert.equal(askHeadOf("가   나\t다"), "가 나 다", "A3 공백을 하나로 접는다");
+  const long = "가".repeat(ASK_HEAD_MAX + 20);
+  const cut = askHeadOf(long) as string;
+  assert.ok(cut.length === ASK_HEAD_MAX && cut.endsWith("…"), "A4 길면 ASK_HEAD_MAX 글자로 자르고 …을 붙인다");
+  for (const v of [null, undefined, "", "   \n  ", 42]) assert.equal(askHeadOf(v), null, `A5 쓸 글이 없으면 null(${JSON.stringify(v)})`);
+  assert.deepEqual(taskOriginOf({ id: 7, requester_session: SID, prompt_head: "로그를 정리해 줘" }), { taskId: 7, originSession: SID, cronJobId: null, ask: "로그를 정리해 줘" }, "A6 지시 머리가 실려 오면 출처에 ask 가 든다");
+  const mine: OriginRowLike[] = [{ id: "w", projectId: null, label: "위탁 #7", owner: "wonjoon-jang" }];
+  applyTaskMarks(mine, new Map([["w", { taskId: 7, originSession: null, cronJobId: null, ask: "로그를 정리해 줘" }]]), new Map(), "wonjoon-jang");
+  assert.equal(mine[0].task?.ask, "로그를 정리해 줘", "A7 ★ 워커 주인이 보면 ask 가 실린다");
+  const theirs: OriginRowLike[] = [{ id: "w", projectId: 5, label: "위탁 #7", owner: "wonjoon-jang" }];
+  applyTaskMarks(theirs, new Map([["w", { taskId: 7, originSession: null, cronJobId: null, ask: "로그를 정리해 줘" }]]), new Map(), "sangmin-yoon");
+  assert.equal(theirs[0].task && "ask" in theirs[0].task, false, "A8 ★★ 남이 보면(프로젝트 폴더 워커) 지시 글이 안 실린다");
+  const nobody: OriginRowLike[] = [{ id: "w", projectId: null, label: "위탁 #7", owner: "" }];
+  applyTaskMarks(nobody, new Map([["w", { taskId: 7, originSession: null, cronJobId: null, ask: "x" }]]));
+  assert.equal(nobody[0].task && "ask" in nobody[0].task, false, "A9 보는 사람을 모르면(빈 주인과 빈 사람) 싣지 않는다");
+  const cron: OriginRowLike[] = [{ id: "w", projectId: null, label: "위탁 #8" }];
+  applyTaskMarks(cron, new Map([["w", { taskId: 8, originSession: null, cronJobId: "distill-sources-headless", cronLabel: "자료 증류" }]]));
+  assert.deepEqual(cron[0].task, { id: 8, originSession: null, originLabel: null, originProject: null, cron: "distill-sources-headless", cronLabel: "자료 증류" }, "A10 크론 잡 이름이 실린다");
 }
 
 console.log("task-origin: ok");
