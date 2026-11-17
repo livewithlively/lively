@@ -33,7 +33,7 @@ LIVELY_HARNESS = "codex"
 - 부팅 시 게이트웨이에 못 닿아도 stdio 는 로컬 프로세스라 세션 내내 failed 로 굳지 않는다(#1079).
 - 토큰이 설정 파일에 안 들어간다 — 프록시가 매 호출 `~/.lively/token` 을 읽는다(rc 의 `LIVELY_TOKEN` 이 스테일이어도 옛 신원으로 조용히 안 붙는다 — #916 의 codex 판).
 - **`env.LIVELY_HARNESS` 는 필수다.** 프록시를 거치면 UA 가 우리 것이 되므로 이 stamp 가 하네스 신호의 전부다(빠지면 게이트웨이가 코덱스 세션을 claude 로 집계 — #182).
-- 프록시 파일이 없거나(구버전 번들) 롤백 스위치(`~/.lively/mcp-transport` = `http`)면 종전 http 직결(`url` + `bearer_token_env_var` + 정적 `x-lively-harness` 헤더)로 떨어진다. 그 경우 세션·모드 기능은 빠진다.
+- Codex 는 http 직결로 떨어지지 않는다. 계정 게이트가 stdio 프록시를 감싸야 하므로, 프록시 파일이 없으면(구버전 번들) lively MCP 를 등록하지 않고, 롤백 스위치(`~/.lively/mcp-transport` = `http`)도 Codex 에서는 무시된다.
 - stdio 경로일 때는 로컬 조작 MCP `[mcp_servers.lively-local]`(`args = ["mcp-local"]` — 레포·워크트리 툴)도 함께 싣는다(#1884, claude 의 `lively-local` 과 패리티).
 
 **추가 MCP 서버**(관리탭 org_mcp_server → 번들 `.lively/mcp-servers.json`): stdio 는 `command`(문자열) + `args`(배열)다.
