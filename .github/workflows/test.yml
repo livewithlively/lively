@@ -141,7 +141,7 @@ jobs:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/auth/session-revoke.pg-test.mjs
       # NAS 파일 도구(#1678) — 목으로는 못 보는 것: 본인 칸이 없을 때 관리자 칸의 공용 계정으로 **폴백하지 않나** · 서버 주소를
-      #  관리자 칸에서만 읽나(구성원이 정한 주소로 붙지 않나) · 내려받기가 실제 쿠키 세션으로만 열리고 유효한 Bearer 는 401 인가 ·
+      #  관리자 칸에서만 읽나(구성원이 정한 주소로 붙지 않나) · 내려받기가 context 권한 있는 쿠키 세션·Bearer 로만 열리고 context 없는 토큰·쿠키와 nas 동의 없는 앱 토큰은 403 인가 ·
       #  매니지드에서 꺼지나 · 이전 색인이 있을 때 다시 만들기 실패의 원문이 nas_find 응답에 실리지 않나. 금고 칸·세션·토큰이 실물이어야 갈린다.
       - name: NAS 파일 도구 접속·내려받기 PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}

@@ -8,6 +8,7 @@ import { toolCandidates, type ToolCandidate } from "../../mcp/mcp-surface.js";
 import { listTools, type OrgTool } from "../store.js";
 
 export const LIVELY_LOCAL_TOOL_NAMES = [
+  "lively_local_nas_pull",
   "lively_local_project_init",
   "lively_local_repo_list",
   "lively_local_repo_pin",

@@ -10,7 +10,11 @@
 //  사양 행:
 //   R1 로그인은 구성원 본인 칸만 — 관리자(게이트웨이) 칸에 nas_ftp(공용 계정)가 있어도 폴백하지 않는다(404). 본인 칸을 넣으면 그 아이디
 //   R2 서버 주소는 관리자 칸만 — 구성원 칸의 nas_ftp_server 만 있으면 503(미설정), 둘 다 있으면 관리자 칸의 host·port
-//   R3 내려받기(실제 서버 listen(0)) — 쿠키 없음 401 · 그 구성원의 유효한 Bearer 만 401 · 유효한 쿠키여도 p 에 `..` 마디면 400
+//   R3 내려받기(실제 서버 listen(0)) — 쿠키·Bearer 없음 401 · 유효한 쿠키여도 p 에 `..` 마디면 400
+//      AI 세션(Bearer, lively_local_nas_pull)도 본문을 받는다(nas-download-route.ts 머리주석). 대신 nas_find·nas_list 와 같은
+//      context 권한이 있어야 한다 — context 없는 Bearer 는 403, context 있는 Bearer 는 인증·경로 검사를 지나 NAS 접속에서 502
+//      쿠키도 같다 — context 없는 구성원의 쿠키는 403. 앱 세션 토큰(appId)은 그 앱 동의 도구에 nas_list 가 있어야 한다 — 동의 없으면 403
+//      인코그니토 세션(x-lively-mode=incognito)은 403 — 능력 REST 와 같은 모드 게이트
 //   R4 매니지드 게이트웨이에서는 로그인한 쿠키 · 정상 경로여도 내려받기가 자체 호스팅 안내(501)
 //   R5 nas_find — 이전 색인이 있는데 다시 만들기가 실패하면(DNS 실패 — 원문에 호스트 이름) 이전 결과로 답하고,
 //      last_error 는 분류 문구이며 응답 어디에도 원문 조각이 없다
@@ -24,6 +28,7 @@ const { initAllSchemas } = await import(`${DIST}/boot/schemas.js`);
 const store = await import(`${DIST}/org/credentials/member-secret-store.js`);
 const nas = await import(`${DIST}/net/nas/nas-access.js`);
 const { registerNasDownloadRoute } = await import(`${DIST}/net/nas/nas-download-route.js`);
+const { BearerVerifier } = await import(`${DIST}/auth/bearer.js`);
 const { nasFileCapabilities } = await import(`${DIST}/capabilities/nas-files.js`);
 const { createSession } = await import(`${DIST}/auth/sessions.js`);
 const tok = await import(`${DIST}/org/store/tokens.js`);
@@ -37,6 +42,8 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const settle = (fn) => Promise.resolve().then(fn).then((v) => ({ v }), (e) => ({ e }));
 
 const MID = "__nas1678_member__";
+const MID_NOCTX = "__nas1678_noctx__";
+const APP = "__nas1678_app__";
 const G = store.GATEWAY_OWNER;
 const M = store.memberOwner(MID);
 const ACTOR = MID;
@@ -45,10 +52,12 @@ const RAW_FRAGMENTS = ["ENOTFOUND", "EAI_AGAIN", "getaddrinfo", "nas-pg1678"];
 
 async function cleanup() {
   for (const owner of [G, M]) for (const kind of [nas.NAS_SERVER_KIND, nas.NAS_LOGIN_KIND]) await store.deleteMemberSecret(owner, kind, "");
-  await itemsPool.query(`DELETE FROM web_session WHERE member_id=$1`, [MID]);
-  await itemsPool.query(`DELETE FROM auth_token WHERE member_id=$1 OR user_id=$1`, [MID]);
+  for (const id of [MID, MID_NOCTX]) {
+    await itemsPool.query(`DELETE FROM web_session WHERE member_id=$1`, [id]);
+    await itemsPool.query(`DELETE FROM auth_token WHERE member_id=$1 OR user_id=$1`, [id]);
+    await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [id]);
+  }
   await itemsPool.query(`DELETE FROM org_content_audit WHERE actor=$1`, [ACTOR]).catch(() => {});
-  await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [MID]);
 }
 
 let server = null;
@@ -91,12 +100,21 @@ try {
     `INSERT INTO org_member(id, kind, display_name, email, state, scopes)
        VALUES($1,'human','NAS 시험','nas1678@example.invalid','active',$2::jsonb)
      ON CONFLICT (tenant_id, id) DO UPDATE SET kind='human', state='active', scopes=$2::jsonb`,
-    [MID, JSON.stringify(["memory"])],
+    [MID, JSON.stringify(["memory", "context"])],
+  );
+  await itemsPool.query(
+    `INSERT INTO org_member(id, kind, display_name, email, state, scopes)
+       VALUES($1,'human','NAS 시험 2','nas1678b@example.invalid','active',$2::jsonb)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET kind='human', state='active', scopes=$2::jsonb`,
+    [MID_NOCTX, JSON.stringify(["memory"])],
   );
   const { sessionId } = await createSession(MID);
+  const { sessionId: sessionNoCtx } = await createSession(MID_NOCTX);
   const minted = await tok.mintToken({ userId: MID, scopes: ["memory"], label: "nas1678", memberId: MID }, ACTOR, "pgtest");
+  const mintedCtx = await tok.mintToken({ userId: MID, scopes: ["memory", "context"], label: "nas1678-ctx", memberId: MID }, ACTOR, "pgtest");
+  const mintedApp = await tok.mintToken({ userId: MID, scopes: ["memory", "context"], label: "nas1678-app", memberId: MID, appId: APP }, ACTOR, "pgtest");
   const app = express();
-  registerNasDownloadRoute(app);
+  registerNasDownloadRoute(app, new BearerVerifier());
   server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}${nas.NAS_DOWNLOAD_PATH}`;
   const p = (raw) => Buffer.from(raw, "latin1").toString("base64url");
@@ -107,13 +125,25 @@ try {
   const cookie = { cookie: `lively_sess=${sessionId}` };
   {
     const r = await get("/docs/a.txt");
-    chk("R3a 쿠키 없음 401", r.status === 401, `status=${r.status}`);
+    chk("R3a 쿠키·Bearer 없음 401", r.status === 401, `status=${r.status}`);
   }
   {
     const valid = await tok.verifyDbToken(minted.token);
     chk("R3b0 (배선) 그 Bearer 토큰은 유효한 토큰이다", valid !== null, "verifyDbToken=null");
     const r = await get("/docs/a.txt", { authorization: `Bearer ${minted.token}` });
-    chk("R3b ★ 유효한 Bearer 만 있으면 401 — AI 세션의 토큰으로 본문을 받지 못한다", r.status === 401, `status=${r.status}`);
+    chk("R3b ★ context 권한 없는 Bearer 는 403 — 목록을 못 보는 토큰이 본문을 받지 못한다", r.status === 403, `status=${r.status} body=${JSON.stringify(r.body)}`);
+    const r2 = await get("/docs/a.txt", { authorization: `Bearer ${mintedCtx.token}` });
+    chk("R3b2 context 권한 있는 그 구성원의 Bearer 는 인증·경로 검사를 지난다(그 뒤 NAS 접속 실패 502)", r2.status === 502,
+      `status=${r2.status} body=${JSON.stringify(r2.body)}`);
+    const r3 = await get("/docs/a.txt", { authorization: `Bearer ${mintedApp.token}` });
+    chk("R3b3 ★ 앱 세션 토큰은 context 가 있어도 그 앱 동의 도구에 nas_list 가 없으면 403", r3.status === 403,
+      `status=${r3.status} body=${JSON.stringify(r3.body)}`);
+    const r4 = await get("/docs/a.txt", { authorization: `Bearer ${mintedCtx.token}`, "x-lively-mode": "incognito" });
+    chk("R3b4 인코그니토 세션은 context 권한이 있어도 403", r4.status === 403, `status=${r4.status} body=${JSON.stringify(r4.body)}`);
+  }
+  {
+    const r = await get("/docs/a.txt", { cookie: `lively_sess=${sessionNoCtx}` });
+    chk("R3b5 ★ 쿠키도 context 권한이 없는 구성원이면 403", r.status === 403, `status=${r.status} body=${JSON.stringify(r.body)}`);
   }
   {
     const r = await get("/a/../b", cookie);
