@@ -2548,7 +2548,7 @@ async function doctorGitSsh(chk) {
         : kind === "hostkey-changed" ? "저장된 호스트키와 서버 키가 다릅니다 — 서버 키 교체이거나 중간자일 수 있습니다"
         : "ssh 키가 거부됐습니다 — 공개키가 그 계정에 없거나, 키에 암호가 걸려 ssh-agent 에 안 올라가 있습니다",
       kind === "hostkey" ? `${t.cmd}  (지문을 대조하고 yes)`
-        : kind === "hostkey-changed" ? `${t.host} 관리자에게 키 교체 여부를 확인한 뒤에만 ssh-keygen -R ${t.host} 후 ${t.cmd}`
+        : kind === "hostkey-changed" ? `${t.host} 관리자에게 키 교체 여부를 확인한 뒤에만 ${t.forgetCmd} 후 ${t.cmd}`
         : sshDeniedFix(core.gitAuthPlace(t.host), t),
       { advisory: true });
   }

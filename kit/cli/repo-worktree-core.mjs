@@ -297,9 +297,20 @@ export function sshTargetOf(url) {
   return m ? safeTarget({ user: m[1] || "git", host: m[2], port: m[3] || null }) : null;
 }
 //  user · host 는 ssh argv 로 넘어가고 복붙 명령으로도 찍힌다 — 이름 글자만 받는다('-' 로 시작하면 ssh 옵션이 된다).
+//  안내 문구(authNote)에 넣는 호스트도 이 규칙 하나로 거른다.
 const SSH_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
-const safeTarget = (t) => (SSH_NAME_RE.test(t.user) && SSH_NAME_RE.test(t.host) ? t : null);
+const isSshName = (s) => typeof s === "string" && SSH_NAME_RE.test(s);
+const safeTarget = (t) => (isSshName(t.user) && isSshName(t.host) ? t : null);
 const sshProbeCmd = (t) => `ssh -T ${t.port ? `-p ${t.port} ` : ""}${t.user}@${t.host}`;
+//  바뀐 호스트키를 지우는 명령 — OpenSSH 는 22 가 아닌 포트를 known_hosts 에 `[host]:port` 로 적는다. 이름만 주면 그 줄이 안 지워져
+//  안내대로 해도 계속 막힌다. 대괄호는 셸 글롭 문자라 따옴표로 감싼다.
+const sshForgetCmd = (t) => (t.port && Number(t.port) !== 22 ? `ssh-keygen -R "[${t.host}]:${Number(t.port)}"` : `ssh-keygen -R ${t.host}`);
+//  안내에 쓰는 호스트 — ssh 주소면 sshTargetOf 가 거른 값, 아니면 주소의 호스트를 같은 이름 규칙으로 거른 값. 못 통과하면 "".
+//  원문으로 되돌아가면 `ssh -T git@-oProxyCommand=x` 같은 복붙 명령이 나간다(PR #1734 리뷰 실측).
+function noteHostOf(url) {
+  const raw = gitHostOf(url);
+  return sshTargetOf(url)?.host || (isSshName(raw) ? raw : "");
+}
 
 // 이 컴퓨터가 라이블리 박스인가 — 게이트웨이가 그 호스트 자격을 이 홈에 내려 줬으면(materialize 산출물) 박스다.
 //  내려 준 게 없으면 OS 로 가른다: 격리 박스는 Linux 전용이라(git-credential-materialize.ts) macOS·Windows 는 내 PC 다.
@@ -312,17 +323,19 @@ export function gitAuthPlace(host, { platform = process.platform, home = homedir
   return platform === "linux" ? "unknown" : "pc";
 }
 
-export function authNote(stderr, url, place = gitAuthPlace(sshTargetOf(url)?.host || gitHostOf(url))) {   // export=테스트용·순수(place 를 주면)
+export function authNote(stderr, url, place = gitAuthPlace(noteHostOf(url))) {   // export=테스트용·순수(place 를 주면)
   const ssh = sshTargetOf(url);
-  const host = ssh?.host || gitHostOf(url);
+  const host = noteHostOf(url);
   const h = host || "그 호스트";
+  //  명령 예시의 대상 — ssh 주소면 그 주소(포트 포함), 아니면 거른 호스트에 기본값(git 사용자·22 번). 호스트를 모르면 명령을 안 준다.
+  const target = ssh || (host ? { user: "git", host, port: null } : null);
   if (HOSTKEY_CHANGED_RE.test(stderr || "")) {
     return ` — ${h} 의 ssh 호스트키가 이 컴퓨터에 저장된 키와 다릅니다. 서버 키 교체이거나 중간자일 수 있습니다.`
-      + ` ${h} 관리자에게 키 교체 여부를 확인한 뒤에만 \`ssh-keygen -R ${h}\` 로 옛 키를 지우고 다시 붙으세요.`;
+      + ` ${h} 관리자에게 키 교체 여부를 확인한 뒤에만 ${target ? `\`${sshForgetCmd(target)}\` 로` : "~/.ssh/known_hosts 에서"} 옛 키를 지우고 다시 붙으세요.`;
   }
   if (HOSTKEY_FAIL_RE.test(stderr || "")) {
     return ` — 이 컴퓨터가 ${h} 의 ssh 호스트키를 아직 모릅니다(~/.ssh/known_hosts 에 없음). git 은 여기서 지문 확인을 물을 수 없어 멈췄습니다.`
-      + ` 터미널에서 \`${ssh ? sshProbeCmd(ssh) : `ssh -T git@${h}`}\` 를 한 번 실행해 지문을 ${h} 관리자가 알려 준 값과 대조하고 yes 로 받아 두면 됩니다.`;
+      + ` 터미널에서 ${target ? `\`${sshProbeCmd(target)}\` 를 한 번 실행해` : "그 호스트에 ssh 로 한 번 접속해"} 지문을 ${h} 관리자가 알려 준 값과 대조하고 yes 로 받아 두면 됩니다.`;
   }
   if (!AUTH_FAIL_RE.test(stderr || "")) return "";
   const box = ` \`me_git_credential_set {kind:"ssh"${host ? `, host:"${host}"` : ""}}\` 로 등록하면(웹은 [내 설정 ▸ 레포 접근 ▸ git 인증 관리])`
@@ -350,13 +363,15 @@ export function classifySshProbe(code, output) {
 }
 
 // lively doctor 가 시험할 ssh 대상 — 등록 레포의 clone 주소에서 ssh 인 것만, 같은 user@host:port 는 한 번. (export=테스트용·순수)
+//  호스트 이름은 대소문자를 가리지 않으므로 소문자로 맞춰 센다(사용자 이름은 가리므로 그대로). cmd = 확인 명령 · forgetCmd = 바뀐 호스트키 지우기.
 export function sshProbeTargets(repos) {
   const seen = new Map();
   for (const r of Array.isArray(repos) ? repos : []) {
-    const t = sshTargetOf(r && r.clone_url);
-    if (!t) continue;
+    const s = sshTargetOf(r && r.clone_url);
+    if (!s) continue;
+    const t = { ...s, host: s.host.toLowerCase() };
     const key = `${t.user}@${t.host}:${t.port || ""}`;
-    if (!seen.has(key)) seen.set(key, { ...t, cmd: sshProbeCmd(t) });
+    if (!seen.has(key)) seen.set(key, { ...t, cmd: sshProbeCmd(t), forgetCmd: sshForgetCmd(t) });
   }
   return [...seen.values()];
 }

@@ -231,6 +231,30 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
     check("⑨ 사용자 없는 scp 주소도 호스트를 안내에 쓴다", authNote(DENIED, "h.kr:o/r.git", "pc").includes("h.kr 계정"), "호스트 누락");
     check("⑨ ssh 포트가 있으면 확인 명령에 -p",
       authNote("Host key verification failed.", "ssh://git@h.kr:2222/o/r.git", "pc").includes("ssh -T -p 2222 git@h.kr"), "포트 누락");
+    // ⑪ 바뀐 호스트키를 지우는 이름 — OpenSSH 는 22 가 아닌 포트를 known_hosts 에 `[host]:port` 로 적는다. `ssh-keygen -R h.kr` 로는
+    //  그 줄이 안 지워져 안내대로 해도 계속 막힌다. 대괄호는 셸 글롭 문자라 따옴표로 감싼다.
+    const CHANGED = "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.";
+    const p2222 = authNote(CHANGED, "ssh://git@h.kr:2222/o/r.git", "pc");
+    check("⑪ 22 가 아닌 포트의 바뀐 호스트키는 [host]:port 로 지운다",
+      p2222.includes('ssh-keygen -R "[h.kr]:2222"') && !p2222.includes("ssh-keygen -R h.kr"), p2222);
+    const p22 = authNote(CHANGED, "ssh://git@h.kr:22/o/r.git", "pc");
+    check("⑪ 22 번은 known_hosts 에 이름만 적힌다 — 대괄호를 붙이지 않는다",
+      p22.includes("ssh-keygen -R h.kr") && !p22.includes("[h.kr]"), p22);
+    // ⑫ 안내에 넣는 호스트는 sshTargetOf 와 같은 이름 규칙을 통과한 값만 — '-' 로 시작하면 ssh 가 옵션으로 읽는다.
+    //  sshTargetOf 가 걸러도 원문 호스트로 되돌아가 `ssh -T git@-oProxyCommand=x` 를 복붙 명령으로 안내했다(PR #1734 리뷰 실측).
+    const EVIL = "ssh://git@-oProxyCommand=x/o/r";
+    const evil = [
+      ["호스트키 미등록", authNote("Host key verification failed.", EVIL, "pc")],
+      ["바뀐 호스트키", authNote(CHANGED, EVIL, "pc")],
+      ["키 거부 · 박스", authNote(DENIED, EVIL, "box")],
+      ["키 거부 · 자리 모름", authNote(DENIED, EVIL, "unknown")],
+      ["https 주소", authNote("fatal: Authentication failed for 'https://$(id)/o/r.git'", "https://$(id)/o/r.git", "box")],
+    ];
+    for (const [n, note] of evil) {
+      check(`⑫ 이름 규칙 밖 호스트는 안내에 안 싣고 «그 호스트» 로 말한다(${n})`,
+        !!note && !/ProxyCommand|\$\(id\)/.test(note) && note.includes("그 호스트"), note);
+      check(`⑫ 이름 규칙 밖 호스트면 명령 예시를 주지 않는다(${n})`, !/`ssh -T|ssh-keygen -R|host:"/.test(note), note);
+    }
   }
   {
     // sshTargetOf — [주소, 기대]
@@ -272,6 +296,10 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
     const targets = sshProbeTargets([{ clone_url: "git@h.kr:a/x.git" }, { clone_url: "git@h.kr:b/y.git" }, { clone_url: "https://h.kr/c.git" }, { clone_url: null }, { clone_url: "ssh://git@h.kr:2222/d.git" }]);
     check("⑩ sshProbeTargets: ssh 주소만 · user@host:port 당 한 번 · 확인 명령 동봉",
       JSON.stringify(targets.map((t) => t.cmd)) === JSON.stringify(["ssh -T git@h.kr", "ssh -T -p 2222 git@h.kr"]), JSON.stringify(targets));
+    //  호스트 이름은 대소문자를 가리지 않는다 — 대소문자만 다른 주소를 따로 세면 같은 서버를 두 번 시험하고 두 줄로 보인다.
+    const cased = sshProbeTargets([{ clone_url: "git@GitHub.com:a/x.git" }, { clone_url: "git@github.com:b/y.git" }]);
+    check("⑩ sshProbeTargets: 호스트 대소문자만 다르면 한 번 · 소문자로",
+      cased.length === 1 && cased[0].host === "github.com" && cased[0].cmd === "ssh -T git@github.com", JSON.stringify(cased));
   }
   {
     // ⑧ 배선 — 안내를 만드는 능력이 있어도 **실패 지점에서 안 불리면 없는 것과 같다**. 실제 클론 경로로 태운다.
