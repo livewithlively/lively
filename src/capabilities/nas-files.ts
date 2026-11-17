@@ -1,5 +1,6 @@
-// NAS 파일명 검색 — 구성원 본인 FTP 계정으로 «어디에 무슨 파일이 있나»만 찾는다.
-//  본문은 이 도구들이 절대 읽지 않는다. 결과의 download_url 은 사람이 로그인한 브라우저에서만 열린다(nas-download-route.ts).
+// NAS 파일명 검색 — 구성원 본인 FTP 계정으로 «어디에 무슨 파일이 있나»를 찾는다.
+//  이 도구들은 본문을 돌려주지 않는다. 본문은 결과의 p 를 로컬 도구 lively_local_nas_pull 에 넘겨 그 기계의 ~/NAS사본
+//  아래로(그 밖은 거부) 받은 뒤 AI 가 연다(nas-download-route.ts — 쿠키·Bearer 둘 다). download_url 은 사람이 브라우저로 받는 링크다.
 //  경계·자격 설계는 net/nas/nas-access.ts · net/nas/nas-index.ts 머리주석.
 import { z } from "zod";
 import type { Capability } from "./types.js";
@@ -13,7 +14,7 @@ import { connectNas, nasErrorReply, openNasSession, resolveNasAccess, nasIndexCa
 /** 첫 색인을 기다리는 최대 시간. 넘으면 «만드는 중»으로 답하고 색인은 뒤에서 계속 만든다(MCP 호출을 오래 붙잡지 않게). */
 export const FIRST_INDEX_WAIT_MS = 20_000;
 
-const BODY_NOTE = "파일 본문은 이 도구로 읽지 않습니다. download_url 은 사람이 라이블리에 로그인한 브라우저에서 열어 내려받습니다.";
+const BODY_NOTE = "파일 내용이 필요하면 항목(p·path·type·size)을 lively_local_nas_pull 의 targets 로 넘겨 ~/NAS사본 아래로 받은 뒤 연다. 프로젝트 공유 폴더에는 받지 않는다(다른 구성원도 본다). download_url 은 사람이 브라우저로 받는 링크다.";
 
 // 소켓 오류 원문(사설 IP·포트)은 AI 세션으로 보내지 않는다 — 문구는 nasErrorReply 의 분류뿐이고, 원문은 로그에만 남긴다.
 const toHttp = (e: unknown): HttpError => {
@@ -61,7 +62,7 @@ const nasFind: Capability = {
   title: "NAS 파일명 검색",
   description:
     "NAS(FTP)에서 파일·폴더를 이름으로 찾는다. 내 FTP 계정(me_credential_set kind=nas_ftp)으로 열 수 있는 폴더만 본다. " +
-    "결과는 경로·크기·시각과 내려받기 링크뿐이고 파일 본문은 읽지 않는다 — 링크는 사람에게 건네 브라우저에서 열게 한다. " +
+    "결과는 경로·크기·시각·p·내려받기 링크다. 내용을 보려면 p 를 lively_local_nas_pull 에 넘겨 로컬 폴더로 받은 뒤 연다(폴더 통째로도 된다). " +
     "첫 호출은 색인을 만드느라 «indexing» 으로 끝날 수 있으니 잠시 뒤 다시 부른다. 폴더 안을 바로 보려면 nas_list.",
   scope: "context",
   input: findInput,
@@ -131,7 +132,7 @@ const nasList: Capability = {
   title: "NAS 폴더 목록",
   description:
     "NAS(FTP) 폴더 하나의 바로 아래 항목을 지금 서버에서 읽어 온다(색인 아님). 내 FTP 계정으로 열 수 있는 폴더만 된다. " +
-    "결과는 이름·크기·시각과 내려받기 링크뿐이고 파일 본문은 읽지 않는다. 하위 폴더는 결과의 p 로 다시 부른다.",
+    "결과는 이름·크기·시각·p·내려받기 링크다. 하위 폴더는 결과의 p 로 다시 부른다. 내용을 보려면 p 를 lively_local_nas_pull 에 넘긴다.",
   scope: "context",
   input: listInput,
   expose: {

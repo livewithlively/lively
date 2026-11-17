@@ -1,13 +1,16 @@
-// NAS 파일 내려받기 — 사람이 로그인한 브라우저 세션(쿠키)으로만 연다. Bearer 토큰은 받지 않는다.
+// NAS 파일 내려받기 — 사람의 브라우저(세션 쿠키)와 그 사람의 AI 세션(Bearer, lively_local_nas_pull) 둘 다 받는다.
 //
-//  왜 쿠키만인가: nas_find·nas_list 는 AI 에게 이름과 링크만 준다. 이 경로가 Bearer 토큰을 받으면 AI 세션이 자기 토큰으로
-//   링크를 그대로 받아 본문(계약서 스캔 같은 개인정보)을 읽을 수 있게 되고, «본문은 사람만 연다»는 경계가 사라진다.
-//   AI 세션은 사람의 브라우저 쿠키를 갖고 있지 않다.
-//  ⚠ 남는 길: 사람과 브라우저를 같이 쓰는 데스크톱 앱의 AI 브라우저 도구는 그 사람의 쿠키로 이 주소를 열 수 있다.
-//   그래서 늘 attachment 로 내려보내 화면에 그리지 않게 한다(브라우저 도구가 읽는 것은 화면이다). 이걸 지우면 그 길이 열린다.
+//  AI 가 본문까지 읽는 것은 의도다 — 구성원이 자기 FTP 계정으로 열 수 있는 파일은 그 구성원의 AI 세션도 연다.
+//   볼 수 있는 범위는 그 구성원 본인 FTP 계정의 폴더 권한이 정한다(nas-access.ts — 공용·남의 계정 폴백 없음).
+//  ⚠ 받은 본문은 AI 세션과 그 모델 제공자에게 넘어간다. 본문 반출을 막아야 하는 조직이면 이 경로의 Bearer 허용이 검토 대상이다.
 import type express from "express";
 import { createHash } from "node:crypto";
-import { parseSessionCookie, userFromSession } from "../../auth/sessions.js";
+import { sessionOrBearer } from "../../auth/http-auth.js";
+import type { BearerVerifier } from "../../auth/bearer.js";
+import type { LivelyUser } from "../../context.js";
+import { HttpError } from "../../http-error.js";
+import { requireAppTool } from "../../apps/principal.js";
+import { incognitoFromHeaders, readOnlyFromHeaders } from "../../org/auth/agent-identity.js";
 import { logger } from "../../log.js";
 import { decodeRawPath, isSafeRawPath, displayPath } from "../ftp/ftp-list.js";
 import { NasConfigError, openNasSession, NAS_DOWNLOAD_PATH } from "./nas-access.js";
@@ -24,15 +27,44 @@ export function contentDisposition(display: string): string {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${ext}`;
 }
 
-export function registerNasDownloadRoute(app: express.Express): void {
-  app.get(NAS_DOWNLOAD_PATH, (req, res) => {
+/**
+ * 이 경로는 능력 어댑터(web.ts restMounts) 밖의 맨 라우트라 거기 게이트를 물려받지 못한다. 같은 판정을 여기서 다시 건다.
+ *  · context 권한 — nas_find·nas_list 와 같다. 목록을 못 보는 토큰이 본문을 다루지 않게(쿠키도 같다).
+ *  · 앱 세션 토큰 — 그 앱 동의 도구에 tool 이 있어야 한다(requireAppTool). 빼면 nas 동의가 없는 앱이 구성원 FTP 계정으로 파일을 다룬다.
+ *  · 세션 모드(#1007) — 인코그니토는 전부, 읽기전용은 쓰기(mutates)를 막는다.
+ * 실패면 응답을 보내고 null.
+ */
+async function nasCaller(req: express.Request, res: express.Response, gate: { tool: string; mutates: boolean }): Promise<{ user: LivelyUser; via: "agent" | "browser" } | null> {
+  const user = (req.auth?.extra ?? null) as LivelyUser | null;
+  if (!user?.userId) { res.status(401).json({ error: "라이블리 인증이 필요합니다" }); return null; }
+  if (!Array.isArray(user.scopes) || !user.scopes.includes("context")) {
+    res.status(403).json({ error: "이 토큰으로는 NAS 파일을 다룰 수 없습니다(context 권한 필요)" });
+    return null;
+  }
+  if (incognitoFromHeaders(req.headers)) {
+    res.status(403).json({ error: "인코그니토 세션 — 라이블리 접근이 비활성화되어 있습니다(#1007)" });
+    return null;
+  }
+  if (gate.mutates && readOnlyFromHeaders(req.headers)) {
+    res.status(403).json({ error: "읽기전용 세션 — NAS 에 쓸 수 없습니다(#1007)" });
+    return null;
+  }
+  try {
+    await requireAppTool(user, gate.tool);
+  } catch (e) {
+    if (!(e instanceof HttpError)) throw e;
+    res.status(e.status).json({ error: e.message });
+    return null;
+  }
+  return { user, via: req.auth?.token ? "agent" : "browser" };
+}
+
+export function registerNasDownloadRoute(app: express.Express, verifier: BearerVerifier): void {
+  app.get(NAS_DOWNLOAD_PATH, sessionOrBearer(verifier), (req, res) => {
     void (async () => {
-      const sid = parseSessionCookie(req.headers.cookie);
-      const user = sid ? await userFromSession(sid).catch(() => null) : null;
-      if (!user?.userId) {
-        res.status(401).json({ error: "라이블리에 로그인한 브라우저에서만 내려받을 수 있습니다" });
-        return;
-      }
+      const who = await nasCaller(req, res, { tool: "nas_list", mutates: false });
+      if (!who) return;
+      const { user, via } = who;
       const raw = decodeRawPath(String(req.query.p ?? ""));
       if (!raw || !isSafeRawPath(raw)) { res.status(400).json({ error: "파일 경로가 올바르지 않습니다" }); return; }
       const shown = displayPath(raw);
@@ -64,7 +96,7 @@ export function registerNasDownloadRoute(app: express.Express): void {
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
         // 접근 기록이다 — NAS 가 파일을 연(RETR 150) 시점에 늘 남긴다. 사람이 중간에 취소했는지는 끝에 따로 남긴다.
-        logger.info({ member: user.userId, ftpUser: username, pathHash: hashPath(raw) }, "[nas] 파일 내려받기");
+        logger.info({ member: user.userId, ftpUser: username, via, pathHash: hashPath(raw) }, "[nas] 파일 내려받기");
         stream.pipe(res);
         await done;
         if (clientGone) logger.info({ member: user.userId, pathHash: hashPath(raw) }, "[nas] 내려받기 취소");
