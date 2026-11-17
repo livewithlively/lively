@@ -1,10 +1,10 @@
-// NAS 파일 내려받기 — 사람의 브라우저(세션 쿠키)와 그 사람의 AI 세션(Bearer, lively_local_nas_pull) 둘 다 받는다.
+// NAS 파일 내려받기·올리기 — 사람의 브라우저(세션 쿠키)와 그 사람의 AI 세션(Bearer, lively_local_nas_pull·push) 둘 다 받는다.
 //
 //  AI 가 본문까지 읽는 것은 의도다 — 구성원이 자기 FTP 계정으로 열 수 있는 파일은 그 구성원의 AI 세션도 연다.
 //   볼 수 있는 범위는 그 구성원 본인 FTP 계정의 폴더 권한이 정한다(nas-access.ts — 공용·남의 계정 폴백 없음).
 //  ⚠ 받은 본문은 AI 세션과 그 모델 제공자에게 넘어간다. 본문 반출을 막아야 하는 조직이면 이 경로의 Bearer 허용이 검토 대상이다.
 import type express from "express";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { sessionOrBearer } from "../../auth/http-auth.js";
 import type { BearerVerifier } from "../../auth/bearer.js";
 import type { LivelyUser } from "../../context.js";
@@ -12,8 +12,9 @@ import { HttpError } from "../../http-error.js";
 import { requireAppTool } from "../../apps/principal.js";
 import { incognitoFromHeaders, readOnlyFromHeaders } from "../../org/auth/agent-identity.js";
 import { logger } from "../../log.js";
-import { decodeRawPath, isSafeRawPath, displayPath } from "../ftp/ftp-list.js";
-import { NasConfigError, openNasSession, NAS_DOWNLOAD_PATH } from "./nas-access.js";
+import { decodeRawPath, isSafeRawPath, displayPath, childRawPath, encodeRawPath } from "../ftp/ftp-list.js";
+import { NasConfigError, openNasSession, NAS_DOWNLOAD_PATH, NAS_UPLOAD_PATH, nasIndexCache, nasIndexKey } from "./nas-access.js";
+import { uploadAtomically } from "./nas-upload.js";
 import { FtpError } from "../ftp/ftp-client.js";
 
 // 파일명에 고객 이름이 흔해 경로 원문은 로그에 남기지 않는다. 같은 파일인지는 해시로 대조한다.
@@ -113,6 +114,67 @@ export function registerNasDownloadRoute(app: express.Express, verifier: BearerV
     })().catch((e) => {
       logger.warn({ err: e }, "[nas] 내려받기 처리 실패");
       if (!res.headersSent) res.status(500).json({ error: "내려받기 처리 실패" });
+    });
+  });
+
+  // 올리기 — 먼저 같은 폴더의 임시 이름으로 받고 다 받은 뒤 제 이름으로 옮긴다. 전송이 끊겨도 반쪽 파일이 제 이름으로 남지 않게.
+  //  덮기(overwrite=1)가 아니면 같은 이름이 있을 때 409 와 그 크기를 돌려준다(받는 쪽이 «이미 올림»을 가를 수 있게).
+  app.put(NAS_UPLOAD_PATH, sessionOrBearer(verifier), (req, res) => {
+    void (async () => {
+      const who = await nasCaller(req, res, { tool: "nas_manage", mutates: true });
+      if (!who) { req.resume(); return; }
+      const { user, via } = who;
+      const dir = decodeRawPath(String(req.query.dir ?? ""));
+      const target = dir ? childRawPath(dir, String(req.query.name ?? "")) : null;
+      const temp = dir ? childRawPath(dir, `.${randomBytes(6).toString("hex")}.lively-upload`) : null;
+      if (!target || !temp) { req.resume(); res.status(400).json({ error: "올릴 폴더(dir)나 이름(name)이 올바르지 않습니다" }); return; }
+      const overwrite = req.query.overwrite === "1" || req.query.overwrite === "true";
+      const declared = req.headers["content-length"] === undefined ? null : Number(req.headers["content-length"]);
+
+      let opened: Awaited<ReturnType<typeof openNasSession>>;
+      try {
+        opened = await openNasSession(user.userId);
+      } catch (e) {
+        req.resume();
+        const status = e instanceof NasConfigError ? e.status : 502;
+        if (!(e instanceof NasConfigError)) logger.warn({ err: e, member: user.userId }, "[nas] 올리기 접속 실패");
+        res.status(status).json({ error: e instanceof NasConfigError ? e.message : "NAS 에 접속하지 못했습니다" });
+        return;
+      }
+      const { session, username, server } = opened;
+      // 임시 파일 정리는 늘 새 세션으로 한다 — 전송이 끊긴 세션은 이미 버려졌고(poison), 실패 종류를 여기서 가르지 않는다
+      const cleanupTemp = async (): Promise<void> => {
+        try {
+          const { session: s2 } = await openNasSession(user.userId);
+          try { await s2.dele(temp); } finally { await s2.close(); }
+        } catch (e) {
+          if (!(e instanceof FtpError && e.code === 550)) logger.warn({ err: e instanceof Error ? e.name : "unknown", member: user.userId }, "[nas] 올리기 임시 파일 정리 실패");
+        }
+      };
+      try {
+        const r = await uploadAtomically(session, { temp, target, overwrite, body: req, declared: Number.isFinite(declared) ? declared : null }, cleanupTemp);
+        if (r.kind === "exists") {
+          req.resume();
+          res.status(409).json({ error: "같은 이름의 파일이 있습니다", exists: true, size: r.size, path: displayPath(target), p: encodeRawPath(target) });
+          return;
+        }
+        nasIndexCache.markStale(nasIndexKey(user.userId, username, server));
+        logger.info({ member: user.userId, ftpUser: username, via, pathHash: hashPath(target), bytes: r.bytes, overwritten: r.overwritten }, "[nas] 파일 올리기");
+        res.json({ path: displayPath(target), p: encodeRawPath(target), size: r.bytes, overwritten: r.overwritten });
+      } catch (e) {
+        req.resume();
+        const brief = { name: e instanceof Error ? e.name : "unknown", code: e instanceof FtpError ? e.code : null, fatal: e instanceof FtpError ? e.fatal : null };
+        logger.warn({ ...brief, member: user.userId, via, pathHash: hashPath(target) }, "[nas] 올리기 실패");
+        if (!res.headersSent) {
+          const denied = e instanceof FtpError && (e.code === 550 || e.code === 553);
+          res.status(denied ? 403 : 502).json({ error: denied ? "그 폴더에 올릴 수 없습니다(없거나 내 계정에 쓰기 권한이 없습니다)" : "올리지 못했습니다" });
+        }
+      } finally {
+        await session.close();
+      }
+    })().catch((e) => {
+      logger.warn({ err: e }, "[nas] 올리기 처리 실패");
+      if (!res.headersSent) res.status(500).json({ error: "올리기 처리 실패" });
     });
   });
 }

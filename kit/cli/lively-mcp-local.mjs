@@ -317,7 +317,7 @@ registerTool({
   description: "NAS(본인 FTP 계정 권한)에서 파일이나 폴더를 통째로 이 기계의 폴더로 내려받는다. 받은 뒤 그 파일을 직접 열어 내용을 본다. "
     + "대상은 nas_find·nas_list 결과 항목(p·type·path·size)을 targets 로 그대로 넘긴다(여러 개 가능). 폴더는 그 폴더 이름부터 하위 구조를 유지한다. "
     + "dest 는 홈 아래만 되고 상대 경로는 ~/NAS사본 기준이다(예: dest «프로젝트A» → ~/NAS사본/프로젝트A). 같은 크기로 이미 받은 파일은 건너뛴다. "
-    + "한 번에 약 50초만 받고 멈추므로 응답의 done 이 false 면 같은 호출을 다시 한다.",
+    + "한 번에 약 50초만 받고 멈춘다 — remaining 이 남았거나 폴더 목록을 만드는 중이면(note) 같은 호출을 다시 하고, truncated 가 상한이면 같은 호출을 반복하지 말고 하위 폴더로 나눠 부른다.",
   inputSchema: {
     type: "object",
     properties: {
@@ -345,6 +345,39 @@ registerTool({
       throw new Error("NAS 받기 모듈(nas-pull-core.mjs)이 이 설치에 없습니다 — `lively update` 로 키트를 갱신한 뒤 새 세션에서 다시 하세요");
     }
     return ctx.json(await nasPull(ctx, args, { home: HOME, fetchImpl: fetch }));
+  },
+});
+
+// NAS 로 올리기 — 이 기계의 파일·폴더를 NAS 폴더로. 본체는 nas-push-core.mjs(dynamic import 인 이유는 nas_pull 과 같다).
+registerTool({
+  name: "lively_local_nas_push",
+  title: "이 기계의 파일·폴더를 NAS 로 올리기",
+  description: "로컬 파일이나 폴더를 NAS(본인 FTP 계정 권한)의 폴더로 올린다. 폴더는 그 이름부터 하위 구조를 유지하고 필요한 NAS 폴더를 만든다. "
+    + "dest_p 는 nas_find·nas_list 결과의 폴더 p(또는 dest_path 에 사람이 읽는 경로). 같은 이름 파일이 NAS 에 있으면 덮지 않는다 — "
+    + "크기가 같으면 이미 올린 것으로 세고, 다르면 conflicts 로 알린다(덮으려면 사람 확인 뒤 overwrite:true). 로컬 링크는 따라가지 않는다. "
+    + "src 는 홈 아래만 되고 숨김 파일·폴더(. 으로 시작)와 ~/Library·~/AppData 는 올리지 않는다(폴더 안의 숨김 항목도 건너뛴다). "
+    + "올릴 대상(src·dest)은 사람이 확인한다. "
+    + "한 번에 약 50초만 올리고 멈춘다 — remaining·pending_dirs 가 남았으면 같은 호출을 다시 하고, truncated 면 같은 호출을 반복하지 말고 하위 폴더로 나눠 부른다. "
+    + "폴더 만들기·지우기·이름 바꾸기는 nas_manage.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      src: { type: "string", description: "올릴 로컬 파일·폴더(절대 경로 또는 작업 폴더 기준 상대 경로)" },
+      dest_p: { type: "string", description: "올릴 NAS 폴더의 p(nas_find·nas_list 결과)" },
+      dest_path: { type: "string", description: "dest_p 대신 NAS 폴더 경로(사람이 읽는 꼴, 예: /공유/2026 계약)" },
+      overwrite: { type: "boolean", description: "true 면 같은 이름 파일을 덮는다(기본 false — 사람 확인 뒤에만)" },
+    },
+    required: ["src"],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx) => {
+    let nasPush;
+    try { ({ nasPush } = await import("./nas-push-core.mjs")); }
+    catch (e) {
+      if (e?.code !== "ERR_MODULE_NOT_FOUND") throw e;
+      throw new Error("NAS 올리기 모듈(nas-push-core.mjs)이 이 설치에 없습니다 — `lively update` 로 키트를 갱신한 뒤 새 세션에서 다시 하세요");
+    }
+    return ctx.json(await nasPush(ctx, args, { fetchImpl: fetch, home: HOME }));
   },
 });
 

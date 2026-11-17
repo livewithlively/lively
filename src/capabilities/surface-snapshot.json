@@ -4495,6 +4495,16 @@
   "input_hash": "b485e26075cf4591"
  },
  {
+  "name": "nas_manage",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/nas/manage"
+  ],
+  "input_hash": "2f832b33bbcd88fb"
+ },
+ {
   "name": "me_oauth_connect",
   "scope": null,
   "mcp": true,
