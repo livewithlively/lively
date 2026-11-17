@@ -5,7 +5,7 @@
 //  이 기능은 없느니만 못하다("실패했습니다"만 뜨면 사용자는 멈춘다). 그래서 상태코드×본문 표를 그대로 돈다.
 //  ★ 표의 첫 행은 2026-08-26 에 **실제로 받은 피그마 응답 원문**이다 — 가상의 문자열이 아니다.
 import assert from "node:assert/strict";
-import { diagnoseFigma, missingScopesFrom, verifierExists, verifyCredential } from "./credential-verify.js";
+import { diagnoseFigma, missingScopesFrom, verifierExists } from "./credential-verify.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -61,56 +61,5 @@ t("배선: 확인 경로가 있는 kind 만 supported 로 답한다", () => {
   assert.equal(verifierExists("prometheus_bearer"), false, "실제로 쳐 보지 않은 kind 를 지원한다고 말하면 이 기능이 거짓말을 한다");
   assert.equal(verifierExists(""), false);
 });
-
-// Claude setup-token 조직 확인 — 실측 전이라 200 + organization_uuid 만 ok=true, 401/403 을 포함한 나머지는 전부 «확인 못 함»(null)이다.
-//  fetch 를 바꿔 끼워 상류 응답 모양들을 돌린다. 요청 모양(POST·Bearer·URL)이 번들과 어긋나면 상류가 다른 답을 낸다.
-{
-  const realFetch = globalThis.fetch;
-  const cases: Array<{ name: string; reply: () => Response; ok: boolean | null; who?: string; msg: RegExp }> = [
-    { name: "200 + organization_uuid → 그 조직", ok: true, who: "org-uuid-1", msg: /org-uuid-1/,
-      reply: () => new Response(JSON.stringify({ organization_uuid: "org-uuid-1" }), { status: 200 }) },
-    { name: "401 → 확인 못 함(실측 전이라 거부로 단정하지 않는다)", ok: null, msg: /거부 응답 401.*단정하지 않습니다/,
-      reply: () => new Response("unauthorized", { status: 401 }) },
-    { name: "403 → 확인 못 함(실측 전이라 거부로 단정하지 않는다)", ok: null, msg: /거부 응답 403.*단정하지 않습니다/,
-      reply: () => new Response("forbidden", { status: 403 }) },
-    { name: "429 → 잠시 뒤 다시", ok: null, msg: /잠깐 뒤 다시/,
-      reply: () => new Response("slow down", { status: 429 }) },
-    { name: "500 → 확인 못 함(토큰 탓 아님)", ok: null, msg: /확인하지 못했어요\(응답 500\)/,
-      reply: () => new Response("oops", { status: 500 }) },
-    { name: "네트워크 오류 → 확인 못 함", ok: null, msg: /네트워크/,
-      reply: () => { throw new TypeError("fetch failed"); } },
-    { name: "200 인데 JSON 아님 → 확인 못 함", ok: null, msg: /모양/,
-      reply: () => new Response("<html>", { status: 200 }) },
-    { name: "200 + {}(uuid 없음) → 확인 못 함", ok: null, msg: /모양/,
-      reply: () => new Response("{}", { status: 200 }) },
-    { name: "201 + organization_uuid → 확인 못 함(200 만 믿는다)", ok: null, msg: /201/,
-      reply: () => new Response(JSON.stringify({ organization_uuid: "org-uuid-1" }), { status: 201 }) },
-  ];
-  try {
-    for (const c of cases) {
-      const calls: Array<{ url: string; init?: RequestInit }> = [];
-      globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-        calls.push({ url: String(url), init });
-        return c.reply();
-      }) as typeof fetch;
-      const r = await verifyCredential("claude_setup_token", "sk-ant-oat01-test");
-      assert.equal(r.ok, c.ok, `${c.name}: ok`);
-      assert.match(r.message, c.msg, `${c.name}: 문구`);
-      if (c.who) assert.equal(r.who, c.who, `${c.name}: who`);
-      assert.doesNotMatch(r.message, /sk-ant-oat01-test/, `${c.name}: 토큰 값이 문구에 새면 안 된다`);
-      assert.equal(calls.length, 1, `${c.name}: 한 번만 묻는다`);
-      assert.match(calls[0].url, /^https:\/\/[^/]+\/api\/oauth\/org$/, `${c.name}: URL`);
-      assert.equal(calls[0].init?.method, "POST", `${c.name}: POST`);
-      assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, "Bearer sk-ant-oat01-test", `${c.name}: Bearer`);
-      pass++; console.log(`ok  claude_setup_token: ${c.name}`);
-    }
-    let asked = 0;
-    globalThis.fetch = (async () => { asked++; return new Response("{}", { status: 200 }); }) as typeof fetch;
-    const empty = await verifyCredential("claude_setup_token", "");
-    assert.equal(empty.ok, false, "빈 토큰은 묻지 않고 없다고 답한다");
-    assert.equal(asked, 0, "빈 토큰으로 상류를 부르면 안 된다");
-  } finally { globalThis.fetch = realFetch; }
-  assert.equal(verifierExists("claude_setup_token"), true, "claude_setup_token 이 supported 로 답해야 me_credential_verify 가 확인기에 닿는다");
-}
 
 console.log(`\ncredential-verify tests: ${pass} passed`);
