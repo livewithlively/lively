@@ -176,6 +176,68 @@ try {
     ok("대조군 — normal·미확장·빈 모드 → 종전대로 전송");
   }
 
+  // ── ⑦ #5580 — 마지막 답이 파일에 늦게 적혀도 그 답까지 올린다 ──
+  //  실측(Claude Code 2.1.326): Stop 훅이 뜬 순간 대화 파일엔 그 턴의 마지막 답이 아직 없다(훅 0건 · 1.5초 뒤 1건).
+  //  종전 훅은 그 순간의 파일을 올려 중앙 기록이 «진행 중입니다» 같은 직전 문장에서 멈췄다(실제 하네스 5턴 중 5턴).
+  const A = (text) => JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } }) + "\n";
+  const U = (text) => JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
+  const lastText = (body) => body.split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((r) => r.type === "assistant").map((r) => r.message.content.map((c) => c.text).join("")).pop();
+  {
+    reset();
+    const tp = await mkTranscript("t9.jsonl", U("영상 만들어 줘") + A("영상을 굽는 중입니다."));
+    const late = setTimeout(() => { fs.appendFileSync(tp, A("밝은 판을 만들어 열었습니다.\n\n경로: /tmp/v1.mp4")); }, 400);
+    const t0 = Date.now();
+    await runHook({ session_id: "s9", transcript_path: tp, last_assistant_message: "밝은 판을 만들어 열었습니다.\n\n경로: /tmp/v1.mp4" });
+    clearTimeout(late);
+    assert.equal(appends.length, 1, "한 번 올린다");
+    assert.equal(lastText(appends[0].body), "밝은 판을 만들어 열었습니다.\n\n경로: /tmp/v1.mp4",
+      "🔴 마지막 답이 0.4초 늦게 적혔는데 직전 진행 문장까지만 올렸다 — 중앙 기록이 최신 답을 잃는다");
+    assert.ok(Date.now() - t0 < 3000, "기다림은 답이 적히는 만큼만");
+    ok("⑦ 마지막 답이 늦게 적혀도 그 답까지 올린다");
+  }
+  {
+    reset();
+    const tp = await mkTranscript("t10.jsonl", U("q") + A("다 됐어요."));
+    const t0 = Date.now();
+    await runHook({ session_id: "s10", transcript_path: tp, last_assistant_message: "다 됐어요." });
+    assert.equal(appends.length, 1);
+    assert.equal(lastText(appends[0].body), "다 됐어요.");
+    assert.ok(Date.now() - t0 < 1500, `이미 적혀 있으면 기다리지 않는다(${Date.now() - t0}ms)`);
+    ok("⑦ 이미 적혀 있으면 바로 올린다");
+  }
+  {
+    reset();
+    //  답 하나가 text 블록 둘로 나뉘어 두 줄로 적힌다 — 마지막 답 글은 둘을 이은 것이다.
+    const tp = await mkTranscript("t11.jsonl", U("q") + A("첫 문단. ") + A("둘째 문단."));
+    const t0 = Date.now();
+    await runHook({ session_id: "s11", transcript_path: tp, last_assistant_message: "첫 문단. 둘째 문단." });
+    assert.equal(appends.length, 1);
+    assert.ok(Date.now() - t0 < 1500, `블록이 나뉘어 적혀도 마지막 블록이 끝부분이면 맞다(${Date.now() - t0}ms)`);
+    ok("⑦ 블록이 나뉘어 적힌 답도 알아본다");
+  }
+  {
+    reset();
+    //  끝내 안 적히면(하네스가 그 줄을 안 쓰는 판) 상한에서 접고 있는 만큼 올린다 — 세션을 막지 않는다.
+    const tp = await mkTranscript("t12.jsonl", U("q") + A("진행 중"));
+    const t0 = Date.now();
+    await runHook({ session_id: "s12", transcript_path: tp, last_assistant_message: "끝내 안 적히는 답" });
+    const took = Date.now() - t0;
+    assert.equal(appends.length, 1, "상한 뒤에도 있는 만큼은 올린다");
+    assert.equal(lastText(appends[0].body), "진행 중");
+    assert.ok(took >= 3500 && took < 7000, `상한(약 4초)에서 접는다 — ${took}ms`);
+    ok("⑦ 끝내 안 적히면 상한에서 접고 있는 만큼 올린다");
+  }
+  {
+    reset();
+    //  답 글을 모르면(구 하네스 · 비Claude) 기다리지 않는다 — 종전 그대로.
+    const tp = await mkTranscript("t13.jsonl", U("q") + A("진행 중"));
+    const t0 = Date.now();
+    await runHook({ session_id: "s13", transcript_path: tp });
+    assert.equal(appends.length, 1);
+    assert.ok(Date.now() - t0 < 1500, `답 글이 없으면 기다리지 않는다(${Date.now() - t0}ms)`);
+    ok("⑦ 답 글을 모르면 종전 그대로(기다리지 않음)");
+  }
+
   console.log(`\n${pass} passed`);
 } finally {
   server.close();

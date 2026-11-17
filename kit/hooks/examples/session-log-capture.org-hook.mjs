@@ -15,6 +15,10 @@
 //   ⑤ 저장 형태 slim(서명·툴결과·토큰통계 제거)은 후속 슬라이스 — 지금은 원본 바이트를 보낸다(서버가 그대로 저장).
 //   ⑥ **읽기전용·인코그니토 세션은 올리지 않는다**(#5048). 대화 전문 저장은 조직 저장소에 쓰는 일이다 — 종전엔 이 훅만
 //      모드를 안 봐서 «읽기전용인데 대화가 다 남는다» 가 됐다. 서버도 그 세션의 저장된 모드(org_session_state)로 한 번 더 거부한다.
+//   ⑦ **마지막 답이 파일에 적힐 때까지 잠깐 기다린다**(#5580). Claude Code 는 Stop 훅을 그 답을 대화 파일에 쓰기 **전에** 부른다
+//      (실측 2.1.326: 훅이 뜬 순간 그 답 0건 · 1.5초 뒤 1건). 그대로 올리면 중앙 기록엔 마지막 답 직전까지만 들어가고, 다음 턴이
+//      없으면(세션이 꺼지면) 끝내 안 올라간다 — 노드 세션 대화창은 중앙 기록을 읽어서 «꺼진 세션 안내 위의 답이 최신이 아니다».
+//      Stop 입력의 last_assistant_message 가 그 답이다 — 아직 안 올린 구간의 마지막 답 줄이 그 글과 맞을 때까지 본다(settleLastReply).
 // ───────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -26,6 +30,54 @@ import os from "node:os";
 const HOOK_TIMEOUT_MS = Number(process.env.LIVELY_HOOK_TIMEOUT_MS) > 0 ? Number(process.env.LIVELY_HOOK_TIMEOUT_MS) : 15_000;
 const BUDGET_MS = Math.floor(HOOK_TIMEOUT_MS * 0.7);   // 이 지점 넘기면 이번 턴 종료 — 남은 건 다음 턴(서버 워터마크가 이어줌).
 const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 상한과 동일) — 넘으면 이번엔 여기까지만.
+// ⑦ 마지막 답 기다림 — 상한 · 주기 · 들여다볼 꼬리 크기. 상한을 넘기면 기다림을 접고 종전대로 올린다(다음 턴이 나머지를 잇는다).
+const SETTLE_MAX_MS = 4000;
+const SETTLE_POLL_MS = 100;
+const SETTLE_TAIL = 512 * 1024;
+
+/** 대화 파일 한 줄(JSON)의 AI 글 — assistant 줄의 text 블록을 잇는다. 글이 없으면(도구 호출만 · 다른 종류) ''. */
+const replyTextOf = (row) => {
+  if (!row || row.type !== "assistant") return "";
+  const c = row.message && row.message.content;
+  if (typeof c === "string") return c;
+  return Array.isArray(c) ? c.filter((b) => b && b.type === "text" && typeof b.text === "string").map((b) => b.text).join("") : "";
+};
+
+/**
+ * ⑦ 아직 안 올린 구간 [from, 끝) 의 **마지막 AI 글 줄**이 이번 턴의 마지막 답(last_assistant_message)과 맞는가.
+ *  맞음 = 그 줄의 글이 비어 있지 않고 마지막 답의 끝부분이다(답 하나가 블록 여러 개로 나뉘어 적히면 마지막 블록이 끝부분이다).
+ *  이전 진행 문장(«굽는 중입니다» 따위)이 아직 마지막 줄이면 맞지 않는다 — 그게 고치려는 상태다.
+ */
+const lastReplyLanded = async (filePath, from, want) => {
+  let st; try { st = await fsp.stat(filePath); } catch { return false; }
+  if (!st.isFile() || st.size <= from) return false;
+  const start = Math.max(from, st.size - SETTLE_TAIL);
+  let text = "";
+  try {
+    const fh = await fsp.open(filePath, "r");
+    try { const b = Buffer.alloc(st.size - start); const { bytesRead } = await fh.read(b, 0, b.length, start); text = b.subarray(0, bytesRead).toString("utf8"); }
+    finally { await fh.close(); }
+  } catch { return false; }
+  const lines = text.split("\n");
+  if (start > from) lines.shift();                                     // 꼬리만 읽었으면 첫 줄은 잘린 줄이다
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].trim()) continue;
+    let row; try { row = JSON.parse(lines[i]); } catch { continue; }   // 쓰는 중인 줄은 건너뛴다
+    const t = replyTextOf(row).trimEnd();
+    if (!t) continue;
+    return want.trimEnd().endsWith(t);
+  }
+  return false;
+};
+
+/** ⑦ 마지막 답이 파일에 적힐 때까지 짧게 기다린다. 답 글을 모르면(구 하네스 · 비Claude) 기다리지 않는다 — 종전 그대로. */
+const settleLastReply = async (filePath, from, want, untilMs) => {
+  if (typeof want !== "string" || !want.trim()) return;
+  while (!(await lastReplyLanded(filePath, from, want))) {
+    if (Date.now() + SETTLE_POLL_MS > untilMs) return;
+    await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
+  }
+};
 
 (async () => {
   const startedAt = Date.now();
@@ -109,7 +161,9 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
     } catch { /* 전송 실패 → 다음 턴 재시도(영구 누락 없음: 서버 워터마크 기준) */ }
   };
 
-  // 5) 주 트랜스크립트 먼저(head 로 워터마크 이미 받음).
+  // 5) 주 트랜스크립트 먼저(head 로 워터마크 이미 받음). ⑦ 마지막 답이 파일에 적힌 뒤에 읽는다 — 서브에이전트 몫 예산은 남긴다.
+  await settleLastReply(transcriptPath, Number(head.bytes) || 0, ev.last_assistant_message,
+    Math.min(Date.now() + SETTLE_MAX_MS, startedAt + BUDGET_MS - 2000));
   await uploadDelta(sessionId, transcriptPath, Number(head.bytes) || 0, {});
 
   // 6) scope=tree 면 서브에이전트(<주sid>/subagents/agent-*.jsonl)도 각각 올린다(#905 C1 슬⑥). parent 로 부모에 매단다.
