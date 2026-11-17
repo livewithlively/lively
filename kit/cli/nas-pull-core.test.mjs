@@ -12,8 +12,9 @@ const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
 const tmpDirs = [];
+// 실제 경로로 돌려준다 — 맥 기본 TMPDIR(/var/folders → /private/var/folders)는 링크라, 실제 경로를 돌려주는 코드와 비교가 갈린다.
 const mkTmp = (prefix = "naspull-") => {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
 };
