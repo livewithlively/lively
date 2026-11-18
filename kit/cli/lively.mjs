@@ -3270,6 +3270,57 @@ async function cmdInit(rest) {
   say(`\n  ${dim("다음 세션부터 이 폴더에서 프로젝트 맥락이 뜹니다. 상태: ")}${bold("lively status")}\n`);
 }
 
+// reclaim --evict — 디스크 압박 때 쉬는 워크트리의 파생물을 오래 안 쓴 것부터 지운다(#5368). 주기 실행(launchd · cron)용.
+//  고르는 규칙은 코어의 planEviction 한 벌이고(게이트웨이 크론 workspace_evict 와 같다), 여기는 이 PC 의 폴더·디스크를 재서 넘긴다.
+async function reclaimEvict({ core, ops, o, roots, activeSessionDirs }) {
+  const { statfs, readdir, stat } = await import("node:fs/promises");
+  const rootDirs = (roots.length ? roots.map((r) => resolve(r))
+    : [join(homedir(), "workspace", "project"), join(homedir(), "workspace", "legacy-project")]).filter((r) => existsSync(r));
+  if (!rootDirs.length) { say(dim("프로젝트 루트가 없습니다 — 할 일이 없습니다.")); return; }
+
+  let disk = null;
+  try {
+    const f = await statfs(rootDirs[0]);
+    const total = Number(f.blocks) * Number(f.bsize);
+    if (total > 0) disk = { usedPct: (1 - Number(f.bavail) / Number(f.blocks)) * 100, totalBytes: total };
+  } catch { /* 못 재면 planEviction 이 아무것도 고르지 않는다(--force 제외) */ }
+
+  const candidates = [];
+  const plans = new Map();
+  for (const root of rootDirs) {
+    for (const name of await readdir(root).catch(() => [])) {
+      const dir = join(root, name);
+      if (!await stat(dir).then((x) => x.isDirectory()).catch(() => false)) continue;
+      const wts = existsSync(join(dir, ".git")) ? [dir] : await core.reposIn(dir);
+      for (const wt of wts) {
+        const plan = await ops.planReclaim(wt, { activeSessionDirs });
+        plans.set(wt, plan);
+        candidates.push({ worktree: wt, reclaimableBytes: plan.reclaimableBytes, lastUsedMs: await ops.worktreeLastUsed(wt), active: plan.active_session });
+      }
+    }
+  }
+  const ev = core.planEviction({ candidates, disk, policy: { pressurePct: o.pressurePct, targetPct: o.targetPct, idleDays: o.idleDays, force: !!o.force } });
+  let freed = 0;
+  const done = [];
+  if (o.apply) {
+    for (const c of ev.picks) {
+      const r = await ops.applyReclaim(plans.get(c.worktree), { removeWorktree: false });
+      freed += r.freedBytes;
+      done.push({ worktree: c.worktree, freed_bytes: r.freedBytes, removed: r.removed });
+    }
+  }
+  const mb = (n) => (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + "MB";
+  if (o.json) {
+    say(JSON.stringify({ dry_run: !o.apply, roots: rootDirs, disk, worktrees: candidates.length, plan: { ...ev, picks: ev.picks.map((c) => ({ worktree: c.worktree, bytes: c.reclaimableBytes, last_used: c.lastUsedMs })) }, freed_bytes: freed, done }, null, 2));
+    return;
+  }
+  say(bold(o.apply ? "파생물 축출" : "파생물 축출 계획(dry-run)") + dim(`  · 워크트리 ${candidates.length}개 · 디스크 ${disk ? disk.usedPct.toFixed(1) + "%" : "못 잼"} · 기준 ${ev.pressurePct}% → 목표 ${ev.targetPct}% · ${ev.idleDays}일 넘게 쉰 것만`));
+  if (!ev.picks.length) say(dim("  " + (ev.reason || "지울 것이 없습니다 — 쉬는 워크트리에 파생물이 없습니다.")));
+  for (const c of ev.picks) say(`  ${o.apply ? green("지움") : dim("지울 것")}  ${c.worktree}  ${dim(mb(c.reclaimableBytes))}`);
+  say(dim(`  건너뜀 — 작업 중 ${ev.skipped.active} · 최근에 씀 ${ev.skipped.fresh} · 쓴 때 모름 ${ev.skipped.unknown_age} · 파생물 없음 ${ev.skipped.empty}`));
+  say("\n" + bold(o.apply ? `되찾은 공간 ${mb(freed)}` : `축출 대상 ${mb(ev.pickedBytes)}`) + (o.apply ? "" : dim("  · 실제로 지우려면 --apply")));
+}
+
 // `lively repo` — 워크트리 셀프서비스 CLI(사람·스크립트용). MCP 툴 lively_local_repo_* 과 **같은 코어**를 쓴다
 //  (repo-worktree-core.mjs — 드리프트 0). ctx 계약: sh → {stdout,stderr,code}(run 의 out/err 매핑) · api → JSON · cwd.
 // reclaim — 이 PC 의 프로젝트 폴더에서 **재생성 가능한 것만** 회수한다(#2621).
@@ -3294,11 +3345,20 @@ async function cmdReclaim(rest) {
     if (t === "--apply") o.apply = true;
     else if (t === "--remove-worktree") o.removeWorktree = true;
     else if (t === "--json") o.json = true;
+    else if (t === "--evict") o.evict = true;
+    else if (t === "--force") o.force = true;
+    else if (t.startsWith("--pressure-pct=")) o.pressurePct = t.slice(15);
+    else if (t.startsWith("--target-pct=")) o.targetPct = t.slice(13);
+    else if (t.startsWith("--idle-days=")) o.idleDays = t.slice(12);
     else if (t === "-h" || t === "--help") {
       say("사용법: lively reclaim [<경로>] [--apply] [--remove-worktree] [--json]\n"
         + dim("  경로 생략 시 현재 디렉터리. 기본은 dry-run(아무것도 지우지 않고 계획만 보여준다).\n")
         + dim("  --apply 로 실제 삭제. 지우는 것은 'gitignored 인 동시에 알려진 파생물 이름'뿐이고,\n")
-        + dim("  시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 건드리지 않는다."));
+        + dim("  시크릿(.env)·로컬 데이터(data/)·미분류 항목은 절대 건드리지 않는다.\n\n")
+        + "       lively reclaim --evict [<프로젝트 루트>…] [--apply] [--pressure-pct=85] [--target-pct=75] [--idle-days=3] [--force] [--json]\n"
+        + dim("  디스크가 찼을 때만, 쉬고 있는 워크트리의 파생물을 오래 안 쓴 것부터 목표 사용률까지 지운다(주기 실행용).\n")
+        + dim("  루트 생략 시 ~/workspace/project · ~/workspace/legacy-project. 워크트리 자체는 지우지 않는다.\n")
+        + dim("  --force 는 디스크 사용률을 보지 않고 쉬는 워크트리 전부를 대상으로 한다."));
       return;
     }
     else pos.push(t);
@@ -3320,7 +3380,19 @@ async function cmdReclaim(rest) {
     }
     return dirs;
   })();
-  const activeSessionDirs = [...new Set([...paneDirs, process.cwd()])];
+  // #5368 — tmux 창만 보면 그 밖에서 도는 것(하네스가 띄운 빌드 · 시험 · 다른 터미널)을 놓친다. 이 사용자의 프로세스 현재 경로도
+  //  함께 본다. lsof 가 없거나 실패하면 창 경로만으로 간다(더하는 쪽이라 빠져도 종전보다 나빠지지 않는다).
+  const procDirs = (() => {
+    if (process.platform === "win32") return [];
+    const user = process.env.USER || process.env.LOGNAME || "";
+    if (!user) return [];
+    const r = run("lsof", ["-a", "-d", "cwd", "-u", user, "-Fn"], { quiet: true, allowFail: true, timeout: 20_000 });
+    if (!r.out) return [];
+    return String(r.out).split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+  })();
+  const activeSessionDirs = [...new Set([...paneDirs, ...procDirs, process.cwd()])];
+
+  if (o.evict) return reclaimEvict({ core, ops, o, roots: pos, activeSessionDirs });
 
   // 대상이 레포 자신이면 그것만, 프로젝트 폴더면 그 안의 레포 전부(한 프로젝트에 여러 레포가 붙는다).
   const self = existsSync(join(target, ".git")) ? [target] : [];

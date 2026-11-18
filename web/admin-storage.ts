@@ -205,6 +205,22 @@ function storageEditor(detail, data) {
     cacheChk.addEventListener('change', syncCacheState);
     syncCacheState();
 
+    // ── ③ 정책 — 파생물 자동 정리(#5368). 시작 기준은 위의 경고 임계를 그대로 쓴다(칸을 따로 두지 않는다). ──
+    const evictChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    evictChk.checked = p.derived_evict_enabled !== false; evictChk.disabled = !canEdit;
+    const evictDaysIn = numIn(p.derived_evict_idle_days ?? 3, 0, 365);
+    //  evictOff — 이 서버에서는 정비 타이머가 돌지 않는다(목록을 받아 온 뒤 paintEvictLast 가 정한다). 켜 봐야 아무 일도 없으니 잠근다.
+    const syncEvict = () => {
+      evictChk.disabled = !canEdit || evictOff;
+      evictDaysIn.disabled = !canEdit || evictOff || !evictChk.checked;
+    };
+    evictChk.addEventListener('change', syncEvict);
+    evictSync = syncEvict;
+    syncEvict();
+
+    // 마지막 회차 — 워크스페이스 목록을 받아 온 뒤 채운다(loadWorkspace). 그 전에는 비어 있다.
+    const evictLast = el('p', { class: 'storage-calc' });
+    evictLastEl = evictLast; paintEvictLast();
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '정책 저장' });
     saveBtn.disabled = !canEdit;
     saveBtn.addEventListener('click', async () => {
@@ -218,6 +234,8 @@ function storageEditor(detail, data) {
           disk_critical_free_gb: Number(critFreeIn.value),
           shared_cache_enabled: cacheChk.checked,
           shared_cache_relocate_home: homeChk.checked,
+          derived_evict_enabled: evictChk.checked,
+          derived_evict_idle_days: Number(evictDaysIn.value),
         };
         await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ storage_policy }) });
         toast('저장됨 — 즉시 반영됩니다(재시작 불필요).');
@@ -561,6 +579,14 @@ function storageEditor(detail, data) {
           el('label', { class: 'storage-toggle' }, homeChk,
             el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })),
           el('p', { class: 'admin-hint storage-warn' }, ...uiText('⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.')),
+          el('strong', { text: '빌드 산출물 자동 정리' }),
+          el('label', { class: 'storage-toggle' }, evictChk,
+            el('span', { text: ' 디스크가 경고 임계를 넘으면 쉬는 프로젝트의 빌드 산출물을 스스로 지웁니다 (권장)' })),
+          el('div', { class: 'storage-form' },
+            el('label', {}, el('span', { text: '건너뛸 기간(일) — 이 안에 손댄 폴더는 지우지 않음' }), evictDaysIn)),
+          el('p', { class: 'admin-hint' }, ...uiText('지우는 것은 node_modules · dist · build 처럼 다시 설치하거나 빌드하면 돌아오는 것뿐입니다. 소스 · 커밋 · .env · data/ · 체크아웃 폴더는 지우지 않습니다. 오래 안 쓴 것부터, 사용률이 경고 임계보다 10%p 낮아질 만큼만 지웁니다. 세션이 쓰고 있는 폴더는 기간과 상관없이 건너뜁니다. 30분마다 확인하며, 디스크가 넉넉하면 아무것도 하지 않습니다.')),
+          el('p', { class: 'admin-hint' }, ...uiText('이 서버의 프로젝트 폴더에만 적용됩니다. 구성원 컴퓨터(노드)의 폴더는 그 컴퓨터에서 lively reclaim --evict 로 정리합니다.')),
+          evictLast,
           el('div', { class: 'storage-actions' }, saveBtn)),
 
         el('h3', { class: 'storage-h', text: '워크스페이스' }),
@@ -693,6 +719,25 @@ function storageEditor(detail, data) {
   //   서버는 remove_worktree=true 를 받아도 푸시 완료·클린·세션 없음을 실행 직전에 다시 확인하고 아니면 남긴다.
   const wtSelected = new Set<string>();
   let wsList: any = null;
+  // #5368 — 빌드 산출물 자동 정리의 마지막 회차 한 줄(정책 블록 안). 목록을 받아 온 뒤 채운다.
+  let evictLastEl: HTMLElement | null = null;
+  let evictOff = false;                         // 이 서버에서는 자동 정리가 돌지 않는다(서버가 auto_evict_runs=false 로 알린다)
+  let evictSync: (() => void) | null = null;    // 정책 블록의 토글 잠금 — 블록이 그려진 뒤에 생긴다
+  const paintEvictLast = (): void => {
+    evictOff = !!wsList && wsList.auto_evict_runs === false;
+    if (evictSync) evictSync();
+    if (!evictLastEl) return;
+    if (evictOff) {
+      evictLastEl.textContent = '이 서버에서는 자동 정리가 돌지 않습니다 — 정비 타이머를 돌리지 않는 서버입니다(여러 워크스페이스를 함께 서비스하는 중앙 서버 · 보조 인스턴스). 구성원 컴퓨터의 폴더는 그 컴퓨터에서 lively reclaim --evict 로 정리합니다.';
+      return;
+    }
+    const r = wsList && wsList.auto_evict_last;
+    if (!r) { evictLastEl.textContent = '마지막 확인: 아직 없음 (켜져 있으면 30분 안에 한 번 확인합니다)'; return; }
+    const when = relTime(new Date(r.at).toISOString());
+    evictLastEl.textContent = !r.ok ? `마지막 확인 ${when} — 건너뜀: ${r.error || '확인 실패'}`
+      : r.evicted ? `마지막 확인 ${when} — 폴더 ${r.evicted}곳에서 ${fmtBytes(r.freed_bytes)} 를 지웠습니다 (디스크 ${r.disk_used_pct}%)`
+      : `마지막 확인 ${when} — 지운 것 없음${r.reason ? ' (' + r.reason + ')' : ''}`;
+  };
 
   const ANALYZE_CHUNK = 10; // 요청당 프로젝트 수 — du 비용이 크므로 작게. 서버 상한은 40.
 
@@ -713,6 +758,7 @@ function storageEditor(detail, data) {
     try { wsList = await api('/api/ui/org/workspace'); }
     catch (e: any) { wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
     renderWorkspace();
+    paintEvictLast();
   }
 
   function renderWorkspace() {
