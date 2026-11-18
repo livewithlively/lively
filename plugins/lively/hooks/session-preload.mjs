@@ -89,7 +89,10 @@ function emitContext(text, opts = {}) {
   const h = harness(HARNESS);
   const reload = !!opts.reloadSkills && h.reloadAssets;
   const n = h.contextEnvelope !== "file" ? ON_NOTICE : null;
-  const body = [n && !opts.contextOff ? n.ai : "", text].filter(Boolean).join("\n\n");
+  const ai = n && !opts.contextOff ? n.ai : "";
+  //  읽기전용 배너(#1007)는 맨 앞을 지킨다 — 켜짐 안내는 그 바로 뒤, 회사 맥락 앞이다.
+  const body = (ai && READONLY && String(text || "").startsWith(RO_BANNER)
+    ? [RO_BANNER, ai, String(text).slice(RO_BANNER.length).trim()] : [ai, text]).filter(Boolean).join("\n\n");
   const line = n ? n.user : "";
   if (!body && !reload && !line) return;
   if (h.contextEnvelope === "json" || reload || n) {

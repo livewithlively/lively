@@ -398,6 +398,7 @@ if (process.platform !== "win32") {
   const w = rs.insideNotice({ ...base, dir: "/w/repo", reason: "work_root", root: "/w/repo", harness: "claude" });
   check("ON4 등록한 작업 폴더 그 자리 — 그 폴더를 빼는 명령 · «그 아래 전부» 경고 없음", w.ai.includes("`lively work-root remove '/w/repo'`") && !w.ai.includes("그 아래 전부"), w.ai);
   const u = rs.insideNotice({ ...base, dir: "/w/repo/api", reason: "work_root", root: "/w", harness: "claude" });
+  check("ON5b 작업 폴더의 아래 — 세션 폴더를 따로 짚는다(«세션을 연 폴더» 가 품은 작업 폴더로 읽히지 않게)", u.ai.includes("이 세션을 연 폴더(`/w/repo/api`)") && u.ai.includes("이 폴더만은 못 끄고"), u.ai);
   check("ON5 작업 폴더의 아래 — 품은 작업 폴더를 빼는 명령 + «그 아래 전부가 꺼진다» 를 먼저 말하라", u.ai.includes("`lively work-root remove '/w'`") && !u.ai.includes("remove '/w/repo/api'") && u.ai.includes("그 아래 전부가 꺼진다"), u.ai);
   const p = rs.insideNotice({ ...base, dir: "/h/lively/projects/42/docs", reason: "project", root: "/h/lively/projects/42", harness: "claude" });
   check("ON6 프로젝트 폴더 — 목록으로 못 끄므로 /lively-disconnect 를 가리키지 않고 lively run --incognito 를 가리킨다",
@@ -419,6 +420,15 @@ if (process.platform !== "win32") {
   check("ON11 배치 실행이 막힌 윈도 — node 로 바로 부르는 끄기 명령 + 셸 안내",
     d.ai.includes(`& "C:/Users/me/.lively/runtime/current/node.exe" "C:/Users/me/.lively/lib/lively.mjs" work-root remove 'C:\\work\\repo'`) && d.ai.includes("PowerShell 이면"), d.ai);
   //  AI 안내는 회사 맥락 앞에 붙는다 — 하네스가 긴 훅 출력을 앞 2,000자 미리보기로 자르므로(#4503) 맥락을 밀어내지 않게 짧아야 한다.
+  {
+    //  심링크로 들어온 작업 폴더 그 자리 — 판정(matchWorkRoot)이 실제 경로로 같은 폴더로 보니 «그 아래 전부» 를 붙이지 않는다.
+    const sb = sandbox(); const realRoot = sb.mk("real-work"); const link = join(sb.root, "link-work");
+    let linked = true; try { symlinkSync(realRoot, link, "dir"); } catch { linked = false; }
+    const s = linked ? rs.insideNotice({ ...base, dir: link, reason: "work_root", root: realRoot, harness: "claude" }) : null;
+    check("ON4b 심링크로 연 작업 폴더 그 자리는 같은 폴더다(«그 아래 전부» 경고 없음)", !linked || (!s.ai.includes("그 아래 전부") && s.ai.includes(`remove '${link}'`)), s?.ai);
+    const curly = rs.insideNotice({ ...base, dir: "/p/a\u2019b", reason: "anywhere", harness: "claude" });
+    check("ON10b 곡선 따옴표가 든 폴더 이름도 안내에 넣지 않는다(PowerShell 은 따옴표로 읽는다)", !curly.ai.includes("\u2019") && curly.ai.includes("이 폴더에서 `lively work-root remove`"), curly.ai);
+  }
   check("ON12 AI 안내는 짧다(이유마다 600자 안)", [a, w, u, p, n, g].every((x) => x.ai.length <= 600), JSON.stringify([a, w, u, p, n, g].map((x) => x.ai.length)));
   check("ON13 끄기 명령은 등록 명령과 같은 꼴(동사만 다르다)",
     rs.workRootRemoveCommand({ ...base, dir: "/a b" }) === rs.workRootAddCommand({ ...base, dir: "/a b" }).replace("work-root add", "work-root remove"));
@@ -689,6 +699,12 @@ await withGateway(async (gw) => {
     const j = jsonOf(await startIn(sb, proj, gw));
     check("J8 프로젝트 폴더(제외해도 켜지는 자리) — 안 듣는 스위치를 가리키지 않는다", String(j?.systemMessage || "").includes("lively run --incognito") && !String(j?.systemMessage || "").includes("lively-disconnect"), JSON.stringify(j).slice(0, 300));
   }
+});
+await withGateway(async (gw) => {
+  const sb = sandbox(); const work = sb.mk("work"); setScope(sb.lively, "work_folders", [work]);
+  const c = ctxOf(jsonOf(await startIn(sb, work, gw, { env: { LIVELY_MODE: "readonly" } })));
+  check("J10 읽기전용 배너는 맨 앞을 지키고 켜짐 안내는 그 뒤 · 회사 맥락 앞이다",
+    c.startsWith("## ⚠ 읽기전용 세션") && c.indexOf("라이블리 켜짐") > 0 && c.indexOf("라이블리 켜짐") < c.indexOf("LATE-CTX"), c.slice(0, 200));
 });
 await withGateway(async (gw) => {
   const sb = sandbox(); const work = sb.mk("work"); setScope(sb.lively, "work_folders", [work]);

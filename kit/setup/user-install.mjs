@@ -522,7 +522,7 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
   const lv = direct || "lively";
   //  자리표시 `$ARGUMENTS` 는 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스)에서 두 번 쓰면 «경로(~/w)를, 비었거나 `~/w` 그대로면…»
   //  처럼 스스로 모순이 된다. 치환 안 하는 하네스를 위해 «달러로 시작하는 글자 그대로면 없는 것» 을 말로만 덧붙인다.
-  const session = "이 세션을 연 폴더(세션 시작 때 라이블리가 켜짐·꺼짐 안내에 적어 준 폴더 — 없으면 지금 작업 폴더)";
+  const session = "이 세션을 연 폴더(세션 시작 때 라이블리 안내가 «이 세션을 연 폴더» 로 적어 준 폴더 — 없으면 지금 작업 폴더)";
   //  스킬(코덱스)은 자리표시를 치환하지 않는다 — 넣지 않고 «사람이 말한 경로» 로 쓴다.
   const folderRule = format === "skill"
     ? `<폴더> 자리에는 사람이 요청하며 말한 경로가 있으면 그것을, 없으면 ${session}의 절대경로를 넣는다.`

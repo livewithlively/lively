@@ -424,7 +424,8 @@ export function connectHint(harness = "claude", { plugin = false, addCmd = workR
 // 안내문에 그대로 넣어도 되는 폴더 이름인가 — 따옴표·백틱·달러·제어문자가 든 이름은 AI 가 읽는 지시문과
 //  셸 명령을 흐트러뜨릴 수 있어(압축을 푼 폴더처럼 이름을 남이 정한 경우) 넣지 않는다.
 //  역슬래시는 받는다(윈도 경로 구분자) — 명령은 작은따옴표로 감싸 bash·Git Bash·PowerShell 이 글자 그대로 받는다.
-const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$]+$/.test(d) && d.length <= MAX_ROOT_LEN;
+//  곡선 따옴표(U+2018~U+201F)도 넣지 않는다 — PowerShell 은 그것도 따옴표로 읽어 작은따옴표 감싸기가 풀린다.
+const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$\u2018-\u201f]+$/.test(d) && d.length <= MAX_ROOT_LEN;
 
 /** 범위 밖 세션 시작 알림 — 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext).
  *  reason·root 는 판정(decideRecordScope) 그대로 — excluded(«어디서나» 방식의 제외 폴더)면 무엇을 빼야 켜지는지(root)를 말한다.
@@ -513,16 +514,21 @@ export function insideNotice({ dir = "", reason = "", root = "", harness = "clau
   const hint = disconnectHint(h, { plugin, removeCmd: remove() });
   const user = plugin ? `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}하세요` : `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}`;
   //  등록 폴더의 아래에서 켠 세션 — 이 폴더만은 못 끈다. 품은 등록 폴더를 빼야 하고 그 아래 전부가 꺼진다.
-  const parent = reason === "work_root" && safeDir(root) && dir && normPath(dir) !== normPath(root) ? root : "";
-  const why = reason === "anywhere" ? "이 컴퓨터는 «어디서나» 방식(조직 설정)이고 이 세션을 연 폴더가 제외 폴더가 아니라서"
-    : safeDir(root) ? `이 세션을 연 폴더가 이 컴퓨터의 라이블리 작업 폴더(\`${root}\`) 안이라` : "이 세션을 연 폴더가 이 컴퓨터의 라이블리 작업 폴더 안이라";
+  //   같은 폴더인지는 실제 경로로도 본다(심링크 · /var ↔ /private/var) — 판정(matchWorkRoot)과 같은 기준이라 같은 자리에 «그 아래 전부» 를 붙이지 않는다.
+  //   세션 폴더는 따로 짚는다 — «여기 끄기» 커맨드가 말하는 «세션을 연 폴더» 가 품은 작업 폴더로 읽히지 않게(그 폴더를 빼는 건 사람이 고른 뒤다).
+  const sameDir = (a, b) => normPath(a) === normPath(b) || (!!real(a) && !!real(b) && normPath(real(a)) === normPath(real(b)));
+  const parent = reason === "work_root" && safeDir(root) && dir && !sameDir(dir, root) ? root : "";
+  const here = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)가` : "이 세션을 연 폴더가";
+  const why = reason === "anywhere" ? `이 컴퓨터는 «어디서나» 방식(조직 설정)이고 ${here} 제외 폴더가 아니라서`
+    : safeDir(root) && parent ? `${here} 이 컴퓨터의 라이블리 작업 폴더(\`${root}\`) 아래라`
+    : `${here} 이 컴퓨터의 라이블리 작업 폴더라`;
   const target = parent || (safeDir(dir) ? dir : "");
   const run = target ? `\`${remove(target)}\`` : `이 폴더에서 \`${remove()}\``;
   const shellNote = isDirect(remove()) ? `(${PS_NOTE})` : "";
   const how = plugin
     ? "사람이 연결 상태를 묻거나 여기서 끄고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 빼거나 제외하라고 안내하라 — 다음 세션부터 꺼진다."
     : `사람이 연결 상태를 묻거나 여기서 끄고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — `
-      + (parent ? `작업 폴더 \`${parent}\` 가 목록에서 빠져 그 아래 전부가 꺼진다는 것을 사람에게 먼저 말하라. ` : "")
+      + (parent ? `이 폴더만은 못 끄고 작업 폴더 \`${parent}\` 를 목록에서 빼야 한다 — 그 아래 전부가 꺼진다는 것을 사람에게 먼저 말하고 고르게 하라. ` : "")
       + "끄면 이 세션도 그때부터 기록·업로드·도구가 멈추니 그 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라.";
   return { user, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, how, ask].join("\n") };
 }
