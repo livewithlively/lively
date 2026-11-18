@@ -141,12 +141,14 @@ const LOCAL_VERIFIERS: Record<string, (token: string) => VerifyResult> = {
  * Claude setup-token 의 소속 조직. 관리 설정 forceLoginOrgUUID(회사 조직만 허용)를 켜면 조직 밖 토큰은 위탁 시작 단계에서
  *  거부된다 — 켜기 전에 본인이 자기 토큰의 조직을 확인할 수 있게 하려고 있다.
  *
- *  경로는 Claude Code 번들(2.1.325)이 inference 전용 토큰의 조직을 얻을 때 쓰는 것을 그대로 따랐다 — POST·빈 body·Bearer,
- *  응답의 organization_uuid. 메시지 생성은 부르지 않으니 구독 사용량을 쓰지 않고 부작용도 없다[미확인 — 번들 코드 읽기 기준].
- *  ⚠ 실측 전이라 거부를 단정하지 않는다: 200 + organization_uuid 만 ok=true 이고, 401/403 을 포함한 나머지는 전부 null 이다.
+ *  경로는 Claude Code 번들이 토큰의 조직을 얻을 때 쓰는 것을 그대로 따랐다 — POST·빈 body·Bearer·Content-Type: application/json,
+ *  응답의 organization_uuid. 번들(2.1.327)은 forceLoginOrgUUID 검사에서 토큰 권한에 user:profile 이 없으면(setup-token 등) 이 경로를,
+ *  있으면 프로필 조회를 쓴다. 메시지 생성은 부르지 않으니 구독 사용량을 쓰지 않고 부작용도 없다[미확인 — 번들 코드 읽기 기준].
+ *  실측(2026-11-18, api.anthropic.com): 토큰 없음 401 «Missing Authorization header…» · 지어낸 토큰 401 «OAuth access token is
+ *   invalid.» · GET 405 · 없는 경로 404 — 경로·호스트·메서드는 맞다. 유효한 토큰의 200 응답은 아직 실측 전이다.
+ *  ⚠ 거부를 단정하지 않는다: 200 + organization_uuid 만 ok=true 이고, 401/403 을 포함한 나머지는 전부 null 이다.
  *   문서 없는 경로의 401 이 «토큰이 틀렸다» 인지 «경로·헤더가 바뀌었다» 인지 모르는데 거부로 말하면 멀쩡한 토큰을 지우게 만든다.
- *   해제 조건: 유효한 토큰·깨진 토큰으로 각 1회 실측해 401 이 깨진 토큰에서만 나오면 401 을 false 로 올린다.
- *  [미확인] 호스트가 api.anthropic.com 인지는 번들의 BASE_API_URL 을 읽어 추정한 것이다.
+ *   해제 조건: 유효한 토큰·깨진 토큰으로 각 1회 실측해 401 이 깨진 토큰에서만 나오면 401 을 false 로 올린다(깨진 토큰 쪽은 위 실측).
  */
 const CLAUDE_ORG_URL = "https://api.anthropic.com/api/oauth/org";
 async function verifyClaudeSetupToken(token: string): Promise<VerifyResult> {
@@ -157,7 +159,7 @@ async function verifyClaudeSetupToken(token: string): Promise<VerifyResult> {
   let res: Response;
   try {
     res = await fetch(CLAUDE_ORG_URL, {
-      method: "POST", headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, signal: AbortSignal.timeout(10_000),
     });
   } catch {
     return { ok: null, message: "Claude 에 연결하지 못했어요(네트워크) — 토큰 문제는 아닙니다. 잠시 뒤 다시 확인해 주세요." };

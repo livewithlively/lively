@@ -102,6 +102,7 @@ t("배선: 확인 경로가 있는 kind 만 supported 로 답한다", () => {
       assert.match(calls[0].url, /^https:\/\/[^/]+\/api\/oauth\/org$/, `${c.name}: URL`);
       assert.equal(calls[0].init?.method, "POST", `${c.name}: POST`);
       assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, "Bearer sk-ant-oat01-test", `${c.name}: Bearer`);
+      assert.equal((calls[0].init?.headers as Record<string, string>)["Content-Type"], "application/json", `${c.name}: Content-Type(번들과 같은 헤더)`);
       pass++; console.log(`ok  claude_setup_token: ${c.name}`);
     }
     let asked = 0;
