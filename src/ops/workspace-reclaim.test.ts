@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { planReclaim, applyReclaim, checkWorktree, isInside, reposIn, DERIVED_NAMES, PROTECTED_NAMES } from "./workspace-reclaim.js";
+import { planReclaim, applyReclaim, checkWorktree, isInside, reposIn, DERIVED_NAMES, PROTECTED_NAMES, isWorktreeActive, planEviction, worktreeLastUsed, type EvictCandidate } from "./workspace-reclaim.js";
 
 const exec = promisify(execFile);
 const git = (args: string[], cwd: string) => exec("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -263,6 +263,146 @@ async function makeRepo(): Promise<{ dir: string; remote: string }> {
   assert.deepEqual(found, [asClone, asWorktree].sort(), "워크트리(.git 파일)와 일반 클론(.git 디렉터리) 둘 다 — 레포 아닌 폴더는 제외");
 
   await fsp.rm(root, { recursive: true, force: true });
+}
+
+// ───────────────────────── #5368 — 워크트리 제거가 지키는 무시 파일을 같이 지우지 않는다 ─────────────────────────
+//  `git worktree remove` 는 무시된 파일을 막지 않고 폴더째 지운다. 파생물 회수에서는 지키던 .env · data/ · 미분류 항목이
+//   워크트리 제거에서 함께 사라졌다. 수정 전 코드로는 K1 · K2 가 빨간불이다(워크트리가 지워지고 .env 가 없어진다).
+async function makeWorktree(): Promise<{ root: string; base: string; wt: string }> {
+  const { dir } = await makeRepo();
+  const root = path.dirname(dir);
+  const wt = path.join(root, "wt");
+  await git(["worktree", "add", "-b", "feat", wt, "main"], dir);
+  return { root, base: dir, wt };
+}
+{
+  // K1 — .env(보호)가 남아 있으면 거부하고 무엇이 남았는지 말한다.
+  const { root, base, wt } = await makeWorktree();
+  await fsp.writeFile(path.join(wt, ".env"), "SECRET=abc");
+  await fsp.mkdir(path.join(wt, "node_modules"), { recursive: true });
+  await fsp.writeFile(path.join(wt, "node_modules", "x"), "x");
+  const res = await applyReclaim(await planReclaim(wt), { removeWorktree: true, repoRoot: base });
+  assert.equal(res.worktreeRemoved, false, "K1 보호 무시 파일(.env)이 있으면 워크트리를 제거하지 않는다");
+  assert.match(String(res.worktreeSkippedReason), /\.env/, "K1 남은 것을 사유에 적는다");
+  assert.equal(fs.existsSync(path.join(wt, ".env")), true, "K1 .env 가 그대로 있다");
+  assert.equal(fs.existsSync(path.join(wt, "node_modules")), false, "K1 파생물은 종전대로 지운다");
+  await fsp.rm(root, { recursive: true, force: true });
+}
+{
+  // K2 — 미분류 무시 항목(weird-cache/ · 로그 같은 것)도 같다.
+  const { root, base, wt } = await makeWorktree();
+  await fsp.mkdir(path.join(wt, "weird-cache"), { recursive: true });
+  await fsp.writeFile(path.join(wt, "weird-cache", "w"), "?");
+  const res = await applyReclaim(await planReclaim(wt), { removeWorktree: true, repoRoot: base });
+  assert.equal(res.worktreeRemoved, false, "K2 미분류 무시 항목이 있으면 워크트리를 제거하지 않는다");
+  assert.equal(fs.existsSync(path.join(wt, "weird-cache", "w")), true, "K2 미분류 항목이 그대로 있다");
+  await fsp.rm(root, { recursive: true, force: true });
+}
+{
+  // K3 — 무시 파일이 파생물뿐이면 종전대로 제거한다(막기만 하면 회수가 죽는다).
+  const { root, base, wt } = await makeWorktree();
+  await fsp.mkdir(path.join(wt, "node_modules"), { recursive: true });
+  await fsp.writeFile(path.join(wt, "node_modules", "x"), "x");
+  await fsp.mkdir(path.join(wt, "dist"), { recursive: true });
+  await fsp.writeFile(path.join(wt, "dist", "o"), "o");
+  const res = await applyReclaim(await planReclaim(wt), { removeWorktree: true, repoRoot: base });
+  assert.equal(res.worktreeRemoved, true, `K3 파생물만 있던 워크트리는 제거한다 (${res.worktreeSkippedReason})`);
+  assert.equal(fs.existsSync(wt), false, "K3 폴더가 사라졌다");
+  await fsp.rm(root, { recursive: true, force: true });
+}
+{
+  // K4 — 심링크는 링크만 사라지고 대상은 그대로라 막지 않는다.
+  const { root, base, wt } = await makeWorktree();
+  const shared = path.join(root, "shared-nm");
+  await fsp.mkdir(shared, { recursive: true });
+  await fsp.writeFile(path.join(shared, "keep"), "k");
+  await fsp.symlink(shared, path.join(wt, "node_modules"));
+  const res = await applyReclaim(await planReclaim(wt), { removeWorktree: true, repoRoot: base });
+  assert.equal(res.worktreeRemoved, true, `K4 무시된 심링크만 있으면 제거한다 (${res.worktreeSkippedReason})`);
+  assert.equal(fs.existsSync(path.join(shared, "keep")), true, "K4 심링크 대상은 그대로다");
+  await fsp.rm(root, { recursive: true, force: true });
+}
+
+// ───────────────────────── #5368 — 이 워크트리에서 누가 일하고 있나 ─────────────────────────
+{
+  const P = "/Users/u/workspace/project";
+  const wt = `${P}/5321/lively`;
+  const scratch = "/private/tmp/claude-501/-Users-u-workspace-project-5321/04daa51e/scratchpad/stage5321";
+  const rows: Array<[string, string, string[], boolean]> = [
+    ["A1 세션이 워크트리 안에서 돈다", wt, [`${wt}/web`], true],
+    ["A2 세션이 워크트리 자신에서 돈다", wt, [wt], true],
+    ["A3 세션이 바로 위 프로젝트 폴더에서 돈다", wt, [`${P}/5321`], true],
+    ["A4 다른 프로젝트 폴더의 세션은 상관없다", wt, [`${P}/5322`, `${P}/5322/lively`], false],
+    ["A5 이름이 앞부분만 같은 프로젝트(532 · 53210)는 상관없다", wt, [`${P}/532`, `${P}/53210`], false],
+    ["A6 홈 · 워크스페이스 루트에서 도는 프로세스가 모든 워크트리를 잡지 않는다", wt, ["/Users/u", "/Users/u/workspace", P, "/"], false],
+    ["A7 스크래치 워크트리 — 그 프로젝트 폴더에서 도는 세션이 있다", scratch, [`${P}/5321`], true],
+    ["A8 스크래치 워크트리 — 그 프로젝트의 워크트리 안에서 도는 세션이 있다", scratch, [`${P}/5321/lively`], true],
+    ["A9 스크래치 워크트리 — 같은 스크래치의 다른 폴더에서 도는 프로세스가 있다", scratch, ["/private/tmp/claude-501/-Users-u-workspace-project-5321/04daa51e/scratchpad"], true],
+    ["A10 스크래치 워크트리 — 다른 프로젝트(532 · 53210 · 5322)의 세션은 상관없다", scratch, [`${P}/532`, `${P}/53210/lively`, `${P}/5322`], false],
+    ["A11 세션이 하나도 없다", wt, [], false],
+  ];
+  for (const [name, w, dirs, want] of rows) assert.equal(isWorktreeActive(w, dirs), want, name);
+  // planReclaim 이 같은 판정을 쓴다 — 프로젝트 폴더에서 도는 세션이 있으면 그 아래 워크트리는 손대지 않는다.
+  const { dir } = await makeRepo();
+  await fsp.mkdir(path.join(dir, "node_modules"), { recursive: true });
+  await fsp.writeFile(path.join(dir, "node_modules", "x"), "x");
+  const plan = await planReclaim(dir, { activeSessionDirs: [path.dirname(dir)] });
+  assert.equal(plan.active_session, true, "A12 바로 위 폴더의 세션이 계획에서도 «작업 중» 으로 잡힌다");
+  const res = await applyReclaim(plan);
+  assert.deepEqual(res.removed, [], "A12 그러면 아무것도 지우지 않는다");
+  assert.equal(fs.existsSync(path.join(dir, "node_modules", "x")), true, "A12 node_modules 가 그대로 있다");
+  await fsp.rm(path.dirname(dir), { recursive: true, force: true });
+}
+
+// ───────────────────────── #5368 — 파생물 축출 계획 ─────────────────────────
+{
+  const DAY = 86_400_000;
+  const now = 1_800_000_000_000;
+  const GB = 1e9;
+  const disk = (usedPct: number) => ({ usedPct, totalBytes: 100 * GB });
+  const c = (worktree: string, gb: number, daysAgo: number | null, active = false): EvictCandidate =>
+    ({ worktree, reclaimableBytes: gb * GB, lastUsedMs: daysAgo === null ? null : now - daysAgo * DAY, active });
+  const names = (p: { picks: EvictCandidate[] }) => p.picks.map((x) => x.worktree);
+
+  const all = [c("old", 4, 30), c("mid", 4, 10), c("new", 4, 5), c("fresh", 4, 1), c("busy", 4, 40, true), c("empty", 0, 50), c("unknown", 4, null)];
+  // E1 — 넉넉하면 아무것도 고르지 않는다.
+  let p = planEviction({ candidates: all, disk: disk(60), now });
+  assert.deepEqual(names(p), [], "E1 기준(85%) 아래면 고르지 않는다");
+  assert.equal(p.pressure, false, "E1 압박 아님");
+  // E2 — 기준 바로 위: 목표까지 필요한 만큼만, 오래 안 쓴 것부터.
+  p = planEviction({ candidates: all, disk: disk(86), now });            // 86 → 75 = 11GB 필요 → old(4)+mid(4)+new(4)
+  assert.deepEqual(names(p), ["old", "mid", "new"], "E2 오래 안 쓴 것부터 목표에 닿을 때까지");
+  p = planEviction({ candidates: all, disk: disk(86), policy: { targetPct: 80 }, now }); // 6GB 필요 → old+mid
+  assert.deepEqual(names(p), ["old", "mid"], "E3 목표에 닿으면 멈춘다");
+  // E4 — 작업 중 · 최근에 쓴 것 · 쓴 때 모르는 것 · 파생물 없는 것은 아무리 압박이 커도 고르지 않는다.
+  p = planEviction({ candidates: all, disk: disk(99), now });
+  assert.deepEqual(names(p), ["old", "mid", "new"], "E4 쉬는 것만 고른다");
+  assert.deepEqual(p.skipped, { active: 1, fresh: 1, unknown_age: 1, empty: 1 }, "E4 건너뛴 사유를 센다");
+  // E5 — 쉰 기간 기준.
+  p = planEviction({ candidates: all, disk: disk(99), policy: { idleDays: 20 }, now });
+  assert.deepEqual(names(p), ["old"], "E5 idleDays 안에 손댄 것은 건너뛴다");
+  // E6 — 디스크를 못 쟀으면 고르지 않는다(«다 지워라» 가 아니다).
+  for (const d of [null, { usedPct: Number.NaN, totalBytes: 100 * GB }, { usedPct: 99, totalBytes: 0 }]) {
+    assert.deepEqual(names(planEviction({ candidates: all, disk: d, now })), [], "E6 디스크를 못 재면 고르지 않는다");
+  }
+  // E7 — force 는 디스크를 보지 않고 쉬는 것 전부(작업 중 · 최근 것은 여전히 제외).
+  p = planEviction({ candidates: all, disk: null, policy: { force: true }, now });
+  assert.deepEqual(names(p), ["old", "mid", "new"], "E7 force 는 쉬는 것 전부");
+  // E8 — 이상한 기준값은 기본값으로(오입력이 «전부 지움» 이 되지 않는다).
+  p = planEviction({ candidates: all, disk: disk(60), policy: { pressurePct: "abc" as unknown as number, targetPct: -5, idleDays: "x" as unknown as number }, now });
+  assert.deepEqual([p.pressurePct, p.targetPct, p.idleDays], [85, 75, 3], "E8 못 읽는 값은 기본값");
+  assert.deepEqual(names(p), [], "E8 그래서 60% 에서는 고르지 않는다");
+  // E9 — 목표가 기준보다 높게 들어오면 기준으로 내린다(끝없이 지우지 않는다).
+  p = planEviction({ candidates: all, disk: disk(90), policy: { pressurePct: 80, targetPct: 95 }, now });
+  assert.equal(p.targetPct, 80, "E9 목표는 기준을 넘지 않는다");
+}
+{
+  // L1 — 마지막으로 쓴 때: 방금 만든 레포는 «방금» 이고, 레포가 아니면 폴더 시각만 본다.
+  const { dir } = await makeRepo();
+  const t = await worktreeLastUsed(dir);
+  assert.ok(t !== null && Math.abs(Date.now() - t) < 120_000, "L1 방금 커밋한 레포의 마지막 사용 시각은 지금 근처다");
+  await fsp.rm(path.dirname(dir), { recursive: true, force: true });
+  assert.equal(await worktreeLastUsed(path.join(os.tmpdir(), "reclaim-nope-" + process.pid)), null, "L1 없는 경로는 null");
 }
 
 console.log("workspace-reclaim.test.ts ok — gitignored∩allow-list 만 삭제 · .env/data 보호 · 더티·원격에없는커밋·활성세션이면 거부(단 다른 이름으로 push 됐으면 upstream 없어도 허용) · reposIn(워크트리=.git파일/클론=.git디렉터리 둘 다, 껍데기는 빈 배열)");

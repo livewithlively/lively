@@ -131,6 +131,7 @@ export const workspaceCapabilities: Capability[] = [
   //  사람이 웹 UI 에서 바로 done 처리하거나, 프로젝트가 방치되면 아무도 안 치운다 — 그리고 **쌓이는 건 바로 그런 것들**이다.
   //  그래서 관리자가 '무엇이 얼마나 쌓였나'를 보고 **수동으로** 회수할 창구가 필요하다.
   //  ⚠ 무인 자동 삭제는 **없다**(설계 결정) — 이 화면은 보여주기만 하고, 지우는 건 사람이 버튼을 눌러야 한다.
+  //   (하나만 무인으로 돈다 — 디스크가 찼을 때 쉬는 워크트리의 **파생물**만 축출하는 크론 workspace_evict(#5368). 워크트리는 거기서도 안 지운다.)
   //  회수 실행은 기존 workspace_reclaim(POST /api/ui/v6/projects/:id/reclaim) 을 그대로 쓴다(안전선 재구현 금지).
   restOnly("org_workspace_status", "워크스페이스 사용량",
     "프로젝트별 워크스페이스 폴더 크기·마지막 사용·활성 세션 여부. 정리 가능량은 프로젝트별 dry-run(POST /api/ui/v6/projects/:id/reclaim)으로 확인한다. admin 전용.",

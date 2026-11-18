@@ -59,6 +59,29 @@ export interface ReclaimResult {
   worktreeSkippedReason: string | null;
 }
 
+/** 파생물 축출 후보 한 줄(#5368) — 워크트리 하나. */
+export interface EvictCandidate {
+  worktree: string;
+  reclaimableBytes: number;
+  /** 마지막으로 쓴 때(ms). 못 쟀으면 null — 축출이 «방금 썼다» 로 보고 건너뛴다. */
+  lastUsedMs: number | null;
+  active: boolean;
+}
+
+/** 축출 계획 — 무엇을 왜 골랐나(또는 왜 아무것도 안 골랐나). */
+export interface EvictPlan {
+  pressure: boolean;
+  forced: boolean;
+  pressurePct: number;
+  targetPct: number;
+  idleDays: number;
+  needBytes: number;
+  picks: EvictCandidate[];
+  pickedBytes: number;
+  skipped: { active: number; fresh: number; unknown_age: number; empty: number };
+  reason: string | null;
+}
+
 /** 실행기가 필요 없는 것들(순수 · fs 전용) — 코어가 top-level 로 내준다. */
 interface ReclaimPure {
   DERIVED_NAMES: string[];
@@ -66,6 +89,14 @@ interface ReclaimPure {
   isInside(child: string, parent: string): boolean;
   dirSize(root: string, budgetMs?: number): Promise<{ bytes: number; partial: boolean }>;
   reposIn(dir: string): Promise<string[]>;
+  isWorktreeActive(wt: string, dirs: readonly string[]): boolean;
+  EVICT_DEFAULTS: { pressurePct: number; targetPct: number; idleDays: number };
+  planEviction(input: {
+    candidates: EvictCandidate[];
+    disk: { usedPct: number; totalBytes: number } | null;
+    policy?: { pressurePct?: number; targetPct?: number; idleDays?: number; force?: boolean };
+    now?: number;
+  }): EvictPlan;
   createReclaim(deps: {
     exec: (file: string, args: string[], opts?: object) => Promise<{ stdout: string }>;
     logger?: { warn: (o: unknown, m: string) => void; info: (o: unknown, m: string) => void };
@@ -80,6 +111,7 @@ interface ReclaimOps {
   checkWorktree(wt: string): Promise<WorktreeCheck>;
   planReclaim(wt: string, opts?: { sizeBudgetMs?: number; activeSessionDirs?: string[] }): Promise<ReclaimPlan>;
   applyReclaim(plan: ReclaimPlan, opts?: { removeWorktree?: boolean; repoRoot?: string }): Promise<ReclaimResult>;
+  worktreeLastUsed(wt: string): Promise<number | null>;
 }
 
 // 코어 위치 — 병합 후 kit 은 게이트웨이 레포 안(`<root>/kit`)이다. `WORKFLOW_STD_DIR` 오버라이드는
@@ -101,6 +133,10 @@ export const PROTECTED_NAMES: readonly string[] = core.PROTECTED_NAMES;
 export const isInside = core.isInside;
 export const dirSize = core.dirSize;
 export const reposIn = core.reposIn;
+/** 살아 있는 세션·프로세스의 현재 경로 중 이 워크트리를 쓰고 있을 수 있는 것이 있나(안 · 바로 위 폴더 · 그 세션의 스크래치). */
+export const isWorktreeActive = core.isWorktreeActive;
+export const EVICT_DEFAULTS = core.EVICT_DEFAULTS;
+export const planEviction = core.planEviction;
 
 export const dirSizeFast = ops.dirSizeFast;
 export const dirSizesFast = ops.dirSizesFast;
@@ -108,3 +144,4 @@ export const baseRepoOf = ops.baseRepoOf;
 export const checkWorktree = ops.checkWorktree;
 export const planReclaim = ops.planReclaim;
 export const applyReclaim = ops.applyReclaim;
+export const worktreeLastUsed = ops.worktreeLastUsed;

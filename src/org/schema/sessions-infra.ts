@@ -30,6 +30,7 @@ export const CRON_ACTION_ALLOWLIST = [
   "agent_inject", "agent_headless",
   "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
   "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
+  "workspace_evict",       // #5368 — 디스크가 찼을 때 쉬는 워크트리의 파생물 축출
 ] as const;
 
 /**
