@@ -190,8 +190,10 @@ export const workspaceCapabilities: Capability[] = [
       items.sort((a, b) => (b.bytes ?? 0) - (a.bytes ?? 0));
       const total = items.reduce((sum, i) => sum + (i.bytes ?? 0), 0);
       // #5368 — 파생물 자동 정리가 마지막으로 무엇을 했나(없으면 null — 꺼져 있거나 재기동 뒤 첫 회차 전).
+      //  auto_evict_runs=false 면 이 서버에서는 정비 타이머 자체가 돌지 않는다(매니지드 중앙 게이트웨이 · 보조 인스턴스) — 화면이 토글을 잠근다.
       const { lastDerivedEvict } = await import("../../ops/workspace-evict.js");
-      return { root: PROJECT_SHARED_BASE, total_bytes: total, projects: items, auto_evict_last: lastDerivedEvict() };
+      const { backgroundSweepsRun } = await import("../../boot/housekeeping.js");
+      return { root: PROJECT_SHARED_BASE, total_bytes: total, projects: items, auto_evict_last: lastDerivedEvict(), auto_evict_runs: backgroundSweepsRun() };
     }),
 
   // ── 워크스페이스 일괄 분석·회수 (#845) ─────────────────────────────────────────────

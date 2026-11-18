@@ -134,5 +134,20 @@ const pol = (over: Partial<StoragePolicy>): (() => Promise<StoragePolicy>) => as
     assert.deepEqual(cwds, [], "C1 그 밖의 OS 에서는 빈 목록(세션 목록만으로 간다)");
   }
 }
+{ // R1 — 이 서버에서 정비 타이머가 도는가(화면이 토글을 잠그는 근거). runBootHousekeeping 의 게이트와 같은 판정이어야 한다.
+  const { backgroundSweepsRun } = await import("../boot/housekeeping.js");
+  const KEYS = ["ITEMS_DATABASE_URL", "LIVELY_NO_SCHEDULER", "LIVELY_TENANT_BINDING", "LIVELY_TENANT_ID", "LIVELY_BOOT_SCHEMA_ONLY"] as const;
+  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  const env = (o: Partial<Record<(typeof KEYS)[number], string>>): void => { for (const k of KEYS) { if (o[k] === undefined) delete process.env[k]; else process.env[k] = o[k]; } };
+  try {
+    const DB = "postgres://x@localhost/y";
+    env({ ITEMS_DATABASE_URL: DB }); assert.equal(backgroundSweepsRun(), true, "R1 셀프호스트(단일) — 돈다");
+    env({ ITEMS_DATABASE_URL: DB, LIVELY_TENANT_BINDING: "rls", LIVELY_TENANT_ID: "t1" }); assert.equal(backgroundSweepsRun(), true, "R1 고정 테넌트 — 돈다");
+    env({ ITEMS_DATABASE_URL: DB, LIVELY_TENANT_BINDING: "rls" }); assert.equal(backgroundSweepsRun(), false, "R1 요청별 테넌시(매니지드 중앙) — 안 돈다");
+    env({ ITEMS_DATABASE_URL: DB, LIVELY_NO_SCHEDULER: "1" }); assert.equal(backgroundSweepsRun(), false, "R1 스케줄러 꺼짐(보조 인스턴스 · 프리뷰) — 안 돈다");
+    env({ ITEMS_DATABASE_URL: DB, LIVELY_BOOT_SCHEMA_ONLY: "1" }); assert.equal(backgroundSweepsRun(), false, "R1 스키마 전용 부팅 — 안 돈다");
+    env({}); assert.equal(backgroundSweepsRun(), false, "R1 DB 없음 — 안 돈다");
+  } finally { env(saved as Partial<Record<(typeof KEYS)[number], string>>); }
+}
 await fsp.rm(root, { recursive: true, force: true });
 console.log("workspace-evict.test.ts ok — 넉넉하면 안 지움 · 고른 것만 · 세션 목록 실패면 그만둠 · 워크트리는 안 지움 · 정책 꺼짐이면 안 돎 · 회차 안 겹침");

@@ -209,8 +209,13 @@ function storageEditor(detail, data) {
     const evictChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
     evictChk.checked = p.derived_evict_enabled !== false; evictChk.disabled = !canEdit;
     const evictDaysIn = numIn(p.derived_evict_idle_days ?? 3, 0, 365);
-    const syncEvict = () => { evictDaysIn.disabled = !canEdit || !evictChk.checked; };
+    //  evictOff — 이 서버에서는 정비 타이머가 돌지 않는다(목록을 받아 온 뒤 paintEvictLast 가 정한다). 켜 봐야 아무 일도 없으니 잠근다.
+    const syncEvict = () => {
+      evictChk.disabled = !canEdit || evictOff;
+      evictDaysIn.disabled = !canEdit || evictOff || !evictChk.checked;
+    };
     evictChk.addEventListener('change', syncEvict);
+    evictSync = syncEvict;
     syncEvict();
 
     // 마지막 회차 — 워크스페이스 목록을 받아 온 뒤 채운다(loadWorkspace). 그 전에는 비어 있다.
@@ -716,8 +721,16 @@ function storageEditor(detail, data) {
   let wsList: any = null;
   // #5368 — 빌드 산출물 자동 정리의 마지막 회차 한 줄(정책 블록 안). 목록을 받아 온 뒤 채운다.
   let evictLastEl: HTMLElement | null = null;
+  let evictOff = false;                         // 이 서버에서는 자동 정리가 돌지 않는다(서버가 auto_evict_runs=false 로 알린다)
+  let evictSync: (() => void) | null = null;    // 정책 블록의 토글 잠금 — 블록이 그려진 뒤에 생긴다
   const paintEvictLast = (): void => {
+    evictOff = !!wsList && wsList.auto_evict_runs === false;
+    if (evictSync) evictSync();
     if (!evictLastEl) return;
+    if (evictOff) {
+      evictLastEl.textContent = '이 서버에서는 자동 정리가 돌지 않습니다 — 정비 타이머를 돌리지 않는 서버입니다(여러 워크스페이스를 함께 서비스하는 중앙 서버 · 보조 인스턴스). 구성원 컴퓨터의 폴더는 그 컴퓨터에서 lively reclaim --evict 로 정리합니다.';
+      return;
+    }
     const r = wsList && wsList.auto_evict_last;
     if (!r) { evictLastEl.textContent = '마지막 확인: 아직 없음 (켜져 있으면 30분 안에 한 번 확인합니다)'; return; }
     const when = relTime(new Date(r.at).toISOString());
