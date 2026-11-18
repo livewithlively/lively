@@ -145,10 +145,12 @@ const LOCAL_VERIFIERS: Record<string, (token: string) => VerifyResult> = {
  *  응답의 organization_uuid. 번들(2.1.327)은 forceLoginOrgUUID 검사에서 토큰 권한에 user:profile 이 없으면(setup-token 등) 이 경로를,
  *  있으면 프로필 조회를 쓴다. 메시지 생성은 부르지 않으니 구독 사용량을 쓰지 않고 부작용도 없다[미확인 — 번들 코드 읽기 기준].
  *  실측(2026-11-18, api.anthropic.com): 토큰 없음 401 «Missing Authorization header…» · 지어낸 토큰 401 «OAuth access token is
- *   invalid.» · GET 405 · 없는 경로 404 — 경로·호스트·메서드는 맞다. 유효한 토큰의 200 응답은 아직 실측 전이다.
+ *   invalid.» · GET 405 · 없는 경로 404 — 경로·호스트·메서드는 맞다. 유효한 로그인 토큰(Max · 권한에 user:profile 있음)은
+ *   200 {organization_uuid} 만 돌려줬다(organization_name 없음). setup-token(user:profile 없음)의 200 은 아직 실측 전이다.
  *  ⚠ 거부를 단정하지 않는다: 200 + organization_uuid 만 ok=true 이고, 401/403 을 포함한 나머지는 전부 null 이다.
  *   문서 없는 경로의 401 이 «토큰이 틀렸다» 인지 «경로·헤더가 바뀌었다» 인지 모르는데 거부로 말하면 멀쩡한 토큰을 지우게 만든다.
- *   해제 조건: 유효한 토큰·깨진 토큰으로 각 1회 실측해 401 이 깨진 토큰에서만 나오면 401 을 false 로 올린다(깨진 토큰 쪽은 위 실측).
+ *   해제 조건: 유효한 토큰·깨진 토큰으로 각 1회 실측해 401 이 깨진 토큰에서만 나오면 401 을 false 로 올린다. 깨진 토큰 쪽과
+ *   로그인 토큰 쪽은 위 실측으로 됐고, setup-token 의 200 이 남았다(권한이 달라 로그인 토큰 결과로 갈음하지 않는다).
  */
 const CLAUDE_ORG_URL = "https://api.anthropic.com/api/oauth/org";
 async function verifyClaudeSetupToken(token: string): Promise<VerifyResult> {
@@ -170,7 +172,7 @@ async function verifyClaudeSetupToken(token: string): Promise<VerifyResult> {
   const body = (await res.json().catch(() => null)) as { organization_uuid?: unknown; organization_name?: unknown } | null;
   const uuid = typeof body?.organization_uuid === "string" && body.organization_uuid ? body.organization_uuid : null;
   if (!uuid) return unknown("응답 모양이 예상과 다름");
-  // [미확인] organization_name 은 번들이 읽는 필드가 아니다. 응답에 있으면 사람이 알아보기 쉬우라고 붙일 뿐, 판정은 uuid 로만 한다.
+  // organization_name 은 번들이 읽는 필드가 아니고 실측 응답(2026-11-18)에도 없었다. 응답에 있으면 사람이 알아보기 쉬우라고 붙일 뿐, 판정은 uuid 로만 한다.
   const name = typeof body?.organization_name === "string" && body.organization_name ? body.organization_name : null;
   const who = name ? `${name} (${uuid})` : uuid;
   return { ok: true, who, message: `Claude 조직 ${who} 의 토큰이에요.` };
