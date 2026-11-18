@@ -420,6 +420,15 @@ function startBackgroundSweeps(): void {
       .then(() => reapPressureSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
+  // #5368 — 디스크가 경고 임계를 넘으면 쉬는 워크트리의 파생물(node_modules · dist …)을 오래 안 쓴 것부터 지운다.
+  //  정책(storage_policy.derived_evict_enabled)이 꺼져 있거나 디스크가 넉넉하면 statfs 한 번으로 끝난다. 규칙은 ops/workspace-evict.ts.
+  //  ⚠ 순회하지 않는다 — 디스크와 프로젝트 폴더는 박스의 것이다(로그 회전과 같다). 워크스페이스마다 돌리면 같은 폴더를 그 수만큼 본다.
+  //  ⚠ 부팅 직후엔 돌리지 않는다 — 재부팅 복원으로 세션이 다시 뜨기 전에는 «작업 중» 을 가릴 재료가 없다.
+  setInterval(() => {
+    void import("../ops/workspace-evict.js")
+      .then(({ sweepDerivedEvict }) => sweepDerivedEvict(() => effectiveStoragePolicy(loadStoragePolicy)))
+      .catch((err) => logger.warn({ err }, "파생물 자동 정리 tick 실패(비치명 — 다음 tick 재시도)"));
+  }, 30 * 60_000).unref();
   // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 셀프호스트에도 구성원 컴퓨터가 붙는다 — 매니지드의 요청 정비표와 같은 1분.
   //  컴퓨터마다 켜야 돈다(기본 꺼짐 · org_node.stop_rule). 노드가 없으면 곧바로 돌아간다(DB 무접촉).
   //  ⚠ 부팅 직후엔 돌리지 않는다 — 노드가 다시 붙어 스냅샷을 올리기 전(그리고 보는 중 판정이 «모름» 인 45초)엔 판정할 재료가 없다.

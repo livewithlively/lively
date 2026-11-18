@@ -170,6 +170,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (s.pty_critical_pct !== undefined) patchIn.pty_critical_pct = num(s.pty_critical_pct, "pty_critical_pct", 0, 100); // #687 후속 0=끔
         if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
         if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
+        if (s.derived_evict_enabled !== undefined) patchIn.derived_evict_enabled = Boolean(s.derived_evict_enabled);                       // #5368
+        if (s.derived_evict_idle_days !== undefined) patchIn.derived_evict_idle_days = num(s.derived_evict_idle_days, "derived_evict_idle_days", 0, 365); // #5368
         // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
         const stored = (await getRuntimeConfig()).storage_policy;
         // 비율도 남은 공간도 0 이면 막는 기준이 없다 — normalize 가 바닥을 기본값으로 되돌리기 전에 여기서 알린다.
@@ -744,6 +746,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         pty_critical_pct: z.number().int().min(0).max(100).optional().describe("#687후속 PTY 슬롯 위험 임계(사용%, 0=끔) — 기본 85. warn 보다 커야"),
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
+        derived_evict_enabled: z.boolean().optional().describe("#5368 디스크가 경고 임계를 넘으면 쉬는 워크트리의 파생물(node_modules·dist…)을 오래 안 쓴 것부터 자동으로 지운다. 워크트리·소스·.env 는 지우지 않는다"),
+        derived_evict_idle_days: z.number().int().min(0).max(365).optional().describe("#5368 자동 정리가 건너뛰는 기간(일) — 이 안에 손댄 워크트리는 지우지 않는다. 0 = 기간을 보지 않는다"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
       call_log_policy: z.object({
         retention_days: z.number().int().min(0).max(3650).optional().describe("MCP 호출 감사로그 보존일수 — 이보다 오래된 기록은 삭제. 0=무기한 보관"),

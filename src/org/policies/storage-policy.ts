@@ -43,6 +43,13 @@ export interface StoragePolicy {
   /** ⚠ gradle/cargo **홈**까지 공유(기본 꺼짐) — 캐시뿐 아니라 설정·자격증명(gradle.properties·credentials.toml)도
    *  옮겨가 고객 빌드가 깨질 수 있다. 그래서 opt-in. (src/ops/build-cache.ts 의 homeRelocateEnv 참조) */
   shared_cache_relocate_home: boolean;
+  /**
+   * #5368 — 디스크가 경고 임계(disk_warn_pct)를 넘으면 쉬는 워크트리의 **파생물**(node_modules · dist · build …)을 오래 안 쓴 것부터
+   *  스스로 지운다. 워크트리 · 소스 · .env · data/ 는 대상이 아니다(다시 설치 · 빌드하면 돌아오는 것만). 규칙은 ops/workspace-evict.ts.
+   */
+  derived_evict_enabled: boolean;
+  /** #5368 — 이 기간(일) 안에 손댄 워크트리는 자동 정리에서 건너뛴다. 0 = 기간을 보지 않는다(살아 있는 세션이 쓰는 것만 건너뛴다). */
+  derived_evict_idle_days: number;
 }
 
 export type StoragePolicyPatch = Partial<StoragePolicy>;
@@ -67,6 +74,10 @@ export const DEFAULT_STORAGE_POLICY: StoragePolicy = {
   pty_critical_pct: 85,
   shared_cache_enabled: true, // 순수 캐시만 이동 — 위험 없고 빌드가 빨라진다
   shared_cache_relocate_home: false, // 자격증명이 딸려가므로 관리자가 명시적으로 켜야 한다
+  // #5368 — 기본 켬. 지우는 것은 다시 만들 수 있는 것뿐이고, 디스크가 가득 차면 전면 다운 + 수동 복구로 착지한다(disk-guard 머리말).
+  //  그 사고를 막는 장치가 꺼진 채 나가면 정작 필요한 박스에서 돌지 않는다. 디스크가 경고 임계 아래면 아무것도 하지 않는다.
+  derived_evict_enabled: true,
+  derived_evict_idle_days: 3,
 };
 
 // 노브 선언(#1313 R47) — 범위·env 시드는 여기 표 하나가 전부다. 클램프/시드/우선순위 골격은 knob.ts 가 맡는다.
@@ -86,6 +97,8 @@ const policy = definePolicy<StoragePolicy>({
     pty_critical_pct: { env: "PTY_CRITICAL_PCT", min: 0, max: 100, loose: true },
     shared_cache_enabled: { kind: "bool", env: "SHARED_CACHE" },
     shared_cache_relocate_home: { kind: "bool", env: "SHARED_CACHE_RELOCATE_HOME" },
+    derived_evict_enabled: { kind: "bool", env: "DERIVED_EVICT" },
+    derived_evict_idle_days: { env: "DERIVED_EVICT_IDLE_DAYS", min: 0, max: 365 },
   },
   // 축 사이 불변식 — 한 칸짜리 범위(min/max)로는 표현이 안 되는 것만 남긴다.
   invariant(out) {
@@ -116,6 +129,18 @@ function keepChosenCriticalPct(out: StoragePolicy, raw: unknown): StoragePolicy 
   //  비율 0(비율 안 봄 #5564)은 예외다 — 그때는 바닥이 유일한 기준이라 떼면 가드가 사라진다.
   if (!floorGiven && out.disk_critical_pct > 0 && out.disk_critical_pct !== DEFAULT_STORAGE_POLICY.disk_critical_pct) out.disk_critical_free_gb = 0;
   return out;
+}
+
+/** #5368 — 자동 정리의 목표 사용률: 경고 임계에서 이만큼(%p) 내려간 자리. 임계 바로 아래까지만 지우면 다음 회차에 곧바로 다시 넘는다. */
+export const DERIVED_EVICT_HEADROOM_PCT = 10;
+/** 정책 → 파생물 자동 정리의 시작 기준 · 목표 · 쉰 기간. 시작 기준은 디스크 경고 임계를 그대로 쓴다(칸을 따로 두지 않는다). */
+export function derivedEvictPolicy(p: StoragePolicy): { enabled: boolean; pressurePct: number; targetPct: number; idleDays: number } {
+  return {
+    enabled: p.derived_evict_enabled,
+    pressurePct: p.disk_warn_pct,
+    targetPct: Math.max(1, p.disk_warn_pct - DERIVED_EVICT_HEADROOM_PCT),
+    idleDays: p.derived_evict_idle_days,
+  };
 }
 
 /** 잡값 방어 — 관리탭 입력이든 env 든 범위를 벗어나면 시드/기본값으로. '경고 < 위험' 불변식도 여기서 강제한다. */
