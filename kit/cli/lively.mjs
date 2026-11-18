@@ -3115,7 +3115,11 @@ async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLin
     return;
   }
   // remove — 이 폴더를 제외 목록에 넣는다.
-  if (whole) die(`${target} 를 통째로 제외하면 라이블리 프로젝트 폴더 말고는 모두 꺼집니다. 그게 필요하면 조직 관리자에게 «작업 폴더에서만» 방식을 요청하세요 — ${SCOPE_ADMIN_PLACE}.`, 2);
+  //  홈에서 연 세션의 «여기 끄기» 가 여기로 온다 — 거절만 하지 않고 지금 쓸 수 있는 두 길을 먼저 말한다(조직 방식 변경은 마지막).
+  if (whole) die(`${target} 를 통째로 제외할 수는 없습니다 — 라이블리 프로젝트 폴더 말고는 모두 꺼집니다.\n`
+    + "  특정 폴더에서만 끄려면: lively work-root remove <경로>\n"
+    + "  이번 세션만 라이블리 없이 하려면: 세션을 닫고 lively run --incognito\n"
+    + `  기본을 꺼짐으로 두려면 조직 관리자에게 «작업 폴더에서만» 방식을 요청하세요 — ${SCOPE_ADMIN_PLACE}.`, 2);
   if (inEx) { say(green(`이미 제외 폴더입니다: ${target}`)); return; }
   const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: target, lively: LIVELY });
   if (d.reason === "excluded") { say(green(`이미 꺼져 있습니다 — 제외 폴더 ${bold(d.root)} 아래입니다.`)); return; }

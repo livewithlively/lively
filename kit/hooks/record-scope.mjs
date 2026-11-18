@@ -477,6 +477,10 @@ export function outsideNotice({ dir = "", reason = "outside", root = "", harness
 //     **아래**면 그 등록 폴더(root)를 빼야 꺼진다(그 아래 전부가 꺼진다 — 사람이 알고 고르게 한다).
 //   project · unsynced — 목록으로는 못 끈다(프로젝트 표식은 제외해도 켜지고, 설정 사본이 없으면 목록 자체가 없다) →
 //     라이블리 없이 다시 여는 명령(`lively run --incognito`)을 가리킨다. 플러그인만 깐 자리엔 그 명령이 없어 켜짐만 말한다.
+//   anywhere 인데 세션 폴더가 홈·디스크 맨 위 — 통째 제외는 CLI 가 거절한다(거의 모든 곳이 꺼진다, kit/cli/lively.mjs workRootAnywhere).
+//     `/lively-disconnect` 가 안 듣는 자리라(2026-11-18 홈에서 연 세션 실측) 같은 다시 여는 명령을 가리키고, AI 에게는 «특정 폴더만 끄기» 도 준다.
+//  say — 사람에게 한 줄을 그리지 않는 화면(클로드 데스크톱 앱 Code 탭 — 훅은 돌지만 systemMessage 가 안 보인다, 2026-11-18 화면 실측)에서
+//   AI 가 첫 답 끝에 그 한 줄을 대신 말하게 하는 지시문. 붙일지는 부르는 쪽(session-preload)이 화면을 보고 정한다.
 //   spawned — 알림 없음(null). 사람이 라이블리로 켜겠다고 고른 세션이고(웹·노드·`lively run`) 폴더 손잡이도 없다.
 /** 이 하네스에서 «여기 끄기» 를 부르는 말 — connectHint 의 짝. */
 export function disconnectHint(harness = "claude", { plugin = false, removeCmd = workRootRemoveCommand() } = {}) {
@@ -497,26 +501,34 @@ export function insideNotice({ dir = "", reason = "", root = "", harness = "clau
   const head = "## 라이블리 켜짐 — 이 세션은 연결돼 있다";
   const on = "회사 맥락 주입·기록·대화 업로드·라이블리 도구가 이 세션에서 동작한다.";
   const ask = "사람이 요청하지 않았는데 끄지 마라.";
+  const done = (user, lines) => ({ user, ai: lines.join("\n"),
+    say: `이 화면은 켜짐 알림을 사람에게 따로 보여 주지 않는다. 사람에게 처음 답할 때 답 맨 끝에 한 줄로 «${user}» 를 덧붙여라 — 이 대화에서 한 번만.` });
+  const sameDir = (a, b) => normPath(a) === normPath(b) || (!!real(a) && !!real(b) && normPath(real(a)) === normPath(real(b)));
+  const whole = reason === "anywhere" && !!dir && (sameDir(dir, dirname(lively)) || normPath(dir) === normPath("/") || /^[A-Za-z]:[\\/]?$/.test(String(dir)));
+  if (whole) {
+    const why = "이 컴퓨터는 «어디서나» 방식(조직 설정)이고 이 세션을 연 폴더는 홈(또는 디스크 맨 위) 폴더라";
+    if (plugin) return done("[라이블리] 켜져 있습니다", [head, `${why} 라이블리가 켜져 있다 — ${on}`,
+      "이 폴더는 통째로 제외할 수 없다. 사람이 특정 폴더에서 끄고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 그 폴더를 제외하라고 안내하라.", ask]);
+    const run = runIncognitoCommand({ ...cli, harness: h });
+    return done(`[라이블리] 켜져 있습니다 · 라이블리 없이 열려면 ${isDirect(run) ? `\`${run}\`` : run}`, [head, `${why} 라이블리가 켜져 있다 — ${on}`,
+      `이 폴더는 통째로 제외할 수 없다(거의 모든 곳이 꺼진다 — 끄기 명령이 거절한다). 사람이 연결 상태를 묻거나 끄고 싶다고 하면 두 길을 안내하라: 특정 폴더에서만 끄려면 그 폴더 경로로 \`${remove()} '<경로>'\`, 이 세션을 라이블리 없이 하려면 닫고 셸에서 \`${run}\` 로 다시 연다${isDirect(run) ? `(${PS_NOTE})` : ""}.`,
+      ask]);
+  }
   if (reason === "project" || reason === "unsynced") {
     const why = reason === "project"
       ? (safeDir(root) ? `이 세션을 연 폴더는 라이블리 프로젝트 폴더(\`${root}\`)라` : "이 세션을 연 폴더는 라이블리 프로젝트 폴더라")
       : "이 컴퓨터는 기록 범위 설정을 아직 받지 못해(종전 동작)";
     const label = reason === "project" ? "[라이블리] 켜져 있습니다(라이블리 프로젝트 폴더)" : "[라이블리] 켜져 있습니다";
-    if (plugin) return { user: label, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, ask].join("\n") };
+    if (plugin) return done(label, [head, `${why} 라이블리가 켜져 있다 — ${on}`, ask]);
     const run = runIncognitoCommand({ ...cli, harness: h });
-    return {
-      user: `${label} · 라이블리 없이 열려면 ${isDirect(run) ? `\`${run}\`` : run}`,
-      ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`,
-        `이 폴더는 목록으로 끌 수 없다. 사람이 연결 상태를 묻거나 라이블리 없이 일하고 싶다고 하면, 이 세션을 닫고 셸에서 \`${run}\` 로 다시 열라고 안내하라${isDirect(run) ? `(${PS_NOTE})` : ""}.`,
-      ].join("\n"),
-    };
+    return done(`${label} · 라이블리 없이 열려면 ${isDirect(run) ? `\`${run}\`` : run}`, [head, `${why} 라이블리가 켜져 있다 — ${on}`,
+      `이 폴더는 목록으로 끌 수 없다. 사람이 연결 상태를 묻거나 라이블리 없이 일하고 싶다고 하면, 이 세션을 닫고 셸에서 \`${run}\` 로 다시 열라고 안내하라${isDirect(run) ? `(${PS_NOTE})` : ""}.`]);
   }
   const hint = disconnectHint(h, { plugin, removeCmd: remove() });
   const user = plugin ? `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}하세요` : `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}`;
   //  등록 폴더의 아래에서 켠 세션 — 이 폴더만은 못 끈다. 품은 등록 폴더를 빼야 하고 그 아래 전부가 꺼진다.
   //   같은 폴더인지는 실제 경로로도 본다(심링크 · /var ↔ /private/var) — 판정(matchWorkRoot)과 같은 기준이라 같은 자리에 «그 아래 전부» 를 붙이지 않는다.
   //   세션 폴더는 따로 짚는다 — «여기 끄기» 커맨드가 말하는 «세션을 연 폴더» 가 품은 작업 폴더로 읽히지 않게(그 폴더를 빼는 건 사람이 고른 뒤다).
-  const sameDir = (a, b) => normPath(a) === normPath(b) || (!!real(a) && !!real(b) && normPath(real(a)) === normPath(real(b)));
   const parent = reason === "work_root" && safeDir(root) && dir && !sameDir(dir, root) ? root : "";
   const here = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)가` : "이 세션을 연 폴더가";
   const why = reason === "anywhere" ? `이 컴퓨터는 «어디서나» 방식(조직 설정)이고 ${here} 제외 폴더가 아니라서`
@@ -530,7 +542,7 @@ export function insideNotice({ dir = "", reason = "", root = "", harness = "clau
     : `사람이 연결 상태를 묻거나 여기서 끄고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — `
       + (parent ? `이 폴더만은 못 끄고 작업 폴더 \`${parent}\` 를 목록에서 빼야 한다 — 그 아래 전부가 꺼진다는 것을 사람에게 먼저 말하고 고르게 하라. ` : "")
       + "끄면 이 세션도 그때부터 기록·업로드·도구가 멈추니 그 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라.";
-  return { user, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, how, ask].join("\n") };
+  return done(user, [head, `${why} 라이블리가 켜져 있다 — ${on}`, how, ask]);
 }
 
 // ── 세션 중간 연결(늦은 맥락 주입) ───────────────────────────────────────────

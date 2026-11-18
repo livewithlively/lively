@@ -429,7 +429,22 @@ if (process.platform !== "win32") {
     const curly = rs.insideNotice({ ...base, dir: "/p/a\u2019b", reason: "anywhere", harness: "claude" });
     check("ON10b 곡선 따옴표가 든 폴더 이름도 안내에 넣지 않는다(PowerShell 은 따옴표로 읽는다)", !curly.ai.includes("\u2019") && curly.ai.includes("이 폴더에서 `lively work-root remove`"), curly.ai);
   }
-  check("ON12 AI 안내는 짧다(이유마다 600자 안)", [a, w, u, p, n, g].every((x) => x.ai.length <= 600), JSON.stringify([a, w, u, p, n, g].map((x) => x.ai.length)));
+  {
+    //  홈·디스크 맨 위에서 연 «어디서나» 세션 — 통째 제외는 CLI 가 거절한다(끄기 커맨드가 안 듣는 자리).
+    const hm = rs.insideNotice({ ...base, dir: "/h", reason: "anywhere", harness: "claude" });   // lively=/h/.lively → 홈=/h
+    check("ON14 홈에서 연 세션 — 안 듣는 /lively-disconnect 대신 lively run --incognito 를 가리킨다", hm.user.includes("켜져 있습니다") && !hm.user.includes("lively-disconnect") && hm.user.includes("lively run --incognito"), hm.user);
+    check("ON14b AI 에게는 두 길을 준다(특정 폴더만 끄기 · 라이블리 없이 다시 열기) — 홈을 빼는 명령은 주지 않는다",
+      hm.ai.includes("통째로 제외할 수 없다") && hm.ai.includes("work-root remove '<경로>'") && hm.ai.includes("lively run --incognito") && !hm.ai.includes("remove '/h'"), hm.ai);
+    const rt = rs.insideNotice({ ...base, dir: "/", reason: "anywhere", harness: "codex" });
+    check("ON14c 디스크 맨 위도 같다(코덱스는 다시 여는 명령에 하네스)", !rt.user.includes("$lively-disconnect") && rt.user.includes("lively run --incognito --harness codex"), rt.user);
+    const sub = rs.insideNotice({ ...base, dir: "/h/notes", reason: "anywhere", harness: "claude" });
+    check("ON14d 홈의 아래 폴더는 종전대로 그 폴더를 끈다", sub.user.includes("/lively-disconnect") && sub.ai.includes("remove '/h/notes'"), sub.user);
+    const wf = rs.insideNotice({ ...base, dir: "/h", reason: "work_root", root: "/h", harness: "claude" });
+    check("ON14e «작업 폴더에서만» 에서 홈이 등록돼 있으면 빼는 건 된다(거절은 통째 제외뿐)", wf.user.includes("/lively-disconnect"), wf.user);
+    check("ON15 say — 한 줄을 그리지 않는 화면용 지시문은 그 한 줄을 그대로 품는다", [a, hm, p].every((x) => typeof x.say === "string" && x.say.includes(`«${x.user}»`) && x.say.includes("한 번만")));
+    a.all = [a, w, u, p, n, g, hm];
+  }
+  check("ON12 AI 안내는 짧다(이유마다 600자 안)", a.all.every((x) => x.ai.length <= 600), JSON.stringify(a.all.map((x) => x.ai.length)));
   check("ON13 끄기 명령은 등록 명령과 같은 꼴(동사만 다르다)",
     rs.workRootRemoveCommand({ ...base, dir: "/a b" }) === rs.workRootAddCommand({ ...base, dir: "/a b" }).replace("work-root add", "work-root remove"));
 }
@@ -700,6 +715,17 @@ await withGateway(async (gw) => {
     const j = jsonOf(await startIn(sb, proj, gw));
     check("J8 프로젝트 폴더(제외해도 켜지는 자리) — 안 듣는 스위치를 가리키지 않는다", String(j?.systemMessage || "").includes("run --incognito") && !String(j?.systemMessage || "").includes("lively-disconnect"), JSON.stringify(j).slice(0, 300));
   }
+});
+await withGateway(async (gw) => {
+  //  사람에게 한 줄을 그리지 않는 화면(클로드 데스크톱 앱 — 진입점 claude-desktop 계열)에서는 AI 가 첫 답에 대신 말하게 한다.
+  const mk = () => { const sb = sandbox(); const work = sb.mk("work"); setScope(sb.lively, "work_folders", [work]); return { sb, work }; };
+  const said = async (env, opt = {}) => { const { sb, work } = mk(); return ctxOf(jsonOf(await startIn(sb, work, gw, { env, ...opt }))).includes("이 대화에서 한 번만"); };
+  check("J11 데스크톱 앱(진입점 claude-desktop · local-agent)에서는 AI 에게 «첫 답 끝에 한 줄» 을 시킨다", (await said({ CLAUDE_CODE_ENTRYPOINT: "claude-desktop" })) && (await said({ CLAUDE_CODE_ENTRYPOINT: "local-agent" })));
+  check("J11b 터미널(cli)은 화면이 그리므로 시키지 않는다", !(await said({ CLAUDE_CODE_ENTRYPOINT: "cli" })));
+  check("J11c 진입점을 모르거나 재지 않은 화면(VS Code 확장)은 종전대로 시키지 않는다", !(await said({ CLAUDE_CODE_ENTRYPOINT: "" })) && !(await said({ CLAUDE_CODE_ENTRYPOINT: "claude-vscode" })));
+  check("J11d 사람 없이 도는 실행(sdk-cli · 무인)은 시키지 않는다", !(await said({ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" })) && !(await said({ CLAUDE_CODE_ENTRYPOINT: "claude-desktop", CLAUDE_CODE_SESSION_ATTENDED: "0" })));
+  check("J11e 압축 뒤 다시 도는 시작 훅은 되풀이시키지 않는다", !(await said({ CLAUDE_CODE_ENTRYPOINT: "claude-desktop" }, { source: "compact" })));
+  check("J11f 코덱스는 진입점 env 와 무관하다(시키지 않는다)", !(await said({ CLAUDE_CODE_ENTRYPOINT: "claude-desktop" }, { args: ["--harness", "codex"] })));
 });
 await withGateway(async (gw) => {
   const sb = sandbox(); const work = sb.mk("work"); setScope(sb.lively, "work_folders", [work]);

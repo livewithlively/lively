@@ -706,6 +706,17 @@ const PLUGIN_INSTALL = (() => {
   try { return existsSync(join(dirname(dirname(fileURLToPath(import.meta.url))), ".claude-plugin", "plugin.json")); } catch { return false; }
 })();
 
+// 사람에게 한 줄(systemMessage)을 그리지 않는 화면인가 — 그러면 AI 가 첫 답 끝에 그 한 줄을 대신 말하게 한다(record-scope.mjs insideNotice 의 say).
+//  클로드 터미널(CLAUDE_CODE_ENTRYPOINT=cli)은 시작 배너 아래에 그린다(2.1.327 실측). 데스크톱 앱 Code 탭은 훅은 돌지만 그 한 줄이 화면에
+//  없다(2026-11-18 상민님 화면 실측). 데스크톱 진입점 값은 클로드 바이너리(2.1.327)의 데스크톱 묶음 그대로다 — 재지 않은 화면(VS Code 확장 등)은
+//  넣지 않는다(그 화면이 한 줄을 그리면 두 번 말하게 된다). 사람 없이 도는 실행(표의 headless)은 읽을 사람이 없어 뺀다.
+const DESKTOP_ENTRYPOINTS = new Set(["claude-desktop", "claude-desktop-3p", "local-agent"]);
+function lineHidden() {
+  const h = harness(HARNESS);
+  if (h.id !== "claude") return false;
+  return DESKTOP_ENTRYPOINTS.has(String(process.env.CLAUDE_CODE_ENTRYPOINT || "").trim()) && !h.headless({}, process.env);
+}
+
 // 기록 범위(#5016) — 범위 밖(작업 폴더 밖 · 제외 폴더 안)에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
 //  여기서만 하는 일 셋: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
 //  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다
@@ -727,7 +738,8 @@ async function scopeGate() {
     //  켜짐 알림(꺼짐 알림의 짝 — record-scope.mjs insideNotice 머리말). 토큰이 없는 컴퓨터는 연결된 것이 아니라 알리지 않는다.
     //  압축 뒤 다시 도는 시작 훅(source: compact)은 같은 대화의 한가운데다 — AI 안내만 다시 싣고 사람에게 한 줄은 되풀이하지 않는다.
     const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively }) : null;
-    if (on) ON_NOTICE = { user: String(input.source || "") === "compact" ? "" : on.user, ai: on.ai };
+    const again = String(input.source || "") === "compact";
+    if (on) ON_NOTICE = { user: again ? "" : on.user, ai: on.ai + (!again && lineHidden() ? "\n" + on.say : "") };
     return false;
   }
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
