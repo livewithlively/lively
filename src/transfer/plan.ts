@@ -20,6 +20,7 @@
 //  · 위키 핀(is_wiki) → 핀 없이 들인다 — 핀은 받는 쪽의 모든 세션에 주입되는 큐레이션이라 조용히 늘리지 않는다.
 //  · 이름이 바뀌어 들어가는 지식을 가리키는 [[링크]] 는 같은 묶음 안에서 새 이름으로 고쳐 쓴다(보완 4).
 import type { Bundle, BundleKnowledge, BundleProblem } from "./bundle.js";
+import { principleForName, groupKeyForPrinciple } from "../v6/category-groups.js";
 import { bundleContentHash, contentHash } from "./bundle.js";
 import { slugify } from "../v6/knowledge-common.js";
 import { RE_WIKI, mapProseSegments } from "../v6/wikilink.js";
@@ -73,6 +74,8 @@ export interface TargetState {
   sourceIds: ReadonlySet<number>;
   /** 외부 좌표 키(sourceExternalKey) → 받는 쪽 자료 id */
   sourcesByExternal: ReadonlyMap<string, number>;
+  /** 받는 쪽의 살아 있는 카테고리 묶음(화면 순서 sort→key). 하나라도 있으면 새 분류는 반드시 그중 하나에 들어간다(#1631 하드 규칙). */
+  groups?: ReadonlyArray<{ key: string; name: string | null }>;
 }
 
 export interface PlanKnowledgeItem {
@@ -92,7 +95,7 @@ export interface PlanKnowledgeItem {
   notes: string[];
 }
 
-export type CategoryDecision = { action: "map"; to: string } | { action: "create"; key?: string; name?: string };
+export type CategoryDecision = { action: "map"; to: string } | { action: "create"; key?: string; name?: string; /** 새 분류가 들어갈 묶음 key — 받는 쪽에 없는 key 면 기본값(이름 규칙) */ group?: string };
 
 export interface PlanCategoryItem {
   /** 묶음 쪽 key(분류가 없던 지식 묶음은 UNSORTED.ref) */
@@ -101,6 +104,8 @@ export interface PlanCategoryItem {
   should: string | null;
   count: number;
   suggestion: { action: "map"; to: string; why: "before" | "same_key" | "same_name" } | { action: "create"; key: string; name: string | null };
+  /** 새 분류로 만들면 들어갈 묶음의 기본값(이름 규칙 — groupForNewCategory). 받는 쪽에 묶음이 없으면 null. 사람이 미리보기에서 바꿀 수 있다. */
+  group: string | null;
 }
 
 export interface PlanSummary {
@@ -127,12 +132,26 @@ export interface Plan {
   sources: { count: number; existing: number; fresh: number };
   problems: BundleProblem[];
   notes: string[];
+  /** 받는 쪽의 카테고리 묶음(화면 순서) — 새 분류가 들어갈 묶음을 고르는 칸. 비어 있으면 묶음 없는 워크스페이스다. */
+  groups: Array<{ key: string; name: string | null }>;
 }
 
 export interface Decisions {
   knowledge?: Record<string, KnowledgeAction>;
   categories?: Record<string, CategoryDecision>;
   include_sources?: boolean;
+}
+
+/**
+ * 새로 만들 분류가 들어갈 묶음(#1631) — 받는 쪽에 묶음이 하나라도 있으면 **반드시 하나**를 준다(없으면 분류를 못 만든다 —
+ *  2026-11-18 실측: GOWIKI 묶음을 들이다 «카테고리는 묶음 하나에 반드시 들어갑니다» 로 첫 단계에서 실패).
+ *  고르는 규칙은 플랫폼이 묶음 밖 분류를 넣을 때 쓰는 것과 **같은 함수**다(planGroupPlacement — 이름 규칙 → 규약 칸, 없으면 첫 묶음).
+ *  묶음은 화면 층이라 틀려도 지식은 안 움직이고, 사람이 분류 설정에서 옮길 수 있다. 묶음이 0개면 null(옛 판 — 종전대로).
+ */
+export function groupForNewCategory(name: string | null, ref: string, groups: TargetState["groups"]): string | null {
+  const keys = (groups ?? []).map((g) => g.key);
+  if (!keys.length) return null;
+  return groupKeyForPrinciple(principleForName(name ?? ref), keys);
 }
 
 /** 사람이 고칠 수 있는 입력 문제(같은 워크스페이스로 가져오기 · 없는 분류로 맞추기) — REST 400 으로 나간다. */
@@ -287,7 +306,7 @@ export function planImport(bundle: Bundle, target: TargetState, problems: Bundle
         suggestion = { action: "create", key, name };
       }
     }
-    categories.push({ ref, name, should, count, suggestion });
+    categories.push({ ref, name, should, count, suggestion, group: groupForNewCategory(name, ref, target.groups) });
   }
 
   // 자료 — 이미 있는 것(전에 가져왔거나 같은 외부 원본)은 연결만 한다.
@@ -318,6 +337,7 @@ export function planImport(bundle: Bundle, target: TargetState, problems: Bundle
     sources: { count: bundle.sources.length, existing: existingSources, fresh: bundle.sources.length - existingSources },
     problems,
     notes,
+    groups: (target.groups ?? []).map((g) => ({ key: g.key, name: g.name })),
   };
 }
 
@@ -352,12 +372,12 @@ export interface Resolved {
   /** 묶음 쪽 분류 ref → 받는 쪽 key */
   categoryMap: Map<string, string>;
   /** 만들 분류 */
-  createCategories: Array<{ ref: string; key: string; name: string | null; should: string | null; description: string | null }>;
+  createCategories: Array<{ ref: string; key: string; name: string | null; should: string | null; description: string | null; group: string | null }>;
   include_sources: boolean;
 }
 
 /** 미리보기 + 사람의 결정 → 실행할 일. 결정이 없거나 허용 범위 밖이면 기본값으로 간다(조용히 위험한 쪽으로 가지 않는다). */
-export function resolveDecisions(plan: Plan, decisions: Decisions, target: Pick<TargetState, "categories" | "originsKnowledge">, bundleCategories: Bundle["categories"]): Resolved {
+export function resolveDecisions(plan: Plan, decisions: Decisions, target: Pick<TargetState, "categories" | "originsKnowledge" | "groups">, bundleCategories: Bundle["categories"]): Resolved {
   const activeKeys = new Set(target.categories.filter((c) => c.state === "active").map((c) => c.key));
   const allKeys = new Set(target.categories.map((c) => c.key));
   const categoryMap = new Map<string, string>();
@@ -381,7 +401,12 @@ export function resolveDecisions(plan: Plan, decisions: Decisions, target: Pick<
     let key = wantedKey;
     for (let i = 2; allKeys.has(key) || createdKeys.has(key); i++) key = `${wantedKey}-${i}`;
     const src = byKey.get(c.ref);
-    createCategories.push({ ref: c.ref, key, name: choice.name ?? c.name, should: c.should, description: src?.description ?? null });
+    const name = choice.name ?? c.name;
+    //  묶음 — 사람이 고른 것이 받는 쪽에 있으면 그것, 아니면 기본값(이름 규칙). 묶음이 없는 워크스페이스면 null(종전대로).
+    const groupKeys = (target.groups ?? []).map((g) => g.key);
+    const wantGroup = d?.action === "create" && typeof d.group === "string" && groupKeys.includes(d.group) ? d.group : null;
+    createCategories.push({ ref: c.ref, key, name, should: c.should, description: src?.description ?? null,
+      group: wantGroup ?? (groupKeys.length ? (c.group && groupKeys.includes(c.group) ? c.group : groupForNewCategory(name, c.ref, target.groups)) : null) });
     createdKeys.add(key);
     categoryMap.set(c.ref, key);
   }

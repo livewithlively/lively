@@ -42,6 +42,7 @@ const applyInput = {
     to: z.string().optional().describe("map 일 때 받는 쪽 분류 key"),
     key: z.string().optional().describe("create 일 때 새 분류 key(없으면 제안값)"),
     name: z.string().optional().describe("create 일 때 새 분류 이름"),
+    group: z.string().optional().describe("create 일 때 새 분류를 넣을 카테고리 묶음 key(미리보기의 plan.groups 중 하나 — 없거나 받는 쪽에 없는 key 면 이름 규칙으로 고른 기본값 categories[].group)"),
   })).optional().describe("묶음 쪽 분류 key → 맞추기(map) 또는 새로 만들기(create)"),
   include_sources: z.boolean().optional().describe("묶음에 자료가 있으면 함께 들일지(기본 true)"),
 };
@@ -56,7 +57,8 @@ function parseDecisions(b: Record<string, unknown>): Decisions {
   for (const [ref, v] of Object.entries(cin)) {
     const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
     if (o.action === "map" && typeof o.to === "string") categories[ref] = { action: "map", to: o.to };
-    else if (o.action === "create") categories[ref] = { action: "create", key: typeof o.key === "string" ? o.key : undefined, name: typeof o.name === "string" ? o.name : undefined };
+    //  group — 새 분류가 들어갈 카테고리 묶음(#1631). 화면의 묶음 고르기가 이 칸으로 온다(빠뜨리면 사람이 고른 묶음이 조용히 기본값으로 바뀐다).
+    else if (o.action === "create") categories[ref] = { action: "create", key: typeof o.key === "string" ? o.key : undefined, name: typeof o.name === "string" ? o.name : undefined, group: typeof o.group === "string" ? o.group : undefined };
   }
   return { knowledge, categories, include_sources: b.include_sources !== false };
 }
