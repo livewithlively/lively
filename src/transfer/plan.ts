@@ -154,6 +154,22 @@ export function groupForNewCategory(name: string | null, ref: string, groups: Ta
   return groupKeyForPrinciple(principleForName(name ?? ref), keys);
 }
 
+/**
+ * 새 분류를 어느 묶음에 넣었는지 결과 안내(순수). 사람이 고른 것은 그대로, 기본값은 «(이름 규칙)» 을 붙인다 —
+ *  종전 문구는 사람이 «제품» 을 고른 것까지 «이름에 따라 넣었습니다» 라고 말했다(2026-11-18 실측, GOWIKI 가져오기).
+ *  묶음에 넣은 것이 없으면 null.
+ */
+export function groupPlacementNote(
+  created: ReadonlyArray<{ key: string; name: string | null; group: string | null; group_chosen: boolean }>,
+  groups: TargetState["groups"],
+): string | null {
+  const placed = created.filter((c) => c.group);
+  if (!placed.length) return null;
+  const nameOf = new Map((groups ?? []).map((g) => [g.key, g.name ?? g.key]));
+  const items = placed.map((c) => `${c.name ?? c.key} → ${nameOf.get(c.group!) ?? c.group}${c.group_chosen ? "" : "(이름 규칙)"}`);
+  return `새로 만든 분류 ${placed.length}개를 묶음에 넣었습니다(${items.join(" · ")}). 묶음은 화면에서만 쓰여 분류 설정에서 옮길 수 있습니다.`;
+}
+
 /** 사람이 고칠 수 있는 입력 문제(같은 워크스페이스로 가져오기 · 없는 분류로 맞추기) — REST 400 으로 나간다. */
 export class PlanError extends Error {}
 
@@ -372,7 +388,9 @@ export interface Resolved {
   /** 묶음 쪽 분류 ref → 받는 쪽 key */
   categoryMap: Map<string, string>;
   /** 만들 분류 */
-  createCategories: Array<{ ref: string; key: string; name: string | null; should: string | null; description: string | null; group: string | null }>;
+  createCategories: Array<{ ref: string; key: string; name: string | null; should: string | null; description: string | null; group: string | null;
+    /** 묶음을 사람이 고른 것인가(false = 이름 규칙 기본값). 결과 안내가 «고른 것» 을 «이름에 따라» 라고 말하지 않게. */
+    group_chosen: boolean }>;
   include_sources: boolean;
 }
 
@@ -406,7 +424,8 @@ export function resolveDecisions(plan: Plan, decisions: Decisions, target: Pick<
     const groupKeys = (target.groups ?? []).map((g) => g.key);
     const wantGroup = d?.action === "create" && typeof d.group === "string" && groupKeys.includes(d.group) ? d.group : null;
     createCategories.push({ ref: c.ref, key, name, should: c.should, description: src?.description ?? null,
-      group: wantGroup ?? (groupKeys.length ? (c.group && groupKeys.includes(c.group) ? c.group : groupForNewCategory(name, c.ref, target.groups)) : null) });
+      group: wantGroup ?? (groupKeys.length ? (c.group && groupKeys.includes(c.group) ? c.group : groupForNewCategory(name, c.ref, target.groups)) : null),
+      group_chosen: !!wantGroup });
     createdKeys.add(key);
     categoryMap.set(c.ref, key);
   }

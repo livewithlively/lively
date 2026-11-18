@@ -11,6 +11,7 @@
 //   A6  항목 수 = 상한 / 상한+1                                → 허용 / 거절(경계)
 //   A7  잘린 파일 · zip 이 아닌 바이트                          → 거절
 //   A8  항목 0개                                             → 빈 결과
+//   A9  고를 이름을 주면                                       → 고르지 않은 항목은 풀지도 검사하지도 않는다(망가져 있어도 오류 없음)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -90,4 +91,23 @@ test("A7 잘린 파일과 zip 이 아닌 바이트는 거절한다", () => {
 test("A8 항목이 0개인 zip 은 빈 결과다", () => {
   const zip = writeZip([]);
   assert.equal(readZip(zip).size, 0);
+});
+
+/** 중앙 목록에서 그 항목의 CRC 를 뒤집는다 — 풀면 «내용이 바뀌었다» 로 거절되는 항목을 만든다. */
+function corruptCrc(zip: Buffer, name: string): Buffer {
+  const out = Buffer.from(zip);
+  for (let p = 0; p + 46 <= out.length; p++) {
+    if (out.readUInt32LE(p) !== 0x02014b50) continue;
+    const nameLen = out.readUInt16LE(p + 28);
+    if (out.subarray(p + 46, p + 46 + nameLen).toString("utf8") === name) { out.writeUInt32LE((out.readUInt32LE(p + 16) ^ 0xffffffff) >>> 0, p + 16); return out; }
+  }
+  throw new Error(`중앙 목록에 ${name} 이 없다`);
+}
+
+test("A9 고를 이름을 주면 고르지 않은 항목은 풀지도 검사하지도 않는다", () => {
+  const zip = corruptCrc(writeZip([{ path: "keep.txt", data: Buffer.from("남길 것") }, { path: "skip.bin", data: randomBytes(4096) }]), "skip.bin");
+  assert.throws(() => readZip(zip), ZipFormatError, "고르지 않으면 망가진 항목에서 거절된다(배선 확인)");
+  const got = readZip(zip, undefined, (n) => n === "keep.txt");
+  assert.deepEqual([...got.keys()], ["keep.txt"]);
+  assert.equal(got.get("keep.txt")!.toString("utf8"), "남길 것");
 });

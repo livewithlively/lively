@@ -25,6 +25,8 @@ interface Plan { origin: { name: string | null; gateway_url: string | null }; bu
 interface Batch { id: number; state: string; file_name: string | null; sealed: boolean; origin: { name: string | null }; created_at: string; applied_at: string | null; summary: Record<string, number> | null; error: string | null; result: { counts?: Record<string, number>; notes?: string[]; knowledge?: Array<{ ref: string; name: string | null; ok: boolean; action: string; error?: string; notes?: string[] }>; undo?: { deleted: number; restored: number; kept: Array<{ name: string; reason: string }> } } | null; plan?: Plan }
 
 const UNSORTED_REF = '__none__';
+/** 올리기 상한 — 서버 src/transfer/export.ts 의 BUNDLE_MAX_BYTES 와 같은 값(100MB). */
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 const STATUS_LABEL: Record<string, string> = {
   new: '새 문서', name_taken: '이름이 겹침', reimport_update: '원본이 바뀜', reimport_unchanged: '바뀐 것 없음',
   reimport_local_changed: '여기서 고침', reimport_conflict: '양쪽 다 고침', reimport_deleted: '여기서 지움', invalid: '들일 수 없음',
@@ -382,6 +384,12 @@ function startView(onPlan: (b: Batch, p: Plan, t: Array<{ key: string; name: str
 
   const upload = async (file: File, password?: string): Promise<void> => {
     current = file;
+    //  100MB 를 넘으면 올리지 않고 바로 알린다(서버 상한 BUNDLE_MAX_BYTES 와 같은 값) — 잘못 고른 큰 파일을 끝까지 올린 뒤
+    //   «요청 실패 (413)» 만 보던 것(2026-11-18 — 설치 파일 zip 을 잘못 올림). 문구는 서버 UPLOAD_TOO_LARGE 와 같다.
+    if (file.size > UPLOAD_MAX_BYTES) {
+      status.textContent = '파일이 100MB 를 넘습니다 — 옮기기 파일이 맞는지 확인해 주세요. 맞다면 보내는 쪽에서 자료를 빼거나 분류를 나눠 다시 내보내 주세요';
+      return;
+    }
     pick.disabled = true;
     status.textContent = `«${file.name}» 을 읽는 중입니다…`;
     try {

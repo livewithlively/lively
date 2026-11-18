@@ -29,11 +29,12 @@
 //   D24 사람이 고른 묶음                         → 받는 쪽에 있으면 그것, 없는 key 면 기본값
 //   D25 받는 쪽에 묶음이 없음                     → 묶음 null · 계획의 묶음 목록 []
 //   D26 묶음 key 가 규약과 다름                   → 화면 순서 첫 묶음
+//   D27 새 분류 묶음 배치 안내                     → 고른 것은 «A → 제품», 기본값은 «B → 사업(이름 규칙)», 넣은 것이 없으면 안내 없음
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bundleContentHash, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle, type BundleKnowledge, type BundleSource } from "./bundle.js";
 import {
-  planImport, resolveDecisions, rewriteWikiLinks, targetContentHash, PlanError, UNSORTED,
+  planImport, resolveDecisions, rewriteWikiLinks, targetContentHash, PlanError, UNSORTED, groupPlacementNote,
   type TargetState, type TargetKnowledge, type PlanKnowledgeItem,
 } from "./plan.js";
 
@@ -347,6 +348,8 @@ test("D24 사람이 고른 묶음이 받는 쪽에 있으면 그것, 없는 key 
   assert.equal(g("cs"), "g3", "사람이 고른 g3");
   assert.equal(g("mr"), "g3", "없는 묶음 key → 기본값(시장 조사 → g3)");
   assert.equal(g("dev"), "g1");
+  const chosen = (ref: string) => r.createCategories.find((c) => c.ref === ref)?.group_chosen;
+  assert.deepEqual([chosen("cs"), chosen("mr"), chosen("dev")], [true, false, false], "고른 것만 «고름» 으로 표시(없는 key 는 기본값이라 고른 것이 아니다)");
 });
 
 test("D25 받는 쪽에 묶음이 없으면 묶음 null · 계획의 묶음 목록이 비어 있다(종전대로)", () => {
@@ -366,4 +369,16 @@ test("D26 받는 쪽 묶음 key 가 규약(g1·g2·g3)과 다르면 화면 순�
   assert.ok(p.categories.every((c) => c.group === "biz"), JSON.stringify(p.categories.map((c) => c.group)));
   const r = resolveDecisions(p, {}, t, b.categories);
   assert.ok(r.createCategories.every((c) => c.group === "biz"));
+});
+
+test("D27 묶음 배치 안내 — 고른 것은 그대로, 기본값은 «(이름 규칙)», 넣은 것이 없으면 안내 없음", () => {
+  const note = groupPlacementNote([
+    { key: "policy-agent", name: "정책 에이전트 구축", group: "g2", group_chosen: true },
+    { key: "mr", name: "시장 조사", group: "g3", group_chosen: false },
+  ], GROUPS);
+  assert.ok(note, "안내가 있어야 한다");
+  assert.match(note!, /정책 에이전트 구축 → 제품(?!\(이름 규칙\))/, note!);
+  assert.match(note!, /시장 조사 → 시스템\(이름 규칙\)/, note!);
+  assert.doesNotMatch(note!, /이름에 따라/, "고른 것까지 «이름에 따라» 라고 말하지 않는다(2026-11-18 실측 문구)");
+  assert.equal(groupPlacementNote([{ key: "x", name: "X", group: null, group_chosen: false }], []), null);
 });

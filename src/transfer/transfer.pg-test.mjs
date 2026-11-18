@@ -257,7 +257,7 @@ try {
     const newKey = apG?.result.categories_created?.[0]?.key;
     const row = newKey ? await q1(`SELECT group_key FROM category WHERE key=$1`, [newKey]) : null;
     chk("I18 새 분류가 묶음에 들어갔다(규약: «고객·응대» → g2)", !!row && activeKeys.includes(row.group_key) && (had > 0 || row.group_key === "g2"), JSON.stringify({ newKey, row }));
-    chk("I18 결과 안내에 묶음 배치 문구", (apG?.result.notes ?? []).some((n) => n.includes("묶음")), JSON.stringify(apG?.result.notes));
+    chk("I18 결과 안내 — 기본값으로 넣은 묶음은 «(이름 규칙)» 으로 밝힌다", (apG?.result.notes ?? []).some((n) => n.includes("묶음") && n.includes("(이름 규칙)")), JSON.stringify(apG?.result.notes));
     if (apG) {
       const unG = await undoImport(stG.batch.id, ctx);
       chk("I18 되돌리기가 새 분류까지 치운다", unG.batch.state === "undone" && !(await q1(`SELECT 1 AS x FROM category WHERE key=$1`, [newKey])), JSON.stringify(unG.report));
@@ -275,6 +275,10 @@ try {
     const pickRow = pickKey ? await q1(`SELECT group_key FROM category WHERE key=$1`, [pickKey]) : null;
     chk("I18 적용 API 로 고른 묶음이 쓰인다(기본값이 아니라)", !errP && pickRow?.group_key === pick && pick !== pc?.group,
       errP ? String(errP.message ?? errP) : JSON.stringify({ pick, default: pc?.group, pickKey, pickRow }));
+    const pickName = (await q1(`SELECT name FROM category_group WHERE key=$1`, [pick]))?.name;
+    const pickNotes = apP?.batch?.result?.notes ?? [];
+    chk("I18 결과 안내 — 고른 묶음은 그 이름으로, «(이름 규칙)» 이라고 하지 않는다(2026-11-18 «이름에 따라» 실측 문구)",
+      pickNotes.some((n) => n.includes(`→ ${pickName}`) && !n.includes("(이름 규칙)") && !n.includes("이름에 따라")), JSON.stringify({ pickName, pickNotes }));
     if (apP) await undoImport(stP.batch.id, ctx);
     await itemsPool.query(`DELETE FROM category_group WHERE origin = $1`, [T]);
   }
