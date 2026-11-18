@@ -2519,7 +2519,7 @@ function renderProjects(): void {
 //  ⚠ 이모지는 쓰지 않는다 — 아이콘은 icons.ts 한 벌(#2043 원준 지시). 「담당」은 알약 대신 이름 뒤 사람 아이콘(person).
 //  분류 편집(#4233): 「분류」 소제목의 [편집] · 묶음 머리 호버 ✎ 는 분류체계 앱(#/taxonomy)으로, 분류 줄에 올리면 뜨는 ✎ 는
 //   그 분류(#/taxonomy/<id>)로 간다. 맥락 관리의 카테고리 탭(#/categories)은 걷었다.
-interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number; group?: string | null }
+interface WikiCat { id: number; name: string; key: string; description?: string | null; knowledge_count?: number; group?: string | null; state?: string | null }
 let wikiCats: WikiCat[] | null = null;
 let wikiLoading = false;
 let wikiPins: number | null = null;      // WIKI 인덱스(핀) 건수 — 고정 줄 「인덱스」의 숫자
@@ -2633,9 +2633,11 @@ function renderWiki(): void {
   loadWikiGroups();
   bindWikiResize();
 
-  const all = wikiCats || [];
-  const total = all.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
   const activeCat = wikiActiveCat();
+  //  치운 분류(deprecated)는 여기 서지 않는다 — 분류체계 앱 사이드바(taxSideBody)·문서의 분류 고르기와 같은 규칙.
+  //   지금 보고 있는 분류만은 치운 것이어도 남긴다(주소로 들어온 «지금 여기» 가 사라지면 안 된다).
+  const all = (wikiCats || []).filter((c) => !taxArchived(c) || c.id === activeCat);
+  const total = all.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
   // 순서 = 문서 많은 것 먼저(#4233: «우리 팀이 맡은 것 먼저»는 분류 담당 개념과 함께 걷었다).
   const rank = (a: WikiCat, b: WikiCat): number => (Number(b.knowledge_count) || 0) - (Number(a.knowledge_count) || 0);
   const fmtN = (n: number): string => Number(n).toLocaleString('en-US');
