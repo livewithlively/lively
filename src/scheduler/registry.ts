@@ -16,7 +16,6 @@ import { runAgentInject, runAgentHeadless } from "./actions/agent.js";
 import { runCanaryJob } from "./actions/canary.js"; // #1657 상류 회귀 탐지
 import { runProjectGc } from "./actions/project-gc.js";
 import { GC_DEFAULTS } from "./actions/project-gc-plan.js";
-import { runWorkspaceEvict, EVICT_DEFAULTS } from "./actions/workspace-evict.js"; // #5368 디스크 압박 때 파생물 축출
 import { HEADLESS_KEYS } from "../node/headless-harness.js"; // #1884 헤드리스 하네스 선택지(표에서 파생)
 
 export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller" | "classifier" | "manager"; choices?: string[]; hint?: string }
@@ -139,14 +138,6 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "batch_children", label: "회차당 하위 태스크 닫기 상한", kind: "text", hint: `기본 ${GC_DEFAULTS.batchChildren}. 모자라면 그 프로젝트는 다음 회차로 넘긴다(회차 첫 프로젝트는 상한보다 많아도 처리).` },
     { name: "cap", label: "단계별 후보 상한", kind: "text", hint: `한 단계의 후보가 이보다 많으면 그 단계는 멈추고 요약에 halted 로 남기며 운영 경보를 보낸다(기준값 오입력 방지). 기본 ${GC_DEFAULTS.cap}.` },
   ], run: runProjectGc },
-  // #5368 디스크가 찼을 때 쉬는 워크트리의 파생물(node_modules · dist …)을 오래 안 쓴 것부터 지운다. 워크트리 · 소스 · .env · data/ 는 대상이 아니다.
-  //  기본은 report(쓰기 0). 규칙은 actions/workspace-evict.ts 머리말, 고르는 순서는 kit/cli/workspace-reclaim-core.mjs planEviction.
-  { key: "workspace_evict", label: "워크스페이스 파생물 축출 (디스크가 찼을 때 · 쉬는 워크트리의 node_modules 등)", params: [
-    { name: "mode", label: "모드", kind: "select", choices: ["report", "on"], hint: "report = 무엇을 지울지만 요약(쓰기 0, 기본) · on = 실제로 지운다. 지우는 것은 다시 설치 · 빌드하면 돌아오는 파생물뿐이고 워크트리는 남는다." },
-    { name: "pressure_pct", label: "시작 기준 — 디스크 사용률(%)", kind: "text", hint: `이 사용률 이상일 때만 지운다. 기본 ${EVICT_DEFAULTS.pressurePct}.` },
-    { name: "target_pct", label: "목표 사용률(%)", kind: "text", hint: `여기에 닿을 만큼만 오래 안 쓴 것부터 지운다. 기본 ${EVICT_DEFAULTS.targetPct}.` },
-    { name: "idle_days", label: "쉰 기간 기준(일)", kind: "text", hint: `이 기간 안에 손댄 워크트리는 건너뛴다. 살아 있는 세션이 쓰는 워크트리는 기간과 상관없이 건너뛴다. 기본 ${EVICT_DEFAULTS.idleDays}.` },
-  ], run: (p, job) => runWorkspaceEvict(p, job) },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [], run: runEnsureManagedSessions },
   // #1036 프리뷰 환경 — 유휴 TTL 회수 + auto 트리거 stage 재-merge(작업 브랜치 갱신 반영). 정지된 건 안 켬(온디맨드).
   { key: "preview_reconcile", label: "프리뷰 환경 reconcile (유휴 회수 + auto stage 재-merge)", params: [], run: runPreviewReconcile },
