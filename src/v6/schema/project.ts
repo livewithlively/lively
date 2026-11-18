@@ -128,6 +128,17 @@ export async function initV6ProjectCore(pool: Pool): Promise<void> {
       WHERE draft IS NULL AND level='project';
   `);
 
+  // ── 5j) 초대제(#5598, 상민 2026-11-18) — 이 프로젝트는 **만든 사람과 팀원만** 보는가. ──
+  //  세션이 초대제(#1876)인데 프로젝트는 전원 공개가 기본이라, 프로젝트에 적은 것이 «부지불식간에 공유된다» 는 불안이 있었다.
+  //  워크스페이스의 «새 프로젝트 공개 방식»(org_runtime_config.project_access · v6/project-access.ts)이 초대제(기본값)면
+  //  사람이 만드는 프로젝트가 이 표시를 달고 태어난다(createProject). 판정은 v6/visibility.ts privateProjectSql — 초안과 한 술어다.
+  //  ⚠ 백필하지 않는다. 기본값 false = «종전대로 리스트 공개범위만 탄다» 라, 이 컬럼이 생겨도 이미 있는 프로젝트는 누구에게서도
+  //   사라지지 않는다. 표시는 생성 때와 만든 사람의 «공개 범위 바꾸기»(setProjectAccess) 두 자리에서만 바뀐다.
+  //  커넥터 미러(INSERT 를 직접 하는 길)는 이 컬럼을 안 채워 false 로 태어난다 — 만든 사람이 없는 행을 닫으면 아무도 못 본다.
+  await pool.query(`
+    ALTER TABLE project ADD COLUMN IF NOT EXISTS invite_only BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   // ── 5d) task_assignee(2026-06-26, #177) — 단일 assignee 컬럼 → n:n **가산**. 멀티담당자(ClickUp/Notion people) 무손실용. ──
   //  전환기: 기존 `assignee` 컬럼이 primary(UI·리스트뷰 호환), task_assignee 는 가산 섀도(쓰기경로가 동기, 백필로 시드).
   //  member_id = org_member.id 또는 외부 신원(FK 없음 — 미러/외부 담당자 허용, project_member·assignee 관례와 동일).

@@ -316,7 +316,7 @@ try {
     itemsPool.query = (text, ...rest) => {
       const sql = typeof text === "string" ? text : (text && text.text) || "";
       //  (#5522 — 그 조회가 초안도 함께 재면서 별칭 hp 를 달았다. 문장이 바뀌면 이 가짜가 조용히 안 걸려 아래 판정이 거짓 빨강이 된다.)
-      if (/FROM project hp\s+WHERE hp\.level='project' AND \(hp\.list_id IS NOT NULL OR hp\.draft\)/.test(sql)) return Promise.reject(new Error("가려진 프로젝트 조회 실패(시험)"));
+      if (/FROM project hp\s+WHERE hp\.level='project' AND \(hp\.list_id IS NOT NULL OR hp\.draft OR hp\.invite_only\)/.test(sql)) return Promise.reject(new Error("가려진 프로젝트 조회 실패(시험)"));
       return realQuery(text, ...rest);
     };
     try {

@@ -14,6 +14,9 @@ import { enqueueExternalPush, closeNoteOf } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
 import { toVectorLiteral } from "./embedding-provider.js";
 import { releaseProjectDraft } from "./project-draft.js";
+import { projectAccessMode } from "./project-access.js";
+import { axisOn } from "./visibility-axes.js";
+import { logger } from "../log.js";
 import { projectVisFor, projectVisPredicate, canSeeProjectRow, invalidateVisibilityCache, PROJECT_VIS_ALL, type ProjectVis, type Viewer } from "./visibility.js";
 // 이름 걸쇠(#2031) — 순위표·다듬기 규칙은 순수 모듈에 두고 여기서는 집행만 한다(DB 무접촉 판정 = 표로 고정).
 import { type ProjectNameSource } from "./project-name.js";
@@ -38,7 +41,7 @@ const PROJECT_COLS =
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source, draft`;
+   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source, draft, invite_only`;
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -64,6 +67,10 @@ export interface ProjectRow {
   // #4170 — 초안(세션 첫 지시로 기계가 막 만든 껍데기). true 면 목록 기본 뷰가 따로 뺀다. NULL = 아직 안 따져 본 구 행
   //  → false 로 읽는다. 들어가는 길은 createProject(draft) 하나, 나오는 길은 제목·본문 직접 수정 · 완료 · 명시 해제.
   draft: boolean | null;
+  // #5598 — 초대제. true 면 만든 사람(created_by)과 팀원(project_member)만 본다(v6/visibility.ts privateProjectSql — 초안과 한 술어).
+  //  들어가는 길은 createProject(워크스페이스의 새 프로젝트 공개 방식 · 명시값) · setProjectAccess(만든 사람이 바꾼다) 둘.
+  //  task/subtask 행에서는 뜻이 없다(늘 false) — 판정은 뿌리 프로젝트로 한다.
+  invite_only: boolean | null;
   members?: unknown[]; // listProjects 가 facepile 용으로 채움(상세 getProject 의 members 와 별개)
 }
 
@@ -456,6 +463,10 @@ export async function createProject(
     name_source?: ProjectNameSource;
     /** 초안으로 만든다(#4170) — 첫 지시로 **기계가 이름을 지은** 껍데기에만 준다(name_source='rule' 과 짝). 생략=false. */
     draft?: boolean;
+    /** 초대제로 만든다(#5598) — true = 만든 사람과 팀원만 본다 · false = 리스트 공개범위만 탄다.
+     *  **생략 = 워크스페이스의 새 프로젝트 공개 방식**(v6/project-access.ts — 기본 초대제)을 따른다. 사람이 만드는 길(웹 · MCP ·
+     *  첫 지시 자동 생성)은 전부 생략해서 한 규칙을 탄다. 만든 사람(ctx.actor)이 없으면 늘 false 다 — 볼 사람이 없는 프로젝트가 된다. */
+    invite_only?: boolean;
   },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
@@ -474,6 +485,14 @@ export async function createProject(
   //   created_at 간격은 0.15~0.2ms) 둘 다 조회에서 아무것도 못 보고 둘 다 INSERT 한다. 그래서 조회와 삽입을
   //   한 트랜잭션에 넣고 (테넌트·만든이·이름) 키로 **직렬화**한다. 자문 락은 클러스터 전역이므로 키에 테넌트를
   //   반드시 섞는다(안 섞으면 남의 워크스페이스가 같은 이름을 만들 때 서로 기다린다).
+  // 초대제(#5598) — 트랜잭션 밖에서 정한다(설정 조회가 자문 락을 쥔 채 기다리지 않게). 만든 사람이 없으면 닫지 않는다.
+  //  생략값은 «프로젝트 공개범위 축이 켜져 있고 · 방식이 초대제» 일 때만 닫는다. 축이 꺼진 워크스페이스에서는 아무것도 가려지지
+  //   않아 화면도 «나만 봅니다» 라고 말하지 않는다(web/lib/proj-access.ts) — 그런데 표시만 조용히 찍어 두면, 나중에 축을 켜는 순간
+  //   그동안 전원이 보던 프로젝트가 한꺼번에 닫힌다. 만들 때 화면이 말한 것이 그 프로젝트의 약속이다.
+  //  방식은 보관값이 아니라 지금 값으로 읽는다(project-access.ts projectAccessMode fresh — 열린 채 태어난 프로젝트는 되돌릴 수 없다).
+  const inviteOnly = !ctx?.actor ? false
+    : input.invite_only !== undefined ? input.invite_only === true
+    : (await axisOn("project")) && (await projectAccessMode({ fresh: true })) === "invite";
   const made = await withTx(async (c): Promise<{ row: ProjectRow; deduped: boolean }> => {
     await c.query(
       `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|' || $1))`,
@@ -486,18 +505,18 @@ export async function createProject(
       [input.name, ctx?.actor ?? null, String(CREATE_DEDUPE_SEC)]);
     if (dup) return { row: dup, deduped: true };
     const fresh: ProjectRow = await one(c,
-      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, draft, created_at, updated_at)
-       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,$7,now(),now())
+      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, draft, invite_only, created_at, updated_at)
+       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,$7,$8,now(),now())
        RETURNING ${PROJECT_COLS}`,
       [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null,
-       input.name_source ?? "human", input.draft === true]);
+       input.name_source ?? "human", input.draft === true, inviteOnly]);
     return { row: fresh, deduped: false };
   });
   // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
   if (made.deduped) return made.row;
   const row = made.row;
-  // #5522 — 초안은 만든 사람과 팀원만 본다. 남의 «숨은 프로젝트» 캐시(15초)에 이 프로젝트가 아직 없으므로 버린다.
-  if (row.draft === true) invalidateVisibilityCache();
+  // #5522 · #5598 — 비공개(초안 · 초대제)는 만든 사람과 팀원만 본다. 남의 «숨은 프로젝트» 캐시(15초)에 이 프로젝트가 아직 없으므로 버린다.
+  if (row.draft === true || row.invite_only === true) invalidateVisibilityCache();
   // 팀원 초기 등록(project_member).
   //  ⚠ ON CONFLICT 에 tenant_id 를 넣지 마라 — 이 PK 는 (tenant_id, …) 로 **재작성되지 않는다**
   //   (project_id 가 project.id 대리키를 가리키는 FK 라 이미 전역 유일 — db/tenant-column.ts isNaturalKey ⓑ).
@@ -835,8 +854,84 @@ export async function setProjectMembers(projectId: number, memberIds: string[], 
     ids.push(memberId);
   }
   await auditProject(String(projectId), "set_members", before.map((r) => r.member_id), ids, ctx);
-  invalidateVisibilityCache();   // #5522 — 초안은 팀원이 곧 볼 수 있는 사람이다
+  invalidateVisibilityCache();   // #5522 · #5598 — 비공개(초안 · 초대제)는 팀원이 곧 볼 수 있는 사람이다
   return ids;
+}
+
+/** 지금 팀원(project_member)의 id — 순서대로. 만든 사람은 팀원 행이 있을 때만 든다(listProjectMemberIds 는 만든 사람을 늘 더한다). */
+export async function projectMemberIds(projectId: number): Promise<string[]> {
+  const rows = await q(itemsPool,
+    `SELECT member_id FROM project_member WHERE project_id=$1 ORDER BY sort, member_id`, [projectId]);
+  return rows.map((r) => String(r.member_id ?? "")).filter(Boolean);
+}
+
+/** 공개 범위는 만든 사람만 바꾼다(#5598) — 부른 쪽(capability)이 403 으로 바꾼다. */
+export class ProjectAccessOwnerError extends Error {
+  constructor(id: number) { super(`프로젝트 #${id} 의 공개 범위는 만든 사람만 바꿀 수 있습니다`); this.name = "ProjectAccessOwnerError"; }
+}
+
+/**
+ * 프로젝트 하나의 공개 범위를 바꾼다(#5598) — invite = 만든 사람과 팀원만 · open = 리스트 공개범위만 탄다(잠긴 리스트가 아니면 전원).
+ *
+ *  ⚠ **만든 사람(created_by)만** 바꾼다. 닫는 방향은 남의 프로젝트를 모두에게서 숨기는 길이고(#5522 가 draft:true 를 안 받는 까닭),
+ *   여는 방향은 초대받은 사람이 남의 프로젝트를 전원에게 여는 길이다 — 어느 쪽도 만든 사람의 일이다. 만든 사람이 비어 있는 행
+ *   (커넥터 미러 · 옛 행)은 닫을 수 없다: 닫으면 팀원 말고는 아무도 못 보고, 팀원이 없으면 영영 아무도 못 본다.
+ *   판정과 쓰기를 UPDATE 한 문장에 둔다(읽고-판정하고-쓰는 사이에 끼는 것이 없다).
+ *  open 은 **초안도 함께 내린다** — 사람이 «전체 공개» 를 눌렀는데 초안이라 계속 닫혀 있으면 그 단추가 거짓말이 된다.
+ *   invite 는 초안을 건드리지 않는다(초안은 «아직 껍데기» 라는 표시이고, 닫힘은 invite_only 가 맡는다).
+ *  같은 값으로 부르면 아무것도 안 바뀐다(감사도 안 남는다).
+ */
+export async function setProjectAccess(id: number, access: "invite" | "open", ctx?: WriteCtx): Promise<ProjectRow> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  if (!before) throw new Error(`프로젝트 #${id} 없음`);
+  const actor = ctx?.actor ?? null;
+  if (!actor || before.created_by !== actor) throw new ProjectAccessOwnerError(id);
+  const inviteOnly = access === "invite";
+  if ((before.invite_only === true) === inviteOnly && (inviteOnly || before.draft !== true)) return before;
+  const after: ProjectRow | undefined = await one(itemsPool,
+    `UPDATE project SET invite_only = $2, draft = CASE WHEN $2 THEN draft ELSE false END, updated_at = now()
+      WHERE id=$1 AND level='project' AND created_by = $3 RETURNING ${PROJECT_COLS}`, [id, inviteOnly, actor]);
+  if (!after) throw new ProjectAccessOwnerError(id);   // 그 사이 만든 사람이 바뀌었다(옮겨 받기 등)
+  await auditProject(String(id), "set_access", { invite_only: before.invite_only === true, draft: before.draft === true },
+    { invite_only: after.invite_only === true, draft: after.draft === true }, ctx);
+  // 닫았으면 — **이미 이 프로젝트에서 일하던 사람**을 팀원으로 넣는다. 닫는 순간 그 사람들이 하던 일에서 밀려나지 않게.
+  //   · 이 프로젝트의 세션에 초대돼 있던 사람 — 세션 판정은 «숨은 프로젝트의 세션은 초대받은 사람에게도 닫는다»
+  //     (terminal/write-cap.ts sessionVisible)라, 안 넣으면 초대받은 세션을 못 연다. 세션 초대 때와 같은 규칙이다
+  //     (sessions/session-state.ts syncPrivateInviteMembers — 세션에 초대 = 프로젝트에도 초대).
+  //   · 이 프로젝트의 태스크 · 서브태스크 담당자 — 안 넣으면 제 태스크가 «내 할 일» 에서 말없이 사라진다.
+  //     담당자 칸에는 구성원이 아닌 외부 신원도 들어간다(ClickUp 미러) — 구성원(org_member)인 사람만 넣는다.
+  //  넣은 사람은 응답의 팀원 명단으로 화면에 곧바로 보인다(만든 사람이 [공유] 에서 뺄 수 있다).
+  //  best-effort: 실패해도 공개 범위는 이미 바뀌었다(만든 사람이 [공유]에서 다시 넣을 수 있다).
+  if (inviteOnly) {
+    await itemsPool.query(
+      `WITH node AS (
+         SELECT t.id, t.assignee FROM project t WHERE t.parent_id = $1 AND t.level = 'task'
+         UNION ALL
+         SELECT s.id, s.assignee FROM project s JOIN project t ON t.id = s.parent_id AND t.level = 'task' AND t.parent_id = $1
+          WHERE s.level = 'subtask'
+       ), who AS (
+         -- 세션 초대는 초대할 때 이미 구성원인지 가렸다(terminal validateInvites) — 그대로 넣는다.
+         SELECT inv.member_id, false AS check_member
+           FROM org_session_state s
+           CROSS JOIN LATERAL jsonb_array_elements_text(
+             CASE WHEN jsonb_typeof(s.invites) = 'array' THEN s.invites ELSE '[]'::jsonb END) AS inv(member_id)
+          WHERE s.project_id = $1
+         UNION ALL SELECT n.assignee, true FROM node n WHERE n.assignee IS NOT NULL
+         UNION ALL SELECT ta.member_id, true FROM task_assignee ta JOIN node n ON n.id = ta.task_id
+       )
+       INSERT INTO project_member(project_id, member_id, role, sort, added_at)
+       SELECT DISTINCT $1::int, w.member_id, 'member', 100, now()
+         FROM who w
+        WHERE w.member_id <> '' AND w.member_id IS DISTINCT FROM $2
+          AND (NOT w.check_member OR EXISTS (SELECT 1 FROM org_member m WHERE m.id = w.member_id))
+       ON CONFLICT (project_id, member_id) DO NOTHING`, [id, actor])
+      .catch((e) => logger.warn({ projectId: id, err: (e as Error)?.message }, "[project-access] 일하던 사람(세션 초대 · 담당자)을 팀원으로 넣지 못했다(비치명)"));
+  }
+  invalidateVisibilityCache();   // 남의 «숨은 프로젝트» 캐시에 곧바로 들어가거나 빠지게
+  // 열었으면 밖(ClickUp)으로도 나갈 수 있다 — 닫혀 있는 동안 반출이 건너뛴 것을 다시 줄 세운다(clickup-push 의 초대제 가드).
+  if (!inviteOnly) await enqueueExternalPush(id, "upsert", ctx);
+  return after;
 }
 
 // 프로젝트 접근 가능자 전원(id) — 생성자(created_by) ∪ 팀원(project_member). 게이트웨이 프로젝트 세션 attach 게이트

@@ -15,6 +15,7 @@ import { anchoredPopover, api, el, personFace, state, toast } from '../core.js';
 import { viewersOf, type Viewer } from './presence.js';
 import { inviteAdded, inviteDirty, shareEnterAction } from '../lib/share-enter.js';   // #3870 — 빈 칸 ↵ = 초대
 import { leaveInvitedSession } from '../session-actions.js';   // #3870 — 초대받은 사람만 나간다
+import { sessionInviteProjectNote, sessionInviteProjectToast, type AccessConfig } from '../lib/proj-access.js';   // #5598 — 세션에 초대하면 프로젝트에도 초대된다
 
 interface ShareSess {
   id: string;
@@ -23,6 +24,8 @@ interface ShareSess {
   owned: boolean;
   owner: string;
   invites: string[];
+  /** 이 세션이 붙은 프로젝트(없으면 null) — #5598 닫힌 프로젝트면 초대한 사람이 그 프로젝트도 보게 된다는 것을 미리 말한다. */
+  projectId: number | null;
 }
 
 interface MemberRow { id: string; display_name?: string | null }
@@ -40,6 +43,7 @@ export function shareSessOf(s: any): ShareSess | null {
     owned: !!s.owned,
     owner: String(raw.owner || ''),
     invites: Array.isArray(raw.invites) ? raw.invites.map((x: any) => String(x)) : [],
+    projectId: Number(s.projectId ?? raw.projectId) > 0 ? Number(s.projectId ?? raw.projectId) : null,
   };
 }
 
@@ -62,6 +66,11 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
   const meId = String((state.me as any)?.userId || '');
   const chosen = new Set<string>(s.invites);
   let members: MemberRow[] = [];
+  //  #5598 — 세션에 초대하면 그 세션의 프로젝트(닫힌 프로젝트일 때)에도 초대된다(서버 session-state.ts syncPrivateInviteMembers).
+  //   사람이 «세션만 보여 주는 줄 알았는데 프로젝트까지 열렸다» 고 느끼지 않게, 초대하기 전에 이 창에서 말한다.
+  //   프로젝트를 못 읽으면(나에게 안 보이는 프로젝트 · 조회 실패) 말하지 않는다 — 모르는 것을 단정하지 않는다.
+  let proj: { name?: string | null; draft?: boolean | null; invite_only?: boolean | null } | null = null;
+  let projCfg: AccessConfig | undefined;
 
   const body = el('div', { class: 'pn-share-body' }, el('p', { class: 'pn-share-fine', text: '불러오는 중…' })) as HTMLElement;
   const panel = el('div', { class: 'pn-share', role: 'dialog', 'aria-label': '세션 공유' },
@@ -112,7 +121,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
     const paintAct = (): void => {
       const toSave = enterNow() === 'save';
       save.replaceChildren(el('span', { text: inviteAdded(s.invites, chosen).length ? '초대' : '저장' }),
-        toSave ? el('span', { class: 'pn-share-kbd pn-share-kbd--btn', 'aria-hidden': 'true', text: '↵' }) : null);
+        ...(toSave ? [el('span', { class: 'pn-share-kbd pn-share-kbd--btn', 'aria-hidden': 'true', text: '↵' })] : []));   // replaceChildren 은 null 을 글자 «null» 로 붙인다 — 없는 조각은 넘기지 않는다
       save.disabled = saving || !dirty();   // 저장 중엔 꺼 둔다 — 그 사이 타이핑이 단추를 다시 켜 두 번째 요청이 나가지 않게(격리 리뷰)
       hint.textContent = toSave
         ? (inviteAdded(s.invites, chosen).length ? '↵ 한 번 더 누르면 초대해요 · 더 부르려면 이름을 이어서 치세요.' : '↵ 를 누르면 저장해요.')
@@ -180,6 +189,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
         const sent = Number(r && r.notified) > 0;
         toast(added.length
           ? `${names.length > 2 ? names.slice(0, 2).join(', ') + ` 외 ${names.length - 2}명` : names.join(', ')}님을 초대했어요` + (sent ? ' — 알림을 보냈어요.' : '.')
+            + sessionInviteProjectToast(proj, projCfg)   // #5598 — 닫힌 프로젝트면 «프로젝트 «…»도 함께 볼 수 있어요.»
           : invites.length ? `${invites.length}명이 이 세션을 볼 수 있어요.` : '비공개로 바꿨어요 — 이제 나만 봅니다.');
         close();
       } catch (e: any) { saving = false; paintAct(); toast('공유 실패 — ' + (e?.message || '알 수 없는 오류'), true); }
@@ -189,6 +199,7 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
       viewersBlock(s.id, meId),
       el('div', { class: 'pn-share-block' }, sec('함께 볼 사람'), chips, q, list, hint),
       fine('고른 사람만 이 세션을 보고 열 수 있어요.'),
+      projNote(),
       el('div', { class: 'pn-share-act' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => close() }), save),
     ].filter(Boolean) as HTMLElement[]);
@@ -198,11 +209,23 @@ export function openSharePopover(anchor: HTMLElement, s: ShareSess, onSaved?: (i
     setTimeout(() => { if (q.isConnected) q.focus(); }, 0);
   }
 
+  /** 닫힌 프로젝트의 세션일 때만 서는 한 줄(#5598). */
+  function projNote(): HTMLElement | null {
+    const t = sessionInviteProjectNote(proj, projCfg);
+    return t ? el('p', { class: 'pn-share-fine pn-share-projnote', text: t }) : null;
+  }
+
   void (async () => {
+    //  명부와 프로젝트를 함께 묻는다 — 프로젝트 안내가 창이 뜬 뒤에 끼어들면 단추 자리가 밀린다.
+    const projP = s.owned && s.projectId
+      ? api('/api/ui/v6/projects/' + s.projectId).then((d: any) => { proj = (d && (d.project || d)) || null; projCfg = d && d.access ? { mode: d.access.mode === 'open' ? 'open' : 'invite', enforced: d.access.enforced !== false } : undefined; })
+          .catch(() => { proj = null; })
+      : Promise.resolve();
     try {
       const d: any = await api('/api/ui/dash/members');
       members = ((d && d.members) || []).map((m: any) => ({ id: String(m.id), display_name: m.display_name }));
     } catch (_) { members = []; }   // 명부를 못 받아도 창은 뜬다 — 이름 자리에 id 가 나갈 뿐이다
+    await projP;
     if (!panel.isConnected) return;
     if (s.owned) paintEditor(); else paintReadOnly();
   })();

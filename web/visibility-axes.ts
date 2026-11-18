@@ -8,6 +8,7 @@
 //   강제한다(confirm 없으면 400) — 화면은 실수를 줄이고, 경계는 서버가 지킨다.
 import { api, busy, el, errorNote, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
+import { ACCESS_MODE_OPTIONS } from './lib/proj-access.js';   // #5598 새 프로젝트 공개 방식
 
 //  bare(#5159) — [AI 주입기 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 행 목록만 그린다.
 export async function visibilityAxesPanel(detail, opts: { bare?: boolean; onChange?: () => void } = {}): Promise<void> {
@@ -19,16 +20,56 @@ export async function visibilityAxesPanel(detail, opts: { bare?: boolean; onChan
   catch (e) { detail.replaceChildren(el('div', { class: opts.bare ? '' : 'card' }, errorNote(e, '설정을 불러오지 못했습니다'))); return; }
 
   const rows = axes.map((a) => axisRow(a, reload));
-  if (opts.bare) { detail.replaceChildren(el('div', { class: 'vax-list vax-list-bare' }, ...rows)); return; }
+  //  #5598 새 프로젝트 공개 방식 — 축 목록 위에 선다(가장 먼저 정할 것: «우리 워크스페이스에서 새 프로젝트를 누가 보나»).
+  //   못 받아도 축 설정은 그대로 그린다(구 서버 · 일시 오류).
+  let access: any = null;
+  try { access = await api('/api/ui/v6/project-access'); } catch (_) { access = null; }
+  const accessBox = access ? projectAccessBox(access, reload) : null;
+  if (opts.bare) { detail.replaceChildren(...[accessBox, el('div', { class: 'vax-list vax-list-bare' }, ...rows)].filter(Boolean) as HTMLElement[]); return; }
 
   detail.replaceChildren(el('div', {},
     el('div', { class: 'section-title' }, el('h2', { text: '맥락 공개범위' })),
+    accessBox ? el('div', { class: 'card' }, accessBox) : null,
     el('div', { class: 'card' },
       el('p', { class: 'muted', text:
         '맥락 유형별로 공개범위 기능을 쓸지 정합니다. 끄면 그 유형은 조직 전원에게 공개됩니다(종전 동작). ' +
         '개별 항목을 잠그는 것은 각 화면에서 하세요 — 여기서는 기능 자체를 켜고 끕니다.' }),
       el('div', { class: 'vax-list' }, ...rows)),
   ));
+}
+
+// ── #5598 새 프로젝트 공개 방식(초대제 | 전체 공개) ────────────────────────────────
+//  축 끄기와 달리 이 설정은 공개 사건이 아니다 — 새로 만드는 프로젝트의 기본값만 바뀌고 이미 있는 프로젝트는 그대로다
+//  (src/v6/project-access.ts). 그래서 확인 창 없이 바로 바꾸고, 그 사실을 선택지 아래에 늘 적어 둔다.
+function projectAccessBox(access: { mode: string; enforced: boolean }, reload: () => void): HTMLElement {
+  const cur = access.mode === 'open' ? 'open' : 'invite';
+  const opt = (o: (typeof ACCESS_MODE_OPTIONS)[number]): HTMLElement => {
+    const on = o.mode === cur;
+    const b = el('button', { class: 'pax-opt' + (on ? ' on' : ''), type: 'button', role: 'radio', 'aria-checked': on ? 'true' : 'false' },
+      el('span', { class: 'pax-radio', 'aria-hidden': 'true' }),
+      el('span', { class: 'pax-body' },
+        el('b', { class: 'pax-t', text: o.title + (o.mode === 'invite' ? ' (기본)' : '') }),
+        el('span', { class: 'pax-d', text: o.desc }))) as HTMLButtonElement;
+    b.onclick = async () => {
+      if (on) return;
+      b.disabled = true;
+      try {
+        await api('/api/ui/v6/project-access', { method: 'POST', body: JSON.stringify({ mode: o.mode }) });
+        toast(`새 프로젝트 공개 방식을 «${o.title}» 로 바꿨습니다 — 이미 있는 프로젝트는 그대로입니다.`);
+        reload();
+      } catch (e: any) { b.disabled = false; toast('설정을 바꾸지 못했습니다 — ' + e.message, true); }
+    };
+    return b;
+  };
+  return el('div', { class: 'pax' },
+    el('div', { class: 'pax-head' }, el('b', { text: '새 프로젝트 공개 방식' }),
+      el('span', { class: 'muted', text: '이 워크스페이스에서 새로 만드는 프로젝트를 누가 보는지 정합니다.' })),
+    el('div', { class: 'pax-opts', role: 'radiogroup', 'aria-label': '새 프로젝트 공개 방식' }, ...ACCESS_MODE_OPTIONS.map(opt)),
+    el('p', { class: 'pax-note muted', text:
+      '이미 있는 프로젝트의 공개 범위는 바뀌지 않습니다 — 새로 만드는 프로젝트의 기본값만 바뀝니다. ' +
+      '프로젝트 하나의 공개 범위는 그 프로젝트를 만든 사람이 프로젝트 화면의 [공유]에서 바꿉니다.' }),
+    access.enforced ? null : el('p', { class: 'pax-note pax-warn', text:
+      '지금은 아래 «프로젝트» 공개범위가 꺼져 있어 모든 프로젝트를 전원이 봅니다 — 이 설정이 적용되려면 그 항목을 켜세요.' }));
 }
 
 function axisRow(a, reload) {

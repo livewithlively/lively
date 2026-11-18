@@ -472,12 +472,14 @@ test("D8 배선(목록): 맨 아래 「초안」 묶음이 없다 · 표 줄 · 
   assert.ok(!/pjvRenderStatusGroupsInner|hasDrafts|pjv-tgroup-draft|pjv-draft-pill|'__draft__'/.test(ROWS), "초안만 모으는 묶음 길이 없다");
   assert.match(ROWS, /const pjvIsDraft = isDraftProj;/);
   assert.match(ROWS, /const draftTag = pjvIsDraft\(p\) \? el\('span', \{ class: 'pj-draft-tag'/);
-  assert.match(ROWS, /caret, lead, title, draftTag,/);
+  //  #5598 — 이름 뒤에 «누가 보나» 표시(accessTag)가 먼저 서고 초안 뱃지가 그 뒤다(project-access-ui.test.ts W1 이 그 배선을 잰다).
+  assert.match(ROWS, /caret, lead, title, accessTag, draftTag,/);
   const BOARD = readFileSync("web/projects/board.ts", "utf8");
-  assert.match(BOARD, /if \(isDraftProj\(p\)\) card\.append\(el\('span', \{ class: 'pj-draft-tag pjv-kb-draft'/);
+  assert.match(BOARD, /const kbDraft = isDraftProj\(p\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  assert.match(BOARD, /card\.append\(el\('div', \{ class: 'pjv-kb-draft pjv-kb-marks' \}, kbAcc, kbDraft\)\)/, "칸반 카드 — 이름 위 한 줄에 «누가 보나» · 초안");
   const LIST = readFileSync("web/projects/session-list.ts", "utf8");
   assert.ok(!/tail:/.test(LIST) && !/draftOpen/.test(LIST), "「리스트」 뷰에도 맨 아래 묶음이 없다");
-  assert.match(LIST, /rowTag: \(it\) => !draftScope && isDraftProj\(it\.proj\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  assert.match(LIST, /const dr = !draftScope && isDraftProj\(it\.proj\) \? el\('span', \{ class: 'pj-draft-tag'/);
   const TABLE = readFileSync("web/v2/sess-table.ts", "utf8");
   assert.ok(!/tail\?:/.test(TABLE), "표 부품에 따로 세우는 묶음(tail) 자리가 없다");
   //  잣대가 화면마다 따로 있지 않다

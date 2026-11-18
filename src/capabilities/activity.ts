@@ -137,7 +137,9 @@ const activityLog: Capability = {
         const targetIsOpen = hidden ? !hidden.ids.has(Number(input.project_id)) : false;
         if (targetIsOpen) {
           throw new HttpError(400,
-            `이 세션의 기록 범위는 '${cap}' 입니다 — 전체 공개 프로젝트에는 기록할 수 없습니다. `
+            //  «전체 공개 프로젝트» 라고 말하지 않는다(#5598) — 이 판정은 «리스트로 대상을 좁힌 프로젝트인가» 만 본다. 초대제 프로젝트는
+            //   전원이 보는 프로젝트가 아닌데도 여기 걸린다(hiddenProjects(PUBLIC_VIEWER) 는 초대제를 «잠긴 프로젝트» 로 세지 않는다).
+            `이 세션의 기록 범위는 '${cap}' 입니다 — 리스트로 대상을 좁히지 않은 프로젝트에는 기록할 수 없습니다. `
             + "넓히려면 세션 설정에서 기록 범위를 바꾸세요(그 자체가 명시 승인입니다).");
         }
       }

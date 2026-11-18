@@ -2,7 +2,7 @@
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
 import { z } from "zod";
-import { canSeeProjectRow, canSeeProjectRowVis, projectVisFor, visibleListIds, listVisible } from "../v6/visibility.js";
+import { canSeeProjectRow, canSeeProjectRowVis, projectVisFor, visibleListIds, listVisible, hiddenProjects, PUBLIC_VIEWER } from "../v6/visibility.js";
 import { releaseProjectDraft } from "../v6/project-draft.js";
 import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
@@ -44,6 +44,7 @@ import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, ProjectBodyConflictError, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
+  setProjectAccess, ProjectAccessOwnerError, projectMemberIds,   // #5598 초대제
   linkProjectCategory, unlinkProjectCategory, setProjectCategories, type CategoryApply,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
@@ -56,6 +57,9 @@ import {
   getNodeRow, listEdgesForNodes, rescheduleDependents, // #1308 의존선 — 노드(레벨 무관) 엣지·자동 재스케줄
 } from "../v6/project-store.js";
 import { assertNoContentSecrets } from "./content-secrets.js";
+import { PROJECT_ACCESS_MODES, projectAccessMode } from "../v6/project-access.js";   // #5598 새 프로젝트 공개 방식
+import { axisOn } from "../v6/visibility-axes.js";
+import { isPrivateProject, memberEditRefusal, newProjectInvitees, notifyProjectInvitees } from "../v6/project-invite.js";
 import { redactTokenShapes } from "../org/ingest/redact.js";
 
 const STATUSES = ["active", "done"] as const;
@@ -211,7 +215,10 @@ const projectListV6: Capability = {
       } catch { /* 세션 조회 실패 → my_session_count 미부여(프론트는 0=비활성으로 처리) */ }
     }
     if (input.slim) for (const p of projects as any[]) delete p.description;
-    return { projects };
+    await markListLocked(projects as Array<{ id: number; list_locked?: boolean }>);
+    // #5598 — 화면이 «누가 보나» 를 사실대로 말하려면 워크스페이스의 새 프로젝트 공개 방식과 축 상태가 필요하다
+    //  (web/lib/proj-access.ts showAccessBadge · newProjectAccessHint). 목록과 한 번에 준다 — 따로 물으면 첫 화면에 자물쇠가 늦게 선다.
+    return { projects, access: { mode: await projectAccessMode(), enforced: await axisOn("project") } };
   },
 };
 
@@ -382,13 +389,35 @@ const projectGetV6: Capability = {
     const bySession = await sessionsOfTasks(rows.map((t) => Number(t.id)))
       .catch(() => new Map<number, Array<{ id: string; label: string | null; owner: string }>>());
     const tasks = rows.map((t) => ({ ...t, sessions: bySession.get(Number(t.id)) ?? [] }));
-    return { project: { ...project, tasks } };
+    await markListLocked([project as { id: number; list_locked?: boolean }]);
+    // access(#5598) — 프로젝트 화면이 «누가 보나» 칩을 그릴 재료(목록 응답과 같은 모양 · 주소로 바로 연 화면은 목록을 안 거친다).
+    return { project: { ...project, tasks }, access: { mode: await projectAccessMode(), enforced: await axisOn("project") } };
   },
 };
 
 // 생성(project/task) 응답에 실리는 prior-art 안내(#639) — 에이전트가 새로 만들기 전 기존 자산을 확인·재사용하도록.
 const PRIOR_ART_NOTE =
   "⚠ 이것과 의미적으로 겹칠 수 있는 기존 지식입니다(유사도순). 새로 설계·구현하기 전에 knowledge_get(name)으로 본문을 확인하세요 — 이미 있으면 중복해서 만들지 말고 재사용/보강하세요.";
+
+/**
+ * 리스트(또는 그 조상 폴더)가 잠긴 프로젝트에 list_locked 를 단다(#5598).
+ *  화면의 «누가 보나» 표시가 초대제 · 초안이 아닌 프로젝트를 «전체 공개» 라고 적는데, 잠긴 리스트 안의 프로젝트는 그 리스트 대상만
+ *  본다 — 그걸 «워크스페이스 구성원 모두가 봐요» 라고 말하면 거짓이다. 판정은 술어 SoT 의 «잠긴 프로젝트» 집합을 그대로 쓴다
+ *  (hiddenProjects(PUBLIC_VIEWER) — 뷰어 무관 · 15초 보관 · 축이 꺼져 있으면 빈 집합). 못 재면 달지 않는다(표시일 뿐 판정이 아니다).
+ */
+async function markListLocked(rows: Array<{ id: number; list_locked?: boolean }>): Promise<void> {
+  if (!rows.length) return;
+  const locked = await hiddenProjects(PUBLIC_VIEWER).then((h) => h.ids).catch(() => null);
+  if (!locked || !locked.size) return;
+  for (const p of rows) if (locked.has(Number(p.id))) p.list_locked = true;
+}
+
+/** REST 본문의 access 글자 → 방식. 모르는 값은 400(조용히 기본값으로 읽으면 «전체 공개» 를 고른 줄 알고 닫힌 채 만들거나 그 반대가 된다). */
+function parseAccess(raw: unknown): (typeof PROJECT_ACCESS_MODES)[number] {
+  const v = String(raw ?? "");
+  if (!(PROJECT_ACCESS_MODES as readonly string[]).includes(v)) throw new HttpError(400, `access 는 ${PROJECT_ACCESS_MODES.join("|")}`);
+  return v as (typeof PROJECT_ACCESS_MODES)[number];
+}
 
 const projectCreateV6Input = {
   name: z.string().min(1).max(200),
@@ -397,12 +426,15 @@ const projectCreateV6Input = {
   members: z.array(z.string()).optional(),
   list_id: z.number().int().positive().describe("소속 리스트(영역) id — project_list_index_v6 로 조회. MCP 생성 시 필수."),
   follow_up: z.number().int().positive().optional().describe("이 프로젝트가 '후속'하는 선행 프로젝트 id(선택) — 생성 직후 follow_up 엣지 연결."),
+  // #5598 — 보통 생략한다(워크스페이스의 «새 프로젝트 공개 방식» 을 따른다 — 기본은 초대제).
+  access: z.enum(PROJECT_ACCESS_MODES).optional()
+    .describe("공개 범위. 보통 생략한다 — 워크스페이스 설정(기본 초대제)을 따른다. invite = 만든 사람과 초대한 사람(members)만 본다 · open = 워크스페이스 전원이 본다(잠긴 리스트 안이면 그 리스트 대상만). 사람이 «팀 전체가 보게 만들어 줘» 처럼 분명히 말했을 때만 open 을 준다."),
 };
 type ProjectCreateV6Input = z.infer<z.ZodObject<typeof projectCreateV6Input>>;
 const projectCreateV6: Capability = {
   name: "project_create_v6",
   title: "프로젝트 생성(v6)",
-  description: "새 프로젝트 생성 + 팀원 초기 등록. **list_id(소속 리스트/영역)는 MCP 생성 시 필수**(project_list_index_v6 로 id 조회). follow_up=선행 프로젝트 id(선택) 주면 생성 직후 follow_up 엣지(이 프로젝트가 그 선행의 후속)도 연결.",
+  description: "새 프로젝트 생성 + 팀원 초기 등록. **list_id(소속 리스트/영역)는 MCP 생성 시 필수**(project_list_index_v6 로 id 조회). follow_up=선행 프로젝트 id(선택) 주면 생성 직후 follow_up 엣지(이 프로젝트가 그 선행의 후속)도 연결. 공개 범위는 워크스페이스 설정을 따른다 — 기본은 초대제(만든 사람과 members 만 본다). 응답의 project.invite_only 가 true 면 그 프로젝트는 초대한 사람만 본다.",
   scope: "memory",
   input: projectCreateV6Input,
   expose: {
@@ -420,6 +452,7 @@ const projectCreateV6: Capability = {
           // 웹은 list_id 선택(미지정 허용 — 보드에서 나중에 분류). MCP 는 위 zod 로 필수.
           list_id: b.list_id != null ? parseId(b.list_id) : undefined,
           follow_up: b.follow_up != null ? parseId(b.follow_up) : undefined,
+          access: b.access == null ? undefined : parseAccess(b.access),
         };
       } }],
   },
@@ -462,7 +495,10 @@ const projectCreateV6: Capability = {
     //  그 밖(사람이 웹·MCP 로 짓는 이름)은 전부 human — 자동 이름짓기가 덮지 못한다.
     const name_source = String(input.description ?? "").includes(AUTO_CREATED_MARK) ? "rule" as const : "human" as const;
     //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
-    const project = await createProject({ ...input, name_source, draft: name_source === "rule" }, writeCtx);
+    //  초대제(#5598) — access 를 안 주면 createProject 가 워크스페이스의 새 프로젝트 공개 방식을 따른다(첫 지시 자동 생성 경로와 한 규칙).
+    const { access, ...createInput } = input;
+    const project = await createProject({ ...createInput, name_source, draft: name_source === "rule",
+      ...(access ? { invite_only: access === "invite" } : {}) }, writeCtx);
     if (input.follow_up != null) await linkProjectEdge(project.id, input.follow_up, "follow_up", writeCtx); // new --follow_up--> 선행
     await regenAgents(project.id);  // 생성 직후 AGENTS.md(+폴더) 생성 — 다음 pull 전에도 존재.
     // 잠긴 리스트 안에 만든 프로젝트면 그 폴더에도 즉시 ACL 을 건다(#1291 v2) — 폴더는 방금 생겼으므로
@@ -747,17 +783,17 @@ const projectUpdateV6Input = {
   due_date: z.string().nullable().optional(),
   // #1308 — 날짜가 움직였으면 depends_on 후행 체인도 같은 Δ 로 민다. 명시 opt-in(간트가 켠다).
   reschedule_dependents: z.boolean().optional(),
-  // #4170 초안 — 보통 안 보낸다: 제목이나 본문을 실제로 고치면 저절로 초안에서 나온다. 웹의 «공개하기» 가 false 를 보낸다.
+  // #4170 초안 — 보통 안 보낸다: 제목이나 본문을 실제로 고치면 저절로 초안에서 나온다. 웹의 «공개하기»(초대제 프로젝트에서는 «초안 풀기» — #5598)가 false 를 보낸다.
   //  #5522 — 초안은 만든 사람과 팀원만 본다. true 는 받아도 아무 일도 없다(남의 프로젝트를 초안으로 되돌려 숨기는 길을 열지 않는다).
   draft: z.boolean()
-    .describe("초안 여부. 보통 생략한다 — 초안(첫 지시로 자동 생성 · 만든 사람과 팀원만 본다)은 제목·본문을 실제로 고치거나 산출지식·작업기록·코멘트·파일을 남기면 저절로 풀려 공개된다. false = 고치지 않고 지금 공개하기. true 는 무시된다(한 번 공개된 프로젝트는 초안으로 돌아가지 않는다).")
+    .describe("초안 여부. 보통 생략한다 — 초안(첫 지시로 자동 생성 · 만든 사람과 팀원만 본다)은 제목·본문을 실제로 고치거나 산출지식·작업기록·코멘트·파일을 남기면 저절로 초안에서 풀린다. false = 고치지 않고 지금 초안에서 풀기. 풀린 뒤 누가 보는지는 그 프로젝트의 공개 범위가 정한다 — 초대제(project.invite_only=true)면 풀려도 만든 사람과 팀원만 보고, 아니면 모두에게 보인다(공개 범위를 바꾸는 것은 project_set_access_v6). true 는 무시된다(한 번 풀린 프로젝트는 초안으로 돌아가지 않는다).")
     .optional(),
 };
 type ProjectUpdateV6Input = z.infer<z.ZodObject<typeof projectUpdateV6Input>>;
 const projectUpdateV6: Capability = {
   name: "project_update_v6",
   title: "프로젝트 수정(v6)",
-  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로. 첫 지시로 자동 생성된 '초안' 프로젝트는 만든 사람과 팀원만 보이고, 이름이나 본문을 실제로 고치면 초안에서 나와 모두에게 보이는 목록에 올라간다.",
+  description: "프로젝트 이름·설명 등을 수정한다. 주어진 키만 변경. 본문은 description(전체 교체) 또는 append_description(원문 보존·끝에 이어쓰기) 중 하나로. 첫 지시로 자동 생성된 '초안' 프로젝트는 만든 사람과 팀원만 보이고, 이름이나 본문을 실제로 고치면 초안에서 나온다. 초안에서 나와도 초대제 프로젝트(invite_only=true — 워크스페이스 기본값)는 만든 사람과 팀원만 보고, 그렇지 않은 프로젝트만 모두에게 보인다.",
   scope: "memory",
   input: projectUpdateV6Input,
   expose: {
@@ -963,7 +999,7 @@ type ProjectSetMembersV6Input = z.infer<z.ZodObject<typeof projectSetMembersV6In
 const projectSetMembersV6: Capability = {
   name: "project_set_members_v6",
   title: "프로젝트 팀원 변경(v6)",
-  description: "프로젝트 팀원(project_member)을 member_id 배열로 통째 교체. 웹 전용.",
+  description: "프로젝트 팀원(project_member)을 member_id 배열로 통째 교체. 초대제 · 초안 프로젝트(project.invite_only · draft)에서는 팀원이 곧 «볼 수 있는 사람» 이다 — 넣으면 그 사람이 프로젝트를 보게 되고(알림이 간다) 빼면 못 본다. 그런 프로젝트에서 남을 빼는 것은 만든 사람만 할 수 있다(자기 자신은 뺄 수 있다).",
   scope: "memory",
   input: projectSetMembersV6Input,
   expose: {
@@ -980,9 +1016,55 @@ const projectSetMembersV6: Capability = {
   handler: async (input: ProjectSetMembersV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    // #5598 — 비공개(초대제 · 초안) 프로젝트에서는 팀원이 볼 수 있는 사람이다. 남을 빼는 것은 만든 사람만(v6/project-invite.ts).
+    const row = await getProjectRow(input.id);
+    if (!row) throw new HttpError(404, `프로젝트 #${input.id} 없음`);
+    const priv = isPrivateProject(row);
+    const prev = await projectMemberIds(input.id);
+    const refusal = memberEditRefusal({ private: priv, owner: row.created_by, actor: writeCtx.actor, prev, next: input.members });
+    if (refusal) throw new HttpError(403, refusal);
     const member_ids = await setProjectMembers(input.id, input.members, writeCtx);
     await regenAgents(input.id);
-    return { member_ids };
+    //  새로 들어온 사람에게만 알린다 — 공개 프로젝트의 팀원 변경은 종전대로 조용하다(볼 수 있는 사람이 달라지지 않는다).
+    const notified = priv
+      ? await notifyProjectInvitees({ projectId: input.id, name: row.name, actor: writeCtx.actor,
+          invitees: newProjectInvitees(prev, member_ids, row.created_by, writeCtx.actor) })
+      : 0;
+    return { member_ids, notified };
+  },
+};
+
+// #5598 — 프로젝트 하나의 공개 범위(초대제 ↔ 전체 공개). 만든 사람만 바꾼다(project-store.setProjectAccess 머리말).
+const projectSetAccessV6Input = {
+  id: z.number().int().positive(),
+  access: z.enum(PROJECT_ACCESS_MODES).describe("invite = 만든 사람과 초대한 사람(팀원)만 본다 · open = 워크스페이스 전원이 본다(잠긴 리스트 안이면 그 리스트 대상만)"),
+};
+type ProjectSetAccessV6Input = z.infer<z.ZodObject<typeof projectSetAccessV6Input>>;
+const projectSetAccessV6: Capability = {
+  name: "project_set_access_v6",
+  title: "프로젝트 공개 범위 변경(v6)",
+  description: "프로젝트 하나의 공개 범위를 바꾼다 — invite(초대제: 만든 사람과 팀원만 본다) | open(전체 공개). **그 프로젝트를 만든 사람만** 바꿀 수 있다(그 밖에는 403). open 은 되돌릴 수 있지만 그 사이 누가 봤는지는 되돌릴 수 없으니, 사람이 분명히 «공개해» 라고 했을 때만 부른다. 사람을 초대하는 것은 project_set_members_v6.",
+  scope: "memory",
+  input: projectSetAccessV6Input,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/access"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        return { id: parseId(req.params?.id), access: parseAccess(b.access) };
+      } }],
+  },
+  handler: async (input: ProjectSetAccessV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertProjectVisible(input.id, ctx, "프로젝트");
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    try {
+      const project = await setProjectAccess(input.id, input.access, writeCtx);
+      await regenAgents(input.id);
+      return { project, member_ids: await projectMemberIds(input.id) };
+    } catch (e) {
+      if (e instanceof ProjectAccessOwnerError) throw new HttpError(403, e.message);
+      throw e;
+    }
   },
 };
 
@@ -1707,7 +1789,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectTrashPreviewV6, projectPurgeV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectRenameV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectArchiveV6, projectTrashV6, projectTrashPreviewV6, projectPurgeV6, projectSetMembersV6, projectSetAccessV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

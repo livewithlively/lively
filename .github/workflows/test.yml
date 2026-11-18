@@ -322,6 +322,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/project-draft-private.pg-test.mjs
+      # 프로젝트 초대제(#5598) — «초대제 프로젝트는 만든 사람과 팀원만 본다» 는 초안과 한 술어(OR)이고, «초안이 풀려도 닫혀 있다» 는
+      #    두 칸(draft · invite_only)이 실제로 따로 움직여야 성립한다. 새 프로젝트 공개 방식(org_runtime_config.project_access)이
+      #    생성 때 표시를 찍는지 · 설정을 바꿔도 있는 프로젝트가 안 움직이는지 · 공개 범위는 만든 사람만 바꾸는지(UPDATE 의 WHERE) ·
+      #    세션 초대 → 팀원 넣기 · 휴지통 개수 · 축 끄기 확인의 수를 실제 테이블에 심고 되읽는다.
+      - name: 프로젝트 초대제 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/project-invite-only.pg-test.mjs
       # 자동 생성 프로젝트 정리(project_gc) — 무엇이 «기록»·«마지막 손길»인지가 후보 SQL 안에 있다(가족 2단계 · 여러 출처의 최댓값).
       #    목 풀로는 가족을 한 단계 덜 봐도 초록이라 실제 테이블에 심고 되읽는다. mode=on 이 웹과 같은 완료·휴지통 핸들러를 타는지도 본다.
       #    tenant 판은 앱 역할 · FORCE RLS 로 남의 워크스페이스 프로젝트가 후보가 아닌지 본다.
