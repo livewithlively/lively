@@ -559,6 +559,15 @@ function startBackgroundSweeps(): void {
 export const SCHEMA_ONLY_LAST_STEP = "self-rls";
 export const schemaOnlyBoot = (): boolean => (process.env.LIVELY_BOOT_SCHEMA_ONLY || "").trim() === "1";
 
+/**
+ * #5368 — 이 프로세스에서 배경 정비 타이머(startBackgroundSweeps · 'background-sweeps' 스텝)가 걸리는가.
+ *  runBootHousekeeping 의 게이트를 그대로 옮긴 것이다 — DB 가 있고 · 스케줄러가 켜져 있고 · 요청별 테넌시가 아니고 · 스키마 전용 부팅이 아닐 때.
+ *  화면이 정책 토글을 «이 서버에서는 돌지 않는다» 로 정직하게 보이려고 연다(매니지드 중앙 게이트웨이 · 보조 인스턴스에서는
+ *  토글을 켜도 아무 일도 일어나지 않는다). 위 두 게이트 자리를 바꾸면 여기도 같이 바꾼다.
+ */
+export const backgroundSweepsRun = (): boolean =>
+  !!process.env.ITEMS_DATABASE_URL && schedulerEnabled() && !requestScopedTenancy() && !schemaOnlyBoot();
+
 // listen 콜백에서 호출 — LISTEN_STEPS 를 동기 배선한 뒤 DB 부팅 직렬 체인을 비동기로 돌린다.
 // 스키마 보장(비치명적) — **포트 바인딩 성공 후에만** 실행. 파괴적 마이그레이션(예: DROP COLUMN)이 EADDRINUSE
 //  (구 게이트웨이 미종료) 상황에서 구코드 밑의 컬럼을 떨어뜨리지 않게: listen 성공 = 포트 소유 확보 = 구 인스턴스 부재.
