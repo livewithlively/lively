@@ -44,7 +44,7 @@ import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, ProjectBodyConflictError, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
-  setProjectAccess, ProjectAccessOwnerError, projectMemberIds,   // #5598 초대제
+  setProjectAccess, ProjectAccessOwnerError, ProjectAccessUnavailableError, projectMemberIds,   // #5598 초대제
   linkProjectCategory, unlinkProjectCategory, setProjectCategories, type CategoryApply,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
@@ -57,8 +57,7 @@ import {
   getNodeRow, listEdgesForNodes, rescheduleDependents, // #1308 의존선 — 노드(레벨 무관) 엣지·자동 재스케줄
 } from "../v6/project-store.js";
 import { assertNoContentSecrets } from "./content-secrets.js";
-import { PROJECT_ACCESS_MODES, projectAccessMode } from "../v6/project-access.js";   // #5598 새 프로젝트 공개 방식
-import { axisOn } from "../v6/visibility-axes.js";
+import { PROJECT_ACCESS_MODES, projectAccessInfo } from "../v6/project-access.js";   // #5598 새 프로젝트 공개 방식
 import { isPrivateProject, memberEditRefusal, newProjectInvitees, notifyProjectInvitees } from "../v6/project-invite.js";
 import { redactTokenShapes } from "../org/ingest/redact.js";
 
@@ -218,7 +217,7 @@ const projectListV6: Capability = {
     await markListLocked(projects as Array<{ id: number; list_locked?: boolean }>);
     // #5598 — 화면이 «누가 보나» 를 사실대로 말하려면 워크스페이스의 새 프로젝트 공개 방식과 축 상태가 필요하다
     //  (web/lib/proj-access.ts showAccessBadge · newProjectAccessHint). 목록과 한 번에 준다 — 따로 물으면 첫 화면에 자물쇠가 늦게 선다.
-    return { projects, access: { mode: await projectAccessMode(), enforced: await axisOn("project") } };
+    return { projects, access: await projectAccessInfo() };
   },
 };
 
@@ -391,7 +390,7 @@ const projectGetV6: Capability = {
     const tasks = rows.map((t) => ({ ...t, sessions: bySession.get(Number(t.id)) ?? [] }));
     await markListLocked([project as { id: number; list_locked?: boolean }]);
     // access(#5598) — 프로젝트 화면이 «누가 보나» 칩을 그릴 재료(목록 응답과 같은 모양 · 주소로 바로 연 화면은 목록을 안 거친다).
-    return { project: { ...project, tasks }, access: { mode: await projectAccessMode(), enforced: await axisOn("project") } };
+    return { project: { ...project, tasks }, access: await projectAccessInfo() };
   },
 };
 
@@ -1063,6 +1062,7 @@ const projectSetAccessV6: Capability = {
       return { project, member_ids: await projectMemberIds(input.id) };
     } catch (e) {
       if (e instanceof ProjectAccessOwnerError) throw new HttpError(403, e.message);
+      if (e instanceof ProjectAccessUnavailableError) throw new HttpError(503, e.message);   // 롤 창 — 칸이 아직 없다
       throw e;
     }
   },

@@ -11,6 +11,7 @@
 //  기본값은 전부 **켜짐** — 지금 동작 그대로다(끄기 전까지 아무것도 달라지지 않는다).
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
+import { ensureInviteOnlyColumn, inviteOnlySql } from "./project-invite-column.js";   // #5598 롤 창
 
 /** 공개범위를 걸 수 있는 맥락 유형. 새 축이 생기면 여기에 한 줄 + 강제 지점에서 axisOn 확인. */
 export const VIS_AXES = ["project", "knowledge", "source", "shared_folder", "session_cap"] as const;
@@ -82,6 +83,7 @@ export interface AxisLockSummary {
  */
 export async function axisLockSummary(): Promise<AxisLockSummary[]> {
   const on = await visAxes();
+  await ensureInviteOnlyColumn();   // 아래 프로젝트 셈이 칸을 읽는다(롤 창)
   const count = async (sql: string): Promise<{ n: number; names: string[] }> => {
     try {
       const r = await itemsPool.query(sql);
@@ -93,7 +95,7 @@ export async function axisLockSummary(): Promise<AxisLockSummary[]> {
   const proj = await count(
     `SELECT name FROM project_list WHERE visibility='members'
      UNION ALL SELECT name FROM project_folder WHERE visibility='members'
-     UNION ALL SELECT name FROM project WHERE level='project' AND (draft OR invite_only) AND trashed_at IS NULL`);
+     UNION ALL SELECT pp.name FROM project pp WHERE pp.level='project' AND (pp.draft OR ${inviteOnlySql("pp")}) AND pp.trashed_at IS NULL`);
   const know = await count(`SELECT name FROM knowledge WHERE visibility='members'`);
   const src = await count(`SELECT id::text AS name FROM source WHERE visibility='members'`);
   const sf = await count(`SELECT path AS name FROM shared_folder_acl WHERE visibility='members'`);

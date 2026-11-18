@@ -21,6 +21,7 @@ import { itemsPool } from "../db/client.js";
 import { axisOn } from "./visibility-axes.js";
 import { q } from "../db/client.js";
 import { readScopeFor, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 앱 맥락 범위
+import { ensureInviteOnlyColumn, inviteOnlySql, onInviteOnlyColumnAppeared } from "./project-invite-column.js";   // #5598 롤 창 — 칸이 아직 없는 DB
 
 // viewer 규약: 문자열=그 멤버로 판정 / null=특권(내부 시스템 경로·긴급열람, 필터 없음).
 //  ⚠ undefined 를 특권으로 쓰지 않는다 — '깜빡하고 안 넘김'과 '의도적 특권'이 구분돼야 한다(호출부에서 명시).
@@ -187,7 +188,8 @@ export function listVisible(ids: Set<number> | null, listId: number): boolean {
 /** 프로젝트 행이 «만든 사람과 팀원만 보는» 상태인가 — alias 는 그 행의 별칭. 이 조건의 SQL 은 여기 한 벌이다. */
 export function privateProjectSql(alias: string): string {
   if (!/^[a-z_][a-z0-9_]*$/.test(alias)) throw new Error(`privateProjectSql: 별칭이 아니다(${alias})`);
-  return `(${alias}.draft OR ${alias}.invite_only)`;
+  //  칸이 아직 없는 DB(롤 창 — project-invite-column.ts)에서는 `false` 가 들어간다 = 초안만 닫힌다(초대제가 없던 때와 같다).
+  return `(${alias}.draft OR ${inviteOnlySql(alias)})`;
 }
 
 /** 프로젝트 행 판정에 필요한 두 가지 — 가시 리스트 집합과, 비공개(초안 · 초대제) 프로젝트를 누구 기준으로 거를지(null = 거르지 않는다). */
@@ -198,6 +200,7 @@ export const PROJECT_VIS_ALL: ProjectVis = { lists: null, privateViewer: null };
 /** 이 뷰어의 프로젝트 판정 재료. 다행 쿼리는 이걸 한 번 뽑아 projectVisPredicate 에 넘긴다. */
 export async function projectVisFor(viewer: Viewer): Promise<ProjectVis> {
   if (viewer === null) return PROJECT_VIS_ALL;
+  await ensureInviteOnlyColumn();   // 술어를 짜기 전에 칸이 있는지 잰다(롤 창 — 없으면 초안만 본다)
   if (!(await axisOn("project"))) return PROJECT_VIS_ALL;
   const bg = await activeBreakGlass(viewer);
   if (bg.some((b) => !b.kind)) return PROJECT_VIS_ALL;
@@ -299,12 +302,13 @@ export async function hiddenProjects(viewer: Viewer): Promise<HiddenProjects> {
     //   세션 기록 범위 파생(write-cap) · 잠긴 폴더 배지 · ClickUp 반출. 비공개 프로젝트를 거기 넣으면 새 세션이 전부 «잠긴 프로젝트의
     //   세션» 이 되어 거기서 남긴 지식이 대상 제한으로 찍힌다(#1876 D2 «세션이 사적이어도 산출물은 공개» 가 뒤집힌다).
     //   초대제 프로젝트를 밖으로 내보내지 않는 일은 ClickUp 반출이 따로 본다(inviteOnlyProjectIds).
+    await ensureInviteOnlyColumn();   // 아래 조회가 칸을 읽는다(PUBLIC_VIEWER 갈래는 projectVisFor 를 안 거친다)
     const vis = viewer === PUBLIC_VIEWER
       ? { lists: await visibleListIds(viewer), privateViewer: null }
       : await projectVisFor(viewer);
     const rows = vis.lists === null && vis.privateViewer === null ? [] : await q(itemsPool, `
       SELECT hp.id, hp.folder FROM project hp
-       WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft OR hp.invite_only)
+       WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft OR ${inviteOnlySql("hp")})
          AND NOT (${projectVisPredicate("hp.list_id", "hp.id", vis)})`, []);
     const v: HiddenProjects = {
       ids: new Set(rows.map((r) => Number(r.id))),
@@ -330,12 +334,15 @@ export async function hiddenProjects(viewer: Viewer): Promise<HiddenProjects> {
  */
 export async function inviteOnlyProjectIds(): Promise<Set<number>> {
   if (!(await axisOn("project"))) return new Set();
+  if (!(await ensureInviteOnlyColumn())) return new Set();   // 칸이 아직 없다(롤 창) — 초대제 프로젝트도 있을 수 없다
   const rows = await q(itemsPool, `SELECT id FROM project WHERE level='project' AND invite_only`, []);
   return new Set(rows.map((r) => Number(r.id)));
 }
 
 /** grant·공개범위가 바뀌면 즉시 반영되도록 캐시를 버린다(설정 변경 경로에서 호출). */
 export function invalidateVisibilityCache(): void { hiddenCache.clear(); }
+//  #5598 롤 창 — 초대제 칸이 «없다 → 있다» 로 바뀌면 그동안 뽑아 둔 «숨은 프로젝트» 집합(초대제가 빠져 있다)을 버린다.
+onInviteOnlyColumnAppeared(invalidateVisibilityCache);
 
 /** 지식 1건이 이 뷰어에게 보이나 — 직접 grant 또는 컨테이너(리스트) 참조 grant. 앱 토큰 요청이면 그 앱의 맥락 범위 안이어야 한다(#5100). */
 export async function canSeeKnowledge(name: string, viewer: Viewer): Promise<boolean> {

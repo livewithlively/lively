@@ -7,8 +7,8 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { VIS_AXES, AXIS_LABEL, axisLockSummary, axisOn, setVisAxes, type VisAxis } from "../v6/visibility-axes.js";
-import { PROJECT_ACCESS_MODES, PROJECT_ACCESS_LABEL, projectAccessMode, setProjectAccessMode, type ProjectAccessMode } from "../v6/project-access.js";
+import { VIS_AXES, AXIS_LABEL, axisLockSummary, setVisAxes, type VisAxis } from "../v6/visibility-axes.js";
+import { PROJECT_ACCESS_MODES, PROJECT_ACCESS_LABEL, projectAccessInfo, projectAccessMode, setProjectAccessMode, type ProjectAccessMode } from "../v6/project-access.js";
 import { logActivity } from "../activity/store.js";
 import { logger } from "../log.js";
 import { reconcileAllDerived } from "../v6/derived-visibility.js";
@@ -134,8 +134,8 @@ const projectAccessGet: Capability = {
   input: {},
   expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/v6/project-access"], parse: () => ({}) }] },
   handler: async () => {
-    const mode = await projectAccessMode();
-    return { mode, label: PROJECT_ACCESS_LABEL[mode], enforced: await axisOn("project") };
+    const info = await projectAccessInfo();
+    return { mode: info.mode, label: PROJECT_ACCESS_LABEL[info.mode], enforced: info.enforced };
   },
 };
 
@@ -161,7 +161,7 @@ const projectAccessSet: Capability = {
   handler: async (input: any, user: any) => {
     const next = input.mode as ProjectAccessMode;
     const cur = await projectAccessMode();
-    const enforced = await axisOn("project");
+    const enforced = (await projectAccessInfo()).enforced;
     if (cur === next) return { mode: cur, label: PROJECT_ACCESS_LABEL[cur], enforced, changed: false };
     await setProjectAccessMode(next);
     await logActivity({

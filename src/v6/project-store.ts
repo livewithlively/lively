@@ -16,6 +16,7 @@ import { toVectorLiteral } from "./embedding-provider.js";
 import { releaseProjectDraft } from "./project-draft.js";
 import { projectAccessMode } from "./project-access.js";
 import { axisOn } from "./visibility-axes.js";
+import { ensureInviteOnlyColumn, inviteOnlyColumnExists } from "./project-invite-column.js";   // #5598 롤 창 — 칸이 아직 없는 DB
 import { logger } from "../log.js";
 import { projectVisFor, projectVisPredicate, canSeeProjectRow, invalidateVisibilityCache, PROJECT_VIS_ALL, type ProjectVis, type Viewer } from "./visibility.js";
 // 이름 걸쇠(#2031) — 순위표·다듬기 규칙은 순수 모듈에 두고 여기서는 집행만 한다(DB 무접촉 판정 = 표로 고정).
@@ -36,12 +37,25 @@ export {
 export type { FolderSyncMode, ProjectFolderBinding, OriginProjectCandidate } from "./project-session-store.js";
 
 // project(=level='project') 본문 컬럼 — task/subtask 도 같은 테이블이라 level 로 구분.
-const PROJECT_COLS =
+//  ⚠ invite_only(#5598)는 이 묶음에 **직접 적지 않는다** — 매니지드 롤은 새 코드가 서빙을 시작한 뒤에야 공용 DB 에 새 칸을 만든다
+//   (project-invite-column.ts 머리말). 묶음에 박아 두면 그 몇 분 동안 프로젝트 행을 읽는 모든 조회가 «없는 칸» 으로 실패한다.
+//   그래서 묶음은 함수다: 칸이 있으면 `invite_only`, 아직 없으면 `false AS invite_only`(초대제가 없던 때와 같은 답).
+const PROJECT_BASE_COLS =
   `id, level, parent_id, name, description, status, status_raw, status_category, folder, created_by,
    list_id,
    priority, assignee, start_date, due_date,
    external_system, external_instance, external_id, external_url,
-   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source, draft, invite_only`;
+   sort, created_at, updated_at, completed_at, archived_at, trashed_at, name_source, draft`;
+/** 프로젝트 행을 읽는 묶음(SELECT · RETURNING). alias 를 주면 칸마다 그 별칭을 붙인다. */
+function projectCols(alias?: string): string {
+  const pre = alias ? alias + "." : "";
+  const base = PROJECT_BASE_COLS.split(",").map((c) => pre + c.trim()).join(", ");
+  return `${base}, ${inviteOnlyColumnExists() ? pre + "invite_only" : "false AS invite_only"}`;
+}
+/** 스냅샷 복원(restoreSnapshot)이 INSERT 할 **칸 이름** 묶음 — 식(`false AS …`)이 들어가면 안 된다. 칸이 없으면 그 이름을 뺀다. */
+function projectColNames(): string {
+  return inviteOnlyColumnExists() ? `${PROJECT_BASE_COLS}, invite_only` : PROJECT_BASE_COLS;
+}
 
 export interface ProjectRow {
   id: number; level: string; parent_id: number | null;
@@ -138,7 +152,7 @@ export async function listMyTasks(memberId: string, limit = 200, viewer?: Viewer
   if (!me) return [];
   // 이 쿼리는 이미 조상 프로젝트(pr)를 조인해 두었으므로 그 list_id 로 바로 판정한다(별도 서브쿼리 불요).
   const visWhere = viewer === undefined ? "TRUE" : projectVisPredicate("pr.list_id", "pr.id", await projectVisFor(viewer));
-  const cols = PROJECT_COLS.split(",").map((c) => "p." + c.trim()).join(", ");
+  const cols = projectCols("p");
   const { rows } = await itemsPool.query(`
     SELECT ${cols},
            pr.id AS project_id, pr.name AS project_name, pr.list_id AS project_list_id
@@ -180,7 +194,7 @@ export async function listTasksForProjects(projectIds: number[], viewerVis?: Vie
   const ids = [...new Set(projectIds.map(Number))].filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return [];
   const pv = viewerVis === undefined ? PROJECT_VIS_ALL : await projectVisFor(viewerVis);
-  const cols = PROJECT_COLS.split(",").map((c) => "p." + c.trim()).join(", ");
+  const cols = projectCols("p");
   // ⚠ 요청 id 는 이미 목록에서 걸러진 것들이지만, 여기서도 가시성을 다시 건다 — 주소창에 남의 프로젝트 id 를
   //  적어 넣으면 잠긴 리스트의 태스크 제목이 그대로 새는 우회로가 되기 때문(#1291 과 같은 이유).
   return q(itemsPool, `
@@ -198,7 +212,7 @@ export async function listTasksForProjects(projectIds: number[], viewerVis?: Vie
 // ── 의존 엣지(#1308) ──────────────────────────────────────────────────────
 /** level 을 가리지 않는 노드 1행. getProjectRow 는 level='project' 고정이라 태스크 끝점을 거부한다. */
 export async function getNodeRow(id: number): Promise<ProjectRow | undefined> {
-  return one(itemsPool, `SELECT ${PROJECT_COLS} FROM project WHERE id=$1`, [id]);
+  return one(itemsPool, `SELECT ${projectCols()} FROM project WHERE id=$1`, [id]);
 }
 
 /** 주어진 노드들 사이에 걸린 엣지(기본 depends_on). 타임라인이 의존선을 그릴 때 쓰는 벌크 경로.
@@ -256,7 +270,7 @@ export async function rescheduleDependents(anchorId: number, deltaDays: number, 
                                  ELSE to_char(due_date::date + $2::int, 'YYYY-MM-DD') END,
                updated_at = now()
          WHERE id = $1 AND start_date IS NOT NULL
-       RETURNING ${PROJECT_COLS}`, [id, delta]);
+       RETURNING ${projectCols()}`, [id, delta]);
       if (!after) continue;            // start 가 없어 못 민 가지 — 여기서 전파도 멈춘다
       await auditProject(String(id), "reschedule", { anchor: anchorId, deltaDays: delta }, { start_date: after.start_date, due_date: after.due_date }, ctx);
       moved.push(after);
@@ -269,6 +283,7 @@ export async function rescheduleDependents(anchorId: number, deltaDays: number, 
 }
 
 export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectRow[]> {
+  await ensureInviteOnlyColumn();   // 행 읽기 묶음이 칸을 읽는다(롤 창 — project-invite-column.ts). 뷰어 없는 내부 경로도 여기서 잰다
   const params: unknown[] = [];
   let join = "";
   // 가시 리스트 집합을 **한 번** 계산해 세미조인으로 붙인다(#1291). 행마다 서브쿼리를 평가하는 대신
@@ -303,7 +318,7 @@ export async function listProjects(filter: ProjectFilter = {}): Promise<ProjectR
   const where = `WHERE ${wh.join(" AND ")}`;
   // DISTINCT — 다중 카테고리 매핑 시 조인 중복 제거. ORDER BY 컬럼은 SELECT DISTINCT 대상에 포함.
   //  members = facepile 용 스칼라 서브쿼리(org_member 표시명 조인, 정렬 보존).
-  const cols = PROJECT_COLS.split(",").map((c) => "p." + c.trim()).join(", ");
+  const cols = projectCols("p");
   return q(itemsPool,
     `SELECT DISTINCT ${cols},
        CASE WHEN p.raw->>'orderindex' ~ '^-?[0-9.]+$' THEN (p.raw->>'orderindex')::float8 END AS ext_orderindex,
@@ -334,8 +349,9 @@ export interface ProjectDetail extends ProjectRow {
 // viewer(#1291) — 이 신원에게 안 보이는 프로젝트면 **없는 것처럼** undefined 를 돌려준다(호출부가 404 로 바꾼다).
 //  403 이 아니라 404 인 이유: "권한이 없다"는 응답 자체가 '그 id 의 프로젝트가 존재한다'는 사실을 알려준다.
 export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDetail | undefined> {
+  await ensureInviteOnlyColumn();   // 롤 창 — 행 읽기 묶음이 칸을 읽는다
   const project: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!project) return undefined;
   // ⚠ 여기서 list_id 를 손으로 견주지 않는다 — 단건 판정의 SoT(canSeeProjectRow)가 리스트와 초안(#5522)을 함께 본다.
   if (viewer !== undefined && !(await canSeeProjectRow(id, viewer))) return undefined;
@@ -350,12 +366,12 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
 
   // 작업 위계 — 2단계 페치: task(parent=project) → subtask(parent IN task ids). 중첩 배열로 조립.
   const taskRows: ProjectRow[] = await q(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE parent_id=$1 AND level='task' ORDER BY sort, id`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE parent_id=$1 AND level='task' ORDER BY sort, id`, [id]);
   const taskIds = taskRows.map((t) => t.id);
   let subtaskRows: ProjectRow[] = [];
   if (taskIds.length) {
     subtaskRows = await q(itemsPool,
-      `SELECT ${PROJECT_COLS} FROM project WHERE parent_id=ANY($1) AND level='subtask' ORDER BY sort, id`, [taskIds]);
+      `SELECT ${projectCols()} FROM project WHERE parent_id=ANY($1) AND level='subtask' ORDER BY sort, id`, [taskIds]);
   }
   // 커스텀 필드(클릭업형 컬럼) — 정의는 루트 프로젝트 단위, 값은 (field,task) 단위. 한 번에 페치해 task 트리에 매핑(N+1 회피).
   //  #541: 프로젝트 행 자신의 값도 함께(ClickUp 최상위 태스크=우리 project 행 — 표시 표면은 상세 메타패널).
@@ -490,7 +506,9 @@ export async function createProject(
   //   않아 화면도 «나만 봅니다» 라고 말하지 않는다(web/lib/proj-access.ts) — 그런데 표시만 조용히 찍어 두면, 나중에 축을 켜는 순간
   //   그동안 전원이 보던 프로젝트가 한꺼번에 닫힌다. 만들 때 화면이 말한 것이 그 프로젝트의 약속이다.
   //  방식은 보관값이 아니라 지금 값으로 읽는다(project-access.ts projectAccessMode fresh — 열린 채 태어난 프로젝트는 되돌릴 수 없다).
-  const inviteOnly = !ctx?.actor ? false
+  //  칸이 아직 없는 DB(롤 창 — project-invite-column.ts)에서는 표시를 찍을 자리가 없다 → 닫지 않고 종전처럼 만든다(그 칸을 INSERT 에서 뺀다).
+  const hasInviteCol = await ensureInviteOnlyColumn();
+  const inviteOnly = !ctx?.actor || !hasInviteCol ? false
     : input.invite_only !== undefined ? input.invite_only === true
     : (await axisOn("project")) && (await projectAccessMode({ fresh: true })) === "invite";
   const made = await withTx(async (c): Promise<{ row: ProjectRow; deduped: boolean }> => {
@@ -498,18 +516,18 @@ export async function createProject(
       `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|' || $1))`,
       [`${ctx?.actor ?? ""}|${input.name}`]);
     const dup: ProjectRow | undefined = input.dedupe === false ? undefined : await one(c,
-      `SELECT ${PROJECT_COLS} FROM project
+      `SELECT ${projectCols()} FROM project
         WHERE level='project' AND name=$1 AND created_by IS NOT DISTINCT FROM $2
           AND created_at > now() - ($3 || ' seconds')::interval
         ORDER BY id DESC LIMIT 1`,
       [input.name, ctx?.actor ?? null, String(CREATE_DEDUPE_SEC)]);
     if (dup) return { row: dup, deduped: true };
     const fresh: ProjectRow = await one(c,
-      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, draft, invite_only, created_at, updated_at)
-       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,$7,$8,now(),now())
-       RETURNING ${PROJECT_COLS}`,
+      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, name_source, draft${hasInviteCol ? ", invite_only" : ""}, created_at, updated_at)
+       VALUES('project',$1,$2,$3,$4,$5,'active','started',$6,$7${hasInviteCol ? ",$8" : ""},now(),now())
+       RETURNING ${projectCols()}`,
       [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null,
-       input.name_source ?? "human", input.draft === true, inviteOnly]);
+       input.name_source ?? "human", input.draft === true, ...(hasInviteCol ? [inviteOnly] : [])]);
     return { row: fresh, deduped: false };
   });
   // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
@@ -536,7 +554,8 @@ export async function createProject(
 
 // 프로젝트 본문 1행(자식·정션 조인 없이) — 소유권 확인 등 가벼운 조회용. 없으면 undefined.
 export async function getProjectRow(id: number): Promise<ProjectRow | undefined> {
-  return one(itemsPool, `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+  await ensureInviteOnlyColumn();   // 롤 창 — 뷰어 없이 부르는 내부 경로(스케줄러 · 세션)가 가장 먼저 닿는 읽기다
+  return one(itemsPool, `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
 }
 
 // 리스트(영역) 1행 — 생성 시 list_id 유효성 확인용(없으면 undefined → capability 가 400).
@@ -558,7 +577,7 @@ export async function setProjectMemberStatus(projectId: number, memberId: string
 // 공유 폴더 경로 영속 — 기존 folder 컬럼 값 갱신(스키마 불변, 데이터 쓰기). 라우트가 lazy 생성 시 호출.
 export async function setProjectFolder(id: number, folder: string, ctx?: WriteCtx): Promise<void> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   if (before.folder === folder) return;
   await itemsPool.query(`UPDATE project SET folder=$2, updated_at=now() WHERE id=$1`, [id, folder]);
@@ -571,7 +590,7 @@ export async function setProjectFolder(id: number, folder: string, ctx?: WriteCt
 //  보존되고 프로젝트 링크만 해제된다. 감사(org_content_audit)는 FK 없는 append-only 라 삭제 후에도 보존.
 export async function deleteProject(id: number, ctx?: WriteCtx): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   await itemsPool.query(`DELETE FROM project WHERE id=$1 AND level='project'`, [id]);
   await auditProject(String(id), "delete", before, null, ctx);
@@ -585,7 +604,7 @@ export async function deleteProject(id: number, ctx?: WriteCtx): Promise<Project
 //  task_update 와 동형(인증 사용자=가능) — capability 계층에서 처리.
 export async function deleteTaskNode(id: number, ctx?: WriteCtx): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   if (!before) throw new Error(`작업 #${id} 없음`);
   await itemsPool.query(`DELETE FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   await auditProject(String(id), "delete", before, null, ctx);
@@ -597,7 +616,7 @@ export async function deleteTaskNode(id: number, ctx?: WriteCtx): Promise<Projec
 //  카테고리/지식 연결은 삭제 시 cascade 됐으므로 복원되지 않는다(프로젝트 본체만). 이미 존재하면 거부.
 //  사람전용 게이트는 capability 계층(content_restore)에서 선행.
 export async function restoreProject(before: Record<string, unknown>, ctx?: WriteCtx): Promise<ProjectRow> {
-  const after = await restoreSnapshot<ProjectRow>("project", PROJECT_COLS, "id", before);
+  const after = await restoreSnapshot<ProjectRow>("project", projectColNames(), "id", before);
   await auditProject(String(after.id), "restore", null, after, ctx);
   await markProjectEmbeddingPending(after.id); // #631/#1053 복원 행 재임베딩 — pending 마킹(백그라운드 스윕이 채움)
   return after;
@@ -612,7 +631,7 @@ export async function restoreProject(before: Record<string, unknown>, ctx?: Writ
 export async function updateProjectStatus(id: number, status: string, ctx?: WriteCtx, statusRaw?: string | null,
   opts: { keepDraft?: boolean } = {}): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   // done → 완료시각 기록, active 복귀 → 완료시각 해제. 완료는 초안(#4170)도 끝낸다 — 끝난 일은 정리할 껍데기가 아니다
   //  (keepDraft 는 예외 — 위 머리말).
@@ -623,7 +642,7 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
        status_raw = CASE WHEN $5::bool THEN $4 ELSE status_raw END,
        completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END,
        draft = CASE WHEN $2='done' AND NOT $6::bool THEN false ELSE draft END, updated_at=now()
-     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven, opts.keepDraft === true]);
+     WHERE id=$1 RETURNING ${projectCols()}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven, opts.keepDraft === true]);
   await auditProject(String(id), "set_status", before, after, ctx);
   if (before.draft === true && after.draft !== true) invalidateVisibilityCache();   // #5522 초안이 풀렸다 — 곧바로 보이게
   // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
@@ -635,12 +654,12 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
 //  세션 전부 그대로고, 목록(listProjects 기본 exclude)과 새 셸 사이드바에서만 빠진다. 감사는 op='archive'|'unarchive'.
 export async function setProjectArchived(id: number, archived: boolean, ctx?: WriteCtx): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   if (!!before.archived_at === archived) return before;   // 이미 그 상태 — 멱등(감사도 남기지 않는다)
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET archived_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
-     WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, archived]);
+     WHERE id=$1 AND level='project' RETURNING ${projectCols()}`, [id, archived]);
   await auditProject(String(id), archived ? "archive" : "unarchive", before, after, ctx);
   return after;
 }
@@ -649,12 +668,12 @@ export async function setProjectArchived(id: number, archived: boolean, ctx?: Wr
 //  세션 묶음은 capability 가 함께 처리한다(sessions/session-trash-ops). 감사 op='trash'|'untrash'.
 export async function setProjectTrashed(id: number, trashed: boolean, ctx?: WriteCtx): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   if (!!before.trashed_at === trashed) return before;
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET trashed_at = CASE WHEN $2::bool THEN now() ELSE NULL END, updated_at=now()
-     WHERE id=$1 AND level='project' RETURNING ${PROJECT_COLS}`, [id, trashed]);
+     WHERE id=$1 AND level='project' RETURNING ${projectCols()}`, [id, trashed]);
   await auditProject(String(id), trashed ? "trash" : "untrash", before, after, ctx);
   return after;
 }
@@ -677,7 +696,7 @@ export async function updateProject(
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   const sets: string[] = [];
   const vals: unknown[] = [];
@@ -733,7 +752,7 @@ export async function updateProject(
   sets.push("updated_at=now()");
   vals.push(id);
   const after: ProjectRow | undefined = await one(itemsPool,
-    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project'${bodyGuard} RETURNING ${PROJECT_COLS}`, vals);
+    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} AND level='project'${bodyGuard} RETURNING ${projectCols()}`, vals);
   // 행은 있는데(before) UPDATE 가 못 잡았다 = 가드가 막았다. 같은 패치의 다른 키도 함께 안 쓰인다(반쪽 저장 없음).
   if (!after) throw new ProjectBodyConflictError(id);
   await auditProject(String(id), "update", before, after, ctx);
@@ -759,12 +778,12 @@ export async function claimProjectName(
   id: number, name: string, source: ProjectNameSource, ctx?: WriteCtx,
 ): Promise<{ applied: boolean; project: ProjectRow | null }> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) return { applied: false, project: null };
   const after: ProjectRow | undefined = await one(itemsPool,
     `UPDATE project SET name=$2, name_source=$3, updated_at=now()
       WHERE id=$1 AND level='project' AND ($3='human' OR ${nameRankSql("$3")} > ${nameRankSql("COALESCE(name_source,'human')")})
-      RETURNING ${PROJECT_COLS}`, [id, name, source]);
+      RETURNING ${projectCols()}`, [id, name, source]);
   if (!after) return { applied: false, project: before };
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
@@ -792,12 +811,12 @@ export async function claimTaskName(
   id: number, name: string, source: ProjectNameSource, ctx?: WriteCtx,
 ): Promise<{ applied: boolean; task: ProjectRow | null }> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   if (!before) return { applied: false, task: null };
   const after: ProjectRow | undefined = await one(itemsPool,
     `UPDATE project SET name=$2, name_source=$3, updated_at=now()
       WHERE id=$1 AND level IN ('task','subtask') AND ($3='human' OR ${nameRankSql("$3")} > ${nameRankSql("COALESCE(name_source,'human')")})
-      RETURNING ${PROJECT_COLS}`, [id, name, source]);
+      RETURNING ${projectCols()}`, [id, name, source]);
   if (!after) return { applied: false, task: before };
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
@@ -865,6 +884,11 @@ export async function projectMemberIds(projectId: number): Promise<string[]> {
   return rows.map((r) => String(r.member_id ?? "")).filter(Boolean);
 }
 
+/** 공개 범위를 적을 칸이 이 DB 에 아직 없다(#5598 — 배포가 스키마를 맞추는 몇 분). 부른 쪽(capability)이 503 으로 바꾼다. */
+export class ProjectAccessUnavailableError extends Error {
+  constructor() { super("배포 중이라 공개 범위를 아직 바꿀 수 없습니다 — 잠시 뒤 다시 시도하세요"); this.name = "ProjectAccessUnavailableError"; }
+}
+
 /** 공개 범위는 만든 사람만 바꾼다(#5598) — 부른 쪽(capability)이 403 으로 바꾼다. */
 export class ProjectAccessOwnerError extends Error {
   constructor(id: number) { super(`프로젝트 #${id} 의 공개 범위는 만든 사람만 바꿀 수 있습니다`); this.name = "ProjectAccessOwnerError"; }
@@ -882,8 +906,10 @@ export class ProjectAccessOwnerError extends Error {
  *  같은 값으로 부르면 아무것도 안 바뀐다(감사도 안 남는다).
  */
 export async function setProjectAccess(id: number, access: "invite" | "open", ctx?: WriteCtx): Promise<ProjectRow> {
+  //  칸이 아직 없는 DB(롤 창)에서는 바꿀 자리가 없다 — 조용히 넘어가면 «닫았다» 고 믿은 프로젝트가 열린 채 남는다. 거절한다.
+  if (!(await ensureInviteOnlyColumn())) throw new ProjectAccessUnavailableError();
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) throw new Error(`프로젝트 #${id} 없음`);
   const actor = ctx?.actor ?? null;
   if (!actor || before.created_by !== actor) throw new ProjectAccessOwnerError(id);
@@ -891,7 +917,7 @@ export async function setProjectAccess(id: number, access: "invite" | "open", ct
   if ((before.invite_only === true) === inviteOnly && (inviteOnly || before.draft !== true)) return before;
   const after: ProjectRow | undefined = await one(itemsPool,
     `UPDATE project SET invite_only = $2, draft = CASE WHEN $2 THEN draft ELSE false END, updated_at = now()
-      WHERE id=$1 AND level='project' AND created_by = $3 RETURNING ${PROJECT_COLS}`, [id, inviteOnly, actor]);
+      WHERE id=$1 AND level='project' AND created_by = $3 RETURNING ${projectCols()}`, [id, inviteOnly, actor]);
   if (!after) throw new ProjectAccessOwnerError(id);   // 그 사이 만든 사람이 바뀌었다(옮겨 받기 등)
   await auditProject(String(id), "set_access", { invite_only: before.invite_only === true, draft: before.draft === true },
     { invite_only: after.invite_only === true, draft: after.draft === true }, ctx);
@@ -959,14 +985,14 @@ export async function createTask(
   let level: string;
   if (input.parentTaskId != null) {
     const parent: ProjectRow | undefined = await one(itemsPool,
-      `SELECT ${PROJECT_COLS} FROM project WHERE id=$1`, [input.parentTaskId]);
+      `SELECT ${projectCols()} FROM project WHERE id=$1`, [input.parentTaskId]);
     if (!parent) throw new Error(`부모 작업 #${input.parentTaskId} 없음`);
     if (parent.level !== "task") throw new Error(`부모 작업 #${input.parentTaskId} 은 task 가 아니어서 하위작업을 만들 수 없습니다(level=${parent.level})`);
     parentId = parent.id;
     level = "subtask";
   } else {
     const parent: ProjectRow | undefined = await one(itemsPool,
-      `SELECT ${PROJECT_COLS} FROM project WHERE id=$1`, [input.projectId]);
+      `SELECT ${projectCols()} FROM project WHERE id=$1`, [input.projectId]);
     if (!parent) throw new Error(`프로젝트 #${input.projectId} 없음`);
     if (parent.level !== "project") throw new Error(`#${input.projectId} 은 project 가 아니어서 작업을 만들 수 없습니다(level=${parent.level})`);
     parentId = parent.id;
@@ -977,7 +1003,7 @@ export async function createTask(
   const row: ProjectRow = await one(itemsPool,
     `INSERT INTO project(level, parent_id, name, description, created_by, status, status_category, name_source, created_at, updated_at)
      VALUES($1,$2,$3,$4,$5,'todo','unstarted',$6,now(),now())
-     RETURNING ${PROJECT_COLS}`,
+     RETURNING ${projectCols()}`,
     [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null, input.name_source ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
@@ -987,11 +1013,11 @@ export async function createTask(
 
 export async function updateTaskStatus(id: number, status: string, ctx?: WriteCtx): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   if (!before) throw new Error(`작업 #${id} 없음`);
   const after: ProjectRow = await one(itemsPool,
     `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
-     WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
+     WHERE id=$1 RETURNING ${projectCols()}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
   // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
   await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
@@ -1039,7 +1065,7 @@ export async function updateTask(
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   const before: ProjectRow | undefined = await one(itemsPool,
-    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+    `SELECT ${projectCols()} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
   if (!before) throw new Error(`작업 #${id} 없음`);
 
   const sets: string[] = [];
@@ -1081,7 +1107,7 @@ export async function updateTask(
   sets.push("updated_at=now()");
   vals.push(id);
   const after: ProjectRow = await one(itemsPool,
-    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} RETURNING ${PROJECT_COLS}`, vals);
+    `UPDATE project SET ${sets.join(", ")} WHERE id=$${vals.length} RETURNING ${projectCols()}`, vals);
   // 단일 assignee 변경 시 task_assignee n:n 동기(전환기 가산 섀도 일관성).
   if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
@@ -1101,7 +1127,7 @@ export async function rootProjectIdOfTaskNode(node: { level: string; parent_id: 
   if (node.level === "subtask") {
     if (node.parent_id == null) return undefined;
     const parent: ProjectRow | undefined = await one(itemsPool,
-      `SELECT ${PROJECT_COLS} FROM project WHERE id=$1`, [node.parent_id]);
+      `SELECT ${projectCols()} FROM project WHERE id=$1`, [node.parent_id]);
     return parent?.parent_id ?? undefined;
   }
   return undefined;

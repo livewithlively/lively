@@ -48,6 +48,7 @@ import { effectiveStoragePolicy, diskThresholds } from "./org/policies/storage-p
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { registerServerExecutor } from "./apps/app-mcp-server-executor.js";   // #5053 앱 선언 MCP 도구의 server 실행기
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
+import { ensureInviteOnlyColumn } from "./v6/project-invite-column.js";   // #5598 롤 창 — 새 칸이 아직 없는 DB
 import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
 import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
@@ -394,6 +395,11 @@ if (!registry.has("source_vis_policy_list")) {
 // #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
 registerPreviewRoutes(app, verifier);
+
+// #5598 — 요청을 받기 전에 project.invite_only 칸이 이 DB 에 있는지 한 번 잰다(v6/project-invite-column.ts). 매니지드 롤은 새 코드를
+//  띄운 뒤에야 공용 DB 에 새 칸을 만들고, 자체 호스팅도 스키마 체인이 listen 뒤에 돈다 — 재지 않고 받으면 그 사이 첫 프로젝트 조회가
+//  «없는 칸» 으로 실패한다. 없으면 초대제 없이 돌다가 칸이 생기는 대로 스스로 켜진다. DB 가 느려도 부팅을 붙잡지 않는다(3초 상한).
+await Promise.race([ensureInviteOnlyColumn(), new Promise((r) => setTimeout(r, 3_000).unref?.())]).catch(() => undefined);
 
 const server = app.listen(PORT, BIND_HOST, () => {
   logger.info(`Lively gateway listening on ${BIND_HOST}:${PORT}/mcp`);
