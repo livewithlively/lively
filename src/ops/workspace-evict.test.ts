@@ -11,7 +11,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runWorkspaceEvict, sweepDerivedEvict, lastDerivedEvict, resetDerivedEvict, type EvictDeps } from "./workspace-evict.js";
+import { runWorkspaceEvict, sweepDerivedEvict, lastDerivedEvict, resetDerivedEvict, parseLsofCwds, processCwds, type EvictDeps } from "./workspace-evict.js";
 import type { ReclaimPlan } from "./workspace-reclaim.js";
 import { DEFAULT_STORAGE_POLICY, normalizeStoragePolicy, derivedEvictPolicy, type StoragePolicy } from "../org/policies/storage-policy.js";
 
@@ -122,6 +122,17 @@ const pol = (over: Partial<StoragePolicy>): (() => Promise<StoragePolicy>) => as
   assert.equal(normalizeStoragePolicy({ derived_evict_enabled: false }).derived_evict_enabled, false, "P1 끌 수 있다");
   assert.equal(normalizeStoragePolicy({}).derived_evict_enabled, true, "P1 안 정했으면 기본값");
   assert.deepEqual(derivedEvictPolicy(normalizeStoragePolicy({ disk_warn_pct: 5 })), { enabled: true, pressurePct: 5, targetPct: 1, idleDays: 3 }, "P1 목표는 1% 아래로 내려가지 않는다");
+}
+{ // C1 — 프로세스 현재 경로: 게이트웨이가 띄우지 않은 작업(노드 세션 · 손으로 돌린 빌드)도 «작업 중» 으로 잡는 재료.
+  assert.deepEqual(parseLsofCwds("p123\nfcwd\nn/Users/u/workspace/project/1\np456\nfcwd\nn/\nnot-a-path\n"), ["/Users/u/workspace/project/1", "/"], "C1 n/ 줄만 경로다");
+  const cwds = await processCwds();
+  if (process.platform === "linux" || process.platform === "darwin") {
+    const here = await fsp.realpath(process.cwd());
+    const real = await Promise.all(cwds.map((d) => fsp.realpath(d).catch(() => d)));
+    assert.ok(real.includes(here), "C1 이 시험 프로세스 자신의 현재 경로가 잡힌다");
+  } else {
+    assert.deepEqual(cwds, [], "C1 그 밖의 OS 에서는 빈 목록(세션 목록만으로 간다)");
+  }
 }
 await fsp.rm(root, { recursive: true, force: true });
 console.log("workspace-evict.test.ts ok — 넉넉하면 안 지움 · 고른 것만 · 세션 목록 실패면 그만둠 · 워크트리는 안 지움 · 정책 꺼짐이면 안 돎 · 회차 안 겹침");
