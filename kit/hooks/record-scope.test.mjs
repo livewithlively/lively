@@ -690,14 +690,15 @@ await withGateway(async (gw) => {
   {
     const sb = sandbox(); const dir = sb.mk("anywhere-x"); setScope(sb.lively, "anywhere");
     const j = jsonOf(await startIn(sb, dir, gw));
-    check("J7 «어디서나» 방식 — 이 폴더를 끄는 명령을 AI 에게 준다", String(j?.systemMessage || "").includes("/lively-disconnect") && ctxOf(j).includes(`lively work-root remove '${dir}'`), JSON.stringify(j).slice(0, 400));
+    //  명령의 앞머리는 플랫폼마다 다르다(윈도는 node 로 바로 부르는 꼴) — 동사와 인자만 잰다.
+    check("J7 «어디서나» 방식 — 이 폴더를 끄는 명령을 AI 에게 준다", String(j?.systemMessage || "").includes("/lively-disconnect") && ctxOf(j).includes(`work-root remove '${dir}'`), JSON.stringify(j).slice(0, 400));
   }
   {
     const sb = sandbox(); const proj = sb.mk("lively", "projects", "42");
     mkdirSync(join(proj, ".lively"), { recursive: true }); writeFileSync(join(proj, ".lively", "project.json"), JSON.stringify({ project_id: 42 }));
     setScope(sb.lively, "anywhere", [], undefined, { exclude_roots: [proj] });
     const j = jsonOf(await startIn(sb, proj, gw));
-    check("J8 프로젝트 폴더(제외해도 켜지는 자리) — 안 듣는 스위치를 가리키지 않는다", String(j?.systemMessage || "").includes("lively run --incognito") && !String(j?.systemMessage || "").includes("lively-disconnect"), JSON.stringify(j).slice(0, 300));
+    check("J8 프로젝트 폴더(제외해도 켜지는 자리) — 안 듣는 스위치를 가리키지 않는다", String(j?.systemMessage || "").includes("run --incognito") && !String(j?.systemMessage || "").includes("lively-disconnect"), JSON.stringify(j).slice(0, 300));
   }
 });
 await withGateway(async (gw) => {
