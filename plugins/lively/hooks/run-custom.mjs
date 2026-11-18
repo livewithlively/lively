@@ -36,7 +36,7 @@ import crypto from "node:crypto";
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { inScopeNow, startedOutside, clearStartedOutside } from "./record-scope.mjs";
+import { inScopeNow, startedOutside, clearStartedOutside, sessionOffToolText } from "./record-scope.mjs";
 import { isInjectedPrompt } from "./prompt-origin.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
@@ -751,6 +751,9 @@ async function lateOrgContext(input) {
   finally { clearTimeout(t); }
 }
 
+// 라이블리 MCP 도구인가(게이트웨이 프록시 lively · 로컬 조작 lively-local) — 이름 꼴은 하네스 표가 정한다.
+const isLivelyTool = (name) => ["lively", "lively-local"].some((srv) => String(name || "").startsWith(harness(HARNESS).tools.mcp(srv, "")));
+
 async function main() {
   if (!EVENT) return;
   const stdin = await readStdin(SESSIONEND ? STDIN_MS_SESSIONEND : undefined);
@@ -758,7 +761,16 @@ async function main() {
   try { input = JSON.parse(stdin || "{}"); toolName = input.tool_name || input.toolName || ""; } catch { /* */ }
   // 기록 범위(#5016) — 작업 폴더 밖에서 켠 세션이면 인코그니토와 같다: 게이트웨이 조회도 커스텀 훅 실행도 없이 끝낸다.
   //  (대화 업로드·첫 지시 프로젝트·지식 회수 같은 조직 훅이 전부 이 러너 뒤에 있다.) 판정 규칙은 record-scope.mjs 하나.
-  if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: HARNESS, lively: LIVELY }).inScope) return;
+  const scope = inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: HARNESS, lively: LIVELY });
+  if (!scope.inScope) {
+    //  사람이 «이 세션만» 꺼 둔 세션 — 훅은 여기서 끝나지만, 라이블리 도구는 MCP 프록시가 이 세션이 꺼진 줄 모른다(프록시는 하네스가
+    //  뜰 때의 세션 id 만 안다 — record-scope.mjs «이 세션만 끄기» 머리말). 그래서 그 도구 호출을 여기서 막는다(다른 도구는 건드리지 않는다).
+    if (scope.reason === "session_off" && EVENT === "PreToolUse" && isLivelyTool(toolName)) {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+        permissionDecisionReason: sessionOffToolText(harness(HARNESS).id) } }) + "\n");
+    }
+    return;
+  }
   const late = EVENT === "UserPromptSubmit" ? await lateOrgContext(input) : "";
 
   // 예산의 기준은 이 프로세스가 뜬 시각이다 — 하네스의 상한도 러너를 띄운 순간부터 센다.

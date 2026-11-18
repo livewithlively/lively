@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside } from "./record-scope.mjs";
+import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside, sessionOff, sessionOffNotice, isSessionId } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -731,19 +731,29 @@ async function scopeGate() {
     const r = await syncScopeSettings({ lively, gw: GW, token: TOKEN, send: fetch, timeoutMs: 1500 }).catch(() => ({ ok: false }));
     if (r.ok) kitVersion = r.kit_version;
   }
-  const sid = String(input.session_id || input.sessionId || "");
+  //  세션 id — 훅 입력이 정본이다. 입력을 제때 못 읽었으면 클로드가 훅에 싣는 env(지금 세션 값 — 2.1.327 실측)로 메운다.
+  const hid = harness(HARNESS).id || "claude";
+  const envSid = hid === "claude" ? String(process.env.CLAUDE_CODE_SESSION_ID || "").trim() : "";
+  const sid = String(input.session_id || input.sessionId || "") || (isSessionId(envSid) ? envSid : "");
+  //  사람이 꺼 둔 세션(이 세션만 끄기)이 다시 시작했다(이어 열기 · 압축 뒤) — 꺼진 채로 두고 그 사실과 다시 켜는 법만 알린다.
+  if (sessionOff(sid, lively)) {
+    const n = sessionOffNotice({ sid, harness: hid, lively });
+    process.stdout.write(JSON.stringify({ ...(String(input.source || "") === "compact" ? {} : { systemMessage: n.user }), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
+    maybeSelfUpdate(kitVersion);
+    return true;
+  }
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
   if (d.inScope) {
     clearStartedOutside(sid);   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
     //  켜짐 알림(꺼짐 알림의 짝 — record-scope.mjs insideNotice 머리말). 토큰이 없는 컴퓨터는 연결된 것이 아니라 알리지 않는다.
     //  압축 뒤 다시 도는 시작 훅(source: compact)은 같은 대화의 한가운데다 — AI 안내만 다시 싣고 사람에게 한 줄은 되풀이하지 않는다.
-    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively }) : null;
+    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, sid, harness: hid, plugin: PLUGIN_INSTALL, lively }) : null;
     const again = String(input.source || "") === "compact";
     if (on) ON_NOTICE = { user: again ? "" : on.user, ai: on.ai + (!again && lineHidden() ? "\n" + on.say : "") };
     return false;
   }
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
-  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
+  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: hid, plugin: PLUGIN_INSTALL, lively });
   // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
   //  코덱스(0.157) SessionStart 출력 스키마도 같은 두 칸을 받는다. 그 밖의 어댑터는 이 출력을 버리거나 본문만 꺼낸다.
   process.stdout.write(JSON.stringify({ systemMessage: n.user, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
