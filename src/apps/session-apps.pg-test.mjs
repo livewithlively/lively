@@ -1,4 +1,4 @@
-// 앱 폴더 판정·승계 DB 함수(#4788 앱 v2-23 · #4684 후속) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 폴더 판정·승계 DB 함수(#4788 앱 v2-23 · #4684 후속) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/session-apps.pg-test.mjs
 //
 //  왜 PG 통합인가: 앱 폴더 판정·맞추기 시험(session-app-folders.test.ts · session-app-folders-wiring.test.ts)은 DB 함수를 가짜로 바꿔 끼운다.
