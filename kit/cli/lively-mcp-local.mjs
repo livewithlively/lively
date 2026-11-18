@@ -130,18 +130,28 @@ function makeCtx(callCwd) {
       //  워크트리가 서버 대장에 안 잡혀 workspace_reclaim 이 회수 대상을 통째로 못 봤다). 어느 주소로 물었는지도
       //  함께 말한다: 주소가 예상과 다르면 그 자체가 답이고(파일이 비어 env 로 폴백한 경우), 맞으면 토큰 문제로
       //  좁혀진다. 진단은 `lively doctor` 한 곳으로 모은다 — 한 조직이 두 곳에서 다르게 진단하면 안 된다.
+      //  상태코드를 오류에 함께 싣는다(e.status · lively.mjs 의 api 와 같은 규약) — 문구만으로는 부른 쪽이 «없는 길(404 — 옛 게이트웨이)» 과
+      //   그 밖의 실패를 가를 수 없다(repo-worktree-core leaseFor).
+      const fail = (msg) => Object.assign(new Error(msg), { status: res.status });
       if (!res.ok && (res.status === 401 || res.status === 403)) {
-        throw new Error(`게이트웨이 ${res.status} (${path}) — ${gw} 에 접속 열쇠가 통하지 않습니다`
+        throw fail(`게이트웨이 ${res.status} (${path}) — ${gw} 에 접속 열쇠가 통하지 않습니다`
           + "(만료·해제됨? 또는 이 주소가 그 열쇠를 발급한 곳이 아님). `lively doctor` 로 진단하고, 열쇠 문제면 `lively login` 으로 다시 등록하세요.");
       }
-      if (!res.ok) throw new Error(`게이트웨이 ${res.status} (${path})`);
+      if (!res.ok) throw fail(`게이트웨이 ${res.status} (${path})`);
       return await res.json();
     } finally { clearTimeout(timer); }
   };
   // 로컬 셸 명령 — 로컬 조작의 본체. 기본 cwd 는 하네스가 spawn 한 작업 디렉토리.
-  const sh = (cmd, args = [], { cwd = callCwd, input, allowFail = false } = {}) => {
+  //  env — 그 호출에만 얹는 환경변수(상속 환경 위에 병합). 원격에 닿는 git 이 «묻지 않기» 와 받아 온 자격을 여기로 받는다
+  //   (repo-worktree-core netGit). 안 주면 종전대로 이 프로세스의 환경 그대로다.
+  //  noTty — 이 호출을 제어 터미널 없이 띄운다(POSIX: 새 세션). 이 프로세스는 하네스와 같은 터미널에 붙어 있어, 자식이 터미널에
+  //   직접 묻는 프롬프트(ssh 의 호스트키 지문 · 키 암호)가 사람의 세션 화면에 끼어들고 키 입력을 가로챈 채 끝없이 기다린다. 여기선
+  //   사람이 답할 길이 없으므로 물을 터미널을 주지 않는다 → 곧바로 실패하고 코어가 고치는 길을 안내한다. 윈도우는 제어 터미널
+  //   개념이 달라(같은 옵션이 새 콘솔 창을 띄운다) 그대로 둔다.
+  const sh = (cmd, args = [], { cwd = callCwd, input, allowFail = false, env, noTty = false } = {}) => {
     try {
-      const stdout = execFileSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+      const stdout = execFileSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
+        ...(env ? { env: { ...process.env, ...env } } : {}), ...(noTty && process.platform !== "win32" ? { detached: true } : {}) });
       return { stdout, stderr: "", code: 0 };
     } catch (e) {
       if (allowFail) return { stdout: e.stdout ? String(e.stdout) : "", stderr: e.stderr ? String(e.stderr) : "", code: e.status ?? 1 };
@@ -217,6 +227,8 @@ registerTool({
     + "다른 세션 것인지 주인 불명인지를 note 가 구분해 말한다). path 를 명시하면 그 자리를 그대로 주되, 남의 세션 자리면 warning 을 달고 "
     + "주인 표시가 없는 자리면 이 세션 것으로 입양한다. "
     + "반환 admin 은 그 워크트리의 등록 id(프로젝트별 고유), warning 은 슬롯 브랜치가 갈아타져 있거나 남의 자리를 지목했을 때. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
+    + "— https 주소로 등록된 사설 레포는 라이블리에 등록한 내 HTTPS 토큰(me_git_credential_set {kind:\"https\"})으로 받는다(이 컴퓨터에 git 자격을 따로 설정하지 않아도 된다 · 등록이 없으면 이 컴퓨터의 git 자격). "
+    + "fetch_warning 이 오면 원격에서 새 커밋을 받지 못한 것이다 — 그 워크트리는 받아 둔 origin 기준이라 최신이 아닐 수 있다 "
     + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다). "
     + "⚠ path 로 스크래치패드 같은 임시경로를 지정하지 마라(기본값을 그대로 써라): 워크트리는 임시파일이 아니라 **작업면(영속 자산)**이다. "
     + "'임시파일은 스크래치패드' 규칙은 여기 적용 안 된다 — 스크래치패드는 하네스가 청소하는 휘발성이라 커밋 전 작업이 사라지고, "
@@ -294,7 +306,9 @@ registerTool({
   description: "코드를 근거로 판단하기 전(리뷰·분석·설계) **먼저 호출하라**. 대상 레포를 이 머신에 확보(없으면 clone·있으면 fetch)한 뒤 "
     + "origin/<ref> 를 detached(브랜치 없음 = SHA 고정) 워크트리로 떠서 경로와 SHA 를 돌려준다. 이후 그 레포의 코드 인용·grep 은 "
     + "반드시 이 핀 경로에서만 하라 — stale 클론·남의 작업 브랜치 오독·분석 중 HEAD 드리프트로 잘못된 코드 근거 결론이 나오는 걸 막는다. "
-    + "리포트·지식엔 경로가 아니라 repo@sha 로 앵커한다(다음 세션이 그 SHA 로 재핀하면 동일 truth 재현). 끝나면 lively_local_repo_pin_remove.",
+    + "리포트·지식엔 경로가 아니라 repo@sha 로 앵커한다(다음 세션이 그 SHA 로 재핀하면 동일 truth 재현). 끝나면 lively_local_repo_pin_remove. "
+    + "https 주소로 등록된 사설 레포는 라이블리에 등록한 내 HTTPS 토큰으로 받는다(이 컴퓨터에 git 자격을 따로 설정하지 않아도 된다). "
+    + "⚠ 반환에 fetch_warning 이 있으면 원격에서 새 커밋을 받지 못한 것이다 — 그 SHA 는 받아 둔 origin 의 것이라 최신이라고 말하지 마라.",
   inputSchema: {
     type: "object",
     properties: {

@@ -203,8 +203,10 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
     authNote("", "https://github.com/o/r.git") === "" && authNote(undefined, undefined) === "" && gitHostOf(undefined) === "", "빈/부재 처리 실패");
   check("⑦ 토큰 만료 계열도 자격 문제로 본다(공개키 거부만 잡으면 안 됨)",
     /me_git_credential_set/.test(authNote("fatal: Authentication failed for 'https://git.x.kr/o/r.git'", "https://git.x.kr/o/r.git", "box")), "미탐");
-  // ⑨ 자리마다 길이 다르다 — 내 PC 는 라이블리가 자격을 내려 주지 않으므로 me_git_credential_set 을 길로 주면 막다른 길이다
-  //  (신규 입사 온보딩에서 그 안내대로 등록했는데 노트북 클론이 계속 막혔다). 처음 붙는 호스트의 호스트키 실패는 따로 안내한다.
+  // ⑨ 자리마다 길이 다르다 — ssh 주소는 내 PC 에서 라이블리에 등록한 SSH 키를 쓸 수 없으므로(개인키는 박스 밖으로 나오지 않는다)
+  //  me_git_credential_set {kind:"ssh"} 를 길로 주면 막다른 길이다(신규 입사 온보딩에서 그 안내대로 등록했는데 노트북 클론이 계속 막혔다).
+  //  처음 붙는 호스트의 호스트키 실패는 따로 안내한다. https 주소는 다르다 — 등록한 HTTPS 토큰을 이 도구가 받아 온다
+  //  (repo-worktree-git-credential.test.mjs 가 그 길을 본다).
   {
     const DENIED = "git@git.example.com: Permission denied (publickey).";
     const URL_SSH = "git@git.example.com:acme-dev/example-one.git";

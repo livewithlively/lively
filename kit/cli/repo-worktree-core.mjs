@@ -4,8 +4,9 @@
 //
 //  주입 컨텍스트  ctx = {
 //    cwd,                                             // 하네스/사람이 선 작업 디렉터리
-//    sh(cmd, args, { allowFail })  → { stdout, stderr, code },  // 로컬 셸(git). allowFail 시 throw 안 함
-//    api(path)                     → parsed JSON,     // 게이트웨이 REST GET(Bearer 자동) — 레포 레지스트리 조회
+//    sh(cmd, args, { allowFail, env, noTty })  → { stdout, stderr, code },  // 로컬 셸(git). allowFail 시 throw 안 함 · env 는 그 호출에만 얹는다
+//                                                     // noTty = 사람에게 물을 수 없는 표면(MCP)은 이 호출을 제어 터미널 없이 띄운다(아래 NET)
+//    api(path, { method, body, timeoutMs }) → parsed JSON,  // 게이트웨이 REST(Bearer 자동) — 레포 레지스트리 조회 · 내 git 토큰 받기
 //  }
 //
 //  규율: base working tree 는 안 건드리고 origin/<ref> 최신에서 워크트리를 분기한다(base RO). 서버측
@@ -265,17 +266,20 @@ function gitFail(stderr) {
 }
 
 // 인증 실패 안내(#1077) — git 은 'Permission denied (publickey)' / 'could not read Username' 까지만 말하고
-//  **이 컴퓨터에서 그걸 어떻게 푸는지**는 말해주지 않는다. 그래서 실패 그 자리에서 정규 경로를 알려준다.
-//  정규 경로는 **자리마다 다르다**:
-//   · 라이블리 박스(격리 세션 홈) — 자격을 DB 에 두고 게이트웨이가 홈에 materialize 한다(me_git_credential_set,
-//     src/org/credentials/git-credential-materialize.ts). 셸 ssh-keygen 우회는 되긴 하지만 관리탭 가시성·오프보딩
-//     회수·재프로비저닝 복원에서 전부 빠지므로 말린다.
-//   · 내 PC(노트북·데스크톱) — 라이블리는 자격을 내려 주지 않는다. me_git_credential_set 의 개인키는 박스 밖으로
-//     나오지 않으니 여기서 그걸 안내하면 막다른 길이다(신규 입사 온보딩에서 실제로 그 안내를 따르다 막혔다).
-//     이 컴퓨터의 git(~/.ssh 키 · credential helper)을 쓴다.
+//  **그걸 어떻게 푸는지**는 말해주지 않는다. 그래서 실패 그 자리에서 정규 경로를 알려준다.
+//  정규 경로는 **주소의 종류와 자리**에 따라 다르다:
+//   · https 주소 — 어디서나 «라이블리에 등록한 내 HTTPS 토큰» 이 정규 경로다. 박스에서는 게이트웨이가 홈에 내려 두고
+//     (git-credential-materialize.ts), 그 밖(내 PC)에서는 이 도구가 git 을 띄울 때 받아 온다(아래 leaseFor). 안내는
+//     «받아 오기가 어떻게 끝났나»(lease.state)로 고른다 — 등록이 없는지 · 등록한 토큰이 거절됐는지 · 받아 오지 못했는지.
+//   · ssh 주소 + 라이블리 박스 — 자격을 DB 에 두고 게이트웨이가 홈에 materialize 한다(me_git_credential_set {kind:"ssh"}).
+//     셸 ssh-keygen 우회는 되긴 하지만 관리탭 가시성·오프보딩 회수·재프로비저닝 복원에서 전부 빠지므로 말린다.
+//   · ssh 주소 + 내 PC — SSH 개인키는 박스 밖으로 나오지 않는다. 여기서 me_git_credential_set {kind:"ssh"} 를 안내하면
+//     막다른 길이다(신규 입사 온보딩에서 실제로 그 안내를 따르다 막혔다). 이 컴퓨터의 ssh 키를 쓴다.
 //  ⚠ 판정은 stderr 문자열이라 느슨하다(호스트마다 문구가 다르다). 오탐해도 손해는 안내 한 줄이라 넓게 잡는다.
-const AUTH_FAIL_RE = /permission denied|could not read username|authentication failed|access denied|repository not found|invalid username or token/i;
-//  처음 붙는 ssh 호스트 — ssh 는 대화형 터미널에서만 지문을 묻는다. MCP·CLI 가 띄운 git 은 물을 수 없어 그대로 실패한다.
+//  «terminal prompts disabled» = 자격이 없어 git 이 물으려다 멈춘 것(GIT_TERMINAL_PROMPT=0) · «returned error: 401|403» = 토큰이 거절된 것.
+const AUTH_FAIL_RE = /permission denied|could not read (?:username|password)|terminal prompts disabled|authentication failed|access denied|repository not found|invalid username or token|returned error: 40[13]/i;
+//  처음 붙는 ssh 호스트 — ssh 는 지문을 **제어 터미널(/dev/tty)에 직접** 묻는다(GIT_TERMINAL_PROMPT 가 닿지 않는다). 제어 터미널이
+//   없으면 물을 수 없어 그대로 실패한다 — MCP 는 원격에 닿는 git 을 그렇게 띄운다(noTty). 사람이 부른 CLI 에서는 ssh 가 묻는다.
 const HOSTKEY_FAIL_RE = /host key verification failed|no \S*\s*host key is known/i;
 //  저장된 호스트키와 다른 키 — ssh 는 같은 «verification failed» 로 끝나지만 묻지도 않고, «처음 붙는 호스트» 로 안내하면
 //  서버 키 교체·중간자를 일상 절차 뒤에 숨긴다. 먼저 가른다.
@@ -323,7 +327,39 @@ export function gitAuthPlace(host, { platform = process.platform, home = homedir
   return platform === "linux" ? "unknown" : "pc";
 }
 
-export function authNote(stderr, url, place = gitAuthPlace(noteHostOf(url))) {   // export=테스트용·순수(place 를 주면)
+const isHttpUrl = (url) => /^https?:\/\//i.test(String(url || "").trim());
+//  https 주소의 안내 — lease = 내 토큰 받아 오기가 어떻게 끝났나({ state, why } | null). null 은 «물어보지 않았다»(옛 호출 · 시험).
+function httpsAuthNote(h, host, lease) {
+  const set = (tok) => `\`me_git_credential_set {kind:"https"${host ? `, host:"${host}"` : ""}, token:"${tok}"}\``;
+  const where = `(웹은 [내 설정 ▸ 레포 접근 ▸ git 인증 관리])`;
+  const helper = ` 이 컴퓨터의 git 자격을 쓰려면 ${h} 개인 액세스 토큰을 git credential helper(macOS 는 키체인)에 저장하세요.`;
+  const state = lease && lease.state;
+  if (state === "used-failed") {
+    return ` — 라이블리에 등록한 내 ${h} 토큰으로 인증하지 못했습니다(만료됐거나 이 레포를 읽을 권한이 없는 토큰). 이 컴퓨터의 git 자격으로도 되지 않았습니다.`
+      + ` ${set("<새 토큰>")} 로 다시 등록하세요${where}.`;
+  }
+  if (state === "ssh-credential") {
+    return ` — 라이블리에 등록한 내 ${h} 자격이 SSH 키인데 이 레포는 https 주소라 그 키로는 받을 수 없습니다.`
+      + ` ${set("<개인 액세스 토큰>")} 로 HTTPS 토큰을 등록하면${where} git 을 따로 설정하지 않아도 받습니다`
+      + ` — ⚠ 같은 호스트에 등록해 둔 SSH 키는 토큰으로 바뀝니다.`;
+  }
+  if (state === "unsupported") {
+    return ` — 이 컴퓨터의 git 자격으로 ${h} 에 인증하지 못했습니다. 이 게이트웨이는 라이블리에 등록한 토큰을 로컬 도구에 내려 주지 않는 옛 판입니다(게이트웨이 업데이트 필요).${helper}`;
+  }
+  if (state === "unavailable") {
+    return ` — 이 컴퓨터의 git 자격으로 ${h} 에 인증하지 못했고, 라이블리에 등록한 내 토큰도 받아 오지 못했습니다${lease.why ? `(${lease.why})` : ""}.`
+      + ` 잠시 뒤 다시 하세요.${helper}`;
+  }
+  if (state === "host-mismatch") {
+    return ` — 이 컴퓨터에 받아 둔 레포의 원격 주소(${h})가 라이블리에 등록된 주소와 달라(호스트 · http/https · 포트), 등록한 토큰을 쓰지 않았습니다.${helper}`;
+  }
+  //  등록한 토큰이 없다(no-credential) · 물어보지 않았다(null) — 등록이 정규 경로이고, 이 컴퓨터의 git 자격은 대안이다.
+  return ` — 라이블리에 등록한 내 ${h} 토큰이 없고 이 컴퓨터의 git 자격으로도 인증하지 못했습니다.`
+    + ` ${set("<개인 액세스 토큰>")} 로 등록하면${where} git 을 따로 설정하지 않아도 받습니다.`
+    + ` 또는 ${h} 개인 액세스 토큰을 이 컴퓨터의 git credential helper(macOS 는 키체인)에 저장해도 됩니다.`;
+}
+
+export function authNote(stderr, url, place = gitAuthPlace(noteHostOf(url)), lease = null) {   // export=테스트용·순수(place 를 주면)
   const ssh = sshTargetOf(url);
   const host = noteHostOf(url);
   const h = host || "그 호스트";
@@ -338,14 +374,14 @@ export function authNote(stderr, url, place = gitAuthPlace(noteHostOf(url))) {  
       + ` 터미널에서 ${target ? `\`${sshProbeCmd(target)}\` 를 한 번 실행해` : "그 호스트에 ssh 로 한 번 접속해"} 지문을 ${h} 관리자가 알려 준 값과 대조하고 yes 로 받아 두면 됩니다.`;
   }
   if (!AUTH_FAIL_RE.test(stderr || "")) return "";
+  //  https 주소 — 등록한 HTTPS 토큰이 어디서나 정규 경로다(박스는 홈에 내려 둔 것 · 그 밖은 이 도구가 받아 온 것).
+  if (isHttpUrl(url)) return httpsAuthNote(h, host, lease);
   const box = ` \`me_git_credential_set {kind:"ssh"${host ? `, host:"${host}"` : ""}}\` 로 등록하면(웹은 [내 설정 ▸ 레포 접근 ▸ git 인증 관리])`
     + ` 공개키가 나옵니다 — 그 공개키를 ${h} 계정에 등록하면 바로 됩니다.`
     + ` (셸에서 ssh-keygen 으로 직접 만들지 마세요 — 그 키는 라이블리가 모르니 회수·복원이 안 됩니다.)`;
-  const pc = ssh
-    ? ` 이 컴퓨터의 ssh 키를 씁니다 — 키가 없으면 \`ssh-keygen -t ed25519\` 로 만들고, 공개키(~/.ssh/id_ed25519.pub)를 ${h} 계정의 SSH 키에 등록한 뒤 \`${sshProbeCmd(ssh)}\` 로 확인하세요.`
-      + ` 이미 등록했는데도 거부되면 키에 암호가 걸려 ssh-agent 에 안 올라간 것입니다 — \`ssh-add\`(macOS 는 \`ssh-add --apple-use-keychain\`).`
-    : ` 이 컴퓨터의 git 자격을 씁니다 — ${h} 개인 액세스 토큰을 git credential helper(macOS 는 키체인)에 저장하거나 ssh 주소로 클론하세요.`;
-  const pcWhy = `내 PC 에서는 라이블리가 git 자격을 내려 주지 않습니다(me_git_credential_set 은 라이블리 박스 세션 전용 — 개인키가 박스 밖으로 나오지 않습니다).`;
+  const pc = ` 이 컴퓨터의 ssh 키를 씁니다 — 키가 없으면 \`ssh-keygen -t ed25519\` 로 만들고, 공개키(~/.ssh/id_ed25519.pub)를 ${h} 계정의 SSH 키에 등록한 뒤 ${ssh ? `\`${sshProbeCmd(ssh)}\` 로` : "ssh 접속으로"} 확인하세요.`
+    + ` 이미 등록했는데도 거부되면 키에 암호가 걸려 ssh-agent 에 안 올라간 것입니다 — \`ssh-add\`(macOS 는 \`ssh-add --apple-use-keychain\`).`;
+  const pcWhy = `내 PC 에서는 라이블리에 등록한 SSH 키를 쓸 수 없습니다(me_git_credential_set {kind:"ssh"} 는 라이블리 박스 세션 전용 — 개인키가 박스 밖으로 나오지 않습니다).`;
   if (place === "box") return ` — 이 계정에 ${h} git 자격이 없어 보입니다.${box}`;
   if (place === "pc") return ` — 이 컴퓨터의 git 자격으로 ${h} 에 인증하지 못했습니다. ${pcWhy}${pc}`;
   return ` — 이 계정에 ${h} git 자격이 없어 보입니다. 라이블리 박스 세션이면${box} 내 PC 라면 ${pcWhy}${pc}`;
@@ -471,25 +507,145 @@ function resolveWtPath(cwd, repo, p, marker = findProjectMarkerUp(cwd)) {
   return isAbsolute(p) ? resolve(p) : resolve(cwd, p);
 }
 
+// ── 원격에 닿는 git 의 자격 ───────────────────────────────────────────────────
+// 왜: 이 도구는 «등록된 레포를 이 컴퓨터에서 읽게 해 주는» 도구다. 종전엔 이 컴퓨터에 이미 깔린 git 자격(ssh 키 ·
+//  credential helper)에만 기댔다 — git 을 한 번도 설정하지 않은 사람은 라이블리에 토큰을 등록해 두고도 사설 레포를 받지
+//  못했고, 물을 터미널이 없는 MCP 에서는 git 이 사용자 이름을 물으며 **끝없이 멈췄다**(실측: 클론 5분째 무응답).
+//  그래서 ① 묻지 않게 하고(GIT_TERMINAL_PROMPT=0 — 서버 쪽 git 은 전부 이렇게 돈다) ② 라이블리에 등록한 **내 HTTPS 토큰**을
+//  받아 그 git 한 번에만 넘긴다.
+//
+// 순서: 등록한 내 토큰 → (그 토큰이 거절되면) 이 컴퓨터의 git 자격. 서버 provision 과 같은 순서다(구성원 자격 먼저).
+//  토큰이 없거나 받아 오지 못하면 곧바로 이 컴퓨터의 git 자격으로 간다 — 종전에 되던 클론은 그대로 된다.
+//
+// 토큰이 머무는 자리: 게이트웨이 응답 → 이 프로세스의 메모리 → git 자식 프로세스의 환경변수(LIVELY_GIT_PASS). 그게 전부다.
+//  · 파일에 쓰지 않는다. git 설정도 환경변수(GIT_CONFIG_COUNT/KEY/VALUE, git ≥ 2.31)로 넘겨 argv 에도 싣지 않는다.
+//  · 자격 도우미를 «그 원격의 scheme://host[:port]» 에만 건다(credential.<url>.helper) — 다른 호스트로 넘어가는 요청에는
+//    git 이 이 도우미를 부르지 않는다. 프롬프트 문구를 읽어 답하는 GIT_ASKPASS 와 달리 로캘 · 문구에 기대지 않는다.
+//  · 앞에 빈 credential.helper 를 둬 이 컴퓨터의 도우미(키체인 등)를 그 호출에서 뺀다 — 낡은 키체인 자격이 먼저 나가 실패하는
+//    것을 막고, 성공 뒤 git 이 도우미에 «저장» 을 시켜도 받아 온 토큰이 이 컴퓨터의 키체인에 남지 않는다.
+const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0" };
+//  원격에 닿는 git 을 띄울 때의 공통 옵션. noTty — GIT_TERMINAL_PROMPT 는 git 자신의 물음만 끈다. ssh 는 호스트키 지문 · 키 암호를
+//   제어 터미널에 직접 묻는데, 로컬 MCP 는 하네스(Claude Code 등)와 **같은 터미널**에 붙어 있어 그 물음이 사람의 세션 화면에 끼어들고
+//   키 입력을 가로챈 채 끝없이 기다렸다(실측: ssh 주소 · 모르는 호스트키 → «Are you sure you want to continue connecting» 에서 멈춤).
+//   그래서 «물을 수 없는 표면» 은 이 호출을 제어 터미널 없이 띄운다 — 어떤 프롬프트든 묻지 못하고 곧바로 실패한다(사용자의
+//   GIT_SSH_COMMAND · core.sshCommand 는 건드리지 않는다). 사람이 터미널에서 부른 CLI 는 이 표식을 무시한다(ssh 물음에 답할 수 있다).
+const NET = { allowFail: true, noTty: true };
+//  도우미 본문 — git 이 `sh -c "<본문> get"` 으로 부른다. get 일 때만 답하고(store · erase 는 아무것도 안 한다), 값은 환경에서 읽는다.
+const LEASE_HELPER = `!f() { test "$1" = get && printf 'username=%s\\npassword=%s\\n' "$LIVELY_GIT_USER" "$LIVELY_GIT_PASS"; }; f`;
+
+//  건넨 설정을 git 이 읽지 못했을 때의 문구(«missing config value» · «bad config» · 환경변수 이름이 그대로 실린 오류).
+const INJECT_FAIL_RE = /missing config (?:key|value)|bad config|bogus (?:count|format) in GIT_CONFIG|GIT_CONFIG_(?:COUNT|KEY|VALUE)/i;
+//  환경변수 설정(GIT_CONFIG_COUNT)을 모르는 옛 git 인가 — 판을 못 읽으면 아니라고 본다(모르는 것을 단정하지 않는다).
+function gitTooOld(ctx) {
+  const m = /(\d+)\.(\d+)/.exec(ctx.sh("git", ["version"], { allowFail: true }).stdout || "");
+  return Boolean(m) && (Number(m[1]) < 2 || (Number(m[1]) === 2 && Number(m[2]) < 31));
+}
+
+// 원격 주소 → 자격을 걸 자리 { origin: "https://host[:port]", host: "host" } — http(s) 가 아니거나 못 읽으면 null. (export=테스트용·순수)
+export function httpRemoteOf(url) {
+  let u; try { u = new URL(String(url || "").trim()); } catch { return null; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  if (!u.hostname) return null;
+  return { origin: `${u.protocol}//${u.host}`, host: u.hostname.toLowerCase() };
+}
+
+// 받아 온 토큰을 그 git 한 번에 싣는 환경변수. 이미 GIT_CONFIG_COUNT 를 쓰는 환경이면 그 뒤에 잇는다. (export=테스트용·순수)
+export function gitAuthEnv(remote, cred, env = process.env) {
+  const n = Number.parseInt(String(env.GIT_CONFIG_COUNT ?? ""), 10);
+  const base = Number.isInteger(n) && n > 0 ? n : 0;
+  return {
+    ...NO_PROMPT,
+    GIT_CONFIG_COUNT: String(base + 2),
+    [`GIT_CONFIG_KEY_${base}`]: "credential.helper", [`GIT_CONFIG_VALUE_${base}`]: "",
+    [`GIT_CONFIG_KEY_${base + 1}`]: `credential.${remote.origin}.helper`, [`GIT_CONFIG_VALUE_${base + 1}`]: LEASE_HELPER,
+    LIVELY_GIT_USER: String(cred.username || "x-access-token"),
+    LIVELY_GIT_PASS: String(cred.token),
+  };
+}
+
+// 이 레포의 내 토큰 받아 오기 — { state, cred?, remote?, why? }.
+//  state: ok(받음) · n/a(https 주소가 아님 — 묻지 않는다) · no-credential · ssh-credential · not-https-url · repo-unregistered(서버의 까닭 그대로)
+//         · host-mismatch(이 원격의 자리 scheme://host[:port] 가 등록 주소의 자리와 다르다 — 토큰을 다른 자리로 보내지 않는다)
+//         · unsupported(이 길이 없는 옛 게이트웨이) · unavailable(그 밖의 실패 — why 에 한 줄).
+//  실패는 던지지 않는다: 받아 오지 못해도 이 컴퓨터의 git 자격으로 갈 길이 남아 있다.
+async function leaseFor(ctx, repo, url) {
+  const remote = httpRemoteOf(url);
+  if (!remote) return { state: "n/a" };
+  let j;
+  try { j = await ctx.api("/api/ui/me/git-credential/lease", { method: "POST", body: { repo }, timeoutMs: 8000 }); }
+  catch (e) {
+    if (e && e.status === 404) return { state: "unsupported" };
+    if (e && e.status === 403) return { state: "unavailable", why: "이 접속 열쇠로는 등록한 토큰을 받을 수 없습니다" };
+    return { state: "unavailable", why: String((e && e.message) || e || "").split("\n")[0].slice(0, 160) };
+  }
+  const c = j && j.credential;
+  if (c && c.kind === "https" && typeof c.token === "string" && c.token) {
+    //  토큰은 «등록 주소의 자리(scheme://host[:port])» 로만 보낸다. 호스트 이름만 대조하면 https 로 등록한 레포의 토큰이 같은 호스트의
+    //   평문 http · 다른 포트로 나간다(받아 둔 base 의 origin 은 이 컴퓨터의 상태라 등록 주소와 다를 수 있다).
+    if (typeof j.origin !== "string" || j.origin !== remote.origin) return { state: "host-mismatch" };
+    return { state: "ok", remote, cred: { username: c.username, token: c.token } };
+  }
+  const reason = j && typeof j.reason === "string" ? j.reason : "";
+  return { state: ["no-credential", "ssh-credential", "not-https-url", "repo-unregistered"].includes(reason) ? reason : "unavailable" };
+}
+
+// 원격에 닿는 git — url 은 그 git 이 닿을 원격 주소(자격을 걸 자리). lease() 는 한 호출 안에서 한 번만 받아 온다(아래 netGitFor).
+//  돌려주는 lease 는 안내(authNote)가 읽는다: 받아 온 토큰이 거절됐으면 state 를 used-failed 로 바꿔 준다.
+async function netGit(ctx, args, lease) {
+  const l = await lease();
+  if (l.state === "ok") {
+    const r = ctx.sh("git", args, { ...NET, env: gitAuthEnv(l.remote, l.cred) });
+    if (r.code === 0) return { ...r, lease: l };
+    const authFail = AUTH_FAIL_RE.test(r.stderr || "");
+    //  토큰을 git 에 건네는 것 자체가 실패했다 — 건넨 설정을 git 이 읽지 못했다(빈 환경변수 값을 떨어뜨리는 환경 등). 자격 탓이 아니다.
+    const injectFail = !authFail && INJECT_FAIL_RE.test(r.stderr || "");
+    if (!authFail && !injectFail) return { ...r, lease: l };   // 자격과 무관한 실패(네트워크 등) — 다시 해도 같다
+    //  이 컴퓨터의 git 자격으로 한 번 더. 그래도 안 되면 안내가 까닭에 맞는 길을 말한다(토큰 거절 → 다시 등록 · 건네기 실패 · 옛 git).
+    const amb = ctx.sh("git", args, { ...NET, env: NO_PROMPT });
+    if (amb.code === 0) return { ...amb, lease: l };
+    if (injectFail) return { ...amb, lease: { state: "unavailable", why: `받아 온 토큰을 git 에 건네지 못했습니다: ${gitFail(r.stderr)}` } };
+    //  git < 2.31 은 환경변수 설정(GIT_CONFIG_COUNT)을 읽지 않는다 — 토큰은 쓰이지도 않았다. «토큰이 거절됐다» 고 말하면 거짓이다.
+    return { ...amb, lease: gitTooOld(ctx) ? { state: "unavailable", why: "이 컴퓨터의 git 이 2.31 보다 옛 판이라 받아 온 토큰을 쓰지 못합니다 — git 을 업데이트하세요" } : { state: "used-failed" } };
+  }
+  return { ...ctx.sh("git", args, { ...NET, env: NO_PROMPT }), lease: l };
+}
+//  이 레포 · 이 원격의 netGit — 토큰 받아 오기를 한 번으로 묶는다(clone → ls-remote → clone 이 게이트웨이를 세 번 묻지 않게).
+function netGitFor(ctx, repo, url) {
+  let p = null;
+  const lease = () => (p ??= leaseFor(ctx, repo, url));
+  return (args) => netGit(ctx, args, lease);
+}
+
 // base 확보 — 로컬에 없으면 레지스트리 clone_url 로 clone, 있으면 fetch(refs 만; 워킹트리 미변경 = RO 규율).
 //  작업 워크트리(repoWorktree)·읽기전용 핀(repoPin) 공용 진입.
 //  새로 받을 땐 등록한 기본 브랜치로 받는다(#1723) — 그 브랜치가 원격에 없으면(원격에 물어 확인) 원격 기본 브랜치로 받는다.
+//  돌려주는 값 { fetchWarning } — 이미 있는 base 의 fetch 가 실패했을 때의 한 줄(없으면 null). fetch 실패는 종전처럼 던지지 않는다
+//   (오프라인에서도 받아 둔 코드로 일한다). 다만 **조용히 넘기지 않는다**: 그 뒤의 워크트리 · 핀은 «마지막으로 받아 둔 origin» 기준이라
+//   최신이 아닐 수 있고, 부른 쪽이 그걸 모르면 묵은 코드를 최신이라 믿는다. 자격 문제면 고치는 길까지 싣는다.
 async function ensureBase(ctx, repo, base, row = registryRow(ctx, repo)) {
+  let fetchWarning = null;
   if (!isGitRepo(ctx, base)) {
     const r = await row();
     const url = r && r.clone_url;
     if (!url) throw new Error(`레포 '${repo}' 가 이 머신에 없고 등록된 clone 주소도 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.`);
     mkdirSync(dirname(base), { recursive: true });
     const want = registeredBranch(r);
-    let c = ctx.sh("git", ["clone", ...(want ? ["--branch", want] : []), url, base], { allowFail: true });
+    const git = netGitFor(ctx, repo, url);
+    let c = await git(["clone", ...(want ? ["--branch", want] : []), url, base]);
     if (c.code !== 0 && want) {
       // 실패가 «등록 브랜치가 원격에 없음» 때문인지 원격에 물어 가른다 — git 의 실패 문구는 로캘·버전마다 달라 문구로 가르지 않는다.
-      const ls = ctx.sh("git", ["ls-remote", "--heads", url, `refs/heads/${want}`], { allowFail: true });
-      if (ls.code === 0 && !ls.stdout.trim()) c = ctx.sh("git", ["clone", url, base], { allowFail: true });
+      const ls = await git(["ls-remote", "--heads", url, `refs/heads/${want}`]);
+      if (ls.code === 0 && !ls.stdout.trim()) c = await git(["clone", url, base]);
     }
-    if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${gitFail(c.stderr)}${authNote(c.stderr, url)}`);
+    if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${gitFail(c.stderr)}${authNote(c.stderr, url, undefined, c.lease)}`);
   } else {
-    ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
+    //  이미 받아 둔 base — 닿을 주소는 그 base 의 origin 이다(등록 주소와 다를 수 있다 → leaseFor 가 호스트를 대조한다).
+    const url = ctx.sh("git", ["-C", base, "remote", "get-url", "origin"], { allowFail: true }).stdout.trim();
+    const f = await netGitFor(ctx, repo, url)(["-C", base, "fetch", "origin"]); // best-effort(오프라인 무시)
+    if (f.code !== 0) {
+      fetchWarning = `원격에서 새 커밋을 받지 못했습니다(${gitFail(f.stderr)}) — 이 컴퓨터에 마지막으로 받아 둔 origin 기준이라 최신이 아닐 수 있습니다.`
+        + authNote(f.stderr, url, undefined, f.lease);
+    }
   }
   // gc 의 자동 워크트리 prune 을 끈다(#3678) — `git gc --auto`(commit·fetch 뒤 저절로 돈다)는 gc.worktreePruneExpire(기본 3개월)
   //  보다 오래 index 를 안 건드린 «경로 없는» 등록을 지운다. 컨테이너에서 «경로 없음» 은 «다른 프로젝트의 살아 있는
@@ -497,6 +653,7 @@ async function ensureBase(ctx, repo, base, row = registryRow(ctx, repo)) {
   //  base 에 만지는 건 이 config 키 하나뿐(워킹트리·ref 무변경 = RO 규율 유지). 워크트리들은 base 의 config 를 공유하므로
   //  어느 워크트리에서 gc 가 돌아도 같이 막힌다. 멱등·best-effort.
   ctx.sh("git", ["-C", base, "config", "gc.worktreePruneExpire", "never"], { allowFail: true });
+  return { fetchWarning };
 }
 
 // 핀 경로 — 지정 없으면 tmpdir 밑 **repo + SHA** 로 content-addressed(#932). 작업 워크트리와 섞이지 않게 별도 루트.
@@ -623,7 +780,7 @@ export async function repoWorktree(ctx, args) {
 
   // ① base 확보(clone or fetch) — 공용.
   const row = registryRow(ctx, repo);
-  await ensureBase(ctx, repo, base, row);
+  const { fetchWarning } = await ensureBase(ctx, repo, base, row);
 
   // ② 경로 결정 — **브랜치가 경로에 달려 있으므로**(아래) 경로가 먼저다. 마커는 한 번만 걸어 올라가 재사용한다.
   const marker = findProjectMarkerUp(ctx.cwd);
@@ -730,6 +887,7 @@ export async function repoWorktree(ctx, args) {
     out.note += ` · 기본 자리(${asideFrom})는 ${asideReason(slot.why)} 옆자리로 비켜섰습니다.`;
   }
   if (refNote) { out.ref_note = refNote; out.note += ` · ${refNote}`; }
+  if (fetchWarning) out.fetch_warning = fetchWarning;   // 새 워크트리가 «받아 둔 origin» 에서 떴다 — 최신이 아닐 수 있다
   // 스탬프가 없으면 다음 호출이 이 자리를 «모르는 자리» 로 보고 또 옆으로 비켜선다 — 자리가 늘어나는 건 그 신호다.
   if (adminNow && stampable && !stamped) out.warning = `소유 표시(${basename(adminNow)}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`;
   return out;
@@ -775,9 +933,10 @@ export async function repoPin(ctx, args) {
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
   const row = registryRow(ctx, repo);
-  await ensureBase(ctx, repo, base, row);
+  const { fetchWarning } = await ensureBase(ctx, repo, base, row);
   const { branch: refBranch, note: refNote } = await refBranchOf(ctx, base, args.ref, row);   // ref 없으면 등록한 기본 브랜치(#1723)
-  const withRef = (o) => (refNote ? { ...o, ref_note: refNote, note: `${o.note} · ${refNote}` } : o);
+  //  fetch 가 실패했으면 이 핀의 SHA 는 «받아 둔 origin» 의 것이다 — 최신이라 믿고 인용하지 않게 알린다.
+  const withRef = (o) => ({ ...(refNote ? { ...o, ref_note: refNote, note: `${o.note} · ${refNote}` } : o), ...(fetchWarning ? { fetch_warning: fetchWarning } : {}) });
   const target = `origin/${refBranch}`;
   const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", target], { allowFail: true }).stdout.trim();
   if (!sha) throw new Error(`ref 해석 실패: ${target} (레포 '${repo}') — ref 이름을 확인하세요.`);

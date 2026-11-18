@@ -2520,8 +2520,8 @@ async function cmdStatus(opts) {
   if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold(addHint()));
 }
 
-// git 접속(ssh) — lively_local_repo_worktree · `lively repo worktree` 는 이 컴퓨터의 git 으로 클론한다. 내 PC 는 라이블리가
-//  자격을 내려 주지 않아(repo-worktree-core authNote 머리말) 첫 클론이 호스트키 미등록·키 미등록으로 막히는데, 그 실패는
+// git 접속(ssh) — lively_local_repo_worktree · `lively repo worktree` 는 이 컴퓨터의 git 으로 클론한다. ssh 주소의 레포는 내 PC 에서
+//  이 컴퓨터의 ssh 키를 쓰므로(repo-worktree-core authNote 머리말) 첫 클론이 호스트키 미등록·키 미등록으로 막히는데, 그 실패는
 //  코드 작업을 시작한 뒤에야 보였다. 등록 레포의 ssh 호스트마다 대화 없이(BatchMode) 시험 접속해 미리 알려 준다.
 //  판정 못 한 것(네트워크·타임아웃·ssh 없음)은 체크를 만들지 않는다 — 모르는 것을 실패로 단정하지 않는다.
 //  ssh 도 이 파일의 다른 외부 명령처럼 spawnSync 래퍼(host-effects 가드)로 띄운다. 가드 없는 spawn 은 deny·sandbox 정책에서도
@@ -3303,7 +3303,7 @@ async function cmdRepo(rest) {
   const ctx = {
     cwd: process.cwd(),
     sh: (cmd, args, opts = {}) => { const r = run(cmd, args, { quiet: true, allowFail: true, env: opts.env }); return { stdout: r.out, stderr: r.err, code: r.code }; },
-    api: (p) => api(p),
+    api: (p, opts) => api(p, opts),   // opts(method · body · timeoutMs) — 내 git 토큰 받기(POST)가 쓴다
   };
   const sub = String(rest[0] || "").toLowerCase();
   const o = {}; const pos = [];
@@ -3339,6 +3339,7 @@ async function cmdRepo(rest) {
       ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch}${res.admin ? ` · admin ${res.admin}` : ""})`)}`);
       say("  " + dim(res.note));
       if (res.warning) warn(res.warning);   // #3678 — 슬롯 브랜치가 갈아타져 있음(중단은 아님)
+      if (res.fetch_warning) warn(res.fetch_warning);   // 원격에서 새 커밋을 못 받았다 — 받아 둔 origin 기준
       return;
     }
     if (sub === "pin") {
@@ -3352,6 +3353,7 @@ async function cmdRepo(rest) {
       const res = await repoPin(ctx, { repo, ref: o.ref, path: o.path });
       ok(`핀: ${bold(res.pin)}  ${dim(`${res.repo}@${res.sha}${res.committed ? " · " + res.committed : ""}${res.reused ? " (재사용)" : ""}`)}`);
       say("  " + dim(res.note));
+      if (res.fetch_warning) warn(res.fetch_warning);   // 이 핀의 SHA 는 받아 둔 origin 의 것 — 최신이 아닐 수 있다
       return;
     }
     die(`알 수 없는 하위명령: ${sub}\n  lively repo list  ·  lively repo pin <repo> [--ref]  ·  lively repo worktree <repo> [--branch --ref --path]  ·  … remove <repo> [--force]`);
