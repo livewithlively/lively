@@ -523,7 +523,9 @@ function resolveWtPath(cwd, repo, p, marker = findProjectMarkerUp(cwd)) {
 //    git 이 이 도우미를 부르지 않는다. 프롬프트 문구를 읽어 답하는 GIT_ASKPASS 와 달리 로캘 · 문구에 기대지 않는다.
 //  · 앞에 빈 credential.helper 를 둬 이 컴퓨터의 도우미(키체인 등)를 그 호출에서 뺀다 — 낡은 키체인 자격이 먼저 나가 실패하는
 //    것을 막고, 성공 뒤 git 이 도우미에 «저장» 을 시켜도 받아 온 토큰이 이 컴퓨터의 키체인에 남지 않는다.
-const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0" };
+//  GCM_INTERACTIVE=never — 윈도우용 git 에 딸려 오는 자격 관리자(GCM)는 터미널이 아니라 **창**으로 묻는다. 동기 실행 중인 MCP 뒤에서
+//   뜬 로그인 창도 같은 멈춤이다(kit/setup/work.mjs 의 git 과 같은 두 값). 이미 저장된 자격을 조용히 내주는 도우미는 그대로 돈다.
+const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
 //  원격에 닿는 git 을 띄울 때의 공통 옵션. noTty — GIT_TERMINAL_PROMPT 는 git 자신의 물음만 끈다. ssh 는 호스트키 지문 · 키 암호를
 //   제어 터미널에 직접 묻는데, 로컬 MCP 는 하네스(Claude Code 등)와 **같은 터미널**에 붙어 있어 그 물음이 사람의 세션 화면에 끼어들고
 //   키 입력을 가로챈 채 끝없이 기다렸다(실측: ssh 주소 · 모르는 호스트키 → «Are you sure you want to continue connecting» 에서 멈춤).

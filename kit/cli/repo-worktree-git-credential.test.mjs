@@ -192,6 +192,7 @@ http.createServer((req, res) => {
     check("K 받아 둔 base 의 원격 주소에 자격이 박히지 않는다", existsSync(join(REPOS, "a")) && raw(["remote", "get-url", "origin"], join(REPOS, "a")) === URL_HTTP);
     // L — 묻지 않는다
     const net = netCalls(c0);
+    check("L 원격에 닿는 git 은 창으로도 묻지 않는다(GCM_INTERACTIVE=never)", net.length > 0 && net.every((x) => x.env && x.env.GCM_INTERACTIVE === "never"), "env 누락");
     check("L 원격에 닿는 git 은 묻지 않게 돈다(GIT_TERMINAL_PROMPT=0)", net.length > 0 && net.every((x) => x.env && x.env.GIT_TERMINAL_PROMPT === "0"),
       JSON.stringify(net.map((x) => [x.args.slice(0, 4), x.env && x.env.GIT_TERMINAL_PROMPT])));
     //  ssh 의 물음(호스트키 지문 · 키 암호)은 GIT_TERMINAL_PROMPT 가 못 끈다 — 물을 수 없는 표면이 터미널 없이 띄우도록 표식을 싣는다.
