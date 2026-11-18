@@ -20,9 +20,9 @@ interface Cat { key: string; name: string | null; count: number; archived: numbe
 interface Doc { name: string; title: string | null; is_folder: boolean; restricted: boolean; archived: boolean; category: string; category_name: string | null }
 interface Preview { knowledge: number; folders_added: number; categories: number; sources: number; restricted: number; body_bytes: number; missing: string[]; notes: string[] }
 interface PlanItem { ref: string; title: string | null; category: string; is_folder: boolean; status: string; new_name: string; existing: string | null; action: string; actions: string[]; reason?: string; notes: string[] }
-interface PlanCat { ref: string; name: string | null; count: number; suggestion: { action: 'map'; to: string; why: string } | { action: 'create'; key: string; name: string | null } }
-interface Plan { origin: { name: string | null; gateway_url: string | null }; bundle_created_at: string; summary: Record<string, number>; knowledge: PlanItem[]; categories: PlanCat[]; sources: { count: number; existing: number; fresh: number }; problems: Array<{ path: string; reason: string }>; notes: string[] }
-interface Batch { id: number; state: string; file_name: string | null; sealed: boolean; origin: { name: string | null }; created_at: string; applied_at: string | null; summary: Record<string, number> | null; error: string | null; result: { counts?: Record<string, number>; knowledge?: Array<{ ref: string; name: string | null; ok: boolean; action: string; error?: string; notes?: string[] }>; undo?: { deleted: number; restored: number; kept: Array<{ name: string; reason: string }> } } | null; plan?: Plan }
+interface PlanCat { ref: string; name: string | null; count: number; suggestion: { action: 'map'; to: string; why: string } | { action: 'create'; key: string; name: string | null }; group?: string | null }
+interface Plan { origin: { name: string | null; gateway_url: string | null }; bundle_created_at: string; summary: Record<string, number>; knowledge: PlanItem[]; categories: PlanCat[]; sources: { count: number; existing: number; fresh: number }; problems: Array<{ path: string; reason: string }>; notes: string[]; groups?: Array<{ key: string; name: string | null }> }
+interface Batch { id: number; state: string; file_name: string | null; sealed: boolean; origin: { name: string | null }; created_at: string; applied_at: string | null; summary: Record<string, number> | null; error: string | null; result: { counts?: Record<string, number>; notes?: string[]; knowledge?: Array<{ ref: string; name: string | null; ok: boolean; action: string; error?: string; notes?: string[] }>; undo?: { deleted: number; restored: number; kept: Array<{ name: string; reason: string }> } } | null; plan?: Plan }
 
 const UNSORTED_REF = '__none__';
 const STATUS_LABEL: Record<string, string> = {
@@ -461,6 +461,9 @@ function startView(onPlan: (b: Batch, p: Plan, t: Array<{ key: string; name: str
 /** 미리보기 — 분류 맞추기 · 확인할 문서의 행동 고르기 · 자료 포함 여부 → [가져오기] */
 function planView(batch: Batch, plan: Plan, targets: Array<{ key: string; name: string | null }>, back: () => void, onResult: (b: Batch) => void): HTMLElement {
   const catChoice = new Map<string, HTMLSelectElement>();
+  //  새 분류가 들어갈 묶음 고르기(분류 ref → 묶음 select). 받는 쪽에 묶음이 없으면 비어 있다.
+  const groupChoice = new Map<string, HTMLSelectElement>();
+  const groups = plan.groups ?? [];
   const itemChoice = new Map<string, HTMLSelectElement>();
 
   const s = plan.summary;
@@ -488,12 +491,25 @@ function planView(batch: Batch, plan: Plan, targets: Array<{ key: string; name: 
     for (const t of targets) sel.append(el('option', { value: t.key, text: `여기의 «${t.name || t.key}» 에 넣기` }));
     sel.value = c.suggestion.action === 'map' ? c.suggestion.to : '__create__';
     catChoice.set(c.ref, sel);
+    //  묶음(#1631) — 묶음이 있는 워크스페이스에서는 새 분류가 반드시 묶음 하나에 들어간다. «새 분류로 만들기» 일 때만 보인다.
+    //   기본값은 서버가 이름 규칙으로 고른 것(c.group) — 묶음은 화면 층이라 나중에 분류 설정에서 옮길 수도 있다.
+    let gsel: HTMLSelectElement | null = null;
+    if (groups.length) {
+      gsel = el('select', { class: 'v2xfer-sel', 'aria-label': `${c.name || c.ref} 를 새로 만들 때 넣을 묶음` }) as HTMLSelectElement;
+      for (const g of groups) gsel.append(el('option', { value: g.key, text: `묶음 «${g.name || g.key}»` }));
+      gsel.value = c.group && groups.some((g) => g.key === c.group) ? c.group : groups[0].key;
+      const g = gsel;
+      const sync = (): void => { g.hidden = sel.value !== '__create__'; };
+      sel.addEventListener('change', sync);
+      sync();
+      groupChoice.set(c.ref, gsel);
+    }
     const why = c.suggestion.action === 'map'
       ? ({ before: '지난번에 맞춘 대로', same_key: '같은 분류가 있어', same_name: '이름이 같은 분류가 있어' } as Record<string, string>)[c.suggestion.why] ?? ''
       : '여기에 같은 분류가 없어';
     return el('div', { class: 'v2xfer-maprow' },
       el('div', { class: 'v2xfer-map-from' }, el('b', { text: c.ref === UNSORTED_REF ? '(분류 없음)' : (c.name || c.ref) }), el('span', { text: `${c.count}건 · ${why} 이렇게 제안합니다.` })),
-      sel);
+      sel, gsel);
   });
 
   // 문서 — 확인이 필요한 것만 펼치고, 그대로 들어가는 것은 접어 둔다.
@@ -532,7 +548,9 @@ function planView(batch: Batch, plan: Plan, targets: Array<{ key: string; name: 
     const knowledge: Record<string, string> = {};
     for (const [ref, sel] of itemChoice) knowledge[ref] = sel.value;
     const categories: Record<string, unknown> = {};
-    for (const [ref, sel] of catChoice) categories[ref] = sel.value === '__create__' ? { action: 'create' } : { action: 'map', to: sel.value };
+    for (const [ref, sel] of catChoice) {
+      categories[ref] = sel.value === '__create__' ? { action: 'create', ...(groupChoice.get(ref) ? { group: groupChoice.get(ref)!.value } : {}) } : { action: 'map', to: sel.value };
+    }
     const overwrites = Object.values(knowledge).filter((a) => a === 'overwrite' || a === 'update').length;
     const creates = plan.knowledge.filter((it) => { const a = knowledge[it.ref] ?? it.action; return a === 'create' || a === 'rename'; }).length;
     if (!creates && !overwrites) { toast('들일 문서가 없습니다 — 처리 방법을 하나 이상 바꿔 주세요.'); return; }
@@ -577,6 +595,7 @@ function resultView(batch: Batch, back: () => void): HTMLElement {
   const c = batch.result?.counts ?? {};
   const failed = (batch.result?.knowledge ?? []).filter((k) => !k.ok);
   const noted = (batch.result?.knowledge ?? []).filter((k) => k.ok && k.notes?.length);
+  const batchNotes = batch.result?.notes ?? [];
   const undo = batch.result?.undo;
   const canUndo = batch.state === 'applied' || batch.state === 'partial';
   const undoBtn = el('button', { class: 'btn-text btn-text-danger', type: 'button', text: '이번 가져오기 되돌리기' }) as HTMLButtonElement;
@@ -611,8 +630,9 @@ function resultView(batch: Batch, back: () => void): HTMLElement {
     failed.length ? el('section', { class: 'v2wss-sec' },
       el('h3', { class: 'v2wss-sec-t', text: `들이지 못한 문서 ${failed.length}건` }),
       ...failed.map((k) => el('p', { class: 'v2xfer-err', text: `${k.ref}: ${k.error ?? '이유를 알 수 없습니다'}` }))) : null,
-    noted.length ? el('section', { class: 'v2wss-sec' },
+    noted.length || batchNotes.length ? el('section', { class: 'v2wss-sec' },
       el('h3', { class: 'v2wss-sec-t', text: '알아 둘 것' }),
+      ...batchNotes.map((n) => el('p', { class: 'v2xfer-note', text: n })),
       ...noted.slice(0, 50).map((k) => el('p', { class: 'v2xfer-note', text: `${k.name ?? k.ref}: ${(k.notes ?? []).join(' ')}` }))) : null,
     el('div', { class: 'v2-wspop-actions v2xfer-acts' },
       el('button', { class: 'btn btn-ghost', type: 'button', text: '목록으로', onclick: back }),
