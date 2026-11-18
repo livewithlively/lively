@@ -209,6 +209,9 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 /* (원준 2026-08-20) 알약 폐지 — 좌상단을 비워 둘 이유가 없다. */
 .pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); flex: none; }
 .pn-eyebrow .sep { color: var(--muted-2); }
+/* #5598 문패의 «누가 보나» 꼬리표 — 누르면 프로젝트 [공유] 창 */
+.pn-door-acc { display: inline-flex; align-items: center; padding: 0; border: none; background: none; font: inherit; cursor: pointer; border-radius: 999px; }
+.pn-door-acc:hover .pj-acc-tag { background: rgba(var(--tint-ink), .12); color: var(--ink); }
 .pn-state.run { color: var(--blue); font-weight: 700; }
 .pn-state.done { color: var(--mint-deep); font-weight: 700; }
 .pn-state.todo { color: var(--muted); }
@@ -1077,6 +1080,24 @@ body.v2-splitting-x .bt-view, body.v2-splitting-y .bt-view, body.cm-dragging .bt
 /* 초대받은 사람의 나가기 — 되돌리기가 내 손에 없는 동작이라 붉은 글자(채운 단추까지는 아니다 · 확인 창이 한 번 더 묻는다). */
 .pn-share-leave { color: var(--danger); }
 .pn-share-leave:hover { color: var(--danger-deep); background: var(--danger-bg); }
+/* #5598 프로젝트 [공유] 창 — 세션 [공유] 의 틀(.pn-share*)을 그대로 쓰고, 공개 범위 줄과 바꾸기 줄만 더한다. */
+.pj-share { width: 312px; }
+.pj-share-state { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); }
+.pj-share-state .pj-acc-ic { width: 15px; height: 15px; color: var(--muted); }
+.pj-share-pending { color: var(--warn-deep, var(--muted)); }
+.pj-share-editor { display: flex; flex-direction: column; gap: 11px; padding-top: 11px; border-top: 1px solid var(--line); }
+.pj-share-switch { display: flex; flex-direction: column; gap: 8px; }
+.pj-share-links { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.pj-share-link { align-self: flex-start; padding: 0; border: none; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--blue); cursor: pointer; }
+.pj-share-link:hover { text-decoration: underline; }
+.pj-share-leave { display: flex; flex-direction: column; gap: 8px; padding-top: 9px; border-top: 1px solid var(--line); }
+.pj-share-leave > .pn-share-leave { align-self: flex-start; }
+.pj-share-warn { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint); font-size: 12px; line-height: 1.5; color: var(--ink); }
+/* 세션 [공유] · 새 세션 창 · 컴포저의 «프로젝트도 함께 보게 돼요» 안내 */
+.pn-share-projnote { padding: 7px 9px; border-radius: 8px; background: var(--bg-tint); color: var(--ink); }
+.pn-att-note { align-self: center; font-size: 11.5px; color: var(--muted-2); white-space: nowrap; }
+.term-invite-projnote { margin: 6px 0 0; }
+
 
 /* ── 타임라인 찾기 칸 (#762) ─────────────────────────────────────────────────
    머리 바의 [최신순][자세히] 과 같은 급이라 높이·반경을 맞춘다(28 · 8). 좁은 칸에서는 이 칸이 먼저 줄고

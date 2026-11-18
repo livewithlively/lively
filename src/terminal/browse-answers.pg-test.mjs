@@ -109,13 +109,15 @@ try {
   };
 
   // ── 준비: 열린 프로젝트(둘 다 본다) · 숨은 프로젝트(가만 본다) · 잠긴 공유 폴더(가만 본다) ──
-  const open = await createProject({ name: "같은 답 시험", dedupe: false }, { actor: "pgt-a" });
+  // #5598 — 이 시험의 프로젝트는 «다른 구성원에게도 보이는» 것이 전제다(가리는 것은 리스트 잠금으로만 잰다). 그래서 invite_only:false 로
+  //  못 박는다 — 생략하면 워크스페이스의 새 프로젝트 공개 방식(기본 초대제)을 따라 만든 사람만 본다.
+  const open = await createProject({ name: "같은 답 시험", dedupe: false, invite_only: false }, { actor: "pgt-a" });
   const OF = await createProjectFolder(open.id); await setProjectFolder(open.id, OF, { source: "web" });
   putDisk(path.join("shared", OF, "docs", "설계.md"), "# 설계");
   mkdirSync(disk("shared", OF, "docs", "sub"), { recursive: true });
   const L = Number((await itemsPool.query(`INSERT INTO project_list(name, visibility) VALUES('pgt 숨은 리스트', 'members') RETURNING id`)).rows[0].id);
   await itemsPool.query(`INSERT INTO project_list_member(list_id, member_id) VALUES($1, 'pgt-a')`, [L]);
-  const hidden = await createProject({ name: "숨은 프로젝트", dedupe: false, list_id: L }, { actor: "pgt-a" });
+  const hidden = await createProject({ name: "숨은 프로젝트", dedupe: false, invite_only: false, list_id: L }, { actor: "pgt-a" });
   const HF = await createProjectFolder(hidden.id); await setProjectFolder(hidden.id, HF, { source: "web" });
   putDisk(path.join("shared", HF, "숨은.md"), "숨은 본문");
   mkdirSync(disk("shared", HF, "폴더"), { recursive: true });

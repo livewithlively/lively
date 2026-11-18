@@ -18,9 +18,11 @@ import { openListForm } from './list-forms.js';
 import { pjvPopover } from './popover.js';
 import { openProjectV2Form } from './project-form.js';
 import { pjvProjTeamControl, pjvSetProjStatus, projPatch } from './rows.js';
+import { projAccessChip } from './access-ui.js';   // #5598 «누가 보나» 칩 · [공유] 창
+import { draftTipFor } from '../lib/proj-access.js';   // #5598 초안 설명 — 초대제인 초안은 «공개됩니다» 라고 말하지 않는다
 import { pjvReloadKeepScroll } from './state.js';
 import { pjvFmtDate, pjvIsOverdue, pjvProjStatusMeta, pjvStatusIconStd } from './status.js';
-import { pjvPriorityControl, pjvSaveProjMembers } from './task-controls.js';
+import { pjvMemberDirectory, pjvPriorityControl, pjvSaveProjMembers } from './task-controls.js';
 
 // ── 프로젝트 클릭업식 메타데이터 패널 (상세 헤더, 이름 아래) — 태스크 모달의 pjv-tm-fields 동형 ──
 //  상태·담당자·기간·우선순위는 /api/ui/v6/projects/:id(updateProject) 로, 태그·시간추적은 /tasks/:id/(tags|time) 를
@@ -435,16 +437,32 @@ function pjvProjFactsStrip(p, members, reload) {
   // 초안(#4170) — 세션 첫 지시로 기계가 막 만든 프로젝트. 목록 기본 뷰에서 따로 서 있다는 걸 여기서도 말하고, 제목·본문을
   //  고치지 않고도 올릴 길(«공개하기»)을 준다. 제목이나 본문을 고치면 서버가 저절로 내린다.
   //  #5522 — 초안은 만든 사람과 팀원만 본다. 그래서 단추 이름이 «목록에 올리기» 에서 «공개하기» 로 바뀌었다(누르면 모두에게 보인다).
+  //  #5598 — 초대제인 초안은 풀려도 공개되지 않는다. 그래서 그때는 «공개하기» 가 아니라 «초안 풀기» 다(공개 범위는 옆의 자물쇠 칩이 맡는다).
+  const inviteOnly = p.invite_only === true;
   const draftChip = p.draft === true && p.status !== 'done'
-    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: '세션 첫 지시로 자동 생성된 프로젝트입니다. 나와 초대한 사람에게만 보이고, 작업을 남기거나 제목 · 본문을 정리하면 모두에게 공개됩니다.' },
+    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: draftTipFor(p) },   // 목록의 초안 뱃지와 같은 말(lib/proj-access)
       el('span', { class: 'pjh-draft-k', text: '초안' }),
-      el('button', { class: 'pjh-draft-up', type: 'button', text: '공개하기', title: '초안은 나와 초대한 사람만 봅니다. 누르면 모두에게 보이는 목록에 올라갑니다.', onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
+      el('button', { class: 'pjh-draft-up', type: 'button', text: inviteOnly ? '초안 풀기' : '공개하기',
+        title: inviteOnly ? '초안 표시만 뗍니다. 공개 범위는 바뀌지 않아요 — 계속 초대한 사람만 봅니다.' : '초안은 나와 초대한 사람만 봅니다. 누르면 모두에게 보이는 목록에 올라갑니다.',
+        onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
     : null;
+  //  #5598 — 닫힌 프로젝트에서는 팀원이 곧 «볼 수 있는 사람» 이다. 팀원 칩은 다시 그리지 않고 조용히 저장하므로(다중 토글),
+  //   저장이 끝나면 «누가 보나» 칩만 새 명단으로 갈아 끼운다 — 사람을 넣었는데 옆 칩이 계속 «나만» 이면 그게 거짓말이다.
+  const reloadKeep = () => pjvReloadKeepScroll(reload);
+  let accChip = projAccessChip(p, members || [], reloadKeep);
+  const saveTeam = (ids: string[]) => Promise.resolve(pjvSaveProjMembers(p.id, ids)).then(async () => {
+    if (!accChip) return;
+    const dir: any[] = await pjvMemberDirectory().catch(() => []);
+    const next = projAccessChip(p, ids.map((id) => ({ member_id: id, display_name: (dir.find((m) => m.id === id) || {}).display_name || null })), reloadKeep);
+    if (next) { accChip.replaceWith(next); accChip = next; }
+  });
   return el('div', { class: 'pjh-facts' },
     chip(null, null, pjvProjStatusPill(p, reload)),
+    //  #5598 «누가 보나» — 상태 바로 다음, 띠의 앞머리. 누르면 [공유] 창(초대 · 공개 범위).
+    accChip,
     draftChip,
     chip('list', p.list_id == null ? '리스트' : null, pjvProjListField(p, reload), p.list_id == null),
-    chip('user', has(members) ? null : '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids)), !has(members)),
+    chip('user', has(members) ? null : '팀원', pjvProjTeamControl(members, saveTeam), !has(members)),
     chip('cal', p.start_date || p.due_date ? null : '기간', pjvProjDatesField(p, reload), !p.start_date && !p.due_date),
     chip('flag', p.priority ? null : '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload)), !p.priority, p.priority ? 'pr-' + p.priority : ''),
     chip('tag', has(p.tags) ? null : '태그', tagsCtl, !has(p.tags)),

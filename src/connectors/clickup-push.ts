@@ -18,7 +18,7 @@ import { logger } from "../log.js";
 import { drainBudgetExceeded } from "./push-budget.js";
 import { classifyPushFailure, parksAfter, parkedSql, parkedParams, notifyParked, isMassRejection, MASS_REJECT_MARK, type ParkedRow } from "./push-failure.js";
 import { sendBoxAlert } from "../ops/alerts.js";
-import { hiddenProjects } from "../v6/visibility.js";
+import { hiddenProjects, inviteOnlyProjectIds } from "../v6/visibility.js";
 import { PUBLIC_VIEWER } from "../v6/visibility.js";
 
 // 상태셋 로드 일시실패를 언제까지 미룰지 — 넘으면 status 없이 진행한다(무한 재시도가 큐 머리를 점거하지 않게).
@@ -253,7 +253,11 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
   //  나갔다. v1 에서 knowledge-store 가 똑같이 1홉만 봤던 그 결함의 사본이다 — 반출은 되돌릴 수 없으므로
   //  가장 비싼 자리이기도 하다. 술어 SoT 의 재귀 판정을 그대로 쓴다(뷰어 무관·캐시됨).
   const restrictedIds = (await hiddenProjects(PUBLIC_VIEWER)).ids;
-  const isRestrictedForPublish = (projectId: number): boolean => restrictedIds.has(projectId);
+  //  #5598 — 초대제 프로젝트(만든 사람과 초대한 사람만 본다)도 내보내지 않는다. 위 집합은 그것을 «잠긴 프로젝트» 로 세지 않아서
+  //   (세션 기록 범위가 뒤집힌다 — visibility.ts hiddenProjects) 따로 더한다. 만든 사람이 «전체 공개» 로 바꾸면 그때 다시 줄 선다
+  //   (project-store.setProjectAccess 가 upsert 를 넣는다).
+  const inviteOnlyIds = await inviteOnlyProjectIds();
+  const isRestrictedForPublish = (projectId: number): boolean => restrictedIds.has(projectId) || inviteOnlyIds.has(projectId);
 
   for (const ob of rows) {
     // 시간예산 — 남은 행은 손대지 않고 나간다(pending 그대로 → 다음 틱이 이어받는다). 왜 자발 종료여야

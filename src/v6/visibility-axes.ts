@@ -17,7 +17,7 @@ export const VIS_AXES = ["project", "knowledge", "source", "shared_folder", "ses
 export type VisAxis = (typeof VIS_AXES)[number];
 
 export const AXIS_LABEL: Record<VisAxis, string> = {
-  project: "프로젝트(리스트·스페이스)",
+  project: "프로젝트(리스트·스페이스·초대제)",
   knowledge: "지식",
   source: "자료",
   shared_folder: "공유폴더",
@@ -88,9 +88,12 @@ export async function axisLockSummary(): Promise<AxisLockSummary[]> {
       return { n: r.rows.length, names: r.rows.slice(0, 5).map((x: any) => String(x.name ?? x.id ?? "")) };
     } catch { return { n: 0, names: [] }; }
   };
+  // #5598 — 비공개 프로젝트(초대제 · 초안)도 이 축이 가린다(visibility.ts projectVisFor — 축이 꺼지면 거르지 않는다).
+  //  그래서 끄면 그것들도 전원에게 열린다. 지운 것은 세지 않는다(휴지통은 축과 상관없이 만든 사람 것이다).
   const proj = await count(
     `SELECT name FROM project_list WHERE visibility='members'
-     UNION ALL SELECT name FROM project_folder WHERE visibility='members'`);
+     UNION ALL SELECT name FROM project_folder WHERE visibility='members'
+     UNION ALL SELECT name FROM project WHERE level='project' AND (draft OR invite_only) AND trashed_at IS NULL`);
   const know = await count(`SELECT name FROM knowledge WHERE visibility='members'`);
   const src = await count(`SELECT id::text AS name FROM source WHERE visibility='members'`);
   const sf = await count(`SELECT path AS name FROM shared_folder_acl WHERE visibility='members'`);

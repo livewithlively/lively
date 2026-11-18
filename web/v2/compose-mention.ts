@@ -10,6 +10,8 @@
 import { el, personFace, state } from '../core.js';
 import { runMembers } from './run-picker.js';
 import { mentionMatches, mentionQuery, mentionTail, removeMentionQuery, type MentionMember } from './mention-text.js';
+import { SESSION_INVITE_PROJECT_NOTE_GENERIC, sessionInviteGenericNote } from '../lib/proj-access.js';   // #5598
+import { accessConfig, loadAccessConfig } from '../projects/access-ui.js';   // #5598 — 워크스페이스 설정(축 켜짐)
 
 export interface ComposerMention {
   /** 사람 칩 줄 — 첨부 칩 줄 옆(아래)에 둔다. 비면 숨김. */
@@ -50,6 +52,7 @@ export function charPos(ta: HTMLTextAreaElement, index: number): { left: number;
 }
 
 export function composerMention(): ComposerMention {
+  void loadAccessConfig();   // #5598 — 사람을 고르기 전에 워크스페이스 설정(축 켜짐)을 받아 둔다(칩 줄의 안내가 쓴다)
   const chips = el('div', { class: 'pn-att v2-ppl', hidden: true });
   const menu = el('div', { class: 'v2-mention', hidden: true, role: 'listbox' });
   let members: MentionMember[] = [];
@@ -61,11 +64,14 @@ export function composerMention(): ComposerMention {
 
   function paintChips(): void {
     chips.hidden = !chosen.length;
-    chips.replaceChildren(...chosen.map((m) => el('span', { class: 'pn-att-c ppl', title: `${m.name} 을(를) 이 세션에 초대해요 — 열리면 함께 봅니다` },
+    chips.replaceChildren(...chosen.map((m) => el('span', { class: 'pn-att-c ppl', title: `${m.name} 을(를) 이 세션에 초대해요 — 열리면 함께 봅니다. ${sessionInviteGenericNote(accessConfig())}`.trim() },
       personFace(m.id, 'v2-ppl-ava', m.name),
       el('span', { class: 'n', text: m.name + (m.kind === 'agent' ? ' (AI)' : '') }),
       el('button', { class: 'pn-att-x', type: 'button', title: '초대 빼기', 'aria-label': '초대 빼기', text: '✕',
-        onclick: () => { const i = chosen.indexOf(m); if (i >= 0) chosen.splice(i, 1); paintChips(); ta?.focus(); } }))));
+        onclick: () => { const i = chosen.indexOf(m); if (i >= 0) chosen.splice(i, 1); paintChips(); ta?.focus(); } }))),
+      //  #5598 — 세션에 초대하면 그 세션이 속한 프로젝트에도 초대된다. 사람을 고른 그 줄 끝에 한마디로 말한다(올려야 보이는 설명에만 두지 않는다).
+      //   축이 꺼진 워크스페이스에서는 말하지 않는다(모든 프로젝트를 이미 전원이 본다 — lib/proj-access sessionInviteGenericNote).
+      ...(chosen.length && sessionInviteGenericNote(accessConfig()) ? [el('span', { class: 'pn-att-note', text: '프로젝트도 함께 보게 돼요', title: SESSION_INVITE_PROJECT_NOTE_GENERIC })] : []));
   }
 
   function closeMenu(): void { menu.hidden = true; picks = []; sel = 0; }

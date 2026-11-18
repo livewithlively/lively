@@ -7,7 +7,8 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { VIS_AXES, AXIS_LABEL, axisLockSummary, setVisAxes, type VisAxis } from "../v6/visibility-axes.js";
+import { VIS_AXES, AXIS_LABEL, axisLockSummary, axisOn, setVisAxes, type VisAxis } from "../v6/visibility-axes.js";
+import { PROJECT_ACCESS_MODES, PROJECT_ACCESS_LABEL, projectAccessMode, setProjectAccessMode, type ProjectAccessMode } from "../v6/project-access.js";
 import { logActivity } from "../activity/store.js";
 import { logger } from "../log.js";
 import { reconcileAllDerived } from "../v6/derived-visibility.js";
@@ -119,4 +120,61 @@ const visAxisSet: Capability = {
   },
 };
 
-export const visAxesCapabilities: Capability[] = [visAxisList, visAxisSet];
+// ── #5598 새 프로젝트 공개 방식(초대제 | 전체 공개) ────────────────────────────────
+//  축 켜기/끄기와 달리 **이 설정을 바꾸는 것은 공개 사건이 아니다** — 새로 만드는 프로젝트의 기본값만 바뀌고, 이미 있는
+//  프로젝트는 그대로다(v6/project-access.ts 머리말). 그래서 확인 절차 없이 바꾸되, 조직 정책이 바뀐 것이라 작업기록에는 남긴다.
+//  읽기는 구성원 누구나 — 화면이 «새 프로젝트는 나만 봅니다» 를 사실대로 말하려면 이 값이 필요하다.
+//  enforced = 프로젝트 공개범위 축이 켜져 있나. 꺼져 있으면 초대제 표시가 아무것도 가리지 않으므로, 화면은 그때
+//   «나만 봅니다» 라고 말하면 안 된다(거짓 안심).
+const projectAccessGet: Capability = {
+  name: "project_access_get",
+  title: "새 프로젝트 공개 방식 조회",
+  description: "이 워크스페이스에서 새로 만드는 프로젝트의 공개 방식 — invite(초대제: 만든 사람과 초대한 사람만 본다 · 기본값) | open(전체 공개: 전원이 본다. 세션 첫 지시로 생긴 초안만 만든 사람이 보다가 작업을 남기면 공개된다). enforced=false 면 프로젝트 공개범위 축이 꺼져 있어 모든 프로젝트가 전원에게 보인다.",
+  scope: "memory",
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/v6/project-access"], parse: () => ({}) }] },
+  handler: async () => {
+    const mode = await projectAccessMode();
+    return { mode, label: PROJECT_ACCESS_LABEL[mode], enforced: await axisOn("project") };
+  },
+};
+
+const projectAccessSet: Capability = {
+  name: "project_access_set",
+  title: "새 프로젝트 공개 방식 설정",
+  description:
+    "이 워크스페이스에서 새로 만드는 프로젝트의 공개 방식을 정한다 — invite(초대제 · 기본값) | open(전체 공개). " +
+    "**이미 있는 프로젝트의 공개 범위는 바뀌지 않는다** — 새 프로젝트의 기본값만 바뀐다. 프로젝트 하나를 열거나 닫는 것은 project_set_access_v6(만든 사람만).",
+  scope: "admin",
+  input: {
+    mode: z.enum(PROJECT_ACCESS_MODES).describe("invite=초대제(만든 사람과 초대한 사람만) | open=전체 공개(초안만 닫혔다가 작업을 남기면 전원)"),
+  },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/project-access"],
+      parse: (req) => {
+        const mode = String(((req.body ?? {}) as Record<string, unknown>).mode ?? "");
+        if (!(PROJECT_ACCESS_MODES as readonly string[]).includes(mode)) throw new HttpError(400, `mode 는 ${PROJECT_ACCESS_MODES.join("|")}`);
+        return { mode };
+      } }],
+  },
+  handler: async (input: any, user: any) => {
+    const next = input.mode as ProjectAccessMode;
+    const cur = await projectAccessMode();
+    const enforced = await axisOn("project");
+    if (cur === next) return { mode: cur, label: PROJECT_ACCESS_LABEL[cur], enforced, changed: false };
+    await setProjectAccessMode(next);
+    await logActivity({
+      type: "decision",
+      title: `새 프로젝트 공개 방식: '${PROJECT_ACCESS_LABEL[cur]}' → '${PROJECT_ACCESS_LABEL[next]}'`,
+      summary: "새로 만드는 프로젝트의 기본값만 바뀐다 — 이미 있는 프로젝트의 공개 범위는 그대로다.",
+      body: JSON.stringify({ project_access: { from: cur, to: next } }),
+    }, user?.userId ?? null).catch((e) => {
+      logger.error({ from: cur, to: next, err: (e as Error)?.message },
+        "[project-access] 새 프로젝트 공개 방식 변경을 작업기록에 남기지 못했다 — 설정은 적용됨");
+    });
+    return { mode: next, label: PROJECT_ACCESS_LABEL[next], enforced, changed: true };
+  },
+};
+
+export const visAxesCapabilities: Capability[] = [visAxisList, visAxisSet, projectAccessGet, projectAccessSet];

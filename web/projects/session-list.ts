@@ -27,7 +27,9 @@ import { enterSession, openRouteRow } from './detail-hub-kit.js';
 import { pjvProjStatusMeta, pjvResolveProjStatus } from './status.js';
 import { pjvProjClosedView } from './state.js';
 import { pjvPopover } from './popover.js';
-import { DRAFT_LABEL, DRAFT_TIP, draftCountText, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 뱃지 · 개수 글 한 벌
+import { DRAFT_LABEL, draftCountText, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 뱃지 · 개수 글 한 벌
+import { draftTipFor } from '../lib/proj-access.js';   // #5598
+import { projAccessTag } from './access-ui.js';        // #5598 «누가 보나» 표시
 
 const PAGE = SESS_TABLE_PAGE;
 // 세션 목록 화면과 같은 두 축(main.ts loadData) — 기록은 서버 상한(2000)까지 한 번에. 실측 384건 · 0.2MB.
@@ -223,7 +225,12 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
     : key;
   const { list, more } = sessTable({
     vis, by, ui, now, cols: true, meId, projName: () => '', ownerName, groupLabel, repaint, nameHead: '프로젝트', projHead: '세션',
-    rowTag: (it) => !draftScope && isDraftProj(it.proj) ? el('span', { class: 'pj-draft-tag', title: DRAFT_TIP, text: DRAFT_LABEL }) : null,
+    //  #5598 — «누가 보나» 표시(자물쇠 «나만» …)와 초안 뱃지를 이름 뒤에 나란히. 둘 다 없으면 null.
+    rowTag: (it) => {
+      const acc = projAccessTag(it.proj, { compact: true });
+      const dr = !draftScope && isDraftProj(it.proj) ? el('span', { class: 'pj-draft-tag', title: draftTipFor(it.proj), text: DRAFT_LABEL }) : null;
+      return acc && dr ? el('span', { class: 'pj-row-marks' }, acc, dr) : (acc || dr);
+    },
     open: () => { /* 세션 줄이 없다 */ },
     openProj: (it) => { location.hash = '#/projects2/p/' + it.pj!.id; },
     menuRows: (it) => [

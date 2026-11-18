@@ -17,6 +17,7 @@ import { mountProjectHub } from './detail-hub.js';
 import { hubIcon } from './detail-hub-kit.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
 import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
+import { setAccessConfig } from './access-ui.js';   // #5598
 import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
 import { pjvGoTaskWorkspace, pjvOpenTaskFromHub, pjvTasksSection } from './detail-tasks.js';
 import { pjvSelReset } from './selection.js';
@@ -242,7 +243,7 @@ async function renderProjectV2Detail(view, idStr) {
   const { y: keepY, host: keepHost } = consumeKeepScroll(); // 인라인 편집 재렌더·태스크 모달 닫기면 스켈레톤 스킵 + 스크롤 복원(#358·#1233)
   if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
   let data: any;
-  try { data = await api('/api/ui/v6/projects/' + id).then((d) => d && (d.project || d)); }
+  try { data = await api('/api/ui/v6/projects/' + id).then((d) => { setAccessConfig(d && d.access); return d && (d.project || d); }); }   // access — #5598 «누가 보나» 칩의 재료
   catch (e) {
     view.replaceChildren(el('div', { class: 'page-head' }, backLink), errorNote(e, '프로젝트를 불러오지 못했습니다'));
     return;

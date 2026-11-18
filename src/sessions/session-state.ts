@@ -628,23 +628,27 @@ export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
 }
 
 /**
- * #5522 — 세션에 초대받은 사람을, 그 세션이 붙은 프로젝트가 **초안**이면 그 프로젝트의 팀원으로 넣는다.
+ * #5522 · #5598 — 세션에 초대받은 사람을, 그 세션이 붙은 프로젝트가 **비공개(초안 · 초대제)** 면 그 프로젝트의 팀원으로 넣는다.
  *
- *  왜: 초안 프로젝트는 만든 사람과 팀원만 본다(v6/visibility.ts). 세션 판정(sessionVisible)은 «숨은 프로젝트의 세션은
- *   초대받은 사람에게도 닫는다» 라, 팀원으로 안 넣으면 새 세션(대부분 초안 프로젝트에 붙는다)에 초대한 사람이 들어오지 못한다.
+ *  왜: 비공개 프로젝트는 만든 사람과 팀원만 본다(v6/visibility.ts). 세션 판정(sessionVisible)은 «숨은 프로젝트의 세션은
+ *   초대받은 사람에게도 닫는다» 라, 팀원으로 안 넣으면 초대한 사람이 그 세션에 들어오지 못한다. 초대제(#5598)가 기본값이 되면서
+ *   거의 모든 프로젝트 세션이 이 길을 탄다 — 그래서 화면도 세션 초대 자리에서 «프로젝트도 함께 보게 된다» 고 미리 말한다
+ *   (web/lib/proj-access.ts sessionInviteProjectNote).
  *  어디서: 초대와 소속이 이 표(org_session_state)에 적히는 두 자리 — upsertSessionState(생성 · 복원) · updateSessionStateMeta
  *   (초대 변경 · 프로젝트 붙이기). 입구(터미널 · 노드 릴레이 · 세션 붙이기)마다 따로 두지 않는다.
- *  ⚠ 넣기만 한다. 초대를 거둬도 팀원에서는 빼지 않는다 — 그 사람이 다른 길(프로젝트 팀원 설정)로 들어온 것인지 가를 근거가
- *   없다. 초안에서 빼려면 프로젝트의 팀원 설정에서 뺀다.
- *  ⚠ best-effort — 실패해도 세션 기록은 이미 끝났다. 초안이 아닌 프로젝트에는 아무 일도 없다(JOIN 이 못 잡는다).
+ *  ⚠ 넣기만 한다. 초대를 거둬도 팀원에서는 빼지 않는다 — 그 사람이 다른 길(프로젝트 초대)로 들어온 것인지 가를 근거가
+ *   없다. 프로젝트에서 빼려면 프로젝트의 [공유]에서 뺀다.
+ *  ⚠ best-effort — 실패해도 세션 기록은 이미 끝났다. 공개 프로젝트에는 아무 일도 없다(JOIN 이 못 잡는다 — 이미 다 본다).
+ *  «비공개» 조건은 v6/visibility.ts privateProjectSql 과 같은 말이다(이 모듈은 v6 를 정적으로 끌지 않아 글자로 옮겨 적는다 —
+ *   한쪽을 고치면 다른 쪽도 고친다. project-invite-only.pg-test 가 두 조건을 다 잰다).
  */
-async function syncDraftInviteMembers(sessionId: string): Promise<void> {
+async function syncPrivateInviteMembers(sessionId: string): Promise<void> {
   try {
     const r = await itemsPool.query(
       `INSERT INTO project_member(project_id, member_id, role, sort, added_at)
        SELECT p.id, inv.member_id, 'member', 100 + inv.ord::int, now()
          FROM org_session_state s
-         JOIN project p ON p.id = s.project_id AND p.level = 'project' AND p.draft
+         JOIN project p ON p.id = s.project_id AND p.level = 'project' AND (p.draft OR p.invite_only)
          CROSS JOIN LATERAL jsonb_array_elements_text(
            CASE WHEN jsonb_typeof(s.invites) = 'array' THEN s.invites ELSE '[]'::jsonb END) WITH ORDINALITY AS inv(member_id, ord)
         WHERE s.id = $1 AND inv.member_id <> '' AND inv.member_id IS DISTINCT FROM p.created_by
@@ -653,7 +657,7 @@ async function syncDraftInviteMembers(sessionId: string): Promise<void> {
     //  동적 import: 이 모듈은 v6 를 정적으로 끌지 않는다(세션 상태는 v6 보다 아래 층이다).
     if ((r.rowCount ?? 0) > 0) await import("../v6/visibility.js").then((m) => m.invalidateVisibilityCache());
   } catch (e) {
-    console.warn(`[session-state] 초안 프로젝트 팀원 맞추기 실패(${sessionId}, 비치명):`, (e as Error)?.message ?? e);
+    console.warn(`[session-state] 비공개 프로젝트 팀원 맞추기 실패(${sessionId}, 비치명):`, (e as Error)?.message ?? e);
   }
 }
 
@@ -705,7 +709,7 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
      s.write_vis ?? null, s.restrict_read ?? false,
      s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null, s.kind ?? null, !!s.end_mark],
   );
-  if (s.project_id && (s.invites?.length ?? 0) > 0) await syncDraftInviteMembers(s.id);   // #5522
+  if (s.project_id && (s.invites?.length ?? 0) > 0) await syncPrivateInviteMembers(s.id);   // #5522 · #5598
 }
 
 // 라벨/초대 변경(editSession) 미러. 레코드 없으면 no-op(구 세션은 다음 upsert 계기에 편입).
@@ -725,7 +729,7 @@ export async function updateSessionStateMeta(id: string, patch: { label?: string
   sets.push("updated_at=now()");
   await itemsPool.query(`UPDATE org_session_state SET ${sets.join(", ")} WHERE id=$1`, vals);
   // #5522 — 초대가 바뀌었거나 프로젝트에 붙었으면, 그 프로젝트가 초안일 때 초대받은 사람을 팀원으로 맞춘다.
-  if ((patch.invites !== undefined && patch.invites.length > 0) || patch.project_id) await syncDraftInviteMembers(id);
+  if ((patch.invites !== undefined && patch.invites.length > 0) || patch.project_id) await syncPrivateInviteMembers(id);
 }
 
 // 세션 이름 **걸쇠**(#1979) — `source` 가 지금 출처를 이길 때만 이름을 바꾸고, 이겼는지 돌려준다.

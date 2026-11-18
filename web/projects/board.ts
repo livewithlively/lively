@@ -46,7 +46,9 @@ import { isMyProject } from '../lib/board-view.js';   // #4865 — '내 할당' 
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 바깥 셸이 알려 온 리스트 즐겨찾기 변경
 import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavListCacheSet, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
 import { openProjectV2Form } from './project-form.js';
-import { DRAFT_HINT, DRAFT_LABEL, DRAFT_TIP, draftsShown, isDraftProj, setDraftsShown, withDraftToggle } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 · 「초안 보기」 토글 한 벌
+import { DRAFT_HINT, DRAFT_LABEL, draftsShown, isDraftProj, setDraftsShown, withDraftToggle } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 · 「초안 보기」 토글 한 벌
+import { draftTipFor } from '../lib/proj-access.js';                // #5598
+import { projAccessTag, setAccessConfig } from './access-ui.js';     // #5598 «누가 보나» 표시 · 워크스페이스 설정
 import { pjvMySessionCounts, pjvPrefetchSessions, pjvSessGroupLabel, pjvSessGroupMenu, pjvSessionListView } from './session-list.js';   // #4865 「리스트」 뷰 = 스코프 안 프로젝트(줄마다 세션 요약)
 
 /** #5522 「초안」 스코프가 비었을 때 — 초안은 무언가를 남기면 풀려 제 리스트 · 「기타 (미분류)」로 간다. */
@@ -156,7 +158,10 @@ function pjvKanbanBoard(projects, selList, ctx) {
     for (const p of cards) {
       const card = el('div', { class: 'pjv-kb-card' + (p.status === 'done' ? ' done' : ''), draggable: 'true', role: 'link', tabindex: '0' });
       //  #5522 초안 표시 — 칸반은 상태 칸으로만 나뉘어 초안이 제 칸에 섞인다. 이름 위에 작은 표시로 가른다(이름은 두 줄에서 잘리므로 따로).
-      if (isDraftProj(p)) card.append(el('span', { class: 'pj-draft-tag pjv-kb-draft', title: DRAFT_TIP, text: DRAFT_LABEL }));
+      //  #5598 «누가 보나» 도 같은 줄에 — 닫힌 프로젝트의 자물쇠가 카드마다 보여야 «이 칸에 올린 게 공유되나» 를 안 묻는다.
+      const kbAcc = projAccessTag(p, { compact: true });
+      const kbDraft = isDraftProj(p) ? el('span', { class: 'pj-draft-tag', title: draftTipFor(p), text: DRAFT_LABEL }) : null;
+      if (kbAcc || kbDraft) card.append(el('div', { class: 'pjv-kb-draft pjv-kb-marks' }, kbAcc, kbDraft));
       card.append(el('div', { class: 'pjv-kb-name', text: p.name }));
       const tags = Array.isArray(p.tags) ? p.tags.slice(0, 3) : [];
       if (tags.length) {
@@ -280,7 +285,7 @@ async function renderProjectV2Board(view, scopeKey?, fresh?: boolean) {
     //  ⚠ 종전엔 '내 프로젝트'(mine=1)도 따로 받았다 — 서버가 프로젝트 목록을 한 벌 더 만들고 tmux 목록까지 훑어 가장 늦게 왔다(0.6초).
     //   그 응답이 주던 둘(내 세션 수 · '내 할당' 집합)은 이미 받는 재료로 같은 셈을 한다(paint).
     const [projects, mySess, lists, folders, fav, st] = await Promise.all([
-      api('/api/ui/v6/projects?slim=1').then((d) => (d && d.projects) || []),
+      api('/api/ui/v6/projects?slim=1').then((d) => { setAccessConfig(d && d.access); return (d && d.projects) || []; }),   // access — #5598 «누가 보나» 표시의 재료
       pjvMySessionCounts(),
       api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),

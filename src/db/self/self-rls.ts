@@ -153,10 +153,10 @@ function quoteIdent(name: string): string {
 /** 이 뷰어에게 숨길 것들 — 전부 술어 SoT 로 계산한다. 이 파일은 '무엇이 숨겨지나'를 스스로 판단하지 않는다. */
 async function hiddenSets(viewer: Viewer): Promise<Array<{ kind: ScopeKind; key: string }>> {
   const out: Array<{ kind: ScopeKind; key: string }> = [];
-  // #5522 — 프로젝트 행은 리스트뿐 아니라 초안으로도 가려진다. 판정 재료를 술어 SoT 에서 그대로 받는다
+  // #5522 · #5598 — 프로젝트 행은 리스트뿐 아니라 비공개(초안 · 초대제)로도 가려진다. 판정 재료를 술어 SoT 에서 그대로 받는다
   //  (특권 · 축 꺼짐 · 전체 긴급 열람이면 둘 다 null — 숨길 것 없음).
   const pv = viewer === null ? null : await projectVisFor(viewer);
-  if (!pv || (pv.lists === null && pv.draftViewer === null)) return out;
+  if (!pv || (pv.lists === null && pv.privateViewer === null)) return out;
   const visLists = pv.lists;
   if (visLists !== null) {
     // 안 보이는 리스트·스페이스. ⚠ 술어는 컬럼마다 새로 만든다 — 생성된 SQL 을 정규식으로 고쳐 쓰면
@@ -178,7 +178,7 @@ async function hiddenSets(viewer: Viewer): Promise<Array<{ kind: ScopeKind; key:
   //  후손을 안 넣으면 task 행의 list_id 가 NULL 이라 그대로 열린다 — v1 에서 실제로 그랬던 결함이다.
   const projRows = await itemsPool.query(`
     WITH RECURSIVE hidden AS (
-      SELECT hp.id FROM project hp WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft)
+      SELECT hp.id FROM project hp WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft OR hp.invite_only)
          AND NOT (${projectVisPredicate("hp.list_id", "hp.id", pv)})
       UNION ALL
       SELECT c.id FROM project c JOIN hidden h ON c.parent_id = h.id

@@ -11,7 +11,9 @@
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
 import { api, busy, el, personFace, toast } from '../core.js';
-import { DRAFT_LABEL, DRAFT_TIP, isDraftProj } from '../lib/proj-draft.js';
+import { DRAFT_LABEL, isDraftProj } from '../lib/proj-draft.js';
+import { draftTipFor } from '../lib/proj-access.js';   // #5598 초대제인 초안은 «공개됩니다» 라고 말하지 않는다
+import { projAccessTag } from './access-ui.js';        // #5598 «누가 보나» 표시
 import { trashProjectFlow } from '../session-actions.js';   // #3778 — 프로젝트 삭제 = 휴지통으로(어느 화면이든 같은 길)
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import {
@@ -500,10 +502,13 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const subcountEl = canExpand ? el('span', { class: 'pjv-trow-subcount pjv-subcount-ico clickable', role: 'button', tabindex: '0', title: nTasks + '개 태스크 — 클릭하여 펼치기' },
     pjvSubtaskIcon(), el('span', { text: String(nTasks) })) : null;
   //  #5522 초안 표시 — 묶지 않는 표 · 상태 아닌 묶음에서도 초안이 한눈에 갈리게. 「초안」 묶음 안에서는 머리가 이미 말하므로 숨긴다(CSS).
-  const draftTag = pjvIsDraft(p) ? el('span', { class: 'pj-draft-tag', title: DRAFT_TIP, text: DRAFT_LABEL }) : null;
+  const draftTag = pjvIsDraft(p) ? el('span', { class: 'pj-draft-tag', title: draftTipFor(p), text: DRAFT_LABEL }) : null;
+  //  #5598 «누가 보나» — 닫힌 프로젝트는 자물쇠와 «나만» · «N명과 공유», 초대제 워크스페이스의 열린 프로젝트는 지구본. 이름 바로 뒤에 선다
+  //   (이름을 읽는 눈이 그대로 읽게 — 멀리 떨어진 칸에 두면 «이게 공유되고 있나» 를 찾아야 한다).
+  const accessTag = projAccessTag(p, { compact: true });
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
     select ? null : pjvRowCheck('project', p, { reload }),
-    caret, lead, title, draftTag,
+    caret, lead, title, accessTag, draftTag,
     subcountEl,
     ptagsEl,
     select ? null : pjvRowActions([

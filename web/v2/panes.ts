@@ -63,6 +63,7 @@ import type { TlOut } from '../timeline.js';
 import { isAbs, pathOpenPlans, pickTailHit, slash, type PathOpenPlan } from '../lib/path-open.js';
 import { type Sess, type V2Data } from './views.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
+import { openProjectSharePopover, projAccessTag, setAccessConfig } from '../projects/access-ui.js';   // #5598 문패의 «누가 보나» 꼬리표 · 프로젝트 [공유] 창
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
 import { appGlyphName, glyphAt } from '../lib/icon-paths.js';
 import { applyHeadH, headGrip, savedHeadH } from './head-grip.js';   // #5319 — 머리 줄 높이(세션 큰 머리 · 곁칸 독 줄이 같이 읽는 --pn-bighead-h)   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
@@ -1891,7 +1892,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         el('div', { class: 'pn-eyebrow' },
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }))),
+          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }),
+          //  #5598 «누가 보나» — 좌표 · 상태 다음 꼬리표. 일하는 화면에서 «이 프로젝트는 나만 본다» 가 늘 보여야
+          //   적어 둔 것이 부지불식간에 공유된다는 불안이 없다. 누르면 프로젝트 [공유] 창(초대 · 공개 범위).
+          loose ? null : doorAccess(p))),
       el('div', { class: 'pn-door-r' },
         // ⭐ #3778 — 얼굴 줄과 [공유] 는 여기 없다. **세션의 머리줄**(session-chat.ts sc-head)로 내려갔다.
         //  이 줄의 왼쪽은 프로젝트 이름인데 그 둘만 세션에 작용해서, 한 줄이 «프로젝트 → 세션 → 프로젝트» 로
@@ -1911,6 +1915,21 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         swap ? swap.button() : null,
         el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('sessNew', 'pn-i sm'), el('span', { text: '새 세션' })),   // #4233 — 새 세션 = 말풍선과 더하기
         sideTg));
+  }
+
+  // ── 문패의 «누가 보나» 꼬리표(#5598) ────────────────────────────────────────
+  //  판이 든 사본(detail.project)에는 팀원과 초대제 표시가 있다 — 그것으로 그리고, [공유] 창이 바꾸면 그 사본을 고쳐 다시 그린다.
+  //  사본이 없으면(상세를 못 읽은 판) 그리지 않는다 — 모르는 것을 «나만» 이라고 말하지 않는다.
+  function doorAccess(p: any): HTMLElement | null {
+    if (!detail || !detail.project) return null;
+    setAccessConfig(detail.access);
+    const tag = projAccessTag(detail.project);
+    if (!tag) return null;
+    //  설명은 꼬리표가 든다(올렸을 때 명부로 새로 적는다 — access-ui freshTip). 단추에는 이름표만 단다.
+    const btn = el('button', { class: 'pn-door-acc', type: 'button', 'aria-label': (tag.getAttribute('aria-label') || '공개 범위') + ' — 프로젝트 공유 창 열기', 'aria-haspopup': 'dialog' }, tag) as HTMLButtonElement;
+    btn.onclick = () => openProjectSharePopover(btn, detail.project, () => { paintDoor(); opts.onProjectChanged?.(); });
+    void p;
+    return btn;
   }
 
   // ── 문패 제목 = **프로젝트 전체 화면으로 가는 문**(원준 2026-08-26) ─────────────────
