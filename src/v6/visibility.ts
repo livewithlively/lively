@@ -21,7 +21,7 @@ import { itemsPool } from "../db/client.js";
 import { axisOn } from "./visibility-axes.js";
 import { q } from "../db/client.js";
 import { readScopeFor, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 앱 맥락 범위
-import { ensureInviteOnlyColumn, inviteOnlySql } from "./project-invite-column.js";   // #5598 롤 창 — 칸이 아직 없는 DB
+import { ensureInviteOnlyColumn, inviteOnlySql, onInviteOnlyColumnAppeared } from "./project-invite-column.js";   // #5598 롤 창 — 칸이 아직 없는 DB
 
 // viewer 규약: 문자열=그 멤버로 판정 / null=특권(내부 시스템 경로·긴급열람, 필터 없음).
 //  ⚠ undefined 를 특권으로 쓰지 않는다 — '깜빡하고 안 넘김'과 '의도적 특권'이 구분돼야 한다(호출부에서 명시).
@@ -341,6 +341,8 @@ export async function inviteOnlyProjectIds(): Promise<Set<number>> {
 
 /** grant·공개범위가 바뀌면 즉시 반영되도록 캐시를 버린다(설정 변경 경로에서 호출). */
 export function invalidateVisibilityCache(): void { hiddenCache.clear(); }
+//  #5598 롤 창 — 초대제 칸이 «없다 → 있다» 로 바뀌면 그동안 뽑아 둔 «숨은 프로젝트» 집합(초대제가 빠져 있다)을 버린다.
+onInviteOnlyColumnAppeared(invalidateVisibilityCache);
 
 /** 지식 1건이 이 뷰어에게 보이나 — 직접 grant 또는 컨테이너(리스트) 참조 grant. 앱 토큰 요청이면 그 앱의 맥락 범위 안이어야 한다(#5100). */
 export async function canSeeKnowledge(name: string, viewer: Viewer): Promise<boolean> {

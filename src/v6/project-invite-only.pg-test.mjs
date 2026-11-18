@@ -51,7 +51,8 @@
 //       수정 · 태스크 · 휴지통 개수 · 축 끄기 수 · 세션 초대 맞추기가 **오류 없이** 돈다(초대제가 없던 때와 같은 답)
 //   W2  그 사이에도 초안은 닫혀 있다(초안 술어는 그대로다) · 화면에 주는 enforced 는 false(«나만» 이라고 말하지 않는다)
 //   W3  그 사이 공개 범위 바꾸기는 거절(ProjectAccessUnavailableError) — 조용히 넘어가지 않는다
-//   W4  ★칸이 생기면 재기동 없이(다시 재는 간격 뒤) 스스로 켜진다 — 닫혀 있던 프로젝트가 다시 닫힌다
+//   W4  ★칸이 생기면 재기동 없이(다시 재는 간격 뒤) 스스로 켜진다 — 닫혀 있던 프로젝트가 다시 닫힌다 · 켜지는 순간 보관해 둔 «숨은 프로젝트» 집합을 버린다
+//   W5  ★«없다» 로 기억한 채 재는 조회만 실패하면 «없다» 를 붙들지 않는다(있다고 본다 — 닫힌 프로젝트가 조용히 새지 않는다)
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
@@ -517,11 +518,35 @@ try {
     }
     //  칸이 돌아왔다(= 마이그레이션이 끝났다). 잰 값을 버리지 않는다 — 다시 재는 간격이 지나면 스스로 켜져야 한다.
     chk("W4 (전제) 방금은 아직 «없다» 로 기억한다(간격 안에서는 다시 재지 않는다)", col.inviteOnlyColumnExists() === false);
+    //  «없다» 로 재던 동안 뽑은 «숨은 프로젝트» 집합을 보관에 올려 둔다(15초 보관) — 닫혀 있던 프로젝트가 빠져 있다.
+    chk("W4 (전제) 창 안에서 뽑은 숨은 프로젝트 집합에는 닫혀 있던 프로젝트가 없다", !(await vis.hiddenProjects(B)).ids.has(closed));
     await new Promise((r) => setTimeout(r, 3_300));
     chk("W4b ★간격이 지나면 스스로 «있다» 로 잰다(재기동 없이)", (await col.ensureInviteOnlyColumn()) === true);
+    chk("W4b2 ★켜지는 순간 보관해 둔 숨은 프로젝트 집합을 버린다(보관 시간만큼 더 새지 않는다)", (await vis.hiddenProjects(B)).ids.has(closed));
     fresh();
     chk("W4c ★닫혀 있던 초대제 프로젝트가 다시 닫힌다", (await rowOf(closed)).invite_only === true && !(await vis.canSeeProjectRow(closed, B)) && !(await inList(B, closed)));
     chk("W4d 켜진 뒤 만든 프로젝트는 다시 표시를 단다 · enforced 도 true", (await rowOf(await mk("W 켜진 뒤 만든 것"))).invite_only === true && (await access.projectAccessInfo()).enforced === true);
+    //  W5 — «없다» 로 기억한 채 **재는 조회만** 실패하면: «없다» 를 붙들지 않고 모르는 상태(= 있다고 본다)로 돌아간다.
+    //   붙들면 그 사이 생긴 칸을 영영 없는 것으로 읽어 닫힌 프로젝트가 전원에게 보인다.
+    await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only TO invite_only_rollwindow`);
+    let realQuery = null;
+    try {
+      col.resetInviteOnlyColumnProbe();
+      chk("W5 (전제) 칸이 없다고 잰다", (await col.ensureInviteOnlyColumn()) === false);
+      await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only_rollwindow TO invite_only`);
+      realQuery = itemsPool.query.bind(itemsPool);
+      itemsPool.query = (sql, ...rest) => (typeof sql === "string" && sql.includes("pg_attribute")
+        ? Promise.reject(new Error("재는 조회 실패(시험)")) : realQuery(sql, ...rest));
+      await new Promise((r) => setTimeout(r, 3_300));
+      const again = await col.ensureInviteOnlyColumn();
+      chk("W5b ★재는 조회가 실패하면 «없다» 를 붙들지 않는다(있다고 본다 — 조용히 새지 않는다)", again === true && col.inviteOnlyColumnExists() === true);
+      fresh();
+      chk("W5c 그래서 닫혀 있던 프로젝트는 닫힌 채다", !(await vis.canSeeProjectRow(closed, B)));
+    } finally {
+      if (realQuery) itemsPool.query = realQuery;
+      await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only_rollwindow TO invite_only`).catch(() => undefined);
+      col.resetInviteOnlyColumnProbe();
+    }
   }
 } catch (e) {
   bad("예외", e?.stack || String(e));

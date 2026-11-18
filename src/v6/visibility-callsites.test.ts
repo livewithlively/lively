@@ -98,6 +98,30 @@ test("★ 세션 초대의 팀원 맞추기는 비공개 술어와 같은 조건
 // ★ #5598 롤 창 — 매니지드 롤은 새 코드가 서빙을 시작한 뒤에야 공용 DB 에 새 칸을 만든다. project.invite_only 를 SQL 에 **글자로**
 //  적은 자리가 가드(project-invite-column.ts) 밖에 있으면, 그 몇 분 동안 그 조회가 «없는 칸» 으로 실패한다.
 //  글자로 적어도 되는 자리는 셋뿐이다: 칸을 만드는 스키마 · 가드 자신 · 가드가 «있다» 를 확인한 뒤에만 도는 쓰기/읽기.
+//  ⚠ 아래 두 시험은 겹으로 선다. 줄 단위 검사(둘째)는 여러 줄 SQL 의 이어진 줄(`  OR p.invite_only)`)을 놓친다(격리 리뷰).
+//   그래서 첫째가 **파일 단위**로 막는다: `invite_only` 라는 글자가 나올 수 있는 파일을 못 박는다. 새 파일이 이 칸을 읽으려면
+//   여기에 까닭과 함께 더해야 하고, 그때 «가드를 지났나» 를 사람이 본다.
+const INVITE_ONLY_FILES = new Set([
+  "src/v6/schema/project.ts",            // 칸을 만든다
+  "src/v6/project-invite-column.ts",     // 가드 자신
+  "src/v6/project-store.ts",             // 행 읽기 묶음(projectCols) · 생성 · 공개 범위 바꾸기 — 전부 가드를 잰 뒤
+  "src/v6/visibility.ts",                // inviteOnlyProjectIds — ensure 가 참일 때만
+  "src/v6/trash-store.ts",               // 삭제 스냅샷(JSON)의 열쇠 · 줄 재료 — 칸 참조는 inviteOnlySql
+  "src/v6/project-invite.ts",            // 행 객체의 속성(SQL 아님)
+  "src/v6/project-access.ts",            // 주석(칸 이름을 설명)
+  "src/v6/project-draft.ts",             // 주석
+  "src/capabilities/trash.ts",           // 스냅샷 객체의 속성
+  "src/capabilities/projects-v6.ts",     // 도구 설명 · createProject 인자 이름
+  "src/sessions/session-state.ts",       // 42703 을 잡아 초안만 보는 조건으로 다시 돌린다
+  "src/index.ts",                        // 주석(부팅 때 가드를 한 번 잰다)
+]);
+test("★ invite_only 라는 글자가 나오는 파일은 못 박은 목록뿐이다(주석 포함)", () => {
+  const found = walk("src").filter((p) => /\binvite_only\b/.test(readFileSync(p, "utf8"))).map((p) => p.replace(/\\/g, "/"))
+    .filter((p) => !p.endsWith(".pg-test.mjs")).sort();
+  const extra = found.filter((p) => !INVITE_ONLY_FILES.has(p));
+  assert.deepEqual(extra, [], "새 파일이 project.invite_only 를 읽으면 롤 창(칸이 아직 없는 DB)에서 실패할 수 있다 — inviteOnlySql · ensureInviteOnlyColumn 을 쓰고 목록에 더한다");
+});
+
 test("★ invite_only 를 SQL 에 글자로 적는 자리는 가드를 지난 곳뿐이다", () => {
   const allowed: Record<string, RegExp[]> = {
     "src/v6/schema/project.ts": [/ADD COLUMN IF NOT EXISTS invite_only/],

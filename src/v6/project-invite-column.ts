@@ -36,16 +36,29 @@ export function inviteOnlySql(alias: string): string {
   return inviteOnlyColumnExists() ? `${alias}.invite_only` : "false";
 }
 
+const onAppear: Array<() => void> = [];
+/**
+ * 칸이 «없다 → 있다» 로 바뀌는 순간 부를 일을 건다. 공개범위 캐시(v6/visibility.ts 의 «숨은 프로젝트» 15초 보관)가 건다 —
+ *  «없다» 로 재던 동안 뽑아 둔 집합에는 초대제 프로젝트가 빠져 있어서, 칸이 생긴 직후 다른 프로세스에서 닫은 프로젝트의 세션 ·
+ *  파일이 이 프로세스에서 보관 시간만큼 더 보인다. 이 모듈은 visibility 보다 아래라 직접 부르지 않고 걸어 두게 한다.
+ */
+export function onInviteOnlyColumnAppeared(fn: () => void): void { onAppear.push(fn); }
+
 async function probe(): Promise<boolean> {
+  const was = known;
   try {
     // to_regclass 는 search_path 를 따른다(테이블을 스키마 이름 없이 읽는 다른 조회와 같은 표를 본다).
     const r = await itemsPool.query(
       `SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('project') AND attname = 'invite_only' AND NOT attisdropped`);
     known = r.rows.length > 0;
   } catch {
-    //  못 쟀다 — 값을 바꾸지 않는다. 처음부터 못 쟀으면 null(= 있다고 본다)로 남는다.
+    //  못 쟀다 — **«없다» 를 붙들지 않는다.** «없다» 로 기억한 채 재는 조회만 계속 실패하면(시간 초과 · 풀 고갈), 그 사이 생긴 칸을
+    //   영영 없는 것으로 읽어 닫힌 프로젝트가 전원에게 보인다. 모르는 상태(null = 있다고 본다)로 되돌린다 — 정말 없으면 조회가
+    //   «없는 칸» 으로 시끄럽게 실패하고(조용히 새는 것보다 낫다) 다음 재기에서 다시 «없다» 가 된다.
+    if (known === false) known = null;
   }
   lastProbe = Date.now();
+  if (was === false && known !== false) for (const fn of onAppear) { try { fn(); } catch { /* 캐시 버리기 실패는 판정을 막지 않는다 */ } }
   return known !== false;
 }
 
