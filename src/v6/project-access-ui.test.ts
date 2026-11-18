@@ -250,6 +250,20 @@ test("W4 배선 — 관리탭이 새 프로젝트 공개 방식을 그린다", (
   assert.match(ax, /access\.enforced \? null :/, "축이 꺼져 있으면 그 사실을 말한다");
 });
 
+test("W6 배선 — 관리탭의 «기존 프로젝트도 초대제로 바꾸기»: 미리보기 → 확인 → 실행", () => {
+  const ax = read("web/visibility-axes.ts");
+  assert.match(ax, /api\('\/api\/ui\/v6\/project-access\/existing'\)/, "몇 건이 닫히는지 먼저 받는다");
+  assert.match(ax, /access\.enforced \? existingRow\(existing, reload\) : null/, "축이 꺼진 워크스페이스에는 단추를 세우지 않는다(닫아도 가려지지 않는다)");
+  assert.match(ax, /if \(ex\.open <= 0\) \{/, "닫을 것이 없으면 단추 대신 그 사실을 말한다");
+  assert.match(ax, /btn\.onclick = \(\) => confirmCloseExisting\(ex, reload\);/, "단추는 곧바로 실행하지 않고 확인 창을 연다");
+  assert.match(ax, /method: 'POST', body: JSON\.stringify\(\{ confirm: true \}\)/, "실행은 확인 창의 단추에서만 · confirm 을 싣는다");
+  assert.match(ax, /되돌리는 단추는 없습니다/);
+  //  서버도 같은 순서를 강제한다 — 관리자만 · confirm 없으면 400.
+  const cap = read("src/capabilities/vis-axes.ts");
+  assert.match(cap, /name: "project_access_existing_close",[\s\S]{0,900}scope: "admin"/);
+  assert.match(cap, /if \(!input\.confirm\) \{[\s\S]{0,200}throw new HttpError\(400,/);
+});
+
 test("W5 배선 — 자물쇠 그림 · 새 프로젝트 창의 공개 범위", () => {
   assert.match(read("web/lib/icon-paths.ts"), /\n  lock: '/);
   const form = read("web/projects/project-form.ts");
