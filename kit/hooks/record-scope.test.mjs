@@ -306,7 +306,7 @@ function fakeServer(state) {
 // ══ 알림 · 늦은 주입 표식 ════════════════════════════════════════════════════
 //  등록 명령의 꼴은 기본 인자가 이 프로세스의 플랫폼·node 를 따른다(윈도 CI 에선 node 직결형) — 종전 명령을 보는 행은 win: false 로 입력을 고정한다.
 check("N1 클로드 알림은 /lively-connect 를 가리킨다", rs.outsideNotice({ dir: "/p", harness: "claude" }).user.includes("/lively-connect"));
-check("N2 코덱스 알림은 /prompts:lively-connect", rs.outsideNotice({ dir: "/p", harness: "codex" }).user.includes("/prompts:lively-connect"));
+check("N2 코덱스 알림은 $lively-connect(스킬 — 0.170 에 /prompts: 가 없다)", rs.outsideNotice({ dir: "/p", harness: "codex" }).user.includes("$lively-connect") && !rs.outsideNotice({ dir: "/p", harness: "codex" }).user.includes("/prompts:"));
 check("N3 그 밖의 하네스는 CLI(lively work-root add)", rs.outsideNotice({ dir: "/p", harness: "grok", win: false }).user.includes("lively work-root add"));
 {
   const flags = mkdtempSync(join(tmpdir(), "rscope-flags-"));
@@ -384,8 +384,58 @@ if (process.platform !== "win32") {
   check("W6 윈도라도 node 경로를 모르면 종전 명령 · & 안내 없음", b.ai.includes(`\`lively work-root add '${dir}'\``) && !b.ai.includes("PowerShell 이면"), b.ai);
 }
 
+// ══ 켜짐 알림(insideNotice) — 이유 × 하네스 엣지 표 ═══════════════════════════════
+//  사양: 켜진 세션은 «켜져 있다» 와 «끄는 법» 을 말한다. 끄는 법은 이유마다 다르다 — 목록으로 끌 수 있으면(어디서나 · 작업 폴더)
+//  그 하네스의 «여기 끄기» 를, 못 끄면(프로젝트 폴더 · 설정 미수신) 라이블리 없이 다시 여는 명령을 가리킨다. 라이블리가 띄운 세션은 알리지 않는다.
+{
+  const base = { win: false, nodeExe: "/usr/bin/node", lively: "/h/.lively" };
+  const a = rs.insideNotice({ ...base, dir: "/p/x", reason: "anywhere", harness: "claude" });
+  check("ON1 «어디서나» 클로드 — 사람 한 줄이 켜짐과 /lively-disconnect 를 말한다", a.user.includes("켜져 있습니다") && a.user.includes("/lively-disconnect"), a.user);
+  check("ON1b AI 안내는 이 폴더를 끄는 명령을 그대로 준다", a.ai.includes("`lively work-root remove '/p/x'`"), a.ai);
+  check("ON1c 요청 없이 끄지 말라고 말한다", a.ai.includes("요청하지 않았는데 끄지 마라"));
+  check("ON2 코덱스는 $lively-disconnect(스킬)", rs.insideNotice({ ...base, dir: "/p/x", reason: "anywhere", harness: "codex" }).user.includes("$lively-disconnect"));
+  check("ON3 그 밖의 하네스는 CLI(lively work-root remove)", rs.insideNotice({ ...base, dir: "/p/x", reason: "anywhere", harness: "grok" }).user.includes("`lively work-root remove`"));
+  const w = rs.insideNotice({ ...base, dir: "/w/repo", reason: "work_root", root: "/w/repo", harness: "claude" });
+  check("ON4 등록한 작업 폴더 그 자리 — 그 폴더를 빼는 명령 · «그 아래 전부» 경고 없음", w.ai.includes("`lively work-root remove '/w/repo'`") && !w.ai.includes("그 아래 전부"), w.ai);
+  const u = rs.insideNotice({ ...base, dir: "/w/repo/api", reason: "work_root", root: "/w", harness: "claude" });
+  check("ON5b 작업 폴더의 아래 — 세션 폴더를 따로 짚는다(«세션을 연 폴더» 가 품은 작업 폴더로 읽히지 않게)", u.ai.includes("이 세션을 연 폴더(`/w/repo/api`)") && u.ai.includes("이 폴더만은 못 끄고"), u.ai);
+  check("ON5 작업 폴더의 아래 — 품은 작업 폴더를 빼는 명령 + «그 아래 전부가 꺼진다» 를 먼저 말하라", u.ai.includes("`lively work-root remove '/w'`") && !u.ai.includes("remove '/w/repo/api'") && u.ai.includes("그 아래 전부가 꺼진다"), u.ai);
+  const p = rs.insideNotice({ ...base, dir: "/h/lively/projects/42/docs", reason: "project", root: "/h/lively/projects/42", harness: "claude" });
+  check("ON6 프로젝트 폴더 — 목록으로 못 끄므로 /lively-disconnect 를 가리키지 않고 lively run --incognito 를 가리킨다",
+    p.user.includes("켜져 있습니다") && !p.user.includes("lively-disconnect") && p.user.includes("lively run --incognito") && !p.ai.includes("work-root remove") && p.ai.includes("/h/lively/projects/42"), JSON.stringify(p));
+  check("ON6b 코덱스 프로젝트 폴더 — 다시 여는 명령에 하네스를 싣는다", rs.insideNotice({ ...base, dir: "/x", reason: "project", root: "/x", harness: "codex" }).user.includes("lively run --incognito --harness codex"));
+  const n = rs.insideNotice({ ...base, dir: "/x", reason: "unsynced", harness: "claude" });
+  check("ON7 설정 미수신(종전 동작) — 목록이 없으니 lively run --incognito", n.user.includes("lively run --incognito") && !n.user.includes("lively-disconnect") && !n.ai.includes("work-root remove"), JSON.stringify(n));
+  check("ON8 라이블리가 띄운 세션 · 꺼진 세션 · 모르는 이유는 알리지 않는다(null)",
+    ["spawned", "outside", "excluded", "error", ""].every((r) => rs.insideNotice({ ...base, dir: "/x", reason: r }) === null));
+  const g = rs.insideNotice({ ...base, dir: "/p/x", reason: "anywhere", harness: "claude", plugin: true });
+  check("ON9 플러그인만 깐 자리 — 커맨드·CLI 대신 웹 화면", g.user.includes("내 컴퓨터별 연결") && !g.user.includes("/lively-disconnect") && !g.ai.includes("work-root remove"), JSON.stringify(g));
+  const gp = rs.insideNotice({ ...base, dir: "/x", reason: "project", root: "/x", harness: "claude", plugin: true });
+  check("ON9b 플러그인 + 프로젝트 폴더 — 없는 명령(lively run)을 가리키지 않는다", gp.user.includes("켜져 있습니다") && !gp.user.includes("lively run") && !gp.ai.includes("lively run"), JSON.stringify(gp));
+  const evil = "/p/a`rm -rf`$(x)\"q";
+  const e = rs.insideNotice({ ...base, dir: evil, reason: "anywhere", harness: "claude" });
+  check("ON10 따옴표·백틱·달러가 든 폴더 이름은 안내에 넣지 않는다(그 폴더에서 실행하는 꼴)", !e.ai.includes(evil) && e.ai.includes("이 폴더에서 `lively work-root remove`"), e.ai);
+  const NODE = "C:\\Users\\me\\.lively\\runtime\\current\\node.exe";
+  const d = rs.insideNotice({ dir: "C:\\work\\repo", reason: "anywhere", harness: "grok", win: true, nodeExe: NODE, lively: "C:\\Users\\me\\.lively" });
+  check("ON11 배치 실행이 막힌 윈도 — node 로 바로 부르는 끄기 명령 + 셸 안내",
+    d.ai.includes(`& "C:/Users/me/.lively/runtime/current/node.exe" "C:/Users/me/.lively/lib/lively.mjs" work-root remove 'C:\\work\\repo'`) && d.ai.includes("PowerShell 이면"), d.ai);
+  //  AI 안내는 회사 맥락 앞에 붙는다 — 하네스가 긴 훅 출력을 앞 2,000자 미리보기로 자르므로(#4503) 맥락을 밀어내지 않게 짧아야 한다.
+  {
+    //  심링크로 들어온 작업 폴더 그 자리 — 판정(matchWorkRoot)이 실제 경로로 같은 폴더로 보니 «그 아래 전부» 를 붙이지 않는다.
+    const sb = sandbox(); const realRoot = sb.mk("real-work"); const link = join(sb.root, "link-work");
+    let linked = true; try { symlinkSync(realRoot, link, "dir"); } catch { linked = false; }
+    const s = linked ? rs.insideNotice({ ...base, dir: link, reason: "work_root", root: realRoot, harness: "claude" }) : null;
+    check("ON4b 심링크로 연 작업 폴더 그 자리는 같은 폴더다(«그 아래 전부» 경고 없음)", !linked || (!s.ai.includes("그 아래 전부") && s.ai.includes(`remove '${link}'`)), s?.ai);
+    const curly = rs.insideNotice({ ...base, dir: "/p/a\u2019b", reason: "anywhere", harness: "claude" });
+    check("ON10b 곡선 따옴표가 든 폴더 이름도 안내에 넣지 않는다(PowerShell 은 따옴표로 읽는다)", !curly.ai.includes("\u2019") && curly.ai.includes("이 폴더에서 `lively work-root remove`"), curly.ai);
+  }
+  check("ON12 AI 안내는 짧다(이유마다 600자 안)", [a, w, u, p, n, g].every((x) => x.ai.length <= 600), JSON.stringify([a, w, u, p, n, g].map((x) => x.ai.length)));
+  check("ON13 끄기 명령은 등록 명령과 같은 꼴(동사만 다르다)",
+    rs.workRootRemoveCommand({ ...base, dir: "/a b" }) === rs.workRootAddCommand({ ...base, dir: "/a b" }).replace("work-root add", "work-root remove"));
+}
+
 // ══ 가짜 게이트웨이(127.0.0.1) — 받은 요청을 센다 ══════════════════════════════
-async function withGateway(fn) {
+async function withGateway(fn, reply = { hooks: [], context: "LATE-CTX" }) {
   const hits = [], reqs = [];
   const srv = createServer((req, res) => {
     let body = ""; req.on("data", (c) => { body += c; });
@@ -398,7 +448,7 @@ async function withGateway(fn) {
         res.end(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name: "probe_tool", inputSchema: { type: "object" } }] } }));
         return;
       }
-      res.end(JSON.stringify({ hooks: [], context: "LATE-CTX" }));
+      res.end(JSON.stringify(reply));
     });
   });
   // ⚠ 포트를 직접 고른다 — 테스트용 HostEffects(sandbox)는 루프백 포트 32768 이상만 연다(host-effects.mjs
@@ -445,7 +495,7 @@ const jsonOf = (s) => { try { return JSON.parse(String(s).trim()); } catch { ret
   setScope(sb.lively, "work_folders", [work]);
   writeFileSync(join(sb.lively, "context.md"), "# 회사 맥락 STATIC-MARK\n");
   const stdout = runPreload(sb, inside);
-  check("H5 범위 안이면 종전처럼 회사 맥락을 넣고 알림은 없다", stdout.includes("STATIC-MARK") && !jsonOf(stdout)?.systemMessage, stdout.slice(0, 200));
+  check("H5 범위 안이어도 토큰이 없으면(연결 아님) 종전처럼 회사 맥락만 넣고 알림은 없다", stdout.includes("STATIC-MARK") && !jsonOf(stdout)?.systemMessage, stdout.slice(0, 200));
 }
 {
   const sb = sandbox(); const out = sb.mk("personal");
@@ -597,6 +647,72 @@ await withGateway(async (gw, hits) => {
   check("H18 설치기의 미리 받기(--preload)는 작업 폴더 밖에서 깔아도 받는다", preloadHits >= 1, JSON.stringify(hits));
 });
 
+// ══ 훅 실측 3 — 켜짐 알림(토큰 있는 범위 안 세션) ══════════════════════════════════
+//  단언은 출력 JSON 의 칸으로: systemMessage(사람에게 한 줄) · hookSpecificOutput.additionalContext(AI 안내 + 회사 맥락).
+const startIn = (sb, dir, gw, { args = [], env = {}, source = "startup" } = {}) =>
+  runHook("session-preload.mjs", args, childEnv(sb, dir, { LIVELY_HOME: "", LIVELY_TOKEN: "tk", LIVELY_GATEWAY_URL: gw, ...env }),
+    { session_id: "s-on", cwd: dir, hook_event_name: "SessionStart", source });
+const ctxOf = (j) => String(j?.hookSpecificOutput?.additionalContext || "");
+await withGateway(async (gw) => {
+  const mkIn = () => { const sb = sandbox(); const work = sb.mk("work"); const dir = sb.mk("work", "repo"); setScope(sb.lively, "work_folders", [work]); return { sb, work, dir }; };
+  {
+    const { sb, work, dir } = mkIn();
+    const out = await startIn(sb, dir, gw); const j = jsonOf(out);
+    check("J1 범위 안 시작 훅은 사람에게 한 줄로 켜짐과 끄는 법을 남긴다", typeof j?.systemMessage === "string" && j.systemMessage.includes("켜져 있습니다") && j.systemMessage.includes("/lively-disconnect"), out.slice(0, 300));
+    check("J1b AI 안내가 회사 맥락 앞에 온다(둘 다 실린다)", ctxOf(j).startsWith("## 라이블리 켜짐") && ctxOf(j).includes("LATE-CTX") && ctxOf(j).indexOf("LATE-CTX") > ctxOf(j).indexOf("라이블리 켜짐"), ctxOf(j).slice(0, 300));
+    check("J1c AI 안내는 켜진 이유(품은 작업 폴더)를 짚는다", ctxOf(j).includes(work), ctxOf(j).slice(0, 400));
+  }
+  {
+    const { sb, dir } = mkIn();
+    const j = jsonOf(await startIn(sb, dir, gw, { args: ["--harness", "codex"] }));
+    check("J2 코덱스 시작 훅은 $lively-disconnect 를 가리킨다", String(j?.systemMessage || "").includes("$lively-disconnect") && ctxOf(j).includes("LATE-CTX"), JSON.stringify(j).slice(0, 300));
+  }
+  {
+    const { sb, dir } = mkIn();
+    const j = jsonOf(await startIn(sb, dir, gw, { source: "compact" }));
+    check("J3 압축 뒤 다시 도는 시작 훅은 사람에게 한 줄을 되풀이하지 않는다(AI 안내는 다시 싣는다)", !!j && !("systemMessage" in j) && ctxOf(j).startsWith("## 라이블리 켜짐"), JSON.stringify(j).slice(0, 300));
+  }
+  {
+    const { sb, dir } = mkIn();
+    const out = await startIn(sb, dir, gw, { env: { LIVELY_SESSION_ID: "box-1" } });
+    check("J4 라이블리가 띄운 세션(웹·노드)은 종전 출력 그대로다(알림 없음 · raw)", out.includes("LATE-CTX") && !out.includes("켜져 있습니다") && !out.includes("라이블리 켜짐") && jsonOf(out) === null, out.slice(0, 300));
+  }
+  {
+    const { sb, dir } = mkIn();
+    const out = await startIn(sb, dir, gw, { env: { LIVELY_RUN: "1" } });
+    check("J5 lively run 으로 켠 세션도 알리지 않는다", out.includes("LATE-CTX") && !out.includes("켜져 있습니다") && !out.includes("라이블리 켜짐"), out.slice(0, 300));
+  }
+  {
+    const { sb, dir } = mkIn();
+    const out = await startIn(sb, dir, gw, { args: ["--harness", "grok"] });
+    check("J6 훅 출력을 버리는 하네스(grok)는 종전 출력 그대로다", !out.includes("켜져 있습니다") && !out.includes("라이블리 켜짐") && jsonOf(out) === null, out.slice(0, 300));
+  }
+  {
+    const sb = sandbox(); const dir = sb.mk("anywhere-x"); setScope(sb.lively, "anywhere");
+    const j = jsonOf(await startIn(sb, dir, gw));
+    //  명령의 앞머리는 플랫폼마다 다르다(윈도는 node 로 바로 부르는 꼴) — 동사와 인자만 잰다.
+    check("J7 «어디서나» 방식 — 이 폴더를 끄는 명령을 AI 에게 준다", String(j?.systemMessage || "").includes("/lively-disconnect") && ctxOf(j).includes(`work-root remove '${dir}'`), JSON.stringify(j).slice(0, 400));
+  }
+  {
+    const sb = sandbox(); const proj = sb.mk("lively", "projects", "42");
+    mkdirSync(join(proj, ".lively"), { recursive: true }); writeFileSync(join(proj, ".lively", "project.json"), JSON.stringify({ project_id: 42 }));
+    setScope(sb.lively, "anywhere", [], undefined, { exclude_roots: [proj] });
+    const j = jsonOf(await startIn(sb, proj, gw));
+    check("J8 프로젝트 폴더(제외해도 켜지는 자리) — 안 듣는 스위치를 가리키지 않는다", String(j?.systemMessage || "").includes("run --incognito") && !String(j?.systemMessage || "").includes("lively-disconnect"), JSON.stringify(j).slice(0, 300));
+  }
+});
+await withGateway(async (gw) => {
+  const sb = sandbox(); const work = sb.mk("work"); setScope(sb.lively, "work_folders", [work]);
+  const c = ctxOf(jsonOf(await startIn(sb, work, gw, { env: { LIVELY_MODE: "readonly" } })));
+  check("J10 읽기전용 배너는 맨 앞을 지키고 켜짐 안내는 그 뒤 · 회사 맥락 앞이다",
+    c.startsWith("## ⚠ 읽기전용 세션") && c.indexOf("라이블리 켜짐") > 0 && c.indexOf("라이블리 켜짐") < c.indexOf("LATE-CTX"), c.slice(0, 200));
+});
+await withGateway(async (gw) => {
+  const sb = sandbox(); const work = sb.mk("work"); setScope(sb.lively, "work_folders", [work]);
+  const j = jsonOf(await startIn(sb, work, gw));
+  check("J9 세션 맥락 주입을 끈 조직 — 사람에게 한 줄은 남기고 AI 안내·맥락은 넣지 않는다", String(j?.systemMessage || "").includes("켜져 있습니다") && ctxOf(j) === "", JSON.stringify(j).slice(0, 300));
+}, { hooks: { session_preload: false }, context: "LATE-CTX" });
+
 // ══ 어댑터 — 세션 폴더를 훅에 LIVELY_SESSION_DIR 로 넘기나(스텁 훅이 받은 env 로 잰다) ════════
 function adapterSandbox() {
   const sb = sandbox(); const hooks = join(sb.lively, "hooks"); const cap = join(sb.root, "cap.log");
@@ -649,6 +765,28 @@ function inChild(sb, code) {
   check("I2a 클로드 커맨드 — frontmatter·미리 허용·자리표시 한 번", c.startsWith("---\n") && c.includes("allowed-tools: Bash(lively work-root add:*)") && once(c));
   check("I2b 코덱스 프롬프트 — frontmatter 없음(프롬프트로 새지 않게)·자리표시 한 번", !x.startsWith("---") && once(x));
   check("I2c 커서 커맨드 — 첫 줄이 제목", u.split("\n")[0] === r.cursor[0].text.split("\n")[0] && !u.startsWith("---") && u.split("\n")[0].includes("작업 폴더"));
+}
+{
+  //  코덱스 0.170 은 커스텀 프롬프트가 없고(`/prompts:…` = Unrecognized command) 스킬이 `$이름` 으로 불린다 — 스킬 폴더 꼴로 깐다.
+  const sb = sandbox();
+  const r = inChild(sb, `console.log(JSON.stringify(ui.connectCommandFiles({ format: "skill", shim: "/h/.lively/bin/lively", win: false })));`);
+  const d = r.find((f) => f.id === "lively-disconnect");
+  check("I2d 코덱스 스킬 — <id>/SKILL.md · name 이 폴더 이름과 같다 · 끄기 명령 · 표식",
+    d?.file === join("lively-disconnect", "SKILL.md") && d.text.startsWith('---\nname: "lively-disconnect"\ndescription: ') && !d.text.includes("$ARGUMENTS") && d.text.includes("work-root remove") && d.text.includes("lively-managed: record-scope"), JSON.stringify(d));
+  check("I2e 스킬 설명은 사람이 시켰을 때만 쓰라고 말한다(모델이 스스로 켜고 끄지 않게)", r.every((f) => /description: ".*사람이 요청했을 때만/.test(f.text)));
+}
+{
+  const sb = sandbox(); const dir = join(sb.root, "skills"); mkdirSync(join(dir, "lively-disconnect"), { recursive: true });
+  writeFileSync(join(dir, "lively-disconnect", "SKILL.md"), "내가 만든 스킬\n");
+  const r = inChild(sb, `
+    const { existsSync, readFileSync } = await import("node:fs");
+    const d = ${JSON.stringify(dir)};
+    ui.writeConnectCommands(d, "skill", "Codex");
+    const afterWrite = { connect: existsSync(d + "/lively-connect/SKILL.md"), user: readFileSync(d + "/lively-disconnect/SKILL.md", "utf8") };
+    un.removeConnectCommands(d, "Codex", { skill: true });
+    console.log(JSON.stringify({ afterWrite, afterRemove: { connectDir: existsSync(d + "/lively-connect"), user: existsSync(d + "/lively-disconnect/SKILL.md") } }));`);
+  check("I3c 스킬 설치 — 우리 스킬을 깔고 같은 이름의 사용자 스킬은 안 덮는다", r.afterWrite.connect && r.afterWrite.user === "내가 만든 스킬\n", JSON.stringify(r));
+  check("I3d 스킬 제거 — 우리 스킬은 폴더째 걷고 사용자 스킬은 남긴다", !r.afterRemove.connectDir && r.afterRemove.user, JSON.stringify(r));
 }
 {
   const sb = sandbox(); const dir = join(sb.root, "cmds"); mkdirSync(dir, { recursive: true });

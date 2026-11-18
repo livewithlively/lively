@@ -478,9 +478,9 @@ const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
 //  «어디서나» 방식의 제외 폴더면 같은 명령(work-root add)이 제외 목록에서 빼는 일을 한다 — 문구만 둘로 가른다.
 const outsideToolText = (reason = "outside") => (reason === "excluded"
   ? "이 폴더는 라이블리 제외 폴더라서 라이블리가 꺼져 있습니다. "
-    + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 켜세요(제외 목록에서 뺍니다) — 다음 메시지부터 연결됩니다.`
+    + `여기서 쓰려면 /lively-connect(코덱스는 $lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 켜세요(제외 목록에서 뺍니다) — 다음 메시지부터 연결됩니다.`
   : "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
-    + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`);
+    + `여기서 쓰려면 /lively-connect(코덱스는 $lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`);
 let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
 async function loadScopeModule() {
   if (scopeMod !== undefined) return scopeMod;

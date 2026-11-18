@@ -386,11 +386,19 @@ export async function changeScopeSettings({ lively, gw, token, send, machineId =
 //   받으면 옛 훅 폴더와 짝이 안 맞는다). 세 곳이 같은 값을 내는지 kit/cli/install-scope-notice.test.mjs 가 한 표로 잰다.
 const fwdSlash = (p) => String(p).replace(/\\/g, "/");
 /** 등록 명령 한 줄. dir 은 작은따옴표로 감싸 붙이고, 작은따옴표·제어문자가 든 이름이면 빼고 낸다(그 폴더에서 실행하는 꼴). */
-export function workRootAddCommand({ win = WIN, nodeExe = process.execPath, cliPath = join(livelyDirOf(), "lib", "lively.mjs"), dir = "" } = {}) {
-  const n = String(nodeExe || ""), d = String(dir || "");
-  const arg = d && !/['\u0000-\u001f\u007f]/.test(d) ? ` '${d}'` : "";
-  if (win && isAbsWinNodeExe(n)) return `& "${fwdSlash(n)}" "${fwdSlash(cliPath)}" work-root add${arg}`;
-  return `lively work-root add${arg}`;
+export function workRootAddCommand(opts = {}) { return cliLine(`work-root add${dirArg(opts.dir)}`, opts); }
+/** 끄기 명령 한 줄 — 등록 명령의 짝(같은 꼴 · 같은 따옴표 규칙). `/lively-disconnect` 가 부르는 것. */
+export function workRootRemoveCommand(opts = {}) { return cliLine(`work-root remove${dirArg(opts.dir)}`, opts); }
+/** 라이블리 없이 다시 여는 명령 한 줄 — 목록으로 끌 수 없는 자리(라이블리 프로젝트 폴더 등)에서 가리킨다. */
+export function runIncognitoCommand({ harness = "claude", ...opts } = {}) {
+  const h = String(harness || "claude").toLowerCase();
+  return cliLine(`run --incognito${h && h !== "claude" && /^[a-z]+$/.test(h) ? ` --harness ${h}` : ""}`, opts);
+}
+const dirArg = (dir) => { const d = String(dir || ""); return d && !/['\u0000-\u001f\u007f]/.test(d) ? ` '${d}'` : ""; };
+function cliLine(tail, { win = WIN, nodeExe = process.execPath, cliPath = join(livelyDirOf(), "lib", "lively.mjs") } = {}) {
+  const n = String(nodeExe || "");
+  if (win && isAbsWinNodeExe(n)) return `& "${fwdSlash(n)}" "${fwdSlash(cliPath)}" ${tail}`;
+  return `lively ${tail}`;
 }
 //  `& ` 는 PowerShell 의 호출 연산자라 Git Bash·cmd 에선 문법 오류다 — 하네스가 어느 셸로 돌릴지 몰라 둘 다 말한다.
 const PS_NOTE = "PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고";
@@ -402,20 +410,22 @@ export function workRootAddVia(opts = {}) {
 }
 
 // ── 범위 밖 알림 ─────────────────────────────────────────────────────────────
-/** 이 하네스에서 «여기 연결» 을 부르는 말 — 클로드 슬래시 커맨드 · 코덱스 커스텀 프롬프트 · 그 밖은 CLI(addCmd).
- *  플러그인만 깐 클로드(키트 없음)엔 커맨드도 CLI 도 없다 — 웹 화면을 가리킨다. */
+/** 이 하네스에서 «여기 연결» 을 부르는 말 — 클로드 슬래시 커맨드 · 코덱스 스킬 · 그 밖은 CLI(addCmd).
+ *  코덱스는 `$lively-connect`(스킬)다 — 0.170 에서 커스텀 프롬프트(`/prompts:…`)가 빠졌고 스킬은 옛 판에도 있다(2026-11-18 실측,
+ *  setup/user-install.mjs connectCommandFiles 머리말). 플러그인만 깐 클로드(키트 없음)엔 커맨드도 CLI 도 없다 — 웹 화면을 가리킨다. */
 export function connectHint(harness = "claude", { plugin = false, addCmd = workRootAddCommand() } = {}) {
   const h = String(harness || "claude").toLowerCase();
   if (plugin) return "웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 등록";
   if (h === "claude") return "/lively-connect";
-  if (h === "codex") return "/prompts:lively-connect";
+  if (h === "codex") return "$lively-connect";
   return `\`${addCmd}\``;
 }
 
 // 안내문에 그대로 넣어도 되는 폴더 이름인가 — 따옴표·백틱·달러·제어문자가 든 이름은 AI 가 읽는 지시문과
 //  셸 명령을 흐트러뜨릴 수 있어(압축을 푼 폴더처럼 이름을 남이 정한 경우) 넣지 않는다.
 //  역슬래시는 받는다(윈도 경로 구분자) — 명령은 작은따옴표로 감싸 bash·Git Bash·PowerShell 이 글자 그대로 받는다.
-const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$]+$/.test(d) && d.length <= MAX_ROOT_LEN;
+//  곡선 따옴표(U+2018~U+201F)도 넣지 않는다 — PowerShell 은 그것도 따옴표로 읽어 작은따옴표 감싸기가 풀린다.
+const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$\u2018-\u201f]+$/.test(d) && d.length <= MAX_ROOT_LEN;
 
 /** 범위 밖 세션 시작 알림 — 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext).
  *  reason·root 는 판정(decideRecordScope) 그대로 — excluded(«어디서나» 방식의 제외 폴더)면 무엇을 빼야 켜지는지(root)를 말한다.
@@ -457,6 +467,70 @@ export function outsideNotice({ dir = "", reason = "outside", root = "", harness
     "사람이 요청하지 않았는데 등록하지 마라.",
   ].join("\n");
   return { user, ai };
+}
+
+// ── 범위 안 알림(켜짐) ───────────────────────────────────────────────────────
+//  꺼짐 알림의 짝이다(상민님 2026-11-18): 라이블리가 켜진 세션도 시작할 때 «켜져 있다» 와 «끄는 법» 을 한 줄로 보인다 —
+//  사람이 «내가 정한 범위 안에서 돈다» 를 매 세션 눈으로 확인하고, 끄는 손잡이를 찾아다니지 않게 한다.
+//  끄는 손잡이는 이유마다 다르다(판정 decideRecordScope 의 reason 그대로):
+//   anywhere · work_root — 목록으로 끈다(/lively-disconnect = `lively work-root remove`). work_root 인데 세션 폴더가 등록 폴더의
+//     **아래**면 그 등록 폴더(root)를 빼야 꺼진다(그 아래 전부가 꺼진다 — 사람이 알고 고르게 한다).
+//   project · unsynced — 목록으로는 못 끈다(프로젝트 표식은 제외해도 켜지고, 설정 사본이 없으면 목록 자체가 없다) →
+//     라이블리 없이 다시 여는 명령(`lively run --incognito`)을 가리킨다. 플러그인만 깐 자리엔 그 명령이 없어 켜짐만 말한다.
+//   spawned — 알림 없음(null). 사람이 라이블리로 켜겠다고 고른 세션이고(웹·노드·`lively run`) 폴더 손잡이도 없다.
+/** 이 하네스에서 «여기 끄기» 를 부르는 말 — connectHint 의 짝. */
+export function disconnectHint(harness = "claude", { plugin = false, removeCmd = workRootRemoveCommand() } = {}) {
+  const h = String(harness || "claude").toLowerCase();
+  if (plugin) return "웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 빼거나 제외";
+  if (h === "claude") return "/lively-disconnect";
+  if (h === "codex") return "$lively-disconnect";
+  return `\`${removeCmd}\``;
+}
+
+/** 범위 안 세션 시작 알림 — 사람에게 한 줄(user) + AI 에게 짧은 안내(ai). 알릴 것이 없으면 null.
+ *  ai 는 회사 맥락 **앞**에 붙는다 — 하네스가 긴 훅 출력을 앞 2,000자 미리보기로 자르므로(#4503) 짧게 쓴다. */
+export function insideNotice({ dir = "", reason = "", root = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
+  if (!["anywhere", "work_root", "project", "unsynced"].includes(reason)) return null;
+  const cli = { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") };
+  const remove = (d = "") => workRootRemoveCommand({ ...cli, dir: d });
+  const h = String(harness || "claude").toLowerCase();
+  const head = "## 라이블리 켜짐 — 이 세션은 연결돼 있다";
+  const on = "회사 맥락 주입·기록·대화 업로드·라이블리 도구가 이 세션에서 동작한다.";
+  const ask = "사람이 요청하지 않았는데 끄지 마라.";
+  if (reason === "project" || reason === "unsynced") {
+    const why = reason === "project"
+      ? (safeDir(root) ? `이 세션을 연 폴더는 라이블리 프로젝트 폴더(\`${root}\`)라` : "이 세션을 연 폴더는 라이블리 프로젝트 폴더라")
+      : "이 컴퓨터는 기록 범위 설정을 아직 받지 못해(종전 동작)";
+    const label = reason === "project" ? "[라이블리] 켜져 있습니다(라이블리 프로젝트 폴더)" : "[라이블리] 켜져 있습니다";
+    if (plugin) return { user: label, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, ask].join("\n") };
+    const run = runIncognitoCommand({ ...cli, harness: h });
+    return {
+      user: `${label} · 라이블리 없이 열려면 ${isDirect(run) ? `\`${run}\`` : run}`,
+      ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`,
+        `이 폴더는 목록으로 끌 수 없다. 사람이 연결 상태를 묻거나 라이블리 없이 일하고 싶다고 하면, 이 세션을 닫고 셸에서 \`${run}\` 로 다시 열라고 안내하라${isDirect(run) ? `(${PS_NOTE})` : ""}.`,
+      ].join("\n"),
+    };
+  }
+  const hint = disconnectHint(h, { plugin, removeCmd: remove() });
+  const user = plugin ? `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}하세요` : `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}`;
+  //  등록 폴더의 아래에서 켠 세션 — 이 폴더만은 못 끈다. 품은 등록 폴더를 빼야 하고 그 아래 전부가 꺼진다.
+  //   같은 폴더인지는 실제 경로로도 본다(심링크 · /var ↔ /private/var) — 판정(matchWorkRoot)과 같은 기준이라 같은 자리에 «그 아래 전부» 를 붙이지 않는다.
+  //   세션 폴더는 따로 짚는다 — «여기 끄기» 커맨드가 말하는 «세션을 연 폴더» 가 품은 작업 폴더로 읽히지 않게(그 폴더를 빼는 건 사람이 고른 뒤다).
+  const sameDir = (a, b) => normPath(a) === normPath(b) || (!!real(a) && !!real(b) && normPath(real(a)) === normPath(real(b)));
+  const parent = reason === "work_root" && safeDir(root) && dir && !sameDir(dir, root) ? root : "";
+  const here = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)가` : "이 세션을 연 폴더가";
+  const why = reason === "anywhere" ? `이 컴퓨터는 «어디서나» 방식(조직 설정)이고 ${here} 제외 폴더가 아니라서`
+    : safeDir(root) && parent ? `${here} 이 컴퓨터의 라이블리 작업 폴더(\`${root}\`) 아래라`
+    : `${here} 이 컴퓨터의 라이블리 작업 폴더라`;
+  const target = parent || (safeDir(dir) ? dir : "");
+  const run = target ? `\`${remove(target)}\`` : `이 폴더에서 \`${remove()}\``;
+  const shellNote = isDirect(remove()) ? `(${PS_NOTE})` : "";
+  const how = plugin
+    ? "사람이 연결 상태를 묻거나 여기서 끄고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 빼거나 제외하라고 안내하라 — 다음 세션부터 꺼진다."
+    : `사람이 연결 상태를 묻거나 여기서 끄고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — `
+      + (parent ? `이 폴더만은 못 끄고 작업 폴더 \`${parent}\` 를 목록에서 빼야 한다 — 그 아래 전부가 꺼진다는 것을 사람에게 먼저 말하고 고르게 하라. ` : "")
+      + "끄면 이 세션도 그때부터 기록·업로드·도구가 멈추니 그 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라.";
+  return { user, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, how, ask].join("\n") };
 }
 
 // ── 세션 중간 연결(늦은 맥락 주입) ───────────────────────────────────────────

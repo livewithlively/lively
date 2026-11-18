@@ -385,15 +385,17 @@ const claudeDirForRemove = () => {
   const c = norm(ccd), r = norm(process.env.LIVELY_HOME);
   return (c === r || c.startsWith(r + "/")) ? ccd : join(HOME, ".claude");
 };
-export function removeConnectCommands(dir, label) {
+//  skill=true — 스킬 꼴(<dir>/<id>/SKILL.md, 코덱스). 표식이 있는 SKILL.md 만 지우고, 그래서 빈 폴더가 되면 폴더도 걷는다(사용자 파일이 있으면 남는다).
+export function removeConnectCommands(dir, label, { skill = false } = {}) {
   let removed = 0;
   for (const id of ["lively-connect", "lively-disconnect"]) {
-    const f = join(dir, `${id}.md`);
+    const f = skill ? join(dir, id, "SKILL.md") : join(dir, `${id}.md`);
     let cur = "";
     try { cur = readFileSync(f, "utf8"); } catch { continue; }
     if (!cur.includes(CONNECT_MARK)) continue;
-    if (DRY) { log(`  [dry-run] ${label} ${id}.md 제거 예정`); continue; }
+    if (DRY) { log(`  [dry-run] ${label} ${skill ? `${id}/SKILL.md` : `${id}.md`} 제거 예정`); continue; }
     try { rmSync(f, { force: true }); removed++; } catch { /* fail-soft */ }
+    if (skill) { try { rmdirSync(join(dir, id)); } catch { /* 비어 있지 않음 — 사용자 파일 보존 */ } }
   }
   if (removed) log(`  ✓ ${label} «여기 연결» 커맨드 ${removed}개 제거`);
 }
@@ -678,7 +680,7 @@ async function main() {
   //  opencode 가 이 경로(실제 `lively uninstall` 이 타는 경로)에서 통째로 빠져 있었다.
   const HARNESS_REMOVE = {
     claude: () => { uninstallClaudeSettings(); uninstallAutoApprove(); cleanupEmptyClaudeSettings(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); removeConnectCommands(join(claudeDirForRemove(), "commands"), "Claude"); },
-    codex: () => { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); removeConnectCommands(join(CODEX, "prompts"), "Codex"); },
+    codex: () => { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); removeConnectCommands(join(CODEX, "prompts"), "Codex"); removeConnectCommands(join(CODEX, "skills"), "Codex", { skill: true }); },
     opencode: () => { uninstallOpencodeWiring(); uninstallHarnessAssets("opencode"); removeConnectCommands(join(OPENCODE, "command"), "OpenCode"); },
     antigravity: () => { uninstallAntigravityWiring(); uninstallHarnessAssets("antigravity"); removeConnectCommands(join(GEMINI, "config", "workflows"), "Antigravity"); },
     grok: () => { uninstallGrokWiring(); uninstallHarnessAssets("grok"); removeConnectCommands(join(GROK, "commands"), "Grok"); },
