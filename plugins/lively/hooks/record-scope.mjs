@@ -42,7 +42,7 @@
 //   LIVELY_SESSION_DIR(어댑터가 실음) > CLAUDE_PROJECT_DIR(클로드가 훅·MCP 에 싣는 시작 폴더) > 훅 입력 cwd > 프로세스 cwd.
 //
 // 이 파일은 네트워크를 직접 부르지 않는다 — 서버 왕복은 호출자가 넘긴 send(HostEffects fetch)로만 한다(kit R5).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renameSync, unlinkSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renameSync, unlinkSync, readdirSync, statSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -563,7 +563,10 @@ export function insideNotice({ dir = "", reason = "", root = "", sid = "", harne
 //   그래서 꺼 둔 세션의 라이블리 도구 호출은 러너(run-custom PreToolUse)가 막는다 — 훅은 언제나 지금 세션 id 를 받는다.
 //  /clear 로 새 대화를 열면 세션 id 가 바뀌어 다시 켜진 채로 시작한다(시작 알림이 다시 뜬다). 이어 열기(resume)는 같은 id 라 꺼진 채다.
 const OFF_DIR = "session-off";
-const OFF_KEEP_MS = 30 * 24 * 3600 * 1000;   // 끝난 세션의 표식은 한 달 뒤 걷는다(새 표식을 쓸 때)
+//  끝난 세션의 표식은 걷는다 — 단 기준은 «세운 때» 가 아니라 **마지막으로 그 세션이 표식을 읽은 때**다(읽을 때 시각을 갱신한다).
+//   세운 때로 걷으면 오래 이어 쓰는 세션의 표식이 사라져, 꺼 둔 대화가 경고 없이 다시 올라간다(격리 리뷰 2026-11-18).
+const OFF_KEEP_MS = 90 * 24 * 3600 * 1000;   // 석 달 동안 한 번도 안 쓰인 세션
+const OFF_TOUCH_MS = 24 * 3600 * 1000;       // 시각 갱신은 하루에 한 번이면 충분하다(훅마다 쓰지 않는다)
 const offMarker = (sid, lively) => join(lively, OFF_DIR, String(sid));
 /** 훅 입력의 세션 id(클로드·코덱스 session_id · 어댑터 sessionId). 없으면 빈 문자열. */
 export const hookSessionId = (input) => (input && typeof input === "object" ? String(input.session_id || input.sessionId || "") : "");
@@ -579,7 +582,13 @@ export function markSessionOff(sid, lively = livelyDirOf()) {
   } catch { return false; }
 }
 export function sessionOff(sid, lively = livelyDirOf()) {
-  return isSessionId(sid) && existsSync(offMarker(sid, lively));
+  if (!isSessionId(sid)) return false;
+  const f = offMarker(sid, lively);
+  try {
+    const st = statSync(f);
+    if (Date.now() - st.mtimeMs > OFF_TOUCH_MS) { try { const now = new Date(); utimesSync(f, now, now); } catch { /* 읽기 전용 홈 — 판정은 그대로 */ } }
+    return true;
+  } catch { return false; }
 }
 export function clearSessionOff(sid, lively = livelyDirOf()) {
   if (!isSessionId(sid)) return false;

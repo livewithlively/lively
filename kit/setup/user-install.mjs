@@ -555,8 +555,12 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
     else {
       // 클로드는 등록 명령을 미리 허용해 둔다 — 범위 밖에서 «여기 연결» 한 번에 권한 확인이 끼지 않게(이 두 명령만).
       //  윈도우는 셸·경로 표기가 갈려 접두사가 맞는다는 보장이 없어 싣지 않는다(그땐 평소처럼 한 번 묻는다).
-      const verb = c.id === "lively-connect" ? "on" : "off";
-      const allowed = format === "claude" && !win ? `allowed-tools: Bash(lively ${verb}:*), Bash(${shim} ${verb}:*)\n` : "";
+      //  미리 허용하는 것은 «이 세션만» 까지다(격리 리뷰 2026-11-18): 끄기는 `off` · `off --session <id>` — CLI 가 --session 과
+      //   --remember·경로를 함께 받지 않으므로 이 접두사로는 폴더를 못 끈다. 켜기는 `on` 한 꼴만 — 꺼 둔 세션을 켜는 `--yes`(꺼 둔 동안의
+      //   대화가 올라간다)와 기억시키기(`--remember` — 그 아래 전부·영속)는 하네스의 권한 확인을 거친다.
+      const allowed = format !== "claude" || win ? ""
+        : c.id === "lively-connect" ? `allowed-tools: Bash(lively on), Bash(${shim} on)\n`
+        : `allowed-tools: Bash(lively off), Bash(lively off --session:*), Bash(${shim} off), Bash(${shim} off --session:*)\n`;
       text = `---\ndescription: ${JSON.stringify(c.description)}\n${allowed}---\n\n${note}\n\n${c.body}\n`;
     }
     return { id: c.id, file: `${c.id}.md`, text };

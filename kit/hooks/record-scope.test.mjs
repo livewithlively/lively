@@ -6,7 +6,7 @@
 //  설정 정본은 서버(컴퓨터별), 판정은 로컬 사본으로. 사본이 아직 없으면 종전 동작(어디서나).
 //  단언은 문구가 아니라 부작용으로 — 사본 파일 · 가짜 게이트웨이 요청 로그 · 출력 JSON 칸 · 표식 파일.
 //  네트워크 없음(가짜 send · 127.0.0.1 가짜 게이트웨이) · 실 홈 무접촉(sandboxEnv).
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, symlinkSync, utimesSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -458,6 +458,16 @@ if (process.platform !== "win32") {
   setScope(sb.lively, "anywhere");
   check("S1 표식을 세우면 꺼진 세션이고 걷으면 아니다", rs.markSessionOff("s-off", fd) && rs.sessionOff("s-off", fd) && rs.clearSessionOff("s-off", fd) && !rs.sessionOff("s-off", fd));
   check("S2 세션 id 꼴이 아니면 표식을 세우지 않는다(경로 문자)", !rs.markSessionOff("../x", fd) && !rs.markSessionOff("", fd) && !rs.sessionOff("../x", fd));
+  {
+    //  표식은 «마지막으로 쓰인 때» 로 걷는다 — 오래 이어 쓰는 세션의 표식이 사라져 꺼 둔 대화가 다시 올라가면 안 된다.
+    const old = new Date(Date.now() - 80 * 24 * 3600 * 1000), dead = new Date(Date.now() - 100 * 24 * 3600 * 1000);
+    rs.markSessionOff("s-live", fd); rs.markSessionOff("s-dead", fd);
+    utimesSync(join(fd, "session-off", "s-live"), old, old); utimesSync(join(fd, "session-off", "s-dead"), dead, dead);
+    const stillOff = rs.sessionOff("s-live", fd);                       // 그 세션의 훅이 읽었다 → 시각 갱신
+    rs.markSessionOff("s-new", fd);                                     // 다른 세션을 끌 때 정리가 돈다
+    check("S4 이어 쓰는 세션의 표식은 정리에 걷히지 않는다(읽을 때 시각 갱신)", stillOff && rs.sessionOff("s-live", fd) && Date.now() - statSync(join(fd, "session-off", "s-live")).mtimeMs < 60000);
+    check("S4b 석 달 동안 한 번도 안 쓰인 세션의 표식만 걷는다", !existsSync(join(fd, "session-off", "s-dead")) && rs.sessionOff("s-new", fd));
+  }
   check("S3 훅 입력의 세션 id — session_id · sessionId 둘 다 읽는다", rs.hookSessionId({ session_id: "a" }) === "a" && rs.hookSessionId({ sessionId: "b" }) === "b" && rs.hookSessionId(null) === "");
 }
 
@@ -753,12 +763,23 @@ await withGateway(async (gw) => {
     const { sb: sb2, work: w2 } = mkOff("");
     const on = await withGateway(async (gw) => runHook("run-custom.mjs", ["PreToolUse"], childEnv(sb2, w2, { LIVELY_TOKEN: "tk", LIVELY_GATEWAY_URL: gw }), tool("k2", "mcp__lively__knowledge_save")));
     check("K4 켜진 세션의 라이블리 도구는 막지 않는다(대조군)", dec(on) !== "deny", on);
+    const cx = await withGateway(async (gw) => runHook("run-custom.mjs", ["PreToolUse", "--harness", "codex"], env(gw), tool("k2", "mcp__lively__knowledge_save")));
+    check("K2c 코덱스 러너도 같은 꼴로 막는다", dec(cx) === "deny", cx);
   }
   {
     const { sb, work } = mkOff("s-on");
     const out = await withGateway(async (gw) => startIn(sb, work, gw, { source: "resume" })); const j = jsonOf(out);
     check("K5 꺼 둔 세션을 이어 열면 꺼진 채다 — 한 줄로 알리고 회사 맥락은 넣지 않는다",
       String(j?.systemMessage || "").includes("꺼 두었습니다") && !out.includes("LATE-CTX") && ctxOf(j).includes("on --session s-on"), out.slice(0, 300));
+  }
+  {
+    //  라이블리가 띄운 세션(웹·노드)도 «이 세션만 끄기» 는 듣는다 — 입력을 안 읽는 자리라 클로드의 env 세션 id 로 본다.
+    const { sb, work } = mkOff("sp-1");
+    const out = await withGateway(async (gw) => startIn(sb, work, gw, { env: { LIVELY_SESSION_ID: "box-1", CLAUDE_CODE_SESSION_ID: "sp-1" } }));
+    check("K5b 라이블리가 띄운 세션도 꺼 두었으면 회사 맥락을 넣지 않는다", !out.includes("LATE-CTX") && String(jsonOf(out)?.systemMessage || "").includes("꺼 두었습니다"), out.slice(0, 200));
+    const { sb: sb2, work: w2 } = mkOff("s-on");   // startIn 의 세션 id
+    const hits = await withGateway(async (gw, h) => { await startIn(sb2, w2, gw, { source: "resume" }); return h; });
+    check("K5c 꺼 둔 세션의 시작 훅은 게이트웨이를 한 번도 안 부른다", hits.length === 0, JSON.stringify(hits));
   }
   {
     const { sb, work } = mkOff("wf-soff");
@@ -779,6 +800,9 @@ await withGateway(async (gw) => {
   const r2 = run({}, "off", "--session", "sw-2");
   check("L3 --session 으로 준 세션도 끈다(코덱스 — 셸에 세션 id 가 없다)", r2.code === 0 && rs.sessionOff("sw-2", fd), r2.out);
   check("L3b 세션 id 꼴이 아니면 받지 않는다", run({}, "off", "--session", "../../x").code === 2);
+  //  클로드 커맨드는 `off --session …` 꼴을 미리 허용한다 — 그 꼴로는 폴더를 끌 수 없어야 한다(그 아래 전부·영속은 권한 확인을 거친다).
+  const mix = run({}, "off", "--session", "sw-9", "--remember");
+  check("L3c --session 과 --remember·경로는 섞지 못한다(종료 2 · 아무것도 안 바뀜)", mix.code === 2 && run({}, "off", "--session", "sw-9", dir).code === 2 && !rs.sessionOff("sw-9", fd) && !rs.readScopeFile(sb.lively)?.pending, mix.out);
   const r3 = run({ CLAUDE_CODE_SESSION_ID: "sw-1" }, "on");
   check("L4 꺼 둔 세션을 켜려 하면 먼저 멈춘다 — 꺼 둔 동안의 대화도 올라간다(종료 3 · 표식 그대로)", r3.code === 3 && r3.out.includes("꺼 둔 동안의 대화도") && rs.sessionOff("sw-1", fd), r3.out);
   const r4 = run({ CLAUDE_CODE_SESSION_ID: "sw-1" }, "on", "--yes");
@@ -862,7 +886,9 @@ function inChild(sb, code) {
   const r = inChild(sb, `console.log(JSON.stringify(Object.fromEntries(["claude","codex","cursor","frontmatter"].map((f) => [f, ui.connectCommandFiles({ format: f, shim: "/h/.lively/bin/lively", win: false })]))));`);
   const c = r.claude[0].text, x = r.codex[0].text, u = r.cursor[0].text;
   const once = (t) => t.split("$ARGUMENTS").length - 1 === 1;
-  check("I2a 클로드 커맨드 — frontmatter·미리 허용·자리표시 한 번", c.startsWith("---\n") && c.includes("allowed-tools: Bash(lively on:*)") && once(c));
+  check("I2a 클로드 커맨드 — frontmatter·미리 허용·자리표시 한 번", c.startsWith("---\n") && c.includes("allowed-tools: Bash(lively on), ") && !c.includes("on:*") && once(c));
+  const dc = r.claude.find((f) => f.id === "lively-disconnect").text;
+  check("I2a2 끄기 커맨드의 미리 허용은 «이 세션만» 까지다(off · off --session — --remember 는 권한 확인을 거친다)", dc.includes("Bash(lively off), Bash(lively off --session:*)") && !dc.includes("Bash(lively off:*)"), dc.slice(0, 300));
   check("I2b 코덱스 프롬프트 — frontmatter 없음(프롬프트로 새지 않게)·자리표시 한 번", !x.startsWith("---") && once(x));
   check("I2c 커서 커맨드 — 첫 줄이 제목", u.split("\n")[0] === r.cursor[0].text.split("\n")[0] && !u.startsWith("---") && u.split("\n")[0].includes("라이블리를 켭니다"));
 }

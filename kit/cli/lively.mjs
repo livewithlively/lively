@@ -3150,7 +3150,9 @@ const switchSession = (rs, o) => { const sid = o.session || String(process.env.C
 async function cmdOff(rest) {
   const rs = await loadRecordScope();
   const o = switchArgs(rest);
-  //  경로를 적었으면 폴더 이야기다 — 세션은 폴더를 고르지 않는다.
+  //  경로를 적었으면 폴더 이야기다 — 세션은 폴더를 고르지 않는다. 둘을 섞은 명령은 받지 않는다: 클로드 커맨드가 `off --session …` 꼴을
+  //   미리 허용하므로(권한 확인 없음), 그 꼴로 폴더까지 꺼지면 «그 아래 전부·영속» 이 확인 없이 돈다.
+  if (o.session && (o.remember || o.path)) die("--session 과 --remember·경로는 함께 쓸 수 없습니다 — 이 세션만: lively off --session <id> · 이 폴더를 앞으로도: lively off --remember [경로]", 2);
   if (o.remember || o.path) return cmdWorkRoot(["remove", ...(o.path ? [o.path] : [])]);
   const sid = switchSession(rs, o);
   const here = sessionFolderOf(rs);
@@ -3162,7 +3164,7 @@ async function cmdOff(rest) {
   const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: here, lively: LIVELY });
   if (!d.inScope) { say(`이 폴더는 이미 라이블리가 꺼져 있습니다(${d.reason === "excluded" ? "제외 폴더" : "작업 폴더 밖"}) — 끌 것이 없습니다.`); return; }
   if (!rs.markSessionOff(sid, LIVELY)) die("이 세션을 끄지 못했습니다(표식 파일을 쓸 수 없습니다).", 1);
-  say(green("✓ 이 세션에서 라이블리를 껐습니다.")
+  say(green("✓ 이 세션에서 라이블리를 껐습니다.") + dim(` (세션 ${sid})`)
     + dim("\n  지금부터 기록·대화 업로드가 멈추고 라이블리 도구 호출이 막힙니다. 이미 올라간 앞부분 대화는 그대로 남습니다."
       + "\n  이 세션에만 적용됩니다 — 새 세션은 다시 켜진 채로 시작합니다."));
   say(`  다시 켜기: /lively-connect ${dim(`(lively on --session ${sid})`)}`);
@@ -3176,6 +3178,7 @@ const key2 = (rs, p) => rs.rootKey(p, HOME);
 async function cmdOn(rest) {
   const rs = await loadRecordScope();
   const o = switchArgs(rest);
+  if (o.session && (o.remember || o.path)) die("--session 과 --remember·경로는 함께 쓸 수 없습니다 — 꺼 둔 세션 켜기: lively on --session <id> · 이 폴더를 앞으로도: lively on --remember [경로]", 2);
   if (o.remember || o.path) return cmdWorkRoot(["add", ...(o.path ? [o.path] : [])]);
   const sid = switchSession(rs, o);
   if (sid && rs.sessionOff(sid, LIVELY)) {

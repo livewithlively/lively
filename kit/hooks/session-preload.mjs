@@ -723,24 +723,28 @@ function lineHidden() {
 //  ③ 범위 안이면 «켜져 있다 · 끄는 법» 알림을 정해 둔다(ON_NOTICE — 내보내기는 emitContext 가 회사 맥락과 함께 한다).
 //  키트 자가 업데이트는 기록이 아니라서 범위 밖에서도 띄운다 — 안 그러면 이 기능의 고침도 그 컴퓨터에 영영 안 닿는다.
 //  라이블리가 띄운 세션(SPAWNED)은 판정할 것이 없다(언제나 켬) — 입력도 안 읽고 종전 경로 그대로 간다.
+const envSessionId = () => {
+  if ((harness(HARNESS).id || "claude") !== "claude") return "";
+  const v = String(process.env.CLAUDE_CODE_SESSION_ID || "").trim();
+  return isSessionId(v) ? v : "";
+};
+function emitSessionOff(sid, again) {
+  const n = sessionOffNotice({ sid, harness: harness(HARNESS).id || "claude", lively: join(homedir(), ".lively") });
+  process.stdout.write(JSON.stringify({ ...(again ? {} : { systemMessage: n.user }), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
+}
 async function scopeGate() {
   const input = await readHookInput();
   const lively = join(homedir(), ".lively");
+  //  세션 id — 훅 입력이 정본이다. 입력을 제때 못 읽었으면 클로드가 훅에 싣는 env(지금 세션 값 — 2.1.327 실측)로 메운다.
+  const hid = harness(HARNESS).id || "claude";
+  const sid = String(input.session_id || input.sessionId || "") || envSessionId();
+  //  사람이 꺼 둔 세션(이 세션만 끄기)이 다시 시작했다(이어 열기 · 압축 뒤) — 꺼진 채로 두고 그 사실과 다시 켜는 법만 알린다.
+  //   서버 왕복(설정 맞추기)보다 먼저 가른다 — 꺼 둔 세션은 게이트웨이를 건드리지 않는다(설정은 다음 켜진 세션이 맞춘다).
+  if (sessionOff(sid, lively)) { emitSessionOff(sid, String(input.source || "") === "compact"); return true; }
   let kitVersion = null;
   if (TOKEN) {
     const r = await syncScopeSettings({ lively, gw: GW, token: TOKEN, send: fetch, timeoutMs: 1500 }).catch(() => ({ ok: false }));
     if (r.ok) kitVersion = r.kit_version;
-  }
-  //  세션 id — 훅 입력이 정본이다. 입력을 제때 못 읽었으면 클로드가 훅에 싣는 env(지금 세션 값 — 2.1.327 실측)로 메운다.
-  const hid = harness(HARNESS).id || "claude";
-  const envSid = hid === "claude" ? String(process.env.CLAUDE_CODE_SESSION_ID || "").trim() : "";
-  const sid = String(input.session_id || input.sessionId || "") || (isSessionId(envSid) ? envSid : "");
-  //  사람이 꺼 둔 세션(이 세션만 끄기)이 다시 시작했다(이어 열기 · 압축 뒤) — 꺼진 채로 두고 그 사실과 다시 켜는 법만 알린다.
-  if (sessionOff(sid, lively)) {
-    const n = sessionOffNotice({ sid, harness: hid, lively });
-    process.stdout.write(JSON.stringify({ ...(String(input.source || "") === "compact" ? {} : { systemMessage: n.user }), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
-    maybeSelfUpdate(kitVersion);
-    return true;
   }
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
   if (d.inScope) {
@@ -767,7 +771,9 @@ async function scopeGate() {
 async function main() {
   if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
   mirrorPluginCreds();                                   // 플러그인 설치면 자격을 ~/.lively 에도 굳힌다(#1473). 키트 설치면 무동작.
-  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) — 아래 전부 건너뜀
+  //  라이블리가 띄운 세션은 범위 판정을 건너뛰지만(언제나 켬) «이 세션만 끄기» 는 듣는다 — 입력을 안 읽는 자리라 클로드의 env 세션 id 로 본다.
+  if (SPAWNED && sessionOff(envSessionId(), join(homedir(), ".lively"))) { emitSessionOff(envSessionId(), false); process.exit(0); }
+  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) · 꺼 둔 세션 — 아래 전부 건너뜀
   // 레포 준비 실패 통지(#1155) — 로컬 마커만 읽으므로 토큰 유무와 무관하게 항상 계산한다(무토큰 세션도 코드는 필요하다).
   const repoNotice = repoStatusNotice();
   if (!TOKEN) { emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n"))); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)
