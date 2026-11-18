@@ -47,6 +47,11 @@
 //   N1  ★댓글 알림 — 초대제 프로젝트의 태스크 댓글에서 팀원이 아닌 사람을 언급해도 그 사람에게 알림이 안 간다(이름 · 발췌가 새지 않는다) ·
 //       팀원에게는 간다 · 열린 프로젝트에서는 종전대로 언급된 사람에게 간다(무회귀)
 //   L1  축 끄기 확인 화면의 «제한 중» 수가 초대제 프로젝트를 닫으면 1 늘고 열면 1 준다
+//   W1  ★롤 창 — project.invite_only 칸이 아직 없는 DB 에서: 프로젝트 목록 · 상세 · 검색 · 단건 판정 · «숨은 프로젝트» · 생성 ·
+//       수정 · 태스크 · 휴지통 개수 · 축 끄기 수 · 세션 초대 맞추기가 **오류 없이** 돈다(초대제가 없던 때와 같은 답)
+//   W2  그 사이에도 초안은 닫혀 있다(초안 술어는 그대로다) · 화면에 주는 enforced 는 false(«나만» 이라고 말하지 않는다)
+//   W3  그 사이 공개 범위 바꾸기는 거절(ProjectAccessUnavailableError) — 조용히 넘어가지 않는다
+//   W4  ★칸이 생기면 재기동 없이(다시 재는 간격 뒤) 스스로 켜진다 — 닫혀 있던 프로젝트가 다시 닫힌다
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
@@ -59,6 +64,7 @@ const ss = await import(`${DIST}/sessions/session-state.js`);
 const trash = await import(`${DIST}/v6/trash-store.js`);
 const { trashCapabilities } = await import(`${DIST}/capabilities/trash.js`);
 const cn = await import(`${DIST}/v6/comment-notify.js`);
+const col = await import(`${DIST}/v6/project-invite-column.js`);
 const { AUTO_CREATED_MARK } = await import(`${DIST}/project/first-prompt-project.js`);
 
 let pass = 0, fail = 0;
@@ -452,9 +458,77 @@ try {
     await ps.setProjectAccess(l1, "open", ctxA);
     chk("L1c 다시 열면 1 준다", (await locked()) === n0);
   }
+
+  // ── W1 ~ W4 — 롤 창: 칸이 아직 없는 DB ──
+  //  매니지드 롤은 새 코드가 서빙을 시작한 뒤에야 공용 DB 에 새 칸을 만든다. 그 몇 분을 칸 이름을 잠깐 바꿔 흉내 낸다
+  //  (지우지 않는다 — 닫혀 있던 프로젝트의 표시를 그대로 두었다가 되돌려, «칸이 생기면 다시 닫힌다» 를 같은 행으로 잰다).
+  {
+    const closed = await mk("W 닫혀 있던 초대제");
+    const dr = await mkShell("W 초안", { invite_only: false });
+    const tk = (await ps.createTask({ projectId: closed, name: `${TAG} W 태스크` }, ctxA)).id;
+    fresh();
+    chk("W (전제) 칸이 있을 때 — 초대제 프로젝트는 남에게 안 보인다", (await col.ensureInviteOnlyColumn()) === true && !(await vis.canSeeProjectRow(closed, B)));
+    await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only TO invite_only_rollwindow`);
+    try {
+      col.resetInviteOnlyColumnProbe(); fresh();
+      chk("W1 (전제) 칸이 없다고 잰다", (await col.ensureInviteOnlyColumn()) === false && col.inviteOnlyColumnExists() === false);
+      const tryAll = async () => {
+        const errs = [];
+        const run = async (name, fn) => { try { return await fn(); } catch (e) { errs.push(`${name}: ${String(e?.message).slice(0, 90)}`); return undefined; } };
+        const out = {};
+        out.listB = await run("listProjects(B)", () => ps.listProjects({ viewerVis: B }));
+        out.listAll = await run("listProjects(내부)", () => ps.listProjects({}));
+        out.getA = await run("getProject", () => ps.getProject(closed, A));
+        out.row = await run("getProjectRow", () => ps.getProjectRow(closed));
+        out.search = await run("searchProjects", () => ps.searchProjects("W 닫혀", { viewer: B, plain: true, limit: 20 }));
+        out.seeDraftB = await run("canSeeProjectRow(초안)", () => vis.canSeeProjectRow(dr, B));
+        out.seeTaskB = await run("canSeeProjectRow(태스크)", () => vis.canSeeProjectRow(tk, B));
+        out.hiddenB = await run("hiddenProjects(B)", () => vis.hiddenProjects(B));
+        out.hiddenPub = await run("hiddenProjects(PUBLIC)", () => vis.hiddenProjects(vis.PUBLIC_VIEWER));
+        out.inviteIds = await run("inviteOnlyProjectIds", () => vis.inviteOnlyProjectIds());
+        out.created = await run("createProject", () => ps.createProject({ name: `${TAG} W 창 안에서 만든 것`, dedupe: false }, ctxA));
+        out.createdExplicit = await run("createProject(명시 닫힘)", () => ps.createProject({ name: `${TAG} W 창 안 · 명시`, dedupe: false, invite_only: true }, ctxA));
+        out.updated = await run("updateProject", () => ps.updateProject(closed, { append_description: "창 안에서 보탬" }, ctxA));
+        out.task = await run("createTask", () => ps.createTask({ projectId: closed, name: `${TAG} W 창 안 태스크` }, ctxA));
+        out.status = await run("updateProjectStatus", () => ps.updateProjectStatus(dr, "in_progress", null, ctxA));
+        out.members = await run("setProjectMembers", () => ps.setProjectMembers(closed, [C], ctxA));
+        out.count = await run("countDeleted", () => trash.countDeleted({ gate: true, visibleListIds: null, privateViewer: B }));
+        out.axes = await run("axisLockSummary", () => axes.axisLockSummary());
+        out.sweep = await run("sweepDraftReleases", () => draft.sweepDraftReleases());
+        out.info = await run("projectAccessInfo", () => access.projectAccessInfo());
+        out.sess = await run("세션 초대 맞추기", () => ss.upsertSessionState({
+          id: `${TAG}s-w`, owner: A, label: "세션", harness: "claude", dir: null, root_key: "personal", subpath: null, flags: {}, auto_approve: false,
+          invites: [D], project_id: dr, project_src: "v6", read_only: false, incognito: false, created: 1, last_busy: 1 }));
+        return { errs, out };
+      };
+      const { errs, out } = await tryAll();
+      chk("W1b ★칸이 없어도 프로젝트 조회 · 쓰기가 하나도 실패하지 않는다", errs.length === 0, JSON.stringify(errs));
+      chk("W1c 읽은 행의 invite_only 는 false 로 선다(초대제가 없던 때와 같은 답)", out.getA?.invite_only === false && out.row?.invite_only === false && Array.isArray(out.listB));
+      chk("W1d 창 안에서 만든 프로젝트는 표시 없이 선다(찍을 칸이 없다) — 명시해도", out.created?.invite_only === false && out.createdExplicit?.invite_only === false);
+      chk("W1e 초대제 프로젝트 집합은 비어 있다(반출 가드가 실패하지 않는다)", out.inviteIds instanceof Set && out.inviteIds.size === 0);
+      chk("W2 ★그 사이에도 초안은 닫혀 있다(초안 술어는 그대로)", out.seeDraftB === false && out.hiddenB?.ids?.has(dr) === true);
+      chk("W2b 화면에 주는 enforced 는 false — «나만» 이라고 말하지 않는다", out.info?.enforced === false);
+      chk("W2c 세션 초대 맞추기는 초안에 그대로 돈다(창 안에서도 초대받은 사람이 세션에 들어온다)", (await members(dr)).includes(D));
+      let unavailable = false;
+      try { await ps.setProjectAccess(closed, "open", ctxA); } catch (e) { unavailable = e instanceof ps.ProjectAccessUnavailableError; }
+      chk("W3 ★창 안의 공개 범위 바꾸기는 거절한다(조용히 넘어가지 않는다)", unavailable);
+    } finally {
+      await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only_rollwindow TO invite_only`).catch(() => undefined);
+    }
+    //  칸이 돌아왔다(= 마이그레이션이 끝났다). 잰 값을 버리지 않는다 — 다시 재는 간격이 지나면 스스로 켜져야 한다.
+    chk("W4 (전제) 방금은 아직 «없다» 로 기억한다(간격 안에서는 다시 재지 않는다)", col.inviteOnlyColumnExists() === false);
+    await new Promise((r) => setTimeout(r, 3_300));
+    chk("W4b ★간격이 지나면 스스로 «있다» 로 잰다(재기동 없이)", (await col.ensureInviteOnlyColumn()) === true);
+    fresh();
+    chk("W4c ★닫혀 있던 초대제 프로젝트가 다시 닫힌다", (await rowOf(closed)).invite_only === true && !(await vis.canSeeProjectRow(closed, B)) && !(await inList(B, closed)));
+    chk("W4d 켜진 뒤 만든 프로젝트는 다시 표시를 단다 · enforced 도 true", (await rowOf(await mk("W 켜진 뒤 만든 것"))).invite_only === true && (await access.projectAccessInfo()).enforced === true);
+  }
 } catch (e) {
   bad("예외", e?.stack || String(e));
 } finally {
+  //  W 시험이 중간에 죽었어도 칸 이름을 되돌린다(다른 시험이 이 DB 를 이어 쓴다).
+  await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only_rollwindow TO invite_only`).catch(() => undefined);
+  col.resetInviteOnlyColumnProbe();
   await axes.setVisAxes({ project: true }).catch(() => undefined);
   await itemsPool.query(`UPDATE org_runtime_config SET project_access = $1 WHERE id=1`, [modeBefore]).catch(() => undefined);
   await cleanup().catch(() => undefined);

@@ -18,6 +18,8 @@
 //  잘못 닫힌 프로젝트는 만든 사람이 한 번 눌러 열 수 있지만, 잘못 열린 프로젝트는 이미 누가 봤는지 알 수 없다.
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
+import { axisOn } from "./visibility-axes.js";
+import { ensureInviteOnlyColumn } from "./project-invite-column.js";
 
 export const PROJECT_ACCESS_MODES = ["invite", "open"] as const;
 export type ProjectAccessMode = (typeof PROJECT_ACCESS_MODES)[number];
@@ -68,4 +70,14 @@ export async function setProjectAccessMode(mode: ProjectAccessMode): Promise<Pro
      ON CONFLICT (tenant_id, id) DO UPDATE SET project_access = EXCLUDED.project_access, updated_at = now()`, [mode]);
   invalidateProjectAccessMode();
   return mode;
+}
+
+/**
+ * 화면 · 도구에 주는 «지금 이 워크스페이스의 프로젝트 공개» 한 벌 — 방식과, 그것이 실제로 강제되는가.
+ *  enforced = 프로젝트 공개범위 축이 켜져 있고 **초대제 칸이 이 DB 에 있다**. 축이 꺼졌거나 칸이 아직 없으면(배포가 스키마를
+ *  맞추는 몇 분 — project-invite-column.ts) 초대제 표시가 아무것도 가리지 않으므로, 화면은 그때 «나만 봅니다» 라고 말하지 않는다.
+ */
+export async function projectAccessInfo(): Promise<{ mode: ProjectAccessMode; enforced: boolean }> {
+  const [mode, axis, col] = await Promise.all([projectAccessMode(), axisOn("project"), ensureInviteOnlyColumn()]);
+  return { mode, enforced: axis && col };
 }

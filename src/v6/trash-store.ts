@@ -5,6 +5,7 @@
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { labelOf, purgeAxesOf, TRASHABLE_SOURCE_SYSTEMS } from "./trash-shape.js";
+import { ensureInviteOnlyColumn, inviteOnlySql } from "./project-invite-column.js";   // #5598 롤 창
 export { previewOf, PREVIEW_BODY_MAX, isMirroredSourceSnapshot, purgeAxesOf, type DeletePreview } from "./trash-shape.js";
 
 // 휴지통 대상 엔티티 — knowledge/project/category + source(#3778: 자료도 지우면 되살릴 문이 있어야 한다.
@@ -95,6 +96,7 @@ export const TRASH_COUNT_CAP = 500;
 export async function countDeleted(opts: { gate: boolean; visibleListIds: number[] | null;
   /** #5522 · #5598 — 지운 비공개 프로젝트(초안 · 초대제)는 만든 사람에게만 센다. null = 거르지 않는다(특권 · 프로젝트 축 꺼짐). */
   privateViewer?: string | null }): Promise<{ knowledge: number; project: number; source: number }> {
+  await ensureInviteOnlyColumn();   // 아래 조회가 뿌리 프로젝트의 칸을 읽는다(롤 창 — 없으면 false 로 읽는다)
   const rows = await q(itemsPool,
     `SELECT latest.entity, LEAST(count(*), $5)::int AS n
        FROM (
@@ -126,7 +128,7 @@ export async function countDeleted(opts: { gate: boolean; visibleListIds: number
                  AND (($4::int[] IS NULL AND $6::text IS NULL)
                    OR (troot.id IS NOT NULL
                        AND ($4::int[] IS NULL OR troot.list_id IS NULL OR troot.list_id = ANY($4))
-                       AND ($6::text IS NULL OR NOT (COALESCE(troot.draft, false) OR troot.invite_only)
+                       AND ($6::text IS NULL OR NOT (COALESCE(troot.draft, false) OR ${inviteOnlySql("troot")})
                          OR troot.created_by IS NOT DISTINCT FROM $6::text
                          OR EXISTS (SELECT 1 FROM project_member tpm WHERE tpm.project_id = troot.id AND tpm.member_id = $6::text)))
                    OR (troot.id IS NULL AND $6::text IS NOT NULL AND latest.before->>'created_by' IS NOT DISTINCT FROM $6::text))))

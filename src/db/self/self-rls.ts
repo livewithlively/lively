@@ -27,6 +27,7 @@ import { itemsPool } from "../client.js";
 import { logger } from "../../log.js";
 import { ITEMS_CONTENT_TABLES } from "./self-source.js";
 import { visibleFolderIds, listIdPredicate, projectVisFor, projectVisPredicate, type Viewer } from "../../v6/visibility.js";
+import { inviteOnlySql } from "../../v6/project-invite-column.js";   // #5598 롤 창 — projectVisFor 가 먼저 잰다
 
 export const SELF_RLS_ROLE = "lively_reader";
 export const SCOPE_TABLE = "lively_vis_scope";
@@ -178,7 +179,7 @@ async function hiddenSets(viewer: Viewer): Promise<Array<{ kind: ScopeKind; key:
   //  후손을 안 넣으면 task 행의 list_id 가 NULL 이라 그대로 열린다 — v1 에서 실제로 그랬던 결함이다.
   const projRows = await itemsPool.query(`
     WITH RECURSIVE hidden AS (
-      SELECT hp.id FROM project hp WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft OR hp.invite_only)
+      SELECT hp.id FROM project hp WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft OR ${inviteOnlySql("hp")})
          AND NOT (${projectVisPredicate("hp.list_id", "hp.id", pv)})
       UNION ALL
       SELECT c.id FROM project c JOIN hidden h ON c.parent_id = h.id

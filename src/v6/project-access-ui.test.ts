@@ -208,7 +208,9 @@ test("W1 배선 — 목록 줄 · 칸반 · 「리스트」 뷰 · 속성 띠 ·
   assert.match(read("web/v2/panes.ts"), /openProjectSharePopover\(btn, detail\.project,/);
   //  서버가 그 재료를 실어 준다 — 목록 · 상세 응답 둘 다.
   const cap = read("src/capabilities/projects-v6.ts");
-  assert.equal((cap.match(/access: \{ mode: await projectAccessMode\(\), enforced: await axisOn\("project"\) \}/g) || []).length, 2);
+  //   projectAccessInfo = 방식 + 강제되는가(축 켜짐 ∧ 초대제 칸이 이 DB 에 있다 — 롤 창에서는 false 라 화면이 «나만» 이라고 말하지 않는다).
+  assert.equal((cap.match(/access: await projectAccessInfo\(\)/g) || []).length, 2);
+  assert.match(read("src/v6/project-access.ts"), /return \{ mode, enforced: axis && col \};/);
   //  잠긴 리스트 표시도 목록 · 상세 둘 다에 단다.
   assert.equal((cap.match(/await markListLocked\(/g) || []).length, 2);
 });

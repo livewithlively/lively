@@ -643,16 +643,28 @@ export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
  *   한쪽을 고치면 다른 쪽도 고친다. project-invite-only.pg-test 가 두 조건을 다 잰다).
  */
 async function syncPrivateInviteMembers(sessionId: string): Promise<void> {
+  //  «비공개» 조건을 인자로 받는다 — 아래 롤 창 폴백이 초안만 보는 조건으로 한 번 더 돌린다.
+  const run = (privateCond: string) => itemsPool.query(
+    `INSERT INTO project_member(project_id, member_id, role, sort, added_at)
+     SELECT p.id, inv.member_id, 'member', 100 + inv.ord::int, now()
+       FROM org_session_state s
+       JOIN project p ON p.id = s.project_id AND p.level = 'project' AND ${privateCond}
+       CROSS JOIN LATERAL jsonb_array_elements_text(
+         CASE WHEN jsonb_typeof(s.invites) = 'array' THEN s.invites ELSE '[]'::jsonb END) WITH ORDINALITY AS inv(member_id, ord)
+      WHERE s.id = $1 AND inv.member_id <> '' AND inv.member_id IS DISTINCT FROM p.created_by
+     ON CONFLICT (project_id, member_id) DO NOTHING`, [sessionId]);
   try {
-    const r = await itemsPool.query(
-      `INSERT INTO project_member(project_id, member_id, role, sort, added_at)
-       SELECT p.id, inv.member_id, 'member', 100 + inv.ord::int, now()
-         FROM org_session_state s
-         JOIN project p ON p.id = s.project_id AND p.level = 'project' AND (p.draft OR p.invite_only)
-         CROSS JOIN LATERAL jsonb_array_elements_text(
-           CASE WHEN jsonb_typeof(s.invites) = 'array' THEN s.invites ELSE '[]'::jsonb END) WITH ORDINALITY AS inv(member_id, ord)
-        WHERE s.id = $1 AND inv.member_id <> '' AND inv.member_id IS DISTINCT FROM p.created_by
-       ON CONFLICT (project_id, member_id) DO NOTHING`, [sessionId]);
+    let r;
+    try {
+      r = await run("(p.draft OR p.invite_only)");
+    } catch (e) {
+      //  롤 창(#5598) — 매니지드 롤은 새 코드를 띄운 뒤에야 공용 DB 에 project.invite_only 칸을 만든다. 그 몇 분 동안은 칸이 없다
+      //   (42703). 칸이 없으면 초대제 프로젝트도 없으니 초안만 보고 다시 돌린다 — 안 그러면 그 사이 초안 세션에 초대한 사람이
+      //   못 들어온다. v6/project-invite-column.ts 의 가드를 쓰지 않는 까닭: 이 모듈은 노드 에이전트 번들에 실리고, 동적 import 도
+      //   번들에 그대로 들어가 v6 를 끌고 온다(scripts/build-node-agent.mjs 가드).
+      if ((e as { code?: string })?.code !== "42703") throw e;
+      r = await run("p.draft");
+    }
     //  팀원이 늘었으면 그 사람의 «숨은 프로젝트» 캐시(15초)를 버린다 — 안 버리면 초대 직후 잠깐 «없는 세션» 으로 보인다.
     //  동적 import: 이 모듈은 v6 를 정적으로 끌지 않는다(세션 상태는 v6 보다 아래 층이다).
     if ((r.rowCount ?? 0) > 0) await import("../v6/visibility.js").then((m) => m.invalidateVisibilityCache());
