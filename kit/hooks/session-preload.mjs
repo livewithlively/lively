@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside } from "./record-scope.mjs";
+import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside, sessionOff, sessionOffNotice, isSessionId } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -706,32 +706,58 @@ const PLUGIN_INSTALL = (() => {
   try { return existsSync(join(dirname(dirname(fileURLToPath(import.meta.url))), ".claude-plugin", "plugin.json")); } catch { return false; }
 })();
 
+// 사람에게 한 줄(systemMessage)을 그리지 않는 화면인가 — 그러면 AI 가 첫 답 끝에 그 한 줄을 대신 말하게 한다(record-scope.mjs insideNotice 의 say).
+//  클로드 터미널(CLAUDE_CODE_ENTRYPOINT=cli)은 시작 배너 아래에 그린다(2.1.327 실측). 데스크톱 앱 Code 탭은 훅은 돌지만 그 한 줄이 화면에
+//  없다(2026-11-18 상민님 화면 실측). 데스크톱 진입점 값은 클로드 바이너리(2.1.327)의 데스크톱 묶음 그대로다 — 재지 않은 화면(VS Code 확장 등)은
+//  넣지 않는다(그 화면이 한 줄을 그리면 두 번 말하게 된다). 사람 없이 도는 실행(표의 headless)은 읽을 사람이 없어 뺀다.
+const DESKTOP_ENTRYPOINTS = new Set(["claude-desktop", "claude-desktop-3p", "local-agent"]);
+function lineHidden() {
+  const h = harness(HARNESS);
+  if (h.id !== "claude") return false;
+  return DESKTOP_ENTRYPOINTS.has(String(process.env.CLAUDE_CODE_ENTRYPOINT || "").trim()) && !h.headless({}, process.env);
+}
+
 // 기록 범위(#5016) — 범위 밖(작업 폴더 밖 · 제외 폴더 안)에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
 //  여기서만 하는 일 셋: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
 //  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다
 //  ③ 범위 안이면 «켜져 있다 · 끄는 법» 알림을 정해 둔다(ON_NOTICE — 내보내기는 emitContext 가 회사 맥락과 함께 한다).
 //  키트 자가 업데이트는 기록이 아니라서 범위 밖에서도 띄운다 — 안 그러면 이 기능의 고침도 그 컴퓨터에 영영 안 닿는다.
 //  라이블리가 띄운 세션(SPAWNED)은 판정할 것이 없다(언제나 켬) — 입력도 안 읽고 종전 경로 그대로 간다.
+const envSessionId = () => {
+  if ((harness(HARNESS).id || "claude") !== "claude") return "";
+  const v = String(process.env.CLAUDE_CODE_SESSION_ID || "").trim();
+  return isSessionId(v) ? v : "";
+};
+function emitSessionOff(sid, again) {
+  const n = sessionOffNotice({ sid, harness: harness(HARNESS).id || "claude", lively: join(homedir(), ".lively") });
+  process.stdout.write(JSON.stringify({ ...(again ? {} : { systemMessage: n.user }), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
+}
 async function scopeGate() {
   const input = await readHookInput();
   const lively = join(homedir(), ".lively");
+  //  세션 id — 훅 입력이 정본이다. 입력을 제때 못 읽었으면 클로드가 훅에 싣는 env(지금 세션 값 — 2.1.327 실측)로 메운다.
+  const hid = harness(HARNESS).id || "claude";
+  const sid = String(input.session_id || input.sessionId || "") || envSessionId();
+  //  사람이 꺼 둔 세션(이 세션만 끄기)이 다시 시작했다(이어 열기 · 압축 뒤) — 꺼진 채로 두고 그 사실과 다시 켜는 법만 알린다.
+  //   서버 왕복(설정 맞추기)보다 먼저 가른다 — 꺼 둔 세션은 게이트웨이를 건드리지 않는다(설정은 다음 켜진 세션이 맞춘다).
+  if (sessionOff(sid, lively)) { emitSessionOff(sid, String(input.source || "") === "compact"); return true; }
   let kitVersion = null;
   if (TOKEN) {
     const r = await syncScopeSettings({ lively, gw: GW, token: TOKEN, send: fetch, timeoutMs: 1500 }).catch(() => ({ ok: false }));
     if (r.ok) kitVersion = r.kit_version;
   }
-  const sid = String(input.session_id || input.sessionId || "");
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
   if (d.inScope) {
     clearStartedOutside(sid);   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
     //  켜짐 알림(꺼짐 알림의 짝 — record-scope.mjs insideNotice 머리말). 토큰이 없는 컴퓨터는 연결된 것이 아니라 알리지 않는다.
     //  압축 뒤 다시 도는 시작 훅(source: compact)은 같은 대화의 한가운데다 — AI 안내만 다시 싣고 사람에게 한 줄은 되풀이하지 않는다.
-    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively }) : null;
-    if (on) ON_NOTICE = { user: String(input.source || "") === "compact" ? "" : on.user, ai: on.ai };
+    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, sid, harness: hid, plugin: PLUGIN_INSTALL, lively }) : null;
+    const again = String(input.source || "") === "compact";
+    if (on) ON_NOTICE = { user: again ? "" : on.user, ai: on.ai + (!again && lineHidden() ? "\n" + on.say : "") };
     return false;
   }
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
-  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
+  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: hid, plugin: PLUGIN_INSTALL, lively });
   // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
   //  코덱스(0.157) SessionStart 출력 스키마도 같은 두 칸을 받는다. 그 밖의 어댑터는 이 출력을 버리거나 본문만 꺼낸다.
   process.stdout.write(JSON.stringify({ systemMessage: n.user, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
@@ -745,7 +771,9 @@ async function scopeGate() {
 async function main() {
   if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
   mirrorPluginCreds();                                   // 플러그인 설치면 자격을 ~/.lively 에도 굳힌다(#1473). 키트 설치면 무동작.
-  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) — 아래 전부 건너뜀
+  //  라이블리가 띄운 세션은 범위 판정을 건너뛰지만(언제나 켬) «이 세션만 끄기» 는 듣는다 — 입력을 안 읽는 자리라 클로드의 env 세션 id 로 본다.
+  if (SPAWNED && sessionOff(envSessionId(), join(homedir(), ".lively"))) { emitSessionOff(envSessionId(), false); process.exit(0); }
+  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) · 꺼 둔 세션 — 아래 전부 건너뜀
   // 레포 준비 실패 통지(#1155) — 로컬 마커만 읽으므로 토큰 유무와 무관하게 항상 계산한다(무토큰 세션도 코드는 필요하다).
   const repoNotice = repoStatusNotice();
   if (!TOKEN) { emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n"))); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)

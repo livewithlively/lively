@@ -3115,7 +3115,6 @@ async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLin
     return;
   }
   // remove — 이 폴더를 제외 목록에 넣는다.
-  if (whole) die(`${target} 를 통째로 제외하면 라이블리 프로젝트 폴더 말고는 모두 꺼집니다. 그게 필요하면 조직 관리자에게 «작업 폴더에서만» 방식을 요청하세요 — ${SCOPE_ADMIN_PLACE}.`, 2);
   if (inEx) { say(green(`이미 제외 폴더입니다: ${target}`)); return; }
   const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: target, lively: LIVELY });
   if (d.reason === "excluded") { say(green(`이미 꺼져 있습니다 — 제외 폴더 ${bold(d.root)} 아래입니다.`)); return; }
@@ -3123,7 +3122,78 @@ async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLin
   const r = await change({ exclude_add: [offOrg || target] });
   say(green(offOrg ? `✓ 조직 제외 폴더를 이 컴퓨터에서 다시 켰습니다: ${bold(offOrg)}` : `✓ 제외 목록에 넣었습니다: ${bold(target)}`)
     + dim("\n  이 폴더와 그 아래에서 연 AI 는 이제 라이블리에 연결되지 않습니다(열려 있는 세션도 곧 도구가 내려갑니다).") + syncNote(r.synced));
+  //  홈·디스크 맨 위를 통째로 — 받되(상민님 2026-11-18: 기억시키는 건 사람이 고른 것이다) 무엇이 꺼졌는지 숨기지 않는다.
+  if (whole) say(yellow(`  ⚠ ${target} 는 이 컴퓨터의 거의 모든 폴더를 품습니다 — 라이블리 프로젝트 폴더 말고는 어디서 열어도 꺼집니다. 되돌리기: lively on --remember "${target}"`));
   if (d.reason === "project") say(dim(`  (이 폴더는 라이블리 프로젝트 폴더(${d.root})라 제외해도 켜집니다.)`));
+}
+
+// ── 스위치 — `lively off` · `lively on` (상민님 2026-11-18) ───────────────────────
+//  /lively-disconnect·/lively-connect(코덱스 $lively-disconnect·$lively-connect)가 부르는 것. 기본은 **이 세션만**이다 — 스위치를 누른
+//  그 대화만 끄고 켠다. 이후 세션까지 기억시키려면 `--remember`(= work-root remove|add — 그 폴더와 그 아래 전부, 이 컴퓨터에 남는다).
+//  세션은 `--session <id>`(시작 알림이 AI 에게 준 명령에 실려 온다) 또는 클로드가 셸에 싣는 CLAUDE_CODE_SESSION_ID 로 안다.
+//  표식·판정은 hooks/record-scope.mjs «이 세션만 끄기» — 훅은 그 세션에서 멈추고, 라이블리 도구 호출은 러너가 막는다.
+function switchArgs(rest) {
+  const o = { remember: false, yes: false, session: "", path: "" };
+  for (let i = 0; i < rest.length; i++) {
+    const a = String(rest[i]);
+    if (a === "--remember") o.remember = true;
+    else if (a === "--yes" || a === "-y") o.yes = true;
+    else if (a === "--session") o.session = String(rest[++i] || "");
+    else if (a.startsWith("--session=")) o.session = a.slice(10);
+    else if (!a.startsWith("-") && !o.path) o.path = a;
+    else die(`모르는 인자: ${a}\n사용법: lively off|on [--remember [경로]] [--session <id>]`, 2);
+  }
+  return o;
+}
+const switchSession = (rs, o) => { const sid = o.session || String(process.env.CLAUDE_CODE_SESSION_ID || "").trim(); return rs.isSessionId(sid) ? sid : ""; };
+
+async function cmdOff(rest) {
+  const rs = await loadRecordScope();
+  const o = switchArgs(rest);
+  //  경로를 적었으면 폴더 이야기다 — 세션은 폴더를 고르지 않는다. 둘을 섞은 명령은 받지 않는다: 클로드 커맨드가 `off --session …` 꼴을
+  //   미리 허용하므로(권한 확인 없음), 그 꼴로 폴더까지 꺼지면 «그 아래 전부·영속» 이 확인 없이 돈다.
+  if (o.session && (o.remember || o.path)) die("--session 과 --remember·경로는 함께 쓸 수 없습니다 — 이 세션만: lively off --session <id> · 이 폴더를 앞으로도: lively off --remember [경로]", 2);
+  if (o.remember || o.path) return cmdWorkRoot(["remove", ...(o.path ? [o.path] : [])]);
+  const sid = switchSession(rs, o);
+  const here = sessionFolderOf(rs);
+  if (!sid) {
+    die("어느 세션인지 알 수 없습니다 — AI 세션 안에서 /lively-disconnect(코덱스 $lively-disconnect)를 쓰거나 --session <id> 를 주세요.\n"
+      + `  이 폴더(${here})와 그 아래를 앞으로 여는 세션까지 끄려면: lively off --remember`, 2);
+  }
+  if (rs.sessionOff(sid, LIVELY)) { say(green("이미 이 세션은 꺼 두었습니다.") + dim(`\n  다시 켜기: lively on --session ${sid}`)); return; }
+  const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: here, lively: LIVELY });
+  if (!d.inScope) { say(`이 폴더는 이미 라이블리가 꺼져 있습니다(${d.reason === "excluded" ? "제외 폴더" : "작업 폴더 밖"}) — 끌 것이 없습니다.`); return; }
+  if (!rs.markSessionOff(sid, LIVELY)) die("이 세션을 끄지 못했습니다(표식 파일을 쓸 수 없습니다).", 1);
+  say(green("✓ 이 세션에서 라이블리를 껐습니다.") + dim(` (세션 ${sid})`)
+    + dim("\n  지금부터 기록·대화 업로드가 멈추고 라이블리 도구 호출이 막힙니다. 이미 올라간 앞부분 대화는 그대로 남습니다."
+      + "\n  이 세션에만 적용됩니다 — 새 세션은 다시 켜진 채로 시작합니다."));
+  say(`  다시 켜기: /lively-connect ${dim(`(lively on --session ${sid})`)}`);
+  //  기억시키는 법 — 원하는 사람만. 폴더로는 못 끄는 자리(프로젝트 폴더)는 그렇다고 말한다.
+  if (d.reason === "project") say(dim(`  (이 폴더는 라이블리 프로젝트 폴더(${d.root})라 폴더 단위로는 끌 수 없습니다 — 세션마다 끄거나 lively run --incognito 로 엽니다.)`));
+  else if (d.reason === "work_root" && key2(rs, d.root) !== key2(rs, here)) say(`  이후 세션에서도 끄려면: 작업 폴더 ${bold(d.root)} 를 목록에서 뺍니다 — lively off --remember "${d.root}" ${dim("(그 폴더와 그 아래 모든 폴더에 적용됩니다)")}`);
+  else say(`  이후 세션에서도 이 폴더를 끄려면: /lively-disconnect 기억 ${dim("(lively off --remember)")} — ${bold(here)} 와 그 아래 모든 폴더에 적용됩니다.`);
+}
+const key2 = (rs, p) => rs.rootKey(p, HOME);
+
+async function cmdOn(rest) {
+  const rs = await loadRecordScope();
+  const o = switchArgs(rest);
+  if (o.session && (o.remember || o.path)) die("--session 과 --remember·경로는 함께 쓸 수 없습니다 — 꺼 둔 세션 켜기: lively on --session <id> · 이 폴더를 앞으로도: lively on --remember [경로]", 2);
+  if (o.remember || o.path) return cmdWorkRoot(["add", ...(o.path ? [o.path] : [])]);
+  const sid = switchSession(rs, o);
+  if (sid && rs.sessionOff(sid, LIVELY)) {
+    //  다시 켜면 대화 업로드 훅이 이 대화 파일을 다시 올린다 — 꺼 둔 동안의 대화가 함께 간다. 사람이 알고 고르게 한 번 멈춘다.
+    if (!o.yes) {
+      say(yellow("이 세션은 꺼 둔 상태입니다. 다시 켜면 꺼 둔 동안의 대화도 대화 기록에 올라갑니다."));
+      say(`  그래도 켜려면: lively on --session ${sid} --yes`);
+      process.exit(3);
+    }
+    rs.clearSessionOff(sid, LIVELY);
+    say(green("✓ 이 세션에서 라이블리를 다시 켰습니다.") + dim("\n  다음 메시지부터 기록·대화 업로드·라이블리 도구가 돌아옵니다."));
+    return;
+  }
+  //  꺼 둔 세션이 아니다 — 폴더가 꺼져 있는 것이다. 폴더는 세션 하나만 켤 수 없어(도구를 주는 MCP 프록시가 세션을 모른다) 이 컴퓨터에 남긴다.
+  return cmdWorkRoot(["add"]);
 }
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
@@ -3455,6 +3525,8 @@ ${bold("작업")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
   scope                               이 컴퓨터의 기록 범위 조회 ${dim("(방식 — 작업 폴더에서만 | 어디서나 — 은 조직 관리자가 정함)")}
   work-root [list|add|remove] [경로]  이 폴더에서 라이블리 켜기(add)·끄기(remove) — 방식에 맞춰 작업 폴더·제외 폴더 목록을 바꿈 ${dim("(경로 생략 = 지금 폴더 · /lively-connect·/lively-disconnect 가 부르는 것)")}
+  off [--remember [경로]]           이 세션에서 라이블리 끄기 ${dim("(기본은 이 세션만 · --remember = 이 폴더와 그 아래를 앞으로 여는 세션까지 · /lively-disconnect 가 부르는 것)")}
+  on [--remember [경로]]            꺼 둔 세션 다시 켜기, 꺼진 폴더면 이 폴더 켜기 ${dim("(/lively-connect 가 부르는 것)")}
   workspace              지금 매여 있는 워크스페이스 + 이 PC 노드가 같은 곳을 보고 있는지
       switch             다른 워크스페이스로 옮기기 ${dim("(다시 로그인 — 노드·MCP 도 함께 따라갑니다)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
@@ -3751,6 +3823,8 @@ async function dispatch(cmd, o, argv) {
     case "mode": return cmdMode(argv.slice(argv.indexOf("mode") + 1));
     case "scope": return cmdScope(argv.slice(argv.indexOf("scope") + 1));
     case "work-root": return cmdWorkRoot(argv.slice(argv.indexOf("work-root") + 1));
+    case "off": return cmdOff(argv.slice(argv.indexOf("off") + 1));
+    case "on": return cmdOn(argv.slice(argv.indexOf("on") + 1));
     // workspace — 지금 어느 워크스페이스에 매여 있나 + 전환(#2215). 계정 하나가 여러 워크스페이스에 속한다.
     case "workspace": return cmdWorkspace(argv.slice(argv.indexOf("workspace") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).

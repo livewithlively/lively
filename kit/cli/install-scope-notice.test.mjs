@@ -86,7 +86,8 @@ try {
   //  /lively-connect 본문(user-install.mjs connectCommandFiles)도 같은 node 판정으로 같은 명령을 싣는다 — 세 번째 사본의 드리프트를 잡는다.
   for (const o of same.filter((x) => x.win && !x.dir)) {
     const body = connectCommandFiles({ format: "codex", win: true, nodeBin: winNodeBin(o.nodeExe), cliPath: o.cliPath.replace(/\\/g, "/") })[0].text;
-    const want = `\`${workRootAddCommand(o)} "<폴더>"\``;
+    //  본문의 켜기 명령은 `… on`(스위치 — 기본은 이 세션만)이다. 앞머리(lively | node 직결)가 등록 명령과 같은 판정이어야 한다.
+    const want = `\`${workRootAddCommand(o).replace(/ work-root add$/, "")} on\``;
     check(`W1 /lively-connect 본문도 같은 명령 — ${o.nodeExe}`, body.includes(want), `want=${want}\n${body}`);
   }
   const winHint = workRootAddHint({ win: true, nodeExe: NODE, cliPath: CLI_JS });

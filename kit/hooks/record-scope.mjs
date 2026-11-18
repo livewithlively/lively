@@ -42,7 +42,7 @@
 //   LIVELY_SESSION_DIR(어댑터가 실음) > CLAUDE_PROJECT_DIR(클로드가 훅·MCP 에 싣는 시작 폴더) > 훅 입력 cwd > 프로세스 cwd.
 //
 // 이 파일은 네트워크를 직접 부르지 않는다 — 서버 왕복은 호출자가 넘긴 send(HostEffects fetch)로만 한다(kit R5).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync, renameSync, unlinkSync, readdirSync, statSync, utimesSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -305,9 +305,14 @@ export function decideRecordScope({ env = process.env, dir = "", lively = lively
 }
 
 /** 훅·프록시용 한 줄 — 판정만 필요할 때. 판정 자체가 터지면(예상 밖 파일 상태) 종전 동작으로 둔다. */
+//  «이 세션만 끔»(아래 «이 세션만 끄기» 절)이 먼저다 — 훅 입력에 세션 id 가 실려 올 때만 본다. 폴더 판정과 달리 세션에 붙은 값이라
+//  세션 id 를 모르는 호출자(MCP 프록시 — 프로세스가 뜰 때의 세션만 안다)는 보지 않는다. 그 세션의 도구 호출은 러너(run-custom)가 막는다.
 export function inScopeNow({ env = process.env, input = null, cwd = process.cwd(), harness = "", lively = livelyDirOf(env) } = {}) {
-  try { return decideRecordScope({ env, dir: sessionDirOf({ env, input, cwd, harness }), lively }); }
-  catch { return { inScope: true, reason: "error", dir: "" }; }
+  try {
+    const dir = sessionDirOf({ env, input, cwd, harness });
+    if (sessionOff(hookSessionId(input), lively)) return { inScope: false, reason: "session_off", dir };
+    return decideRecordScope({ env, dir, lively });
+  } catch { return { inScope: true, reason: "error", dir: "" }; }
 }
 
 // ── 이 컴퓨터 id ─────────────────────────────────────────────────────────────
@@ -472,11 +477,15 @@ export function outsideNotice({ dir = "", reason = "outside", root = "", harness
 // ── 범위 안 알림(켜짐) ───────────────────────────────────────────────────────
 //  꺼짐 알림의 짝이다(상민님 2026-11-18): 라이블리가 켜진 세션도 시작할 때 «켜져 있다» 와 «끄는 법» 을 한 줄로 보인다 —
 //  사람이 «내가 정한 범위 안에서 돈다» 를 매 세션 눈으로 확인하고, 끄는 손잡이를 찾아다니지 않게 한다.
-//  끄는 손잡이는 이유마다 다르다(판정 decideRecordScope 의 reason 그대로):
+//  기본 스위치는 **이 세션만 끄기**다(상민님 2026-11-18): 스위치를 누른 그 대화만 끄고, 이후 세션까지 기억시키는 건 원하는 사람만 따로
+//   고른다(`lively off --remember` — 그 폴더와 그 아래 전부). 세션 id 를 아는 하네스(클로드·코덱스)는 어느 자리에서든 이 스위치를 가리킨다.
+//  세션 id 를 모르는 자리(그 밖의 하네스 · 플러그인)는 종전대로 폴더 손잡이를 가리키고, 그 손잡이는 이유마다 다르다(판정 reason 그대로):
 //   anywhere · work_root — 목록으로 끈다(/lively-disconnect = `lively work-root remove`). work_root 인데 세션 폴더가 등록 폴더의
 //     **아래**면 그 등록 폴더(root)를 빼야 꺼진다(그 아래 전부가 꺼진다 — 사람이 알고 고르게 한다).
 //   project · unsynced — 목록으로는 못 끈다(프로젝트 표식은 제외해도 켜지고, 설정 사본이 없으면 목록 자체가 없다) →
 //     라이블리 없이 다시 여는 명령(`lively run --incognito`)을 가리킨다. 플러그인만 깐 자리엔 그 명령이 없어 켜짐만 말한다.
+//  say — 사람에게 한 줄을 그리지 않는 화면(클로드 데스크톱 앱 Code 탭 — 훅은 돌지만 systemMessage 가 안 보인다, 2026-11-18 화면 실측)에서
+//   AI 가 첫 답 끝에 그 한 줄을 대신 말하게 하는 지시문. 붙일지는 부르는 쪽(session-preload)이 화면을 보고 정한다.
 //   spawned — 알림 없음(null). 사람이 라이블리로 켜겠다고 고른 세션이고(웹·노드·`lively run`) 폴더 손잡이도 없다.
 /** 이 하네스에서 «여기 끄기» 를 부르는 말 — connectHint 의 짝. */
 export function disconnectHint(harness = "claude", { plugin = false, removeCmd = workRootRemoveCommand() } = {}) {
@@ -489,7 +498,7 @@ export function disconnectHint(harness = "claude", { plugin = false, removeCmd =
 
 /** 범위 안 세션 시작 알림 — 사람에게 한 줄(user) + AI 에게 짧은 안내(ai). 알릴 것이 없으면 null.
  *  ai 는 회사 맥락 **앞**에 붙는다 — 하네스가 긴 훅 출력을 앞 2,000자 미리보기로 자르므로(#4503) 짧게 쓴다. */
-export function insideNotice({ dir = "", reason = "", root = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
+export function insideNotice({ dir = "", reason = "", root = "", sid = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
   if (!["anywhere", "work_root", "project", "unsynced"].includes(reason)) return null;
   const cli = { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") };
   const remove = (d = "") => workRootRemoveCommand({ ...cli, dir: d });
@@ -497,26 +506,37 @@ export function insideNotice({ dir = "", reason = "", root = "", harness = "clau
   const head = "## 라이블리 켜짐 — 이 세션은 연결돼 있다";
   const on = "회사 맥락 주입·기록·대화 업로드·라이블리 도구가 이 세션에서 동작한다.";
   const ask = "사람이 요청하지 않았는데 끄지 마라.";
+  const done = (user, lines) => ({ user, ai: lines.join("\n"),
+    say: `이 화면은 켜짐 알림을 사람에게 따로 보여 주지 않는다. 사람에게 처음 답할 때 답 맨 끝에 한 줄로 «${user}» 를 덧붙여라 — 이 대화에서 한 번만.` });
+  const sameDir = (a, b) => normPath(a) === normPath(b) || (!!real(a) && !!real(b) && normPath(real(a)) === normPath(real(b)));
+  //  이 세션만 끄기(기본 스위치) — 세션 id 를 아는 하네스(클로드·코덱스 키트 설치)는 어느 자리에서든 듣는다(프로젝트 폴더 · 홈 · 설정 미수신 포함).
+  //   끄는 명령은 세션 id 를 실어 그대로 준다 — 코덱스의 셸에는 세션 id 가 없다(클로드는 env CLAUDE_CODE_SESSION_ID 로도 안다).
+  if (!plugin && (h === "claude" || h === "codex") && SID_RE.test(String(sid || ""))) {
+    const hint = disconnectHint(h);
+    const off = cliLine(`off --session ${sid}`, cli);
+    const where = reason === "project" ? (safeDir(root) ? `이 세션을 연 폴더는 라이블리 프로젝트 폴더(\`${root}\`)라` : "이 세션을 연 폴더는 라이블리 프로젝트 폴더라")
+      : reason === "unsynced" ? "이 컴퓨터는 기록 범위 설정을 아직 받지 못해(종전 동작)"
+      : reason === "anywhere" ? "이 컴퓨터는 «어디서나» 방식(조직 설정)이라"
+      : safeDir(root) ? `이 세션을 연 폴더가 이 컴퓨터의 라이블리 작업 폴더(\`${root}\`) 안이라` : "이 세션을 연 폴더가 이 컴퓨터의 라이블리 작업 폴더 안이라";
+    return done(`[라이블리] 켜져 있습니다 · 이 세션에서 끄려면 ${hint}`, [head, `${where} 라이블리가 켜져 있다 — ${on}`,
+      `사람이 연결 상태를 묻거나 끄고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 \`${off}\` 를 실행하라${isDirect(off) ? `(${PS_NOTE})` : ""} — 이 세션만 꺼진다(지금부터 기록·업로드가 멈추고 라이블리 도구가 막힌다). 끈 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라. 이후 세션에도 적용하는 법은 그 명령의 결과가 알려 준다.`,
+      ask]);
+  }
   if (reason === "project" || reason === "unsynced") {
     const why = reason === "project"
       ? (safeDir(root) ? `이 세션을 연 폴더는 라이블리 프로젝트 폴더(\`${root}\`)라` : "이 세션을 연 폴더는 라이블리 프로젝트 폴더라")
       : "이 컴퓨터는 기록 범위 설정을 아직 받지 못해(종전 동작)";
     const label = reason === "project" ? "[라이블리] 켜져 있습니다(라이블리 프로젝트 폴더)" : "[라이블리] 켜져 있습니다";
-    if (plugin) return { user: label, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, ask].join("\n") };
+    if (plugin) return done(label, [head, `${why} 라이블리가 켜져 있다 — ${on}`, ask]);
     const run = runIncognitoCommand({ ...cli, harness: h });
-    return {
-      user: `${label} · 라이블리 없이 열려면 ${isDirect(run) ? `\`${run}\`` : run}`,
-      ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`,
-        `이 폴더는 목록으로 끌 수 없다. 사람이 연결 상태를 묻거나 라이블리 없이 일하고 싶다고 하면, 이 세션을 닫고 셸에서 \`${run}\` 로 다시 열라고 안내하라${isDirect(run) ? `(${PS_NOTE})` : ""}.`,
-      ].join("\n"),
-    };
+    return done(`${label} · 라이블리 없이 열려면 ${isDirect(run) ? `\`${run}\`` : run}`, [head, `${why} 라이블리가 켜져 있다 — ${on}`,
+      `이 폴더는 목록으로 끌 수 없다. 사람이 연결 상태를 묻거나 라이블리 없이 일하고 싶다고 하면, 이 세션을 닫고 셸에서 \`${run}\` 로 다시 열라고 안내하라${isDirect(run) ? `(${PS_NOTE})` : ""}.`]);
   }
   const hint = disconnectHint(h, { plugin, removeCmd: remove() });
   const user = plugin ? `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}하세요` : `[라이블리] 켜져 있습니다 · 여기서 끄려면 ${hint}`;
   //  등록 폴더의 아래에서 켠 세션 — 이 폴더만은 못 끈다. 품은 등록 폴더를 빼야 하고 그 아래 전부가 꺼진다.
   //   같은 폴더인지는 실제 경로로도 본다(심링크 · /var ↔ /private/var) — 판정(matchWorkRoot)과 같은 기준이라 같은 자리에 «그 아래 전부» 를 붙이지 않는다.
   //   세션 폴더는 따로 짚는다 — «여기 끄기» 커맨드가 말하는 «세션을 연 폴더» 가 품은 작업 폴더로 읽히지 않게(그 폴더를 빼는 건 사람이 고른 뒤다).
-  const sameDir = (a, b) => normPath(a) === normPath(b) || (!!real(a) && !!real(b) && normPath(real(a)) === normPath(real(b)));
   const parent = reason === "work_root" && safeDir(root) && dir && !sameDir(dir, root) ? root : "";
   const here = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)가` : "이 세션을 연 폴더가";
   const why = reason === "anywhere" ? `이 컴퓨터는 «어디서나» 방식(조직 설정)이고 ${here} 제외 폴더가 아니라서`
@@ -530,7 +550,67 @@ export function insideNotice({ dir = "", reason = "", root = "", harness = "clau
     : `사람이 연결 상태를 묻거나 여기서 끄고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — `
       + (parent ? `이 폴더만은 못 끄고 작업 폴더 \`${parent}\` 를 목록에서 빼야 한다 — 그 아래 전부가 꺼진다는 것을 사람에게 먼저 말하고 고르게 하라. ` : "")
       + "끄면 이 세션도 그때부터 기록·업로드·도구가 멈추니 그 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라.";
-  return { user, ai: [head, `${why} 라이블리가 켜져 있다 — ${on}`, how, ask].join("\n") };
+  return done(user, [head, `${why} 라이블리가 켜져 있다 — ${on}`, how, ask]);
+}
+
+// ── 이 세션만 끄기 ───────────────────────────────────────────────────────────
+//  스위치의 기본이다(상민님 2026-11-18): «여기 끄기» 는 그 대화만 끈다. 표식 파일 하나(~/.lively/session-off/<세션 id>).
+//   ⚠ tmp 가 아니라 ~/.lively 아래다 — 표식은 셸의 CLI(`lively off`)가 쓰고 훅이 읽는데, 하네스가 셸 도구에 다른 TMPDIR 을 줄 수 있어
+//    (샌드박스 셸) tmp 에 두면 쓴 자리와 읽는 자리가 갈린다. 홈은 둘이 같다(기록 범위 사본 record-scope.json 과 같은 전제).
+//  누가 보나 — 세션 id 를 훅 입력으로 받는 쪽 전부(inScopeNow 에 input 을 넘기는 훅: run-custom · work-flag · stop-writeback-gate · 시작 훅).
+//   MCP 프록시는 보지 않는다: 프록시는 하네스가 뜰 때의 세션 id 만 env 로 알고 /clear 뒤에도 그 값이 그대로다(클로드 2.1.327 실측 — 훅·셸의
+//   CLAUDE_CODE_SESSION_ID 는 새 값으로 바뀌는데 프록시 프로세스는 옛 값). 프록시가 그 값으로 판정하면 새 대화가 켜졌는데 도구만 꺼진 반쪽이 된다.
+//   그래서 꺼 둔 세션의 라이블리 도구 호출은 러너(run-custom PreToolUse)가 막는다 — 훅은 언제나 지금 세션 id 를 받는다.
+//  /clear 로 새 대화를 열면 세션 id 가 바뀌어 다시 켜진 채로 시작한다(시작 알림이 다시 뜬다). 이어 열기(resume)는 같은 id 라 꺼진 채다.
+const OFF_DIR = "session-off";
+//  끝난 세션의 표식은 걷는다 — 단 기준은 «세운 때» 가 아니라 **마지막으로 그 세션이 표식을 읽은 때**다(읽을 때 시각을 갱신한다).
+//   세운 때로 걷으면 오래 이어 쓰는 세션의 표식이 사라져, 꺼 둔 대화가 경고 없이 다시 올라간다(격리 리뷰 2026-11-18).
+const OFF_KEEP_MS = 90 * 24 * 3600 * 1000;   // 석 달 동안 한 번도 안 쓰인 세션
+const OFF_TOUCH_MS = 24 * 3600 * 1000;       // 시각 갱신은 하루에 한 번이면 충분하다(훅마다 쓰지 않는다)
+const offMarker = (sid, lively) => join(lively, OFF_DIR, String(sid));
+/** 훅 입력의 세션 id(클로드·코덱스 session_id · 어댑터 sessionId). 없으면 빈 문자열. */
+export const hookSessionId = (input) => (input && typeof input === "object" ? String(input.session_id || input.sessionId || "") : "");
+export const isSessionId = (sid) => SID_RE.test(String(sid || ""));
+export function markSessionOff(sid, lively = livelyDirOf()) {
+  if (!isSessionId(sid)) return false;
+  try {
+    const dir = join(lively, OFF_DIR);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of readdirSync(dir)) { try { if (Date.now() - statSync(join(dir, f)).mtimeMs > OFF_KEEP_MS) unlinkSync(join(dir, f)); } catch { /* 경합 */ } }
+    writeFileSync(offMarker(sid, lively), new Date().toISOString() + "\n");
+    return true;
+  } catch { return false; }
+}
+export function sessionOff(sid, lively = livelyDirOf()) {
+  if (!isSessionId(sid)) return false;
+  const f = offMarker(sid, lively);
+  try {
+    const st = statSync(f);
+    if (Date.now() - st.mtimeMs > OFF_TOUCH_MS) { try { const now = new Date(); utimesSync(f, now, now); } catch { /* 읽기 전용 홈 — 판정은 그대로 */ } }
+    return true;
+  } catch { return false; }
+}
+export function clearSessionOff(sid, lively = livelyDirOf()) {
+  if (!isSessionId(sid)) return false;
+  try { unlinkSync(offMarker(sid, lively)); return true; } catch { return false; }
+}
+
+/** 꺼 둔 세션이 다시 시작할 때(이어 열기 · 압축 뒤)의 알림 — 사람에게 한 줄 + AI 안내. 다시 켜는 명령은 세션 id 를 실어 그대로 준다. */
+export function sessionOffNotice({ sid = "", harness = "claude", win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
+  const h = String(harness || "claude").toLowerCase();
+  const hint = connectHint(h, { addCmd: cliLine("on", { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") }) });
+  const onCmd = cliLine(`on --session ${isSessionId(sid) ? sid : "<세션 id>"}`, { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") });
+  return { user: `[라이블리] 이 세션은 꺼 두었습니다 · 다시 켜려면 ${hint}`, ai: [
+    "## 라이블리 꺼짐 — 이 세션만",
+    "사람이 이 세션에서 라이블리를 꺼 두었다 — 회사 맥락 주입·기록·대화 업로드가 없고 라이블리 도구 호출은 막힌다.",
+    "다른 곳(예: ~/.codex/AGENTS.md)에 라이블리 블록이 남아 있어도 그 규칙(기록하라 등)은 이 세션에 적용하지 마라.",
+    `사람이 다시 켜고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 \`${onCmd}\` 를 실행하라 — 다시 켜면 꺼 둔 동안의 대화도 대화 기록에 올라간다는 것을 먼저 말하라.`,
+    "사람이 요청하지 않았는데 켜지 마라.",
+  ].join("\n") };
+}
+/** 꺼 둔 세션에서 라이블리 도구를 부르면 러너가 돌려주는 말. */
+export function sessionOffToolText(harness = "claude") {
+  return `이 세션은 라이블리를 꺼 두었습니다 — 라이블리 도구를 쓰지 않습니다. 사람이 다시 켜 달라고 하면 ${connectHint(String(harness || "claude").toLowerCase())} 를 안내하세요.`;
 }
 
 // ── 세션 중간 연결(늦은 맥락 주입) ───────────────────────────────────────────
