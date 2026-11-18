@@ -954,7 +954,7 @@ export function workRootAddCommand({ win, nodeExe, cliPath, dir = "" }) {
 /** (순수) 사람에게 보이는 «작업 폴더 등록» 안내. node 직결형이면 긴 셸 명령보다 AI 세션 안의 /lively-connect 를 먼저 말한다. */
 export function workRootAddHint(opts) {
   const cmd = workRootAddCommand(opts);
-  return cmd.startsWith("& ") ? `/lively-connect(AI 세션 안, 코덱스는 /prompts:lively-connect) 또는 PowerShell 의 ${cmd}` : cmd;
+  return cmd.startsWith("& ") ? `/lively-connect(AI 세션 안, 코덱스는 $lively-connect) 또는 PowerShell 의 ${cmd}` : cmd;
 }
 const addHint = () => workRootAddHint({ win: WIN, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs") });
 
@@ -3037,7 +3037,7 @@ function listScope(rs) {
 }
 
 // `lively work-root [list | add [경로] | remove [경로]]` — 이 폴더에서 라이블리 켜기·끄기(방식에 맞춰 목록을 바꾼다). 경로를 빼면 지금 세션 폴더다.
-//  `/lively-connect`(클로드)·`/prompts:lively-connect`(코덱스)가 부르는 것이 `add`, `/lively-disconnect` 가 부르는 것이 `remove` 다.
+//  `/lively-connect`(클로드)·`$lively-connect`(코덱스 스킬)가 부르는 것이 `add`, `/lively-disconnect`·`$lively-disconnect` 가 부르는 것이 `remove` 다.
 async function cmdWorkRoot(rest) {
   const rs = await loadRecordScope();
   const sub = rest[0] || "list";

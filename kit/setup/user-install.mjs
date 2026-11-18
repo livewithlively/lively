@@ -508,7 +508,9 @@ function agentsMerge(existing, ctx) {
 //   정작 필요한 그 자리에 없다. 표식 줄(CONNECT_MARK)이 있는 파일만 덮고 지운다 — 같은 이름의 사용자 파일은 안 건드린다.
 //  하네스마다 커맨드 파일 꼴이 다르다(harness-registry 의 assets.command.compose 와 같은 구분):
 //   claude·grok·opencode·antigravity = frontmatter(description) + 본문 · codex = 본문만(frontmatter 가 프롬프트로 샌다)
-//   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다).
+//   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다) · skill = 스킬 폴더(<id>/SKILL.md — name·description frontmatter).
+//  ⚠ 코덱스는 **스킬이 정본**이다(2026-11-18 실측, 0.170.0): 커스텀 프롬프트가 빠져 `/prompts:lively-connect` 는 «Unrecognized command» 고,
+//   `$` 선택창에 스킬이 뜬다 → `$lively-connect`·`$lively-disconnect`. 프롬프트 파일(codex 꼴)은 그 기능이 남아 있는 옛 코덱스용으로 계속 깐다.
 export const CONNECT_MARK = "lively-managed: record-scope(#5016)";
 //  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
 //   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
@@ -520,9 +522,12 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
   const lv = direct || "lively";
   //  자리표시 `$ARGUMENTS` 는 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스)에서 두 번 쓰면 «경로(~/w)를, 비었거나 `~/w` 그대로면…»
   //  처럼 스스로 모순이 된다. 치환 안 하는 하네스를 위해 «달러로 시작하는 글자 그대로면 없는 것» 을 말로만 덧붙인다.
-  const session = "이 세션을 연 폴더(세션 시작 때 라이블리가 «작업 폴더 밖» 안내에 적어 준 폴더 — 없으면 지금 작업 폴더)";
-  const folderRule = `<폴더> 자리에는 사람이 이 커맨드 뒤에 적은 경로가 있으면 그것을, 없으면 ${session}의 절대경로를 넣는다. 사람이 적은 경로: «$ARGUMENTS»`
-    + (win || format === "cursor" || format === "frontmatter" ? " (비었거나 달러 기호로 시작하는 글자 그대로 남아 있으면 적은 경로가 없는 것이다)" : "");
+  const session = "이 세션을 연 폴더(세션 시작 때 라이블리가 켜짐·꺼짐 안내에 적어 준 폴더 — 없으면 지금 작업 폴더)";
+  //  스킬(코덱스)은 자리표시를 치환하지 않는다 — 넣지 않고 «사람이 말한 경로» 로 쓴다.
+  const folderRule = format === "skill"
+    ? `<폴더> 자리에는 사람이 요청하며 말한 경로가 있으면 그것을, 없으면 ${session}의 절대경로를 넣는다.`
+    : `<폴더> 자리에는 사람이 이 커맨드 뒤에 적은 경로가 있으면 그것을, 없으면 ${session}의 절대경로를 넣는다. 사람이 적은 경로: «$ARGUMENTS»`
+      + (win || format === "cursor" || format === "frontmatter" ? " (비었거나 달러 기호로 시작하는 글자 그대로 남아 있으면 적은 경로가 없는 것이다)" : "");
   const cmds = [
     //  명령은 조직이 정한 방식(작업 폴더에서만 | 어디서나)에 맞춰 목록을 고른다 — 작업 폴더로 등록하거나 제외 목록에서 뺀다(kit/cli/lively.mjs cmdWorkRoot).
     { id: "lively-connect", description: "지금 폴더에서 라이블리를 켜고 이 세션을 바로 연결합니다(작업 폴더로 등록하거나 제외 목록에서 뺍니다)",
@@ -546,6 +551,8 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
   return cmds.map((c) => {
     let text;
     if (format === "codex") text = `${note}\n\n${c.body}\n`;
+    //  스킬은 설명이 모델의 목록에 늘 실린다 — 사람이 시켰을 때만 쓰라고 설명에 못박는다(스스로 켜고 끄지 않게).
+    else if (format === "skill") return { id: c.id, file: join(c.id, "SKILL.md"), text: `---\nname: ${JSON.stringify(c.id)}\ndescription: ${JSON.stringify(`${c.description} — 사람이 요청했을 때만 쓴다`)}\n---\n\n${note}\n\n${c.body}\n` };
     else if (format === "cursor") text = `${c.description}\n\n${note}\n\n${c.body}\n`;
     else {
       // 클로드는 등록 명령을 미리 허용해 둔다 — 범위 밖에서 «여기 연결» 한 번에 권한 확인이 끼지 않게(이 두 명령만).
@@ -563,6 +570,7 @@ export function writeConnectCommands(dir, format, label) {
     let wrote = 0;
     for (const f of connectCommandFiles({ format })) {
       const p = join(dir, f.file);
+      mkdirSync(dirname(p), { recursive: true });   // 스킬 꼴은 <id>/SKILL.md 다
       if (existsSync(p)) {
         let cur = "";
         try { cur = readFileSync(p, "utf8"); } catch { /* 못 읽으면 남의 파일로 본다 */ }
@@ -1797,7 +1805,8 @@ async function main() {
     codex: () => {
       console.log("  ── Codex ──");
       installCodex(ctx, gatewayMcpUrl());
-      writeConnectCommands(join(CODEX, "prompts"), "codex", "Codex");           // /prompts:lively-connect(#5016)
+      writeConnectCommands(join(CODEX, "skills"), "skill", "Codex");            // $lively-connect · $lively-disconnect(스킬 — 0.170 의 정본)
+      writeConnectCommands(join(CODEX, "prompts"), "codex", "Codex(옛 프롬프트)");  // /prompts:lively-connect(#5016 — 커스텀 프롬프트가 남은 옛 코덱스)
     },
     opencode: () => {
       console.log("  ── OpenCode ──");

@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, markStartedOutside, clearStartedOutside } from "./record-scope.mjs";
+import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -80,15 +80,23 @@ const HARNESS = (() => {
 //   codex → JSON 봉투(additionalContext), 그 외(claude/미설정) → raw 텍스트.
 //   opts.reloadSkills(Claude 전용, 자산 sync 자기치유가 이번 세션에 스킬을 materialize 했을 때):
 //   raw 텍스트론 신호를 실을 수 없어 JSON 봉투(additionalContext+reloadSkills)로 전환 — 공식 SessionStart 계약.
+//   켜짐 알림(ON_NOTICE — 아래 scopeGate 가 정한다)이 있으면 사람에게 한 줄(systemMessage)과 AI 안내(맥락 앞)를 함께 싣는다.
+//   한 줄은 raw 텍스트에 실을 수 없어 클로드도 JSON 봉투로 낸다(꺼짐 알림과 같은 두 칸). 훅 출력을 버리는 하네스
+//   (contextEnvelope "file" — opencode·antigravity·grok)는 실을 자리가 없어 종전 출력 그대로다.
+//   opts.contextOff(세션 맥락 주입을 관리자가 끈 조직) — AI 안내는 빼고 사람에게 한 줄만 남긴다.
+let ON_NOTICE = null;
 function emitContext(text, opts = {}) {
   const h = harness(HARNESS);
   const reload = !!opts.reloadSkills && h.reloadAssets;
-  if (!text && !reload) return;
-  if (h.contextEnvelope === "json" || reload) {
+  const n = h.contextEnvelope !== "file" ? ON_NOTICE : null;
+  const body = [n && !opts.contextOff ? n.ai : "", text].filter(Boolean).join("\n\n");
+  const line = n ? n.user : "";
+  if (!body && !reload && !line) return;
+  if (h.contextEnvelope === "json" || reload || n) {
     const out = { hookEventName: "SessionStart" };
-    if (text) out.additionalContext = text;
+    if (body) out.additionalContext = body;
     if (reload) out.reloadSkills = true;
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: out }) + "\n");
+    process.stdout.write(JSON.stringify({ ...(line ? { systemMessage: line } : {}), hookSpecificOutput: out }) + "\n");
   } else {
     process.stdout.write(text + "\n");
   }
@@ -696,8 +704,9 @@ const PLUGIN_INSTALL = (() => {
 })();
 
 // 기록 범위(#5016) — 범위 밖(작업 폴더 밖 · 제외 폴더 안)에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
-//  여기서만 하는 일 둘: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
-//  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다.
+//  여기서만 하는 일 셋: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
+//  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다
+//  ③ 범위 안이면 «켜져 있다 · 끄는 법» 알림을 정해 둔다(ON_NOTICE — 내보내기는 emitContext 가 회사 맥락과 함께 한다).
 //  키트 자가 업데이트는 기록이 아니라서 범위 밖에서도 띄운다 — 안 그러면 이 기능의 고침도 그 컴퓨터에 영영 안 닿는다.
 //  라이블리가 띄운 세션(SPAWNED)은 판정할 것이 없다(언제나 켬) — 입력도 안 읽고 종전 경로 그대로 간다.
 async function scopeGate() {
@@ -710,7 +719,14 @@ async function scopeGate() {
   }
   const sid = String(input.session_id || input.sessionId || "");
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
-  if (d.inScope) { clearStartedOutside(sid); return false; }   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
+  if (d.inScope) {
+    clearStartedOutside(sid);   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
+    //  켜짐 알림(꺼짐 알림의 짝 — record-scope.mjs insideNotice 머리말). 토큰이 없는 컴퓨터는 연결된 것이 아니라 알리지 않는다.
+    //  압축 뒤 다시 도는 시작 훅(source: compact)은 같은 대화의 한가운데다 — AI 안내만 다시 싣고 사람에게 한 줄은 되풀이하지 않는다.
+    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively }) : null;
+    if (on) ON_NOTICE = { user: String(input.source || "") === "compact" ? "" : on.user, ai: on.ai };
+    return false;
+  }
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
   const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
   // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
@@ -746,7 +762,7 @@ async function main() {
     const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
     maybeSelfUpdate(rc && rc.kit_version);
     // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
-    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); safeExit(0); return; }
+    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed, contextOff: true }); safeExit(0); return; }
     // 레포 통지는 org-context 앞에 — 길이가 긴 컨텍스트 뒤에 묻히면 안 되는 '지금 이 세션의 상태'다.
     const blocks = [notice, repoNotice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 레포 실패 → org-context(없으면 로컬 STATIC)
     emitContext(withRo(blocks.join("\n\n")), { reloadSkills: healed }); // 읽기전용이면 배너를 맨 앞에(#1007)
