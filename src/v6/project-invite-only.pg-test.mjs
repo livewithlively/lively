@@ -337,10 +337,15 @@ try {
     const a7t = (await ps.createTask({ projectId: a7, name: `${TAG} A7 태스크` }, ctxA)).id;
     const a7s = (await ps.createTask({ projectId: a7, parentTaskId: a7t, name: `${TAG} A7 서브` }, ctxA)).id;
     await itemsPool.query(`UPDATE project SET assignee = $2 WHERE id = $1`, [a7t, C]);                       // 단일 담당자 칸 — 구성원
-    await itemsPool.query(`INSERT INTO task_assignee(task_id, member_id) VALUES($1, $2), ($1, $3)`, [a7s, D, "clickup:999 외부 담당"]);   // 서브태스크 · 구성원 + 외부 신원
+    await itemsPool.query(`INSERT INTO task_assignee(task_id, member_id) VALUES($1, $2)`, [a7s, "clickup:999 외부 담당"]);   // 서브태스크 · 외부 신원(구성원 아님)
+    //  사람마다 길이 하나씩이다(한 길을 빼면 그 사람만 빠진다): 태스크 담당자 = C · 프로젝트 행 자신의 담당자 = D ·
+    //   그 프로젝트에서 세션을 돌리던 사람 = B(초대받은 게 아니라 제 세션의 주인).
+    await itemsPool.query(`UPDATE project SET assignee = $2 WHERE id = $1`, [a7, D]);
+    await ss.upsertSessionState({ ...sessBase(`${TAG}s-a7`, a7, []), owner: B });
     await ps.setProjectAccess(a7, "invite", ctxA);
-    chk("A7 ★닫을 때 — 태스크 · 서브태스크 담당자(구성원)가 팀원이 된다", JSON.stringify(await members(a7)) === JSON.stringify([C, D].sort()), JSON.stringify(await members(a7)));
-    chk("A7b 그 담당자는 닫힌 뒤에도 제 태스크를 본다", (await vis.canSeeProjectRow(a7t, C)) && (await vis.canSeeProjectRow(a7s, D)));
+    chk("A7 ★닫을 때 — 프로젝트 · 태스크 · 서브태스크 담당자와 그 프로젝트에서 세션을 돌리던 사람이 팀원이 된다",
+      JSON.stringify(await members(a7)) === JSON.stringify([B, C, D].sort()), JSON.stringify(await members(a7)));
+    chk("A7b 그 사람들은 닫힌 뒤에도 프로젝트와 태스크를 본다", (await vis.canSeeProjectRow(a7t, C)) && (await vis.canSeeProjectRow(a7, D)) && (await vis.canSeeProjectRow(a7, B)));
     chk("A7c 구성원이 아닌 담당자(외부 신원)는 팀원으로 넣지 않는다", !(await members(a7)).includes("clickup:999 외부 담당"));
 
     // ── I1 · I3 ──
@@ -577,11 +582,20 @@ try {
       invites: [D], project_id: e1, project_src: "v6", read_only: false, incognito: false, created: 1, last_busy: 1 });
     const e2t = (await ps.createTask({ projectId: e2, name: `${TAG} E 태스크` }, ctxA)).id;
     await itemsPool.query(`INSERT INTO task_assignee(task_id, member_id) VALUES($1, $2), ($1, $3)`, [e2t, B, "clickup:777 외부"]);
+    //  프로젝트 행 자신의 담당자(C) · 그 프로젝트에서 세션을 돌리던 사람(D — 제 세션의 주인) · 사람이 아닌 계정이 만든 열린 프로젝트
+    await itemsPool.query(`UPDATE project SET assignee = $2 WHERE id = $1`, [e2, C]);
+    await ss.upsertSessionState({
+      id: `${TAG}s-e2`, owner: D, label: "세션", harness: "claude", dir: null, root_key: "personal", subpath: null, flags: {}, auto_approve: false,
+      invites: [], project_id: e2, project_src: "v6", read_only: false, incognito: false, created: 1, last_busy: 1 });
+    const BOT = `${TAG}bot`;
+    await itemsPool.query(`INSERT INTO org_member(id, display_name, kind, updated_by) VALUES($1, '초대시험 봇', 'agent', 'pg-test')`, [BOT]);
+    const eBot = await mk("E 봇이 만든 열린 것", { invite_only: false }, { actor: BOT, source: "mcp" });
     fresh();
     const sum1 = await backfill.existingOpenProjects();
     chk("E1 ★미리보기 — 닫을 수 있는 건수가 만든 사람별로 는다(가 +3 · 나 +1)", of(sum1, A) === of(sum0, A) + 3 && of(sum1, B) === of(sum0, B) + 1 && sum1.open === sum0.open + 4,
       JSON.stringify({ a0: of(sum0, A), a1: of(sum1, A), b0: of(sum0, B), b1: of(sum1, B), open0: sum0.open, open1: sum1.open }));
-    chk("E1b 만든 사람이 없거나 지금 구성원이 아닌 것은 «제외» 로 센다(+2) · 꺼진 계정은 만든 사람 줄에 없다", sum1.excluded === sum0.excluded + 2 && of(sum1, E) === 0, JSON.stringify({ ex0: sum0.excluded, ex1: sum1.excluded }));
+    chk("E1b 만든 사람이 없거나 · 지금 구성원이 아니거나 · 사람이 아닌 것은 «제외» 로 센다(+3) · 그 계정들은 만든 사람 줄에 없다",
+      sum1.excluded === sum0.excluded + 3 && of(sum1, E) === 0 && of(sum1, BOT) === 0, JSON.stringify({ ex0: sum0.excluded, ex1: sum1.excluded }));
     chk("E1c 이미 초대제인 것은 세지 않는다", !(await rowOf(eAlready)).draft && (await rowOf(eAlready)).invite_only === true);
 
     await axes.setVisAxes({ project: false }); axes.invalidateVisAxes();
@@ -604,7 +618,9 @@ try {
     chk("E3e ★곧바로 남에게서 사라진다(«숨은 프로젝트» 보관을 버린다)", !(await vis.canSeeProjectRow(e1, B)) && !(await inList(B, e1)) && (await vis.hiddenProjects(B)).ids.has(e1)
       && !(await vis.canSeeProjectRow(e3, A)));
     chk("E3f 기존 팀원은 그대로 · 세션에 초대돼 있던 사람이 팀원이 된다", JSON.stringify(await members(e1)) === JSON.stringify([C, D].sort()), JSON.stringify(await members(e1)));
-    chk("E3g ★태스크 담당자(구성원)가 팀원이 된다 · 외부 신원은 안 넣는다", JSON.stringify(await members(e2)) === JSON.stringify([B]), JSON.stringify(await members(e2)));
+    chk("E3g ★프로젝트 · 태스크 담당자(구성원)와 그 프로젝트에서 세션을 돌리던 사람이 팀원이 된다 · 외부 신원은 안 넣는다",
+      JSON.stringify(await members(e2)) === JSON.stringify([B, C, D].sort()), JSON.stringify(await members(e2)));
+    chk("E3g2 ★사람이 아닌 계정이 만든 프로젝트는 닫지 않는다(로그인하는 사람이 없는 계정에게만 보이게 된다)", (await rowOf(eBot)).invite_only === false);
     chk("E3h 그 사람들은 닫힌 뒤에도 본다", (await vis.canSeeProjectRow(e1, C)) && (await vis.canSeeProjectRow(e1, D)) && (await vis.canSeeProjectRow(e2t, B)));
     chk("E3i updated_at 을 안 바꾼다(목록의 최근 수정 순서를 뒤섞지 않는다)", String((await rowOf(e1)).updated_at) === upd0);
     const au = (await itemsPool.query(

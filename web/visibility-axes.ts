@@ -88,14 +88,15 @@ function existingRow(ex: ExistingOpen | null | undefined, reload: () => void): H
   if (ex.open <= 0) {
     return el('div', { class: 'pax-existing done' },
       el('b', { text: '기존 프로젝트' }),
-      el('span', { class: 'muted', text: '전체 공개로 남아 있는 기존 프로젝트가 없습니다.' + excludedNote }));
+      el('span', { class: 'muted', text: '초대제가 아닌 기존 프로젝트가 없습니다.' + excludedNote }));
   }
   const btn = el('button', { class: 'btn btn-sm', type: 'button', text: '기존 프로젝트도 초대제로 바꾸기…' }) as HTMLButtonElement;
   btn.onclick = () => confirmCloseExisting(ex, reload);
   return el('div', { class: 'pax-existing' },
     el('div', { class: 'pax-existing-t' },
       el('b', { text: '기존 프로젝트' }),
-      el('span', { class: 'muted', text: `지금 전체 공개인 프로젝트가 ${ex.open}건 있습니다 — 위 설정은 새 프로젝트에만 적용됩니다.` + excludedNote })),
+      //  «전체 공개인 N건» 이라고 하지 않는다 — 이 수에는 아직 풀리지 않은 초안(이미 만든 사람만 본다)과 잠긴 리스트 안의 프로젝트도 든다.
+      el('span', { class: 'muted', text: `초대제가 아닌 프로젝트가 ${ex.open}건 있습니다 — 위 설정은 새 프로젝트에만 적용됩니다.` + excludedNote })),
     btn);
 }
 
@@ -106,12 +107,12 @@ function confirmCloseExisting(ex: ExistingOpen, reload: () => void): void {
   const back = overlayBox('기존 프로젝트를 초대제로 바꾸기',
     el('div', { class: 'vax-warn' },
       el('b', { text: `프로젝트 ${ex.open}건이 만든 사람과 팀원에게만 보이게 됩니다` }),
-      el('span', { text: '다른 구성원의 목록과 검색에서는 그 순간 사라집니다. 되돌리는 단추는 없습니다 — 다시 열려면 프로젝트마다 만든 사람이 [공유]에서 «전체 공개» 로 바꿉니다.' })),
+      el('span', { text: '팀원이 아닌 구성원의 목록과 검색에서는 그 순간 사라집니다 — 관리자도 남의 프로젝트는 못 봅니다. 되돌리는 단추는 없습니다. 다시 열려면 프로젝트마다 만든 사람이 [공유]에서 «전체 공개» 로 바꿉니다.' })),
     el('ul', { class: 'vax-samples' },
       ...top.map((c) => el('li', { text: `${c.display_name || c.member_id} — ${c.count}건` })),
       ex.by_creator.length > top.length ? el('li', { class: 'muted', text: `외 ${ex.by_creator.length - top.length}명` }) : null),
     el('p', { class: 'pax-note muted', text:
-      '그 프로젝트의 기존 팀원, 그 프로젝트 세션에 초대돼 있던 사람, 태스크 담당자는 팀원으로 남아 계속 봅니다.'
+      '그 프로젝트의 기존 팀원, 그 프로젝트에서 세션을 돌리거나 세션에 초대돼 있던 사람, 프로젝트 · 태스크 담당자는 팀원으로 남아 계속 봅니다.'
       + (ex.excluded > 0 ? ` 만든 사람이 없거나 지금 구성원이 아닌 ${ex.excluded}건은 그대로 둡니다.` : '') }),
     el('div', { class: 'ov-actions' }, cancel, go));
   cancel.onclick = () => back.remove();

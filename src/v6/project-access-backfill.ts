@@ -16,7 +16,8 @@
 //
 // ── 닫으면서 남기는 사람 ────────────────────────────────────────────────────
 //  이미 그 프로젝트에서 일하던 사람이 밀려나지 않게 팀원으로 넣는다 — 프로젝트 하나를 닫을 때(project-store.setProjectAccess)와
-//  같은 규칙이다: 그 프로젝트 세션에 초대돼 있던 사람 · 태스크/서브태스크 담당자(구성원만). 기존 팀원은 그대로 남는다.
+//  같은 규칙이다: 그 프로젝트 세션에 초대돼 있던 사람 · 그 프로젝트에서 세션을 돌리던 사람 · 프로젝트/태스크/서브태스크 담당자
+//  (구성원만). 기존 팀원은 그대로 남는다.
 //
 //  되돌리는 단추는 없다 — 닫힌 프로젝트는 만든 사람이 프로젝트 화면의 [공유]에서 하나씩 «전체 공개» 로 바꾼다. 그래서 확인을 받는다.
 //  ⚠ updated_at 을 건드리지 않는다(목록의 «최근 수정» 순서를 뒤섞지 않는다).
@@ -37,7 +38,9 @@ export class ProjectAccessBackfillUnavailableError extends Error {
 
 //  닫을 수 있는 «아직 열린» 프로젝트 — p 는 project 의 별칭. 이 조건의 SQL 은 여기 한 벌이다(미리보기와 실행이 함께 쓴다).
 const OPEN_ROW = `p.level = 'project' AND NOT p.invite_only AND p.folder IS DISTINCT FROM '__board_anchor__'`;
-const OWNER_ACTIVE = `p.created_by IS NOT NULL AND EXISTS (SELECT 1 FROM org_member om WHERE om.id = p.created_by AND om.state = 'active')`;
+//  만든 사람이 **지금 구성원인 사람**이다 — 꺼진 계정 · 사람이 아닌 계정(에이전트 · 시스템 신원)이 만든 행은 닫지 않는다.
+//   닫으면 아무도 로그인하지 않는 계정에게만 보이고, 공개 범위를 다시 열 사람이 없다.
+const OWNER_ACTIVE = `p.created_by IS NOT NULL AND EXISTS (SELECT 1 FROM org_member om WHERE om.id = p.created_by AND om.state = 'active' AND om.kind = 'human')`;
 
 export interface ExistingOpenSummary {
   /** 닫을 수 있는 프로젝트 수(만든 사람이 지금 구성원). */
@@ -53,7 +56,7 @@ export async function existingOpenProjects(): Promise<ExistingOpenSummary> {
   if (!(await ensureInviteOnlyColumn())) return { open: 0, excluded: 0, by_creator: [] };
   const rows = await q(itemsPool, `
     SELECT p.created_by AS member_id, om.display_name, count(*)::int AS n
-      FROM project p JOIN org_member om ON om.id = p.created_by AND om.state = 'active'
+      FROM project p JOIN org_member om ON om.id = p.created_by AND om.state = 'active' AND om.kind = 'human'
      WHERE ${OPEN_ROW}
      GROUP BY p.created_by, om.display_name
      ORDER BY n DESC, p.created_by`, []);
@@ -76,6 +79,9 @@ export async function closeExistingOpenProjects(ctx?: WriteCtx): Promise<{ conve
     //  일하던 사람 — setProjectAccess 와 같은 규칙을 여러 프로젝트에 한 번에. node = 그 프로젝트의 태스크 · 서브태스크(뿌리 id 를 달고).
     const added = await c.query(
       `WITH node AS (
+         -- 프로젝트 행 자신도 담당자를 가진다(최상위 태스크로 쓰는 워크스페이스) — 뿌리부터 훑는다.
+         SELECT r.id AS root, r.id, r.assignee FROM project r WHERE r.id = ANY($1::int[])
+         UNION ALL
          SELECT t.parent_id AS root, t.id, t.assignee FROM project t WHERE t.level = 'task' AND t.parent_id = ANY($1::int[])
          UNION ALL
          SELECT t.parent_id, s.id, s.assignee FROM project s JOIN project t ON t.id = s.parent_id AND t.level = 'task'
@@ -86,6 +92,8 @@ export async function closeExistingOpenProjects(ctx?: WriteCtx): Promise<{ conve
            CROSS JOIN LATERAL jsonb_array_elements_text(
              CASE WHEN jsonb_typeof(s.invites) = 'array' THEN s.invites ELSE '[]'::jsonb END) AS inv(member_id)
           WHERE s.project_id = ANY($1::int[])
+         -- 그 프로젝트에서 세션을 돌리던 사람 — 제 세션은 계속 열리지만(주인) 프로젝트와 그 폴더의 파일이 가려진다.
+         UNION ALL SELECT s.project_id, s.owner, true FROM org_session_state s WHERE s.project_id = ANY($1::int[]) AND s.owner IS NOT NULL
          UNION ALL SELECT n.root, n.assignee, true FROM node n WHERE n.assignee IS NOT NULL
          UNION ALL SELECT n.root, ta.member_id, true FROM task_assignee ta JOIN node n ON n.id = ta.task_id
        )

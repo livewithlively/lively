@@ -166,7 +166,7 @@ export function openProjectSharePopover(anchor: HTMLElement, p: any, onChanged?:
         el('p', { class: 'pj-share-warn', text: to === 'open'
           ? `${everyone}가 이 프로젝트의 본문 · 태스크 · 파일을 보게 돼요. 프로젝트의 세션은 그대로 초대한 사람만 봐요.`
           //  닫을 때 서버가 «이미 일하던 사람»(세션에 초대한 사람 · 태스크 담당자)을 팀원으로 함께 넣는다(project-store.setProjectAccess).
-          : '지금부터 나와 팀원만 봐요 — 이 프로젝트의 세션에 초대한 사람과 태스크 담당자는 팀원으로 함께 남아요. 그 밖의 구성원의 목록과 검색에서는 사라져요.' }),
+          : '지금부터 나와 팀원만 봐요 — 이 프로젝트에서 세션을 돌리거나 세션에 초대된 사람, 프로젝트 · 태스크 담당자는 팀원으로 함께 남아요. 그 밖의 구성원의 목록과 검색에서는 사라져요.' }),
         el('div', { class: 'pn-share-act' },
           el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => host.replaceChildren(link()) }), go));
     };

@@ -925,13 +925,16 @@ export async function setProjectAccess(id: number, access: "invite" | "open", ct
   //   · 이 프로젝트의 세션에 초대돼 있던 사람 — 세션 판정은 «숨은 프로젝트의 세션은 초대받은 사람에게도 닫는다»
   //     (terminal/write-cap.ts sessionVisible)라, 안 넣으면 초대받은 세션을 못 연다. 세션 초대 때와 같은 규칙이다
   //     (sessions/session-state.ts syncPrivateInviteMembers — 세션에 초대 = 프로젝트에도 초대).
-  //   · 이 프로젝트의 태스크 · 서브태스크 담당자 — 안 넣으면 제 태스크가 «내 할 일» 에서 말없이 사라진다.
+  //   · 이 프로젝트에서 세션을 돌리던 사람 — 제 세션은 계속 열리지만(주인) 프로젝트와 그 폴더의 파일이 가려진다.
+  //   · 이 프로젝트 · 그 태스크 · 서브태스크의 담당자 — 안 넣으면 제 일이 «내 할 일» 에서 말없이 사라진다.
   //     담당자 칸에는 구성원이 아닌 외부 신원도 들어간다(ClickUp 미러) — 구성원(org_member)인 사람만 넣는다.
   //  넣은 사람은 응답의 팀원 명단으로 화면에 곧바로 보인다(만든 사람이 [공유] 에서 뺄 수 있다).
   //  best-effort: 실패해도 공개 범위는 이미 바뀌었다(만든 사람이 [공유]에서 다시 넣을 수 있다).
   if (inviteOnly) {
     await itemsPool.query(
       `WITH node AS (
+         SELECT r.id, r.assignee FROM project r WHERE r.id = $1
+         UNION ALL
          SELECT t.id, t.assignee FROM project t WHERE t.parent_id = $1 AND t.level = 'task'
          UNION ALL
          SELECT s.id, s.assignee FROM project s JOIN project t ON t.id = s.parent_id AND t.level = 'task' AND t.parent_id = $1
@@ -943,6 +946,7 @@ export async function setProjectAccess(id: number, access: "invite" | "open", ct
            CROSS JOIN LATERAL jsonb_array_elements_text(
              CASE WHEN jsonb_typeof(s.invites) = 'array' THEN s.invites ELSE '[]'::jsonb END) AS inv(member_id)
           WHERE s.project_id = $1
+         UNION ALL SELECT s.owner, true FROM org_session_state s WHERE s.project_id = $1 AND s.owner IS NOT NULL
          UNION ALL SELECT n.assignee, true FROM node n WHERE n.assignee IS NOT NULL
          UNION ALL SELECT ta.member_id, true FROM task_assignee ta JOIN node n ON n.id = ta.task_id
        )
