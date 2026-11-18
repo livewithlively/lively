@@ -114,6 +114,7 @@ const INVITE_ONLY_FILES = new Set([
   "src/capabilities/projects-v6.ts",     // 도구 설명 · createProject 인자 이름
   "src/sessions/session-state.ts",       // 42703 을 잡아 초안만 보는 조건으로 다시 돌린다
   "src/index.ts",                        // 주석(부팅 때 가드를 한 번 잰다)
+  "src/v6/project-access-backfill.ts",   // 기존 프로젝트 한꺼번에 닫기 — 미리보기 · 실행 둘 다 ensureInviteOnlyColumn 을 먼저 잰다
 ]);
 test("★ invite_only 라는 글자가 나오는 파일은 못 박은 목록뿐이다(주석 포함)", () => {
   const found = walk("src").filter((p) => /\binvite_only\b/.test(readFileSync(p, "utf8"))).map((p) => p.replace(/\\/g, "/"))
@@ -132,6 +133,8 @@ test("★ invite_only 를 SQL 에 글자로 적는 자리는 가드를 지난 �
     "src/v6/visibility.ts": [/SELECT id FROM project WHERE level='project' AND invite_only`/],
     //  세션 상태는 노드 에이전트 번들에 실려 가드 모듈을 못 쓴다 — 42703 을 잡아 초안만 보는 조건으로 다시 돌린다(같은 함수 안).
     "src/sessions/session-state.ts": [/r = await run\("\(p\.draft OR p\.invite_only\)"\);/],
+    //  미리보기는 ensure 가 거짓이면 0건으로 돌아가고, 실행은 거절한다 — 그 뒤에만 이 조건 · UPDATE 가 돈다.
+    "src/v6/project-access-backfill.ts": [/const OPEN_ROW = `p\.level = 'project' AND NOT p\.invite_only/, /UPDATE project SET invite_only = true WHERE id = ANY/],
   };
   const bad: string[] = [];
   for (const f of walk("src")) {

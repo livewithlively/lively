@@ -10,6 +10,7 @@ import type { Capability } from "./types.js";
 import { VIS_AXES, AXIS_LABEL, axisLockSummary, setVisAxes, type VisAxis } from "../v6/visibility-axes.js";
 import { PROJECT_ACCESS_MODES, PROJECT_ACCESS_LABEL, projectAccessInfo, projectAccessMode, setProjectAccessMode, type ProjectAccessMode } from "../v6/project-access.js";
 import { logActivity } from "../activity/store.js";
+import { existingOpenProjects, closeExistingOpenProjects, ProjectAccessAxisOffError, ProjectAccessBackfillUnavailableError } from "../v6/project-access-backfill.js";
 import { logger } from "../log.js";
 import { reconcileAllDerived } from "../v6/derived-visibility.js";
 
@@ -177,4 +178,64 @@ const projectAccessSet: Capability = {
   },
 };
 
-export const visAxesCapabilities: Capability[] = [visAxisList, visAxisSet, projectAccessGet, projectAccessSet];
+// ── #5598 후속 — 기존 프로젝트를 한꺼번에 초대제로(관리자가 누른 워크스페이스에서만 · 누른 그때 한 번) ──────────
+//  방식 설정은 새 프로젝트의 기본값일 뿐이라 이미 있는 프로젝트는 계속 열려 있다. 이 둘이 그것을 닫는 문이다:
+//   미리보기(몇 건이 닫히나 · 만든 사람별) → 확인을 받고 실행. 이쪽은 **좁히는 방향**이지만 동료가 보던 것이 그 순간 사라지고
+//   되돌리는 단추가 없어서(만든 사람이 하나씩 다시 연다) confirm 을 요구하고 작업기록에 남긴다(v6/project-access-backfill.ts 머리말).
+const projectAccessExisting: Capability = {
+  name: "project_access_existing",
+  title: "기존 프로젝트 — 아직 전체 공개인 것(초대제로 바꾸기 미리보기)",
+  description: "아직 초대제가 아닌 기존 프로젝트가 몇 건인지(만든 사람별)와, 만든 사람이 없어 닫지 않는 건수를 돌려준다. 내용은 주지 않는다 — 규모만.",
+  scope: "admin",
+  input: {},
+  expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/v6/project-access/existing"], parse: () => ({}) }] },
+  handler: async () => existingOpenProjects(),
+};
+
+const projectAccessExistingClose: Capability = {
+  name: "project_access_existing_close",
+  title: "기존 프로젝트를 한꺼번에 초대제로 바꾸기",
+  description:
+    "아직 전체 공개인 기존 프로젝트를 전부 초대제(만든 사람과 팀원만)로 바꾼다. 그 프로젝트의 기존 팀원 · 세션에 초대돼 있던 사람 · 태스크 담당자는 " +
+    "팀원으로 남는다. 만든 사람이 없거나 더는 구성원이 아닌 프로젝트는 닫지 않는다. **되돌리는 도구가 없다** — 닫힌 프로젝트는 만든 사람이 " +
+    "하나씩 project_set_access_v6 로 다시 연다. confirm:true 가 필요하다.",
+  scope: "admin",
+  input: { confirm: z.boolean().optional().describe("동료가 보던 프로젝트가 그 순간 목록 · 검색에서 사라진다는 데 동의한다는 표시(필수)") },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/v6/project-access/existing"],
+      parse: (req) => ({ confirm: ((req.body ?? {}) as Record<string, unknown>).confirm === true }) }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const before = await existingOpenProjects();
+    if (!input.confirm) {
+      //  확인 없이 부르면 무엇이 닫히는지 돌려주고 멈춘다(축 끄기와 같은 꼴 — 이 응답이 확인 화면의 재료다).
+      throw new HttpError(400, JSON.stringify({
+        error: "확인이 필요합니다",
+        message: `기존 프로젝트 ${before.open}건이 만든 사람과 팀원에게만 보이게 됩니다. 계속하려면 confirm:true 로 다시 요청하세요.`,
+        ...before,
+      }));
+    }
+    let done: { converted: number; members_added: number };
+    try {
+      done = await closeExistingOpenProjects({ actor: user?.userId ?? null, source: ctx?.source ?? "web" });
+    } catch (e) {
+      if (e instanceof ProjectAccessAxisOffError) throw new HttpError(409, e.message);
+      if (e instanceof ProjectAccessBackfillUnavailableError) throw new HttpError(503, e.message);
+      throw e;
+    }
+    if (done.converted > 0) {
+      await logActivity({
+        type: "decision",
+        title: `기존 프로젝트 ${done.converted}건을 초대제로 바꿈`,
+        summary: "만든 사람과 팀원만 본다 — 세션에 초대돼 있던 사람 · 태스크 담당자는 팀원으로 남겼다. 다시 여는 것은 프로젝트마다 만든 사람이 한다.",
+        body: JSON.stringify({ project_access_backfill: { ...done, by_creator: before.by_creator, excluded: before.excluded } }),
+      }, user?.userId ?? null).catch((e) => {
+        logger.error({ ...done, err: (e as Error)?.message }, "[project-access] 기존 프로젝트 초대제 전환을 작업기록에 남기지 못했다 — 전환은 적용됨");
+      });
+    }
+    return { ...done, remaining: await existingOpenProjects() };
+  },
+};
+
+export const visAxesCapabilities: Capability[] = [visAxisList, visAxisSet, projectAccessGet, projectAccessSet, projectAccessExisting, projectAccessExistingClose];

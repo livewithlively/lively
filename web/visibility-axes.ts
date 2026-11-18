@@ -24,7 +24,10 @@ export async function visibilityAxesPanel(detail, opts: { bare?: boolean; onChan
   //   못 받아도 축 설정은 그대로 그린다(구 서버 · 일시 오류).
   let access: any = null;
   try { access = await api('/api/ui/v6/project-access'); } catch (_) { access = null; }
-  const accessBox = access ? projectAccessBox(access, reload) : null;
+  //  기존 프로젝트 중 아직 전체 공개인 것(초대제로 한꺼번에 바꾸기의 미리보기). 못 받으면 그 줄만 안 선다.
+  let existing: any = null;
+  if (access) { try { existing = await api('/api/ui/v6/project-access/existing'); } catch (_) { existing = null; } }
+  const accessBox = access ? projectAccessBox(access, reload, existing) : null;
   if (opts.bare) { detail.replaceChildren(...[accessBox, el('div', { class: 'vax-list vax-list-bare' }, ...rows)].filter(Boolean) as HTMLElement[]); return; }
 
   detail.replaceChildren(el('div', {},
@@ -41,7 +44,7 @@ export async function visibilityAxesPanel(detail, opts: { bare?: boolean; onChan
 // ── #5598 새 프로젝트 공개 방식(초대제 | 전체 공개) ────────────────────────────────
 //  축 끄기와 달리 이 설정은 공개 사건이 아니다 — 새로 만드는 프로젝트의 기본값만 바뀌고 이미 있는 프로젝트는 그대로다
 //  (src/v6/project-access.ts). 그래서 확인 창 없이 바로 바꾸고, 그 사실을 선택지 아래에 늘 적어 둔다.
-function projectAccessBox(access: { mode: string; enforced: boolean }, reload: () => void): HTMLElement {
+function projectAccessBox(access: { mode: string; enforced: boolean }, reload: () => void, existing?: ExistingOpen | null): HTMLElement {
   const cur = access.mode === 'open' ? 'open' : 'invite';
   const opt = (o: (typeof ACCESS_MODE_OPTIONS)[number]): HTMLElement => {
     const on = o.mode === cur;
@@ -69,7 +72,58 @@ function projectAccessBox(access: { mode: string; enforced: boolean }, reload: (
       '이미 있는 프로젝트의 공개 범위는 바뀌지 않습니다 — 새로 만드는 프로젝트의 기본값만 바뀝니다. ' +
       '프로젝트 하나의 공개 범위는 그 프로젝트를 만든 사람이 프로젝트 화면의 [공유]에서 바꿉니다.' }),
     access.enforced ? null : el('p', { class: 'pax-note pax-warn', text:
-      '지금은 아래 «프로젝트» 공개범위가 꺼져 있어 모든 프로젝트를 전원이 봅니다 — 이 설정이 적용되려면 그 항목을 켜세요.' }));
+      '지금은 아래 «프로젝트» 공개범위가 꺼져 있어 모든 프로젝트를 전원이 봅니다 — 이 설정이 적용되려면 그 항목을 켜세요.' }),
+    access.enforced ? existingRow(existing, reload) : null);
+}
+
+// ── 기존 프로젝트도 초대제로(#5598 후속, 상민 2026-11-18 «단추로 가») ─────────────────────────
+//  방식 설정은 새 프로젝트의 기본값이라 이미 있는 프로젝트는 계속 전체 공개다. 이 줄이 그것을 **이 워크스페이스에서 한 번에** 닫는 문이다.
+//  좁히는 방향이지만 동료가 보던 프로젝트가 그 순간 사라지고 되돌리는 단추가 없다(만든 사람이 하나씩 다시 연다) — 그래서 몇 건이
+//  누구 것인지 먼저 보여 주고 받는다. 서버도 confirm 없으면 400(src/capabilities/vis-axes.ts).
+interface ExistingOpen { open: number; excluded: number; by_creator: Array<{ member_id: string; display_name?: string | null; count: number }> }
+
+function existingRow(ex: ExistingOpen | null | undefined, reload: () => void): HTMLElement | null {
+  if (!ex) return null;
+  const excludedNote = ex.excluded > 0 ? ` 만든 사람이 없거나 지금 구성원이 아닌 ${ex.excluded}건은 닫지 않습니다(닫으면 볼 사람이 없습니다).` : '';
+  if (ex.open <= 0) {
+    return el('div', { class: 'pax-existing done' },
+      el('b', { text: '기존 프로젝트' }),
+      el('span', { class: 'muted', text: '전체 공개로 남아 있는 기존 프로젝트가 없습니다.' + excludedNote }));
+  }
+  const btn = el('button', { class: 'btn btn-sm', type: 'button', text: '기존 프로젝트도 초대제로 바꾸기…' }) as HTMLButtonElement;
+  btn.onclick = () => confirmCloseExisting(ex, reload);
+  return el('div', { class: 'pax-existing' },
+    el('div', { class: 'pax-existing-t' },
+      el('b', { text: '기존 프로젝트' }),
+      el('span', { class: 'muted', text: `지금 전체 공개인 프로젝트가 ${ex.open}건 있습니다 — 위 설정은 새 프로젝트에만 적용됩니다.` + excludedNote })),
+    btn);
+}
+
+function confirmCloseExisting(ex: ExistingOpen, reload: () => void): void {
+  const cancel = el('button', { class: 'btn', type: 'button', text: '취소' });
+  const go = el('button', { class: 'btn btn-danger', type: 'button', text: '이해했고 초대제로 바꿉니다' }) as HTMLButtonElement;
+  const top = ex.by_creator.slice(0, 8);
+  const back = overlayBox('기존 프로젝트를 초대제로 바꾸기',
+    el('div', { class: 'vax-warn' },
+      el('b', { text: `프로젝트 ${ex.open}건이 만든 사람과 팀원에게만 보이게 됩니다` }),
+      el('span', { text: '다른 구성원의 목록과 검색에서는 그 순간 사라집니다. 되돌리는 단추는 없습니다 — 다시 열려면 프로젝트마다 만든 사람이 [공유]에서 «전체 공개» 로 바꿉니다.' })),
+    el('ul', { class: 'vax-samples' },
+      ...top.map((c) => el('li', { text: `${c.display_name || c.member_id} — ${c.count}건` })),
+      ex.by_creator.length > top.length ? el('li', { class: 'muted', text: `외 ${ex.by_creator.length - top.length}명` }) : null),
+    el('p', { class: 'pax-note muted', text:
+      '그 프로젝트의 기존 팀원, 그 프로젝트 세션에 초대돼 있던 사람, 태스크 담당자는 팀원으로 남아 계속 봅니다.'
+      + (ex.excluded > 0 ? ` 만든 사람이 없거나 지금 구성원이 아닌 ${ex.excluded}건은 그대로 둡니다.` : '') }),
+    el('div', { class: 'ov-actions' }, cancel, go));
+  cancel.onclick = () => back.remove();
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      const r: any = await api('/api/ui/v6/project-access/existing', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+      back.remove();
+      toast(`기존 프로젝트 ${Number(r && r.converted) || 0}건을 초대제로 바꿨습니다.`);
+      reload();
+    } catch (e: any) { go.disabled = false; toast('바꾸지 못했습니다 — ' + e.message, true); }
+  };
 }
 
 function axisRow(a, reload) {

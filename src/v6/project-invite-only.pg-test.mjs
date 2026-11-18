@@ -53,6 +53,12 @@
 //   W3  그 사이 공개 범위 바꾸기는 거절(ProjectAccessUnavailableError) — 조용히 넘어가지 않는다
 //   W4  ★칸이 생기면 재기동 없이(다시 재는 간격 뒤) 스스로 켜진다 — 닫혀 있던 프로젝트가 다시 닫힌다 · 켜지는 순간 보관해 둔 «숨은 프로젝트» 집합을 버린다
 //   W5  ★«없다» 로 기억한 채 재는 조회만 실패하면 «없다» 를 붙들지 않는다(있다고 본다 — 닫힌 프로젝트가 조용히 새지 않는다)
+//   E1  기존 프로젝트 미리보기 — 닫을 수 있는 건수(만든 사람별) · 제외(만든 사람 없음 · 지금 구성원이 아님)
+//   E2  프로젝트 축이 꺼져 있으면 한꺼번에 닫기를 거절(닫아도 가려지지 않고 나중에 한꺼번에 닫힌다) · 아무것도 안 바뀐다
+//   E3  ★한꺼번에 닫기 — 만든 사람이 지금 구성원인 열린 프로젝트가 전부 초대제가 된다(초안도 초안인 채) · 남에게서 사라진다 ·
+//       기존 팀원 그대로 + 세션에 초대돼 있던 사람 · 태스크 담당자가 팀원으로 · 제외 대상은 그대로 열려 있다 ·
+//       updated_at 을 안 바꾼다 · 프로젝트마다 감사 한 줄 · 다시 불러도 0건(멱등)
+//   E4  초대제 칸이 아직 없는 DB(롤 창) — 미리보기는 0건 · 실행은 거절
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
@@ -66,6 +72,7 @@ const trash = await import(`${DIST}/v6/trash-store.js`);
 const { trashCapabilities } = await import(`${DIST}/capabilities/trash.js`);
 const cn = await import(`${DIST}/v6/comment-notify.js`);
 const col = await import(`${DIST}/v6/project-invite-column.js`);
+const backfill = await import(`${DIST}/v6/project-access-backfill.js`);
 const { AUTO_CREATED_MARK } = await import(`${DIST}/project/first-prompt-project.js`);
 
 let pass = 0, fail = 0;
@@ -544,6 +551,76 @@ try {
       chk("W5c 그래서 닫혀 있던 프로젝트는 닫힌 채다", !(await vis.canSeeProjectRow(closed, B)));
     } finally {
       if (realQuery) itemsPool.query = realQuery;
+      await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only_rollwindow TO invite_only`).catch(() => undefined);
+      col.resetInviteOnlyColumnProbe();
+    }
+  }
+
+  // ── E1 ~ E4 — 기존 프로젝트를 한꺼번에 초대제로(관리자 단추) ──
+  //  ⚠ 이 절은 맨 끝에 둔다 — 이 DB 에서 닫을 수 있는 열린 프로젝트를 전부 닫는다(앞 절들이 만든 열린 프로젝트 포함).
+  {
+    const E = `${TAG}e`;   // 지금은 구성원이 아닌 사람(꺼진 계정)
+    await itemsPool.query(`INSERT INTO org_member(id, display_name, state, updated_by) VALUES($1, '초대시험마', 'inactive', 'pg-test')`, [E]);
+    const sum0 = await backfill.existingOpenProjects();
+    const of = (sum, id) => (sum.by_creator.find((c) => c.member_id === id) || { count: 0 }).count;
+    const e1 = await mk("E 가의 열린 것 1", { invite_only: false });
+    const e2 = await mk("E 가의 열린 것 2", { invite_only: false });
+    const e3 = await mk("E 나의 열린 것", { invite_only: false }, ctxB);
+    const eDraft = await mkShell("E 가의 열린 초안", { invite_only: false });
+    const eGone = await mk("E 꺼진 계정의 열린 것", { invite_only: false }, { actor: E, source: "web" });
+    const eOrphan = Number((await itemsPool.query(
+      `INSERT INTO project(level, name, status) VALUES('project', $1, 'active') RETURNING id`, [`${TAG} E 만든 사람 없는 열린 것`])).rows[0].id);
+    const eAlready = await mk("E 이미 초대제");
+    await ps.setProjectMembers(e1, [C], ctxA);
+    await ss.upsertSessionState({
+      id: `${TAG}s-e1`, owner: A, label: "세션", harness: "claude", dir: null, root_key: "personal", subpath: null, flags: {}, auto_approve: false,
+      invites: [D], project_id: e1, project_src: "v6", read_only: false, incognito: false, created: 1, last_busy: 1 });
+    const e2t = (await ps.createTask({ projectId: e2, name: `${TAG} E 태스크` }, ctxA)).id;
+    await itemsPool.query(`INSERT INTO task_assignee(task_id, member_id) VALUES($1, $2), ($1, $3)`, [e2t, B, "clickup:777 외부"]);
+    fresh();
+    const sum1 = await backfill.existingOpenProjects();
+    chk("E1 ★미리보기 — 닫을 수 있는 건수가 만든 사람별로 는다(가 +3 · 나 +1)", of(sum1, A) === of(sum0, A) + 3 && of(sum1, B) === of(sum0, B) + 1 && sum1.open === sum0.open + 4,
+      JSON.stringify({ a0: of(sum0, A), a1: of(sum1, A), b0: of(sum0, B), b1: of(sum1, B), open0: sum0.open, open1: sum1.open }));
+    chk("E1b 만든 사람이 없거나 지금 구성원이 아닌 것은 «제외» 로 센다(+2) · 꺼진 계정은 만든 사람 줄에 없다", sum1.excluded === sum0.excluded + 2 && of(sum1, E) === 0, JSON.stringify({ ex0: sum0.excluded, ex1: sum1.excluded }));
+    chk("E1c 이미 초대제인 것은 세지 않는다", !(await rowOf(eAlready)).draft && (await rowOf(eAlready)).invite_only === true);
+
+    await axes.setVisAxes({ project: false }); axes.invalidateVisAxes();
+    let axisOff = false;
+    try { await backfill.closeExistingOpenProjects(ctxA); } catch (e) { axisOff = e instanceof backfill.ProjectAccessAxisOffError; }
+    chk("E2 ★프로젝트 축이 꺼져 있으면 거절한다 · 아무것도 안 바뀐다", axisOff && (await rowOf(e1)).invite_only === false);
+    await axes.setVisAxes({ project: true }); axes.invalidateVisAxes(); fresh();
+
+    const upd0 = String((await rowOf(e1)).updated_at);
+    //  «숨은 프로젝트» 집합을 닫기 **전에** 보관에 올려 둔다(15초 보관) — 닫은 뒤 E3e 가 «그 보관을 버렸나» 를 잰다.
+    chk("E3 (전제) 닫기 전 — 남이 가의 열린 프로젝트를 본다 · 숨은 프로젝트 집합에 없다",
+      (await vis.canSeeProjectRow(e1, B)) && (await inList(B, e2)) && !(await vis.hiddenProjects(B)).ids.has(e1));
+    const done = await backfill.closeExistingOpenProjects(ctxA);
+    chk("E3a ★닫은 건수 = 미리보기의 건수", done.converted === sum1.open, JSON.stringify({ done, open: sum1.open }));
+    chk("E3b ★만든 사람이 지금 구성원인 열린 프로젝트가 전부 초대제가 된다(남의 것도)",
+      (await rowOf(e1)).invite_only === true && (await rowOf(e2)).invite_only === true && (await rowOf(e3)).invite_only === true);
+    chk("E3c 초안은 초안인 채 닫힌다", (await rowOf(eDraft)).invite_only === true && (await rowOf(eDraft)).draft === true);
+    chk("E3d ★제외 대상은 그대로 열려 있다(닫으면 볼 사람이 없다)", (await rowOf(eGone)).invite_only === false && (await rowOf(eOrphan)).invite_only === false
+      && (await vis.canSeeProjectRow(eOrphan, B)) && (await vis.canSeeProjectRow(eGone, B)));
+    chk("E3e ★곧바로 남에게서 사라진다(«숨은 프로젝트» 보관을 버린다)", !(await vis.canSeeProjectRow(e1, B)) && !(await inList(B, e1)) && (await vis.hiddenProjects(B)).ids.has(e1)
+      && !(await vis.canSeeProjectRow(e3, A)));
+    chk("E3f 기존 팀원은 그대로 · 세션에 초대돼 있던 사람이 팀원이 된다", JSON.stringify(await members(e1)) === JSON.stringify([C, D].sort()), JSON.stringify(await members(e1)));
+    chk("E3g ★태스크 담당자(구성원)가 팀원이 된다 · 외부 신원은 안 넣는다", JSON.stringify(await members(e2)) === JSON.stringify([B]), JSON.stringify(await members(e2)));
+    chk("E3h 그 사람들은 닫힌 뒤에도 본다", (await vis.canSeeProjectRow(e1, C)) && (await vis.canSeeProjectRow(e1, D)) && (await vis.canSeeProjectRow(e2t, B)));
+    chk("E3i updated_at 을 안 바꾼다(목록의 최근 수정 순서를 뒤섞지 않는다)", String((await rowOf(e1)).updated_at) === upd0);
+    const au = (await itemsPool.query(
+      `SELECT op, actor, after FROM org_content_audit WHERE entity='project' AND entity_key=$1 ORDER BY id DESC LIMIT 1`, [String(e1)])).rows[0];
+    chk("E3j 프로젝트마다 감사 한 줄 — 누가 · 무엇을(backfill)", au && au.op === "set_access" && au.actor === A && au.after?.invite_only === true && au.after?.reason === "backfill", JSON.stringify(au));
+    const again = await backfill.closeExistingOpenProjects(ctxA);
+    chk("E3k 다시 불러도 0건(멱등) · 미리보기도 0건 · 제외는 그대로", again.converted === 0 && (await backfill.existingOpenProjects()).open === 0 && (await backfill.existingOpenProjects()).excluded === sum1.excluded);
+
+    await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only TO invite_only_rollwindow`);
+    try {
+      col.resetInviteOnlyColumnProbe();
+      const s = await backfill.existingOpenProjects();
+      let unavailable = false;
+      try { await backfill.closeExistingOpenProjects(ctxA); } catch (e) { unavailable = e instanceof backfill.ProjectAccessBackfillUnavailableError; }
+      chk("E4 ★초대제 칸이 아직 없는 DB — 미리보기는 0건 · 실행은 거절", s.open === 0 && s.excluded === 0 && unavailable, JSON.stringify(s));
+    } finally {
       await itemsPool.query(`ALTER TABLE project RENAME COLUMN invite_only_rollwindow TO invite_only`).catch(() => undefined);
       col.resetInviteOnlyColumnProbe();
     }
