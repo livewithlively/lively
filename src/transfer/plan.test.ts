@@ -25,6 +25,10 @@
 //   D20 자료 — 전에 가져옴·같은 외부 원본·새것      → 이미 있음 2 · 새것 1
 //   D21 지식 0건 묶음                           → 합계 0
 //   D22 묶음에 대상자 제한 자료                    → «공개로» 안내
+//   D23 받는 쪽에 묶음 g1·g2·g3, 새 분류          → 이름 규약대로 묶음 기본값(상대 말 g2 · 바깥 말 g3 · 그 밖 g1), 만들 분류에 실림
+//   D24 사람이 고른 묶음                         → 받는 쪽에 있으면 그것, 없는 key 면 기본값
+//   D25 받는 쪽에 묶음이 없음                     → 묶음 null · 계획의 묶음 목록 []
+//   D26 묶음 key 가 규약과 다름                   → 화면 순서 첫 묶음
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bundleContentHash, BUNDLE_FORMAT, BUNDLE_VERSION, type Bundle, type BundleKnowledge, type BundleSource } from "./bundle.js";
@@ -310,4 +314,56 @@ test("D22 묶음에 대상자를 제한했던 자료가 있으면 공개로 들�
     external_system: null, external_instance: null, external_id: null, external_url: null, parent_external_id: null, occurred_at: null, author: null };
   const p = planImport(bundleOf([k("a")], { sources: [src] }), target());
   assert.ok(p.notes.some((n) => n.includes("자료") && n.includes("공개로")), JSON.stringify(p.notes));
+});
+
+const GROUPS = [{ key: "g1", name: "사업" }, { key: "g2", name: "제품" }, { key: "g3", name: "시스템" }];
+const groupedBundle = (): Bundle => bundleOf([k("a", { category: "cs" }), k("b", { category: "mr" }), k("c", { category: "dev" })], {
+  categories: [
+    { key: "cs", name: "고객 응대", description: null, should: null, cross_cutting: false },
+    { key: "mr", name: "시장 조사", description: null, should: null, cross_cutting: false },
+    { key: "dev", name: "개발 규약", description: null, should: null, cross_cutting: false },
+  ],
+});
+
+test("D23 받는 쪽에 묶음이 있으면 새 분류마다 이름 규약대로 묶음 기본값이 붙고, 만들 분류에 실린다", () => {
+  const b = groupedBundle();
+  const t = target({ groups: GROUPS });
+  const p = planImport(b, t);
+  const g = (ref: string) => p.categories.find((c) => c.ref === ref)?.group;
+  assert.equal(g("cs"), "g2", "«고객·응대» 는 상대가 있는 말 → g2");
+  assert.equal(g("mr"), "g3", "«시장·조사» 는 바깥 자료 말 → g3");
+  assert.equal(g("dev"), "g1", "둘 다 아니면 g1");
+  assert.deepEqual(p.groups, GROUPS, "계획에 받는 쪽 묶음 목록이 담긴다(화면이 고를 칸)");
+  const r = resolveDecisions(p, {}, t, b.categories);
+  assert.deepEqual(Object.fromEntries(r.createCategories.map((c) => [c.ref, c.group])), { cs: "g2", mr: "g3", dev: "g1" });
+});
+
+test("D24 사람이 고른 묶음이 받는 쪽에 있으면 그것, 없는 key 면 기본값", () => {
+  const b = groupedBundle();
+  const t = target({ groups: GROUPS });
+  const p = planImport(b, t);
+  const r = resolveDecisions(p, { categories: { cs: { action: "create", group: "g3" }, mr: { action: "create", group: "nope" } } }, t, b.categories);
+  const g = (ref: string) => r.createCategories.find((c) => c.ref === ref)?.group;
+  assert.equal(g("cs"), "g3", "사람이 고른 g3");
+  assert.equal(g("mr"), "g3", "없는 묶음 key → 기본값(시장 조사 → g3)");
+  assert.equal(g("dev"), "g1");
+});
+
+test("D25 받는 쪽에 묶음이 없으면 묶음 null · 계획의 묶음 목록이 비어 있다(종전대로)", () => {
+  const b = groupedBundle();
+  const t = target();
+  const p = planImport(b, t);
+  assert.ok(p.categories.every((c) => c.group === null), JSON.stringify(p.categories.map((c) => c.group)));
+  assert.deepEqual(p.groups, []);
+  const r = resolveDecisions(p, { categories: { cs: { action: "create", group: "g1" } } }, t, b.categories);
+  assert.ok(r.createCategories.length === 3 && r.createCategories.every((c) => c.group === null), JSON.stringify(r.createCategories));
+});
+
+test("D26 받는 쪽 묶음 key 가 규약(g1·g2·g3)과 다르면 화면 순서 첫 묶음에 넣는다", () => {
+  const b = groupedBundle();
+  const t = target({ groups: [{ key: "biz", name: "사업" }, { key: "prod", name: "제품" }] });
+  const p = planImport(b, t);
+  assert.ok(p.categories.every((c) => c.group === "biz"), JSON.stringify(p.categories.map((c) => c.group)));
+  const r = resolveDecisions(p, {}, t, b.categories);
+  assert.ok(r.createCategories.every((c) => c.group === "biz"));
 });

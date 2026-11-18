@@ -6014,7 +6014,7 @@
   "rest": [
    "POST /api/ui/transfer/imports/:id/apply"
   ],
-  "input_hash": "3afd3729bb63c974"
+  "input_hash": "c6074d4ea088ba34"
  },
  {
   "name": "transfer_import_undo",
