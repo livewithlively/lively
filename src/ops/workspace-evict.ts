@@ -20,6 +20,8 @@
 //   게이트웨이가 못 본다 — 거기서는 같은 규칙을 `lively reclaim --evict` 가 돈다(같은 코어).
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR } from "../project/project-fs.js";
 import { applyReclaim, planEviction, planReclaim, reposIn, worktreeLastUsed, type EvictCandidate, type ReclaimPlan } from "./workspace-reclaim.js";
 import { derivedEvictPolicy, type StoragePolicy } from "../org/policies/storage-policy.js";
@@ -40,11 +42,40 @@ export interface EvictDeps {
   apply(plan: ReclaimPlan): Promise<{ freedBytes: number }>;
 }
 
+/** `lsof -Fn` 출력에서 경로만 — `n/…` 줄이 현재 경로다(p · f 줄은 프로세스 · fd 표지). */
+export function parseLsofCwds(out: string): string[] {
+  return out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+}
+
+/**
+ * 이 호스트에서 도는 프로세스들의 현재 경로 — **더하는 재료**다(못 읽으면 빈 목록).
+ *  세션 목록만으로는 게이트웨이가 띄우지 않은 것을 못 본다: 같은 기계에 붙은 노드 에이전트의 세션(다른 tmux 서버), ssh 로 들어와
+ *  손으로 돌리는 빌드. 그 폴더의 node_modules 를 지우면 그 작업이 깨진다. 리눅스는 /proc, 맥은 lsof 로 읽는다.
+ *  자기 사용자 것만 보이는 환경(비특권)에서도 그만큼은 걸러진다 — 종전(세션 목록만)보다 나빠지지 않는다.
+ */
+export async function processCwds(): Promise<string[]> {
+  const out = new Set<string>();
+  try {
+    if (process.platform === "linux") {
+      for (const pid of await fsp.readdir("/proc")) {
+        if (!/^\d+$/.test(pid)) continue;
+        try { out.add(await fsp.readlink(`/proc/${pid}/cwd`)); } catch { /* 남의 프로세스 · 그 사이 끝남 */ }
+      }
+    } else if (process.platform === "darwin") {
+      const { stdout } = await promisify(execFile)("lsof", ["-a", "-d", "cwd", "-Fn"], { timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+      for (const d of parseLsofCwds(stdout)) out.add(d);
+    }
+  } catch { /* lsof 없음 · 시간 초과 — 세션 목록만으로 간다 */ }
+  return [...out];
+}
+
 export const defaultEvictDeps: EvictDeps = {
   roots: () => [path.join(PROJECT_SHARED_BASE, PROJECT_SUBDIR), path.join(PROJECT_SHARED_BASE, LEGACY_SUBDIR)],
   activeSessionDirs: async () => {
     const { listSessionsRaw } = await import("../terminal/terminal-sessions.js");
-    return (await listSessionsRaw({ strict: true })).map((s) => s.dir).filter(Boolean) as string[];
+    // 세션 목록은 못 읽으면 throw(회차를 그만둔다) · 프로세스 경로는 더하는 재료라 실패해도 간다.
+    const sessions = (await listSessionsRaw({ strict: true })).map((s) => s.dir).filter(Boolean) as string[];
+    return [...new Set([...sessions, ...await processCwds()])];
   },
   disk: async (dir) => {
     try {
