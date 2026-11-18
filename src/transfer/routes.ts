@@ -16,7 +16,7 @@ import { incognitoFromHeaders } from "../org/auth/agent-identity.js";
 import { exportBundle, parseSelection, BUNDLE_MAX_BYTES } from "./export.js";
 import { stageImport, listActiveCategories } from "./apply.js";
 import { assertUsablePassword, SealPasswordError } from "./seal.js";
-import { mapTransferErrors } from "./http-errors.js";
+import { mapTransferErrors, uploadBodyError } from "./http-errors.js";
 import { batchView } from "./view.js";
 import { splitPasswordFrame, PasswordFrameError } from "./frame.js";
 
@@ -94,4 +94,10 @@ export function registerTransferRoutes(app: express.Express, verifier: BearerVer
       res.setHeader("Cache-Control", "no-store");
       res.json({ batch: batchView(batch), plan, target_categories: await listActiveCategories() });
     }));
+  //  본문 파서(express.raw)의 상한 초과 → 한국어 안내 JSON(기본 오류 처리는 영어 HTML 이다). 이 경로에만 건다.
+  app.use(TRANSFER_UPLOAD_PATH, (err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const out = uploadBodyError(err);
+    if (!out || res.headersSent) { next(err); return; }
+    res.status(out.status).json(out.body);
+  });
 }

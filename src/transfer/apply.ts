@@ -21,7 +21,7 @@ import { readBundle, bundleContentHash, sha256Hex, type Bundle, type BundleKnowl
 import {
   planImport, resolveDecisions, rewriteWikiLinks, sourceExternalKey, targetContentHash, freeName,
   TARGET_LINK_RELATIONS, TARGET_SOURCE_RELATIONS, UNSORTED,
-  type Plan, type Decisions, type TargetState, type TargetKnowledge, type KnowledgeAction, type ResolvedItem,
+  type Plan, type Decisions, type TargetState, type TargetKnowledge, type KnowledgeAction, type ResolvedItem, groupPlacementNote,
 } from "./plan.js";
 import {
   createBatch, getBatch, getBatchPayload, transitionBatch, expireStalePlans, recoverStuckBatches, getWorkspaceUid, saveBatchProgress,
@@ -224,11 +224,8 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
       await createCategory({ key: c.key, name: c.name ?? c.key, description: c.description ?? undefined, should: c.should ?? undefined, group: c.group ?? undefined }, ctx);
       result.categories_created.push({ ref: c.ref, key: c.key, group: c.group });
     }
-    const grouped = resolved.createCategories.filter((c) => c.group);
-    if (grouped.length) {
-      const nameOf = new Map((target.groups ?? []).map((g) => [g.key, g.name ?? g.key]));
-      result.notes = [...(result.notes ?? []), `새로 만든 분류 ${grouped.length}개는 이름에 따라 묶음에 넣었습니다(${grouped.map((c) => `${c.name ?? c.key} → ${nameOf.get(c.group!) ?? c.group}`).join(' · ')}). 묶음은 화면에서만 쓰여 분류 설정에서 옮길 수 있습니다.`];
-    }
+    const groupNote = groupPlacementNote(resolved.createCategories, target.groups);
+    if (groupNote) result.notes = [...(result.notes ?? []), groupNote];
     for (const [ref, key] of resolved.categoryMap) {
       await upsertOrigin({ origin_uid: originUid, kind: "category", origin_ref: ref, local_ref: key, origin_hash: null, local_hash: null, batch_id: batchId });
     }
