@@ -1,4 +1,4 @@
-// 백필 CLI(#5232) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 백필 CLI(#5232) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/v6/embedding-backfill-cli.pg-test.mjs
 //
 // 왜 이 계층인가: 약속이 «`.env` 로 켠 박스에서 CLI 를 돌리면 DB 의 벡터가 실제로 채워지고, 종료코드가 그 결과를 말한다» 이다 — 설정 해석 · 배치 · 시간 상한 · 쓰기가

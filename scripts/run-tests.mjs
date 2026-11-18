@@ -41,14 +41,23 @@
 //       node scripts/run-tests.mjs --scope=kit,desktop 지정 디렉터리의 *.test.mjs 만 수집(src→dist 매핑 생략)
 //                                                     — 빌드 산출물이 없는 면(윈도우 CI)이 이 러너를 그대로 쓰게 한다
 //       node scripts/run-tests.mjs --budget=45         유닛 파일당 상한(초). 넘으면 통과해도 실패로 본다(#2457)
-import { readdirSync, existsSync } from "node:fs";
+//       node scripts/run-tests.mjs --shard=2/6         전체를 6조각으로 나눈 둘째 조각만(CI 가 잡 여럿으로 나눠 돈다 — 아래 «조각»)
+//       node scripts/run-tests.mjs --pg                ⑤계층: src/**/*.pg-test.mjs(실 Postgres — ITEMS_DATABASE_URL 필수 · 직렬)
+//       node scripts/run-tests.mjs --write-weights     이번 실행의 파일별 시간을 scripts/test-weights.json 에 적는다(조각 균형용)
+//
+// ── 조각 (#5603) ────────────────────────────────────────────────────────────────
+// CI 는 이 러너를 **잡 여럿으로 나눠** 부른다(`--shard=i/N`). 한 잡이 1,200 파일을 혼자 돌던 때 유닛만 511초였다(4코어 · CPU 합
+//  1749초) — 코어를 늘릴 수 없으니 러너를 늘린다. 나눔은 scripts/test-weights.json(파일별 초 — 2초 넘는 것만)을 보고 무거운 것부터
+//  가벼운 조각에 얹는다. 그 표가 낡거나 비어도 **빠지는 파일은 없다**(균형만 흐트러진다 — test-runner-schedule.mjs shardFiles).
+//  혼자 도는 시험은 러너 한 대를 통째로 쓰므로 비용을 코어 수만큼 곱해 센다.
+import { readdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
 import { testChildEnv } from "./test-runner-env.mjs";
-import { readHead, isSoloTest, soloLast, mayStart } from "./test-runner-schedule.mjs";
+import { readHead, isSoloTest, soloLast, mayStart, parseShard, shardFiles } from "./test-runner-schedule.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
@@ -57,7 +66,13 @@ const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
 const DEFAULT_JOBS = Math.min(availableParallelism(), 8);
 const TEST_ENV = testChildEnv();
 
-const opts = { list: false, itest: false, build: false, failFast: false, verbose: false, slowest: 0, jobs: null, scope: [], budget: 0 };
+const opts = { list: false, itest: false, pg: false, build: false, failFast: false, verbose: false, slowest: 0, jobs: null, scope: [], budget: 0, shard: null, writeWeights: false };
+// 조각 균형용 파일별 시간(초). 없거나 깨져 있어도 러너는 돈다 — 모르는 파일은 1초로 센다.
+const WEIGHTS_FILE = path.join(ROOT, "scripts", "test-weights.json");
+const WEIGHT_FLOOR_MS = 2000;   // 이보다 빠른 파일은 적지 않는다(1,000줄짜리 표가 PR 마다 흔들린다) — 기본값 1초로 센다
+const SOLO_COST = 4;            // 혼자 도는 시험 1초 = 병렬 묶음의 4초(CI 러너 4코어를 통째로 쓴다)
+const posix = (f) => f.split(path.sep).join("/");
+const WEIGHTS = (() => { try { return JSON.parse(readFileSync(WEIGHTS_FILE, "utf8")); } catch { return {}; } })();
 // --scope 가 고를 수 있는 면 — 여기 없는 이름은 오타로 보고 죽인다(0건 매치 = 거짓 green 방지, --list 와 같은 원칙).
 const MJS_DIRS = ["kit", "scripts", "deploy", "desktop"];
 const filters = [];
@@ -78,6 +93,12 @@ for (let i = 0; i < argv.length; i++) {
   };
   if (key === "--list") opts.list = true;
   else if (key === "--itest") opts.itest = true;
+  else if (key === "--pg") opts.pg = true;
+  else if (key === "--write-weights") opts.writeWeights = true;
+  else if (key === "--shard") {
+    opts.shard = parseShard(val ?? argv[++i]);
+    if (!opts.shard) die(`--shard 는 i/N 꼴이어야 합니다(1 ≤ i ≤ N): ${val ?? argv[i] ?? ""}`);
+  }
   else if (key === "--build") opts.build = true;
   else if (key === "--fail-fast") opts.failFast = true;
   else if (key === "--verbose") opts.verbose = true;
@@ -95,6 +116,11 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith("-")) die(`알 수 없는 옵션: ${a}\n(사용법은 ${path.relative(ROOT, fileURLToPath(import.meta.url))} 머리 주석)`);
   else filters.push(a);
 }
+if (opts.pg && (opts.itest || opts.scope.length)) die("--pg 는 --itest · --scope 와 함께 쓸 수 없습니다");
+// 표는 전체를 한 번 돌린 결과로만 고친다 — 일부만 돌린 시간으로 덮으면 나머지 파일의 몫이 사라진다.
+if (opts.writeWeights && (opts.shard || filters.length || opts.list)) die("--write-weights 는 전체 실행에서만 씁니다(--shard · 필터 · --list 없이)");
+// 실 DB 주소 없이 돌리면 105건이 저마다 다른 말로 죽는다 — 원인 하나를 먼저 말한다.
+if (opts.pg && !opts.list && !process.env.ITEMS_DATABASE_URL) die("--pg 는 실 Postgres 가 필요합니다 — ITEMS_DATABASE_URL 을 주세요(버려도 되는 DB · 스키마는 initAllSchemas 로 먼저)");
 
 // ── 빌드(선택) — `npm test` 는 종전 `npm run build && …` 였다. && 라서 빌드가 깨지면 테스트 결과를 하나도
 //  못 봤다(웹 tsc 타입오류 하나가 노드 테스트 160건을 가린다). 여기서 돌리면 빌드 실패를 **기억해두고**
@@ -117,6 +143,14 @@ if (opts.build) {
   }
 }
 
+/** src 아래의 pg-test 전부 — collect() 가 유닛 수집에서 빼는 바로 그 파일들이다. */
+function collectPg(dir) {
+  return readdirSync(path.join(ROOT, dir), { recursive: true })
+    .filter((p) => /\.pg-test\.mjs$/.test(p))
+    .map((p) => path.join(dir, p))
+    .sort();
+}
+
 function collect(dir, re) {
   const base = path.join(ROOT, dir);
   if (!existsSync(base)) return [];
@@ -127,7 +161,11 @@ function collect(dir, re) {
 }
 
 let files;
-if (opts.itest) {
+if (opts.pg) {
+  // ⑤계층(pg-test) — 실 Postgres 를 요구해 유닛 수집에서 빠지는 파일들. 종전엔 CI 워크플로에 파일마다 스텝으로 손수 적었다
+  //  (106 스텝 · 직렬 429초). 이제 여기서 자동으로 모으고 CI 는 조각으로 나눠 돈다 — 등록을 빠뜨릴 자리 자체가 없다.
+  files = collectPg("src");
+} else if (opts.itest) {
   // ②계층(itest) — 실 DB 필요. 기본 수집의 제외 규칙과 대칭이며, .env 를 자동 적용한다.
   files = readdirSync(path.join(ROOT, "scripts"), { recursive: true })
     .filter((p) => /\.itest\.mjs$/.test(p))
@@ -149,6 +187,11 @@ if (opts.itest) {
 if (filters.length) files = files.filter((f) => filters.some((s) => f.includes(s)));
 // 혼자 도는 시험(`// @lively-test exclusive`, 근거는 test-runner-schedule.mjs) — 맨 뒤로 모아 병렬 묶음이 끝난 뒤 하나씩 돌린다.
 const SOLO = new Set(files.filter((f) => { try { return isSoloTest(readHead(path.join(ROOT, f))); } catch { return false; } }));
+const collected = files;   // 조각으로 나누기 전의 전체 — --write-weights 가 «이번 계층의 파일» 을 안다
+if (opts.shard) {
+  const costOf = (f) => Math.max(0.1, Number(WEIGHTS[posix(f)]) || 1) * (SOLO.has(f) ? SOLO_COST : 1);
+  files = shardFiles(files, opts.shard.total, costOf)[opts.shard.index - 1];
+}
 files = soloLast(files, SOLO);
 
 if (opts.list) {
@@ -160,13 +203,15 @@ if (opts.list) {
   process.exit(0);
 }
 if (!files.length) {
-  console.error(filters.length ? `일치하는 테스트가 없습니다: ${filters.join(" ")}` : "발견된 테스트가 없습니다");
+  console.error(filters.length ? `일치하는 테스트가 없습니다: ${filters.join(" ")}`
+    : opts.shard ? `조각 ${opts.shard.index}/${opts.shard.total} 에 든 테스트가 없습니다 — 조각 수가 파일 수(${collected.length})보다 많다`
+    : "발견된 테스트가 없습니다");
   process.exit(1);
 }
 
 // 테스트를 하나라도 띄우기 전에 격리 린트를 선행한다. R3 위반 테스트가 setup/에 추가돼도 알파벳 순서나
 // 병렬 스케줄 때문에 린트보다 먼저 실행되어 capability를 얻는 창이 없어야 한다. 필터로 한 파일만 돌려도 동일하다.
-if (!opts.itest) {
+if (!opts.itest && !opts.pg) {
   const isolationPreflight = path.join(ROOT, "kit", "testlib", "test-isolation-lint.test.mjs");
   const r = spawnSync(process.execPath, [isolationPreflight], { cwd: ROOT, stdio: "inherit", env: TEST_ENV });
   if (r.status !== 0) {
@@ -203,7 +248,8 @@ process.on("exit", () => {
   }
 });
 
-const jobs = Math.max(1, Math.min(opts.jobs ?? (opts.itest ? 1 : DEFAULT_JOBS), files.length));
+// --pg 도 --itest 처럼 실 DB 하나를 나눠 쓰니 직렬 고정이다(명시적 -j 로만 덮는다).
+const jobs = Math.max(1, Math.min(opts.jobs ?? (opts.itest || opts.pg ? 1 : DEFAULT_JOBS), files.length));
 const argsFor = (f) => (opts.itest || ENV_FILE_TESTS.has(f) ? ["--env-file-if-exists=.env", f] : [f]);
 const label = (r) => (r.missing ? "빌드 산출물 없음" : r.signal ? `signal ${r.signal}` : `exit ${r.status ?? 1}`);
 
@@ -229,7 +275,9 @@ const record = (idx, r) => {
   if (r.status !== 0) failed++;
 };
 
-if (jobs === 1) {
+// --pg 는 직렬이어도 아래 버퍼링 경로로 돈다 — CI 로그가 통과 105줄 + 실패한 파일의 전문으로 읽힌다(종전엔 스텝 106개가 그 일을 했다).
+//  한 파일을 눈으로 따라가려면 `node <파일>` 로 직접 돌린다.
+if (jobs === 1 && !opts.pg) {
   // 직렬 — 종전과 같이 자식 출력을 그대로 흘린다(버퍼링 없음). 한 건을 눈으로 따라갈 때 이 모드.
   for (let idx = 0; idx < files.length; idx++) {
     if (interrupted) break;
@@ -330,7 +378,20 @@ if (opts.slowest) {
   for (const r of top) console.log(`  ${((r.ms / 1000).toFixed(1) + "s").padStart(7)}  ${((r.ms / sum) * 100).toFixed(1).padStart(4)}%  ${r.f}`);
 }
 
-const suffix = `${wall}${jobs > 1 ? `, -j ${jobs}` : ", 직렬"}`;
+// ── 조각 균형용 시간표 갱신(선택) — 전부 통과한 전체 실행에서만. 다른 계층(유닛 ↔ pg)의 몫은 건드리지 않는다. ──
+if (opts.writeWeights && ran.length === collected.length && ran.every((r) => r.status === 0)) {
+  const mine = new Set(collected.map(posix));
+  const next = Object.fromEntries(Object.entries(WEIGHTS).filter(([k]) => !mine.has(k)));
+  for (const r of ran) if (r.ms >= WEIGHT_FLOOR_MS) next[posix(r.f)] = Math.round(r.ms / 1000);
+  const sorted = Object.fromEntries(Object.keys(next).sort().map((k) => [k, next[k]]));
+  writeFileSync(WEIGHTS_FILE, `${JSON.stringify(sorted, null, 1)}\n`);
+  console.log(`\n시간표 갱신: ${path.relative(ROOT, WEIGHTS_FILE)} (${Object.keys(sorted).length}건 · ${WEIGHT_FLOOR_MS / 1000}초 이상만)`);
+} else if (opts.writeWeights) {
+  console.error("\n시간표는 그대로 둡니다 — 전부 통과한 전체 실행의 시간만 적습니다(실패 · 중단 · 미실행이 있었다).");
+}
+
+const shardNote = opts.shard ? `, 조각 ${opts.shard.index}/${opts.shard.total}` : "";
+const suffix = `${wall}${jobs > 1 ? `, -j ${jobs}` : ", 직렬"}${shardNote}`;
 if (!fails.length && !buildFailed && !interrupted && !homeDirty.length && !overBudget.length) {
   console.log(`\n✓ ${ran.length} test files passed (${suffix})`);
   process.exitCode = 0;

@@ -1,4 +1,4 @@
-// 지식 낱말 색인(BM25) · 식별자 분기 · 찾기 기록(#5201) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 지식 낱말 색인(BM25) · 식별자 분기 · 찾기 기록(#5201) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/v6/knowledge-lex.pg-test.mjs
 //
 // 왜 이 계층인가: 색인이 knowledge 를 따라가는지, BM25 점수와 공개범위 · 수명 거르기가 맞는지, 쓰지 않는 매개변수를 Postgres 가 거부하지 않는지는 실제 SQL 에서만 드러난다.

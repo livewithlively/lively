@@ -1,4 +1,4 @@
-// 앱 맥락 범위(#5100) — 실제 Express 길 PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(.github/workflows/test.yml 에 등록).
+// 앱 맥락 범위(#5100) — 실제 Express 길 PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(.github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-context-rest.pg-test.mjs
 //
 // 왜 따로인가: 범위의 경계는 «앱 토큰 요청을 범위 안에서 돌리는» 문(인증 문 · 능력 어댑터)이다. app-context.pg-test.mjs 는 저장소 · 핸들러를

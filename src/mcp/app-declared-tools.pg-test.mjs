@@ -1,4 +1,4 @@
-// 앱이 선언한 MCP 도구(#5050 앱 v2-40) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱이 선언한 MCP 도구(#5050 앱 v2-40) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/mcp/app-declared-tools.pg-test.mjs
 //
 //  무엇을 보나 — 완료 조건 그대로: **세션 머리글 없는 OAuth 토큰**(진짜 인가 흐름: 요청 → 승인 → 코드 교환)으로 실제 /mcp(express + 인증 +
