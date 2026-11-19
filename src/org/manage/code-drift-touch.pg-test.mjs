@@ -16,9 +16,14 @@
 //   T8  지식 하나는 후보 한 건이다 — 레포가 여럿이면 가장 최근에 바뀐 모듈의 레포, 같은 모듈의 여러 변경은 모듈 한 줄(최근 시각)
 //   T9  비활성 모듈은 후보를 만들지 않는다
 //   T10 관리기 스코프(match_categories) 밖 지식은 후보가 아니다
+//   T11 지식을 낸 작업과 같은 sha 를 늦게 다시 기록한 것은 변경이 아니다 · 가장 늦은 기록이 그 재기록이면 그 아래 다른 커밋을 쓴다
+//   T12 관리기에 lookback_days 가 있어도 이 원천은 오래 안 고친 지식을 낸다
+//   T13 deprecated 레포의 모듈은 후보를 만들지 않는다
 //   M1  실행 경로 — 작업 기록 원천 지식은 모듈의 레포 위탁에 실리고, 분류 원천과 겹친 지식은 한 위탁에 한 번만 실린다
 //       · 분류 원천 지식은 그대로 분류 레포 위탁에 실린다 · 지시문에 바뀐 모듈이 실린다
-//   E1  후보 SQL 오류(없는 열)는 빈 결과로 삼키지 않는다 — 함수는 던지고, 관리기 실행은 error 로 기록되며 위탁하지 않는다
+//   M2  두 원천을 합친 지식 후보도 batch_size 까지이고 작업 기록 원천이 먼저다
+//   E1  후보 SQL 오류(없는 열)는 빈 결과로 삼키지 않는다 — 함수는 던지고, 관리기 실행은 그 원천만 빼고 나머지를 위탁하며
+//       실패를 partial_error 로 싣는다
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -62,11 +67,11 @@ const kn = async (name, bodyDay, catId) => {
   await Q(`UPDATE knowledge SET body_updated_at=$2, updated_at=$2 WHERE name=$1`, [name, at(bodyDay)]);
   await Q(`INSERT INTO knowledge_category(name, category_id, mapped_by, state) VALUES($1,$2,'manual','confirmed')`, [name, catId]);
 };
-const act = async ({ day, commit = true, repoId = null, touches = [], refs = [] }) => {
+const act = async ({ day, commit = true, sha, committed = true, repoId = null, touches = [], refs = [] }) => {
   const id = (await Q(
     `INSERT INTO activity(type, title, repo_id, commit_sha, committed_at, created_at)
-     VALUES('feature','t',$1,$2,$3,$3) RETURNING id`,
-    [repoId, commit ? `c${Math.random().toString(16).slice(2).padEnd(12, "0")}` : null, at(day)]))[0].id;
+     VALUES('feature','t',$1,$2,$3,$4) RETURNING id`,
+    [repoId, commit ? (sha ?? `c${Math.random().toString(16).slice(2).padEnd(12, "0")}`) : null, committed ? at(day) : null, at(day)]))[0].id;
   for (const t of touches) {
     await Q(`INSERT INTO activity_touch(activity_id, target_kind, target_id, created_at, derived) VALUES($1,'code_unit',$2,now(),$3)`,
       [id, t.unit, t.derived ?? true]);
@@ -78,7 +83,6 @@ const act = async ({ day, commit = true, repoId = null, touches = [], refs = [] 
 };
 
 const N = (i) => `cdt-n${String(i).padStart(2, "0")}`;
-let renamed = false;
 try {
   const CK = await cat("cdt-k");
   const CR = await cat("cdt-r");
@@ -147,11 +151,27 @@ try {
   await act({ day: 0, repoId: R1, touches: [{ unit: U11 }], refs: [{ name: N(11) }] });
   await act({ day: 30, repoId: R1, touches: [{ unit: U11 }] });
   await kn(N(12), 0, CR);
+  // T11 같은 커밋을 늦게 다시 기록(committed_at 없음)
+  const U13 = await unit(R1, "src/n");
+  await kn(N(13), 0, CK);
+  await act({ day: 0, sha: "same13", committed: false, repoId: R1, touches: [{ unit: U13 }], refs: [{ name: N(13) }] });
+  await act({ day: 30, sha: "same13", committed: false, repoId: R1, touches: [{ unit: U13 }] });
+  // T11 가장 늦은 기록이 재기록이어도 그 아래의 다른 커밋은 변경이다
+  const U14 = await unit(R1, "src/o");
+  await kn(N(14), 0, CK);
+  await act({ day: 0, sha: "same14", committed: false, repoId: R1, touches: [{ unit: U14 }], refs: [{ name: N(14) }] });
+  await act({ day: 30, repoId: R1, touches: [{ unit: U14 }] });
+  await act({ day: 60, sha: "same14", committed: false, repoId: R1, touches: [{ unit: U14 }] });
+  // T13 deprecated 레포
+  const R3 = await repo("cdt-r3");
+  await Q(`UPDATE repo SET state='deprecated' WHERE id=$1`, [R3]);
+  const U15 = await unit(R3, "src/p");
+  await kn(N(15), 0, CK);
+  await act({ day: 0, repoId: R3, touches: [{ unit: U15 }], refs: [{ name: N(15) }] });
+  await act({ day: 30, repoId: R3, touches: [{ unit: U15 }] });
 
   const scope = { match_categories: ["cdt-k", "cdt-r"], match_types: null, match_provenance: null, exclude_names: null, lookback_days: null };
-  const hasFn = typeof det.findCodeDriftTouchCandidates === "function";
-  chk("T 작업 기록 원천 후보 함수가 있다", hasFn);
-  const cands = hasFn ? await det.findCodeDriftTouchCandidates(scope, 50) : [];
+  const cands = await det.findCodeDriftTouchCandidates(scope, 50);
   const by = new Map(cands.map((c) => [c.name, c]));
   const names = cands.map((c) => c.name);
 
@@ -170,7 +190,14 @@ try {
       && c8.changed_units[0].changed_at === at(50), show(c8));
   chk("T9 비활성 모듈은 후보를 만들지 않는다", !by.has(N(9)), show(names));
   chk("T10 스코프 밖 지식은 후보가 아니다", !by.has(N(10)), show(names));
-  chk("T 후보 전체가 기대와 같다", show([...names].sort()) === show([N(1), N(3), N(8), N(11)].sort()), show(names));
+  chk("T11 지식을 낸 작업과 같은 커밋의 재기록은 변경이 아니다", !by.has(N(13)), show(names));
+  chk("T11 가장 늦은 기록이 재기록이면 그 아래 다른 커밋의 시각을 쓴다",
+    by.get(N(14))?.changed_units?.[0]?.changed_at === at(30), show(by.get(N(14))));
+  chk("T13 deprecated 레포의 모듈은 후보를 만들지 않는다", !by.has(N(15)), show(names));
+  chk("T 후보 전체가 기대와 같다", show([...names].sort()) === show([N(1), N(3), N(8), N(11), N(14)].sort()), show(names));
+  const lb = await det.findCodeDriftTouchCandidates({ ...scope, lookback_days: 30 }, 50);
+  chk("T12 lookback_days 가 있어도 이 원천은 오래 안 고친 지식을 낸다",
+    show(lb.map((c) => c.name).sort()) === show([...names].sort()), show(lb.map((c) => c.name)));
 
   // ── M1 실행 경로 ──
   const MD = await mstore.upsertManager({ key: "cdt-md", kind: "code_drift", enabled: true, match_categories: ["cdt-k", "cdt-r"] }, ME, "web");
@@ -188,20 +215,31 @@ try {
   chk("M1 지시문에 바뀐 모듈이 실린다", /본문 뒤에 바뀐 모듈: src\/a\(/.test(calls.find((c) => c.repo === "cdt-r1")?.prompt ?? ""),
     calls.find((c) => c.repo === "cdt-r1")?.prompt?.slice(0, 400));
 
-  // ── E1 SQL 오류 ──
+  // ── M2 두 원천의 합도 batch_size 까지(작업 기록 원천이 앞) ──
+  const MB = await mstore.upsertManager({ key: "cdt-mb", kind: "code_drift", enabled: true, match_categories: ["cdt-k", "cdt-r"], batch_size: 2 }, ME, "web");
+  const bcalls = [];
+  await runManager(MB, async (prompt, opts) => { bcalls.push({ prompt, repo: opts.repo }); return { status: "ok", summary: { task_id: 1 } }; });
+  const bnames = [N(1), N(3), N(8), N(11), N(12), N(14)].filter((n) => bcalls.some((c) => c.prompt.includes(`) ${n} `)));
+  chk("M2 합친 지식 후보는 batch_size 까지이고 작업 기록 원천이 먼저다",
+    bnames.length === 2 && !bnames.includes(N(12)), show(bnames));
+
+  // ── E1 SQL 오류 ──  (DB 는 끝에 통째로 지우므로 열 이름을 되돌리지 않는다)
   await Q(`ALTER TABLE activity_knowledge RENAME COLUMN relation TO relation_cdt`);
-  renamed = true;
   let thrown = null;
-  try { if (hasFn) await det.findCodeDriftTouchCandidates(scope, 50); } catch (e) { thrown = e; }
+  try { await det.findCodeDriftTouchCandidates(scope, 50); } catch (e) { thrown = e; }
   chk("E1 후보 함수가 없는 열 오류를 던진다(빈 결과로 삼키지 않는다)", thrown?.code === "42703", show({ code: thrown?.code, msg: thrown?.message }));
   const before = calls.length;
   const res2 = await runManager(MD, enqueue);
-  const st = (await Q(`SELECT last_status FROM org_manager WHERE id=$1`, [MD.id]))[0]?.last_status;
-  chk("E1 관리기 실행은 error 로 기록되고 위탁하지 않는다", !!res2.error && st === "error" && calls.length === before, show({ res2, st }));
+  const after = calls.slice(before);
+  const row = (await Q(`SELECT last_status, last_summary FROM org_manager WHERE id=$1`, [MD.id]))[0];
+  chk("E1 작업 기록 원천만 빠지고 분류 원천은 위탁된다",
+    !res2.error && show(after.map((c) => c.repo)) === show(["cdt-catrepo"]), show({ res2, repos: after.map((c) => c.repo) }));
+  chk("E1 실패는 partial_error 로 결과와 실행 기록에 실린다(감시가 센다)",
+    /작업 기록 원천 후보 조회 실패/.test(res2.partial_error ?? "") && /작업 기록 원천/.test(row?.last_summary?.partial_error ?? ""),
+    show({ partial: res2.partial_error, row }));
 } catch (e) {
   fail++; console.log(`FAIL 예외 — ${e?.stack ?? e}`);
 } finally {
-  if (renamed) await Q(`ALTER TABLE activity_knowledge RENAME COLUMN relation_cdt TO relation`).catch(() => {});
   await itemsPool.end().catch(() => {});
   await su.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch(() => {});
   await su.end();

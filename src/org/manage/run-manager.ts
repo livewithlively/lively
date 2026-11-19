@@ -162,9 +162,18 @@ export async function runManager(
     //  구현이 보는 것이 갈라져 있었다. 그래서 «지식이 «이 함수가 X 를 막는다» 고 적었는데 그 심볼이 코드에
     //  없다» 는 자리를 아무도 안 봤다(실측: 08-28 지식이 적은 defaultWorkspaceId 가 열흘간 코드에 없었다).
     const allCats = await findCodeDriftCandidates(m, m.batch_size);
-    const allDocs = mergeCodeDriftKnowledgeCandidates(
-      await findCodeDriftTouchCandidates(m, m.batch_size),
-      await findCodeDriftKnowledgeCandidates(m, m.batch_size));
+    //  작업 기록 원천이 깨져도 정의·분류 원천의 대조는 이번 주에 돈다 — 실패는 partial_error 로 실어 감시가 센다.
+    let touchError: string | undefined;
+    const touched = await findCodeDriftTouchCandidates(m, m.batch_size).catch((e: unknown) => {
+      touchError = `작업 기록 원천 후보 조회 실패: ${(e as Error)?.message ?? String(e)}`;
+      logger.warn({ manager: m.key, err: touchError }, "code_drift 작업 기록 원천 실패 — 나머지 원천으로 진행");
+      return [] as CodeDriftKnowledgeCandidate[];
+    });
+    //  두 원천의 합도 batch_size 까지다(작업 기록 원천이 앞) — 원천을 더해 대조 비용이 늘지 않게.
+    const allDocs = mergeCodeDriftKnowledgeCandidates(touched, await findCodeDriftKnowledgeCandidates(m, m.batch_size))
+      .slice(0, m.batch_size);
+    const withTouchError = (r: ManagerRunResult): ManagerRunResult =>
+      touchError ? { ...r, partial_error: [r.partial_error, touchError].filter(Boolean).join(" · ") } : r;
     // 레포가 안 붙은 것은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
     //  AI 가 '코드를 못 찾겠다'만 보고하거나, 더 나쁘게는 **읽지도 않고 추측한다**. 비교할 is 가 없는 것과 같다.
     const cands = allCats.filter((c) => c.repos.length > 0);
@@ -173,8 +182,8 @@ export async function runManager(
       const why = allCats.length
         ? `정의는 있으나 레포가 연결된 도메인이 없음(${allCats.length}개 후보 중 0개). 「분류체계」 앱에서 분류에 레포를 지정하세요`
         : "정의(should)·지식과 코드가 함께 있는 도메인 없음";
-      await recordManagerRun(m.id, "ok", { candidates: 0, note: why });
-      return { ...base, candidates: 0, skipped: why };
+      await recordManagerRun(m.id, "ok", { candidates: 0, note: why, ...(touchError ? { partial_error: touchError } : {}) });
+      return withTouchError({ ...base, candidates: 0, skipped: why });
     }
 
     // 레포 단위로 갈라 접수한다(#1419 T8) — 헤드리스 태스크는 **작업 cwd 가 레포 하나**다.
@@ -206,10 +215,12 @@ export async function runManager(
     //  레포별 접수 실패를 결과에 싣는다 — 일부 레포만 실패해도 그 레포의 비교는 이번 주에 빠지므로 감시(cron-watch
     //   delegatedWork)가 실패로 센다. 무엇을 어느 칸에 싣는지(전멸=error · 태스크도 못 만든 레포=partial_error ·
     //   큐에 남은 배정 실패는 id 로 판정)는 repoEnqueueFailure 머리말.
-    await recordManagerRun(m.id, out.some((o) => o.status === "error") ? "error" : "ok", { repos: out });
-    return { ...base, candidates: cands.length + docs.length,
+    await recordManagerRun(m.id, out.some((o) => o.status === "error") ? "error" : "ok",
+      { repos: out, ...(touchError ? { partial_error: touchError } : {}) });
+    const result: ManagerRunResult = { ...base, candidates: cands.length + docs.length,
       ...(taskIds.length ? { enqueued: true, task_ids: taskIds } : {}),
       ...repoEnqueueFailure(out) };
+    return withTouchError(result);
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });

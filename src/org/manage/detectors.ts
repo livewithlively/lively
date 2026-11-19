@@ -376,46 +376,69 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
  * 코드 괴리 후보 — **작업 기록 원천**. 지식을 산출·결정한 작업 기록이 건드린 모듈을, 지식 본문과 그 작업 뒤에 커밋 작업이 다시 건드린 것.
  *  분류에 레포가 없어도 바뀐 모듈의 레포를 알기 때문에 그 레포를 싣는다(분류의 첫 레포는 대표값일 뿐 실제로 바뀐 곳이 아니다).
  *
+ *  · 모듈 변경 시각은 그 모듈을 건드린 커밋 작업 기록의 시각이다 — 도메인맵의 모듈 내용 변경 시각이 아직 없어 대신 쓴다.
+ *    committed_at 이 없는 기록이면 커밋 시각이 아니라 기록 시각이다.
  *  · 14일 여유: 같은 작업의 MR 이 늦게 머지돼 작업 기록 뒤 커밋이 다시 기록되는 경우를 오탐으로 올리지 않으려는 값이다.
+ *    본문 시각에도 붙이는 것은 본문을 고친 그 작업의 커밋이 뒤늦게 기록되는 경우도 같기 때문이다. 대가로 창 안의 변경은
+ *    뒤에 다른 변경이 오지 않는 한 영영 후보가 되지 않는다.
+ *  · 지식을 낸 작업의 커밋과 같은 sha 의 기록은 변경이 아니다 — 같은 커밋을 늦게 다시 기록한 것이다.
  *  · 변경은 커밋이 달린 작업 기록의 touch 만 센다(유도·호출자 모두). 조사·리뷰 기록의 touch 는 «읽었다» 일 수 있다.
  *  · 같은 모듈에 지식을 낸 작업이 여럿이면 가장 늦은 것을 기준으로 본다 — 변경 뒤 그 지식을 다시 냈으면 이미 대조한 것이다.
+ *  · 스코프의 lookback_days 는 걸지 않는다. 그 조건은 «최근에 고친 지식» 인데 이 원천은 «오래 안 고친 지식» 을 찾는다
+ *    — 걸면 lookback 을 둔 관리기에서 이 원천이 늘 빈다.
  *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
- *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다(runManager 가 오류로 기록한다).
+ *  ⚠ 지식×모듈 행을 그 모듈의 touch 전부와 조인하지 마라 — 모듈당 touch 수의 제곱으로 커진다. 모듈별 커밋에 시각 순번을 한 번
+ *   매기고, 지식×모듈마다 «제외할 sha 수 + 1» 번째까지만 본다(그 안에 제외되지 않은 가장 늦은 커밋이 반드시 있다).
+ *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
  */
 export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
 
 export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
   const params: unknown[] = [];
-  const conds = scopeConds(m, params, "k");
+  const conds = scopeConds({ ...m, lookback_days: null }, params, "k");
   params.push(CODE_DRIFT_TOUCH_GRACE_DAYS);
   const graceP = `$${params.length}`;
   params.push(limit);
   const limP = `$${params.length}`;
   try {
     const rows = await q(itemsPool, `
-      WITH origin AS (
-        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at
+      WITH kk AS (
+        SELECT k.name, COALESCE(k.body_updated_at, k.updated_at) AS body_at
+          FROM knowledge k
+         WHERE ${conds.join(" AND ")}
+      ), origin AS (
+        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at,
+               COALESCE(array_agg(DISTINCT a.commit_sha) FILTER (WHERE a.commit_sha IS NOT NULL), ARRAY[]::text[]) AS shas
           FROM activity_knowledge ak
+          JOIN kk               ON kk.name = ak.name
           JOIN activity a       ON a.id = ak.activity_id
           JOIN activity_touch t ON t.activity_id = a.id AND t.target_kind = 'code_unit'
          WHERE ak.relation IN ('produced', 'decided')
          GROUP BY ak.name, t.target_id
+      ), unit_commit AS (
+        SELECT t2.target_id AS unit_id, a2.commit_sha, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
+          FROM activity_touch t2
+          JOIN activity a2 ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
+         WHERE t2.target_kind = 'code_unit' AND t2.target_id IN (SELECT unit_id FROM origin)
+         GROUP BY t2.target_id, a2.commit_sha
+      ), ranked AS (
+        SELECT uc.unit_id, uc.commit_sha, uc.changed_at,
+               row_number() OVER (PARTITION BY uc.unit_id ORDER BY uc.changed_at DESC, uc.commit_sha) AS rn
+          FROM unit_commit uc
       ), changed AS (
-        SELECT o.name, o.unit_id, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
+        SELECT o.name, o.unit_id, max(r.changed_at) AS changed_at
           FROM origin o
-          JOIN knowledge k       ON k.name = o.name
-          JOIN activity_touch t2 ON t2.target_kind = 'code_unit' AND t2.target_id = o.unit_id
-          JOIN activity a2       ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
-         WHERE ${conds.join(" AND ")}
-           AND COALESCE(a2.committed_at, a2.created_at) > COALESCE(k.body_updated_at, k.updated_at) + (${graceP} || ' days')::interval
-           AND COALESCE(a2.committed_at, a2.created_at) > o.origin_at + (${graceP} || ' days')::interval
-         GROUP BY o.name, o.unit_id
+          JOIN kk       ON kk.name = o.name
+          JOIN ranked r ON r.unit_id = o.unit_id AND r.rn <= cardinality(o.shas) + 1 AND r.commit_sha <> ALL(o.shas)
+         GROUP BY o.name, o.unit_id, o.origin_at, kk.body_at
+        HAVING max(r.changed_at) > kk.body_at + (${graceP} || ' days')::interval
+           AND max(r.changed_at) > o.origin_at + (${graceP} || ' days')::interval
       ), per_repo AS (
         SELECT c.name, r.name AS repo, max(c.changed_at) AS changed_at,
                json_agg(json_build_object('path', cu.path, 'changed_at', c.changed_at) ORDER BY c.changed_at DESC, cu.path) AS units
           FROM changed c
           JOIN code_unit cu ON cu.id = c.unit_id AND COALESCE(cu.state, 'active') = 'active'
-          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL
+          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL AND COALESCE(r.state, 'active') = 'active'
          GROUP BY c.name, r.name
       ), pick AS (
         SELECT DISTINCT ON (p.name) p.name, p.repo, p.changed_at, p.units
