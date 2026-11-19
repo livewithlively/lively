@@ -2,13 +2,14 @@
 // 소개 영상(#5550, 원준님 2026-11-16 «리니어는 온보딩하면 맨 처음에 온보딩 영상 띄워 주잖아») — 인사 장면 · 재생기 · 자산.
 //
 //  엣지 표 — 행마다 단언 하나 이상.
-//   F1 인사 장면 = 영상이 선다(소리 없음 · 인라인 · 자산 주소는 문서 기준 상대경로) · [계속하기]는 처음부터 눌린다
+//   F1 인사 장면 = 온보딩 영상(기초)이 선다(소리 없음 · 인라인 · 자산 주소는 문서 기준 상대경로) · [계속하기]는 처음부터 눌린다
+//   F1b 소리 — 내레이션 없는 영상엔 소리 단추가 없다 · 있는 영상은 음소거로 시작해 [소리 켜기] · 스피커로 켜고 끈다
 //   F2 [계속하기] → 이름 장면 · 떠난 영상은 멈추고 주소를 놓는다(떼어 낸 영상은 스스로 멈추지 않는다)
 //   F3 영상을 못 읽으면 그 자리에 종전 그림이 선다 · 넓힌 칸도 되돌린다 · [계속하기]는 그대로 눌린다
 //   F4 «움직임 줄이기» 면 스스로 틀지 않는다
-//   F5 다시 보기 창 — 한 번에 하나 · Esc 로 닫히고 영상을 놓는다
-//   S1 자산이 있고(mp4 · 포스터), 영상은 머리(moov)가 앞에 있어 받는 대로 튼다 · 크기 상한
-//   S2 사용 가이드 첫 화면에 다시 보는 문이 있다 · 프리뷰가 mp4 를 영상 타입으로 준다
+//   F5 다시 보기 창 — 고른 영상이 뜬다 · 한 번에 하나 · Esc 로 닫히고 영상을 놓는다
+//   S1 자산이 영상마다 있고(mp4 · 포스터), 영상은 머리(moov)가 앞에 있어 받는 대로 튼다 · 크기 상한
+//   S2 사용 가이드 첫 화면에 영상 둘(온보딩 영상(기초) · 사용 가이드(라이블리 동작원리))을 다시 보는 문이 있다 · 프리뷰가 mp4 를 영상 타입으로 준다
 //  크롬이 없는 면에서는 런타임 행(F1~F5)을 조용히 건너뛴다(종료코드 0) — 정적 행(S1·S2)은 늘 돈다.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -25,27 +26,32 @@ const t = (name, fn) => {
 };
 
 // ── 정적 ──
-t("S1 자산 — mp4 · 포스터가 있고, 영상은 moov 가 mdat 앞(받는 대로 재생) · 12MB 아래", () => {
-  const mp4 = path.join(ROOT, "public/media/welcome-film.mp4"), poster = path.join(ROOT, "public/media/welcome-film-poster.jpg");
-  assert.ok(existsSync(mp4), "public/media/welcome-film.mp4 가 없다 — node scripts/welcome-film/render.mjs");
+const FILM_FILES = [["welcome-film", 12], ["welcome-guide", 20]];   // [이름, 상한 MB] — 동작원리 영상은 길이가 두 배라 상한도 넉넉히
+for (const [name, capMB] of FILM_FILES) t(`S1 자산 ${name} — mp4 · 포스터가 있고, 영상은 moov 가 mdat 앞(받는 대로 재생) · ${capMB}MB 아래`, () => {
+  const mp4 = path.join(ROOT, `public/media/${name}.mp4`), poster = path.join(ROOT, `public/media/${name}-poster.jpg`);
+  assert.ok(existsSync(mp4), `public/media/${name}.mp4 가 없다 — node scripts/welcome-film/render.mjs`);
   assert.ok(existsSync(poster), "포스터가 없다");
   const size = statSync(mp4).size;
   assert.ok(size > 200_000, `영상이 너무 작다(${size}바이트) — 굽다 만 파일`);
-  assert.ok(size < 12 * 1048576, `영상이 12MB 를 넘는다(${(size / 1048576).toFixed(1)}MB) — 이미지 · 저장소가 그만큼 무거워진다`);
+  assert.ok(size < capMB * 1048576, `영상이 ${capMB}MB 를 넘는다(${(size / 1048576).toFixed(1)}MB) — 이미지 · 저장소가 그만큼 무거워진다`);
   const buf = readFileSync(mp4);
   assert.equal(buf.subarray(4, 8).toString("latin1"), "ftyp", "mp4 가 아니다");
   const moov = buf.indexOf(Buffer.from("moov")), mdat = buf.indexOf(Buffer.from("mdat"));
   assert.ok(moov > 0 && mdat > 0 && moov < mdat, "★ moov 가 뒤에 있다(+faststart 없이 구웠다) — 다 받을 때까지 안 튼다");
   assert.equal(readFileSync(poster).subarray(0, 2).toString("hex"), "ffd8", "포스터가 JPEG 가 아니다");
 });
-t("S2 다시 보는 문 · 프리뷰의 영상 타입 · 원본 도구", () => {
+t("S2 다시 보는 문 둘 · 프리뷰의 영상 타입 · 원본 도구", () => {
   const guide = read("web/guide/app.ts");
-  assert.match(guide, /class: 'gd-film'[^\n]*onclick: \(\) => openWelcomeFilm\(\)/, "사용 가이드 첫 화면에 «소개 영상 보기» 가 없다");
+  assert.match(guide, /FILMS\.map\(\(f\) =>\s*el\('button', \{ class: 'gd-film'[^\n]*onclick: \(\) => openWelcomeFilm\(f\)/, "★ 사용 가이드 첫 화면이 영상마다 문을 세우지 않는다");
   assert.match(read("src/preview/routes.ts"), /"\.mp4": "video\/mp4"/, "프리뷰가 mp4 를 영상 타입으로 주지 않는다 — 미리 보기에서 영상이 안 뜬다");
   const wf = read("web/v2/welcome-film.ts");
   assert.match(wf, /src: 'media\/welcome-film\.mp4'/, "영상 주소가 문서 기준 상대경로가 아니다 — 프리뷰(/preview/<id>/ui/)에서 깨진다");
+  assert.match(wf, /src: 'media\/welcome-guide\.mp4'/, "동작원리 영상 주소가 문서 기준 상대경로가 아니다");
+  assert.match(wf, /label: '온보딩 영상\(기초\)'/, "★ 온보딩 영상 제목이 «온보딩 영상(기초)» 가 아니다(원준 2026-11-19)");
+  assert.match(wf, /label: '사용 가이드\(라이블리 동작원리\)'/, "★ 동작원리 영상 제목이 «사용 가이드(라이블리 동작원리)» 가 아니다");
+  assert.match(wf, /FILMS: readonly FilmSpec\[\] = \[WELCOME_FILM, GUIDE_FILM\]/, "첫 화면에 늘어놓는 영상이 둘이 아니다");
   assert.ok(!/from '\.\/(apps|rail|shell-prefs|side)\.js'/.test(wf), "재생기가 셸을 문다 — 사용 가이드(클래식 번들)가 셸 전부를 끌고 온다");
-  for (const f of ["film.html", "film.css", "film.js", "engine.js", "render.mjs", "gen-assets.mjs"]) assert.ok(existsSync(path.join(ROOT, "scripts/welcome-film", f)), `원본 도구가 없다: ${f}`);
+  for (const f of ["film.html", "film.css", "film.js", "engine.js", "render.mjs", "gen-assets.mjs", "tour.html", "tour.js", "gen-tour.mjs", "guide.html", "guide.js", "guide.css", "gen-guide.mjs", "gen-common.mjs"]) assert.ok(existsSync(path.join(ROOT, "scripts/welcome-film", f)), `원본 도구가 없다: ${f}`);
 });
 
 // ── 런타임 ──
@@ -53,7 +59,7 @@ const chrome = findChrome();
 if (!chrome) { console.log("skip  크롬을 못 찾아 런타임 행(F1~F5)을 건너뜁니다(CHROME_BIN 으로 지정)"); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }
 const CSS = ["01-base.css", "41-onboarding.css"].map((f) => path.join(ROOT, "public/styles", f)).filter(existsSync);
 const bundle = buildSync({
-  stdin: { contents: "export { renderOnboarding } from './web/v2/onboarding.ts'; export { mountWelcomeFilm, openWelcomeFilm } from './web/v2/welcome-film.ts';", resolveDir: ROOT, loader: "ts" },
+  stdin: { contents: "export { renderOnboarding } from './web/v2/onboarding.ts'; export { mountWelcomeFilm, openWelcomeFilm, WELCOME_FILM, GUIDE_FILM } from './web/v2/welcome-film.ts';", resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "OB", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 
@@ -92,6 +98,20 @@ async function PAGE_MAIN() {
     src: v && v.getAttribute("src"), poster: v && v.getAttribute("poster"), muted: !!(v && v.muted), inline: !!(v && v.playsInline),
     controls: !!(v && v.controls), plays, go: !!host.querySelector("#introGo") && !host.querySelector("#introGo").disabled, art: !!host.querySelector(".ob-in-art"),
   };
+  R.f1.label = host.querySelector(".wf") && host.querySelector(".wf").getAttribute("aria-label");
+  // F1b — 소리: 내레이션 없는 온보딩 영상엔 소리 단추가 없다. 있는 영상(sound: true)은 음소거로 시작 · [소리 켜기] 로 켜고 걷힌다 · 스피커로 다시 끈다
+  {
+    R.f1b = { silent: { un: !!host.querySelector(".wf-unmute"), sp: !!host.querySelector(".wf-snd"), mutedCls: host.querySelector(".wf").classList.contains("is-muted") } };
+    const box = document.createElement("div"); document.body.append(box);
+    const loud = OB.mountWelcomeFilm({ film: { ...OB.WELCOME_FILM, sound: true }, autoplay: false }); box.append(loud.root);
+    const wf = loud.root, lv = wf.querySelector("video"), un = wf.querySelector(".wf-unmute"), sp = wf.querySelector(".wf-snd");
+    Object.assign(R.f1b, { mutedCls: wf.classList.contains("is-muted"), un: !!un, sp: !!sp, spLabel0: sp && sp.getAttribute("aria-label") });
+    un.click(); await sleep(10);
+    R.f1b.afterUn = { muted: lv.muted, cls: wf.classList.contains("is-muted"), spLabel: sp.getAttribute("aria-label"), pressed: sp.getAttribute("aria-pressed") };
+    sp.click(); await sleep(10);
+    R.f1b.afterSp = { muted: lv.muted, cls: wf.classList.contains("is-muted") };
+    loud.destroy(); box.remove();
+  }
   // F2
   pauses = 0;
   host.querySelector("#introGo").click(); await sleep(50);
@@ -110,10 +130,10 @@ async function PAGE_MAIN() {
   reduce = false;
   // F5
   if (cur) { cur.destroy(); cur = null; }
-  OB.openWelcomeFilm(); OB.openWelcomeFilm();
+  OB.openWelcomeFilm(OB.GUIDE_FILM); OB.openWelcomeFilm();
   const m = document.querySelectorAll(".wf-modal");
   const mv = document.querySelector(".wf-modal video");
-  R.f5 = { count: m.length, dialog: m[0] && m[0].getAttribute("role"), video: !!mv };
+  R.f5 = { count: m.length, dialog: m[0] && m[0].getAttribute("role"), video: !!mv, label: m[0] && m[0].getAttribute("aria-label"), src: mv && mv.getAttribute("src") };
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await sleep(20);
   R.f5.afterEsc = document.querySelectorAll(".wf-modal").length; R.f5.srcLeft = mv && mv.getAttribute("src");
 
@@ -131,12 +151,21 @@ assert.ok(res.text !== null, `결과를 못 받았다 — ${res.out}`);
 const R = JSON.parse(res.text);
 assert.ok(!R.fatal, R.fatal);
 
+t("F1b 소리 — 내레이션 없는 영상엔 소리 단추가 없고, 있는 영상은 음소거로 시작해 [소리 켜기] 로 켜고 스피커로 다시 끈다", () => {
+  assert.deepEqual(R.f1b.silent, { un: false, sp: false, mutedCls: false }, "★ 소리 없는 영상에 소리 단추가 선다 — 눌러도 아무 소리가 없다");
+  assert.equal(R.f1b.mutedCls, true, "음소거 표시(is-muted)가 없다 — [소리 켜기] 가 안 뜬다");
+  assert.ok(R.f1b.un && R.f1b.sp, "소리 단추가 없다");
+  assert.equal(R.f1b.spLabel0, "소리 켜기");
+  assert.deepEqual(R.f1b.afterUn, { muted: false, cls: false, spLabel: "소리 끄기", pressed: "true" }, "★ [소리 켜기] 를 눌러도 소리가 안 켜진다");
+  assert.deepEqual(R.f1b.afterSp, { muted: true, cls: true }, "스피커로 다시 끄지 못한다");
+});
 t("F1 인사 장면에 영상이 선다 — 소리 없음 · 인라인 · 상대경로 · [계속하기]는 처음부터", () => {
   assert.equal(R.f1.scene, "intro");
   assert.equal(R.f1.film, true, "★ 인사 장면에 영상이 없다");
   assert.equal(R.f1.art, false, "영상과 종전 그림이 함께 선다");
   assert.equal(R.f1.wide, true, "칸을 넓히지 않았다 — 영상이 560px 칸에 갇힌다");
   assert.equal(R.f1.src, "media/welcome-film.mp4"); assert.equal(R.f1.poster, "media/welcome-film-poster.jpg");
+  assert.equal(R.f1.label, "온보딩 영상(기초)", "인사 장면 영상의 이름");
   assert.equal(R.f1.muted, true, "★ 소리가 켜져 있다 — 브라우저가 자동 재생을 막는다"); assert.equal(R.f1.inline, true, "아이폰에서 전체 화면으로 튄다");
   assert.equal(R.f1.controls, false, "브라우저 기본 조작줄이 함께 선다");
   assert.equal(R.f1.plays, 1, `스스로 튼 횟수: ${R.f1.plays}`);
@@ -155,8 +184,9 @@ t("F3 영상을 못 읽으면 종전 그림 — 처음 설정은 그대로 간�
   assert.equal(R.f3.after, "name", "영상이 깨지면 [계속하기]가 죽는다");
 });
 t("F4 «움직임 줄이기» — 스스로 틀지 않고 재생 단추가 선다", () => { assert.equal(R.f4.plays, 0, `★ 스스로 튼 횟수: ${R.f4.plays}`); assert.equal(R.f4.big, true); });
-t("F5 다시 보기 창 — 하나만 · Esc 로 닫히고 영상을 놓는다", () => {
+t("F5 다시 보기 창 — 고른 영상 · 하나만 · Esc 로 닫히고 영상을 놓는다", () => {
   assert.equal(R.f5.count, 1, `창 수: ${R.f5.count}`); assert.equal(R.f5.dialog, "dialog"); assert.equal(R.f5.video, true);
+  assert.equal(R.f5.label, "사용 가이드(라이블리 동작원리)", "★ 고른 영상이 아니라 다른 영상이 뜬다"); assert.equal(R.f5.src, "media/welcome-guide.mp4");
   assert.equal(R.f5.afterEsc, 0, "Esc 로 안 닫힌다"); assert.equal(R.f5.srcLeft, null, "닫은 뒤에도 영상이 주소를 쥐고 있다");
 });
 t("런타임 오류 없음", () => { assert.deepEqual(R.errors, []); });
