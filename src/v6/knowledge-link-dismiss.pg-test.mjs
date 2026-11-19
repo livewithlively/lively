@@ -25,6 +25,7 @@
 //   X2  반려한 사람이 볼 수 없는 지식이 낀 쌍은 발견만 반려하고 관리기 링크는 그대로 둔다(링크 해제와 같은 문턱)
 //   X1  보고자가 볼 수 없는 지식과의 모순은 발견만 저장하고 링크를 만들지 않는다 · 응답에 링크 여부가 없다(없는 이름과 같은 모양)
 //   B5  INSERT 가 body_updated_at 을 실으면 그 값을 둔다(가져오기·되살리기)
+//   P6  단건 승인 — 낡은 조치는 result=stale, 적용 오류는 result=failed 로 열린 채
 //   P5  단건 승인(apply)이 적용 도중 반려되면 accepted 로 덮지 않는다 · 적용되면 사람이 쓴 처리 메모가 남는다 · 응답에 적용 결과(result)
 //   A5  분류 key 에 '->' 가 있어도 mismatch 재판정이 성립을 바로 본다
 //   R2  발견 뒤 본문을 고친 지식은 review_hint 에서 빠진다(재판정이 없는 code_drift 포함)
@@ -208,8 +209,8 @@ try {
   const rj = await attempt(() => resolveCap.handler({ id: cd[0]?.id, state: "rejected" }, user(ME), web(ME)));
   const rj2 = await attempt(() => resolveCap.handler({ id: ghF[0]?.id, state: "rejected" }, user(ME), web(ME)));
   const lcd = await linkRows(KC, KD), lgh = await linkRows(KG, KH);
-  chk("C8 반려하면 그 쌍의 관리기 링크가 해제된다", rj.ok && lcd.length === 1 && lcd[0].dismissed_at !== null, show({ rj, lcd }));
-  chk("C8 사람 링크는 반려에도 그대로", rj2.ok && lgh.length === 1 && lgh[0].origin === "user" && lgh[0].dismissed_at === null, show({ rj2, lgh }));
+  chk("C8 반려하면 그 쌍의 관리기 링크가 해제된다 · links_dismissed=1", rj.ok && rj.v.links_dismissed === 1 && lcd.length === 1 && lcd[0].dismissed_at !== null, show({ rj, lcd }));
+  chk("C8 사람 링크는 반려에도 그대로 · links_dismissed=0", rj2.ok && rj2.v.links_dismissed === 0 && lgh.length === 1 && lgh[0].origin === "user" && lgh[0].dismissed_at === null, show({ rj2, lgh }));
   const r3 = await rep(MC.key, KD, KC);
   chk("C8 반려 뒤 재보고는 skipped · 링크 그대로 해제", r3.ok && r3.v.result === "skipped" && (await linkRows(KC, KD))[0]?.dismissed_at !== null
     && (await findingRows(MC.id, KC, KD)).length === 1, show({ r3, l: await linkRows(KC, KD) }));
@@ -365,7 +366,7 @@ try {
   const rx2 = await attempt(() => resolveCap.handler({ id: Number(fx2.id), state: "rejected" }, user(OTHER), web(OTHER)));
   const lx2b = await linkRows(W1, W3);
   chk("X2 못 보는 지식이 낀 쌍의 반려는 발견만 반려하고 링크는 그대로",
-    lx2a.length === 1 && lx2a[0].dismissed_at === null && rx2.ok && (await findingById(fx2.id)).state === "rejected" && lx2b[0]?.dismissed_at === null,
+    lx2a.length === 1 && lx2a[0].dismissed_at === null && rx2.ok && rx2.v.links_dismissed === 0 && (await findingById(fx2.id)).state === "rejected" && lx2b[0]?.dismissed_at === null,
     show({ lx2a, rx2: rx2.ok || rx2, lx2b }));
   const gw = await kget(W1, OTHER);
   chk("V1 안 보이는 모순 이웃은 경고에서 빠진다", gw.ok && !("contradicts_warning" in gw.v), show(gw.ok ? gw.v.contradicts_warning : gw));
@@ -425,6 +426,17 @@ try {
   const F6 = await insFinding(MP.id, "mismatch", P6n, `${CA}->${CB}`, "open", mv(P6n, ca, cb));
   const ap6 = await attempt(() => resolveCap.handler({ id: F6, state: "accepted", apply: true, resolution: "사람 메모" }, user(ME), web(ME)));
   const f6 = await findingById(F6);
+  //  stale — 발견 이후 분류가 바뀐 지식 · failed — 없는 지식으로의 이동(분류 행 FK 가 거절한다, from 이 없어 낡음 판정은 지나간다)
+  const P7n = k("p7");
+  await mkIn(P7n, CC);
+  const F7 = await insFinding(MP.id, "mismatch", P7n, `${CA}->${CB}`, "open", mv(P7n, ca, cb));
+  const ap7 = await attempt(() => resolveCap.handler({ id: F7, state: "accepted", apply: true }, user(ME), web(ME)));
+  chk("P6 단건 승인 — 낡은 조치는 result=stale · 「분류 변경으로 해소」",
+    ap7.ok && ap7.v.result === "stale" && ap7.v.applied === false && (await findingById(F7)).resolution === "분류 변경으로 해소" && show(await catOf(P7n)) === show([cc]),
+    show({ ap7, c: await catOf(P7n) }));
+  const F8 = await insFinding(MP.id, "mismatch", k("p8-없음"), "", "open", { op: "move_category", name: k("p8-없음"), to_category_id: cb });
+  const ap8 = await attempt(() => resolveCap.handler({ id: F8, state: "accepted", apply: true }, user(ME), web(ME)));
+  chk("P6 단건 승인 — 적용 오류는 result=failed · 발견은 열린 채", ap8.ok && ap8.v.result === "failed" && (await findingById(F8)).state === "open", show({ ap8, f: await findingById(F8) }));
   chk("P5 적용되면 사람이 쓴 처리 메모가 남는다 · result=applied", ap6.ok && ap6.v.applied === true && ap6.v.result === "applied" && f6.state === "accepted" && f6.resolution === "사람 메모", show({ ap6, f6 }));
 
   // ── M · A3 mismatch — 벡터를 직접 둔다 ──

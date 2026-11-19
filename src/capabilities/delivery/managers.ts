@@ -118,7 +118,7 @@ export const managersCapabilities: Capability[] = [
     }),
 
   restWork("org_manager_finding_resolve", "발견 처리(승인·반려·해결)",
-    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다 · 모순이면 관리기가 건 contradicts 링크도 해제) · resolved=사람이 직접 고침. " +
+    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다 · 모순이면 처리하는 사람이 두 지식을 모두 쓸 수 있을 때만 관리기가 건 contradicts 링크도 해제하고, 해제한 링크 수를 links_dismissed 로 돌려준다) · resolved=사람이 직접 고침. " +
     "apply=true 면 accepted 시 조치안(예: 분류 이동)을 실제로 적용한다 — 되돌릴 수 있는 조치만 수행된다.",
     [{ method: "POST", paths: ["/api/ui/org/manager-findings/:id/resolve"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id), ...(req.body as object ?? {}),
@@ -153,9 +153,11 @@ export const managersCapabilities: Capability[] = [
             .then(() => true, () => false);
         }
       }
-      const finding = await resolveFinding(id, state, actorOf(user), resolution, { source, allowDismiss });
-      if (!finding) throw new HttpError(404, "발견을 찾을 수 없습니다");
-      return { finding, applied: false };
+      const row = await resolveFinding(id, state, actorOf(user), resolution, { source, allowDismiss });
+      if (!row) throw new HttpError(404, "발견을 찾을 수 없습니다");
+      const { links_dismissed, ...finding } = row;
+      //  모순 반려에만 싣는다 — 0 은 «해제할 관리기 링크가 없었거나 처리자가 양 끝을 쓸 수 없어 두었다» 이다.
+      return { finding, applied: false, ...(state === "rejected" && finding.kind === "contradiction" ? { links_dismissed: links_dismissed ?? 0 } : {}) };
     }, {
       id: z.number().int().positive(),
       state: z.enum(["accepted", "rejected", "resolved"]).describe("rejected 는 존중된다 — 다음 주기에 되살아나지 않는다"),
