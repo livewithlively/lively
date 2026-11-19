@@ -914,11 +914,14 @@ export async function proposeKnowledgeCategory(
   // 분류기는 '빈 자리'만 채운다 — 이미 카테고리 행(어떤 state 든)이 있으면 건너뛴다(single_uq 위반 방지 + 사람/기존 판정 불가침).
   const ex = await itemsPool.query(`SELECT 1 FROM knowledge_category WHERE name=$1 LIMIT 1`, [name]);
   if (ex.rowCount) return { applied: false, state, threshold, skipped: "already_has_category" };
-  await itemsPool.query(
+  //  비활성 분류에는 제안도 넣지 않는다 — 비활성 전환 검사는 proposed 도 세므로, 넣으면 «비활성 분류는 비어 있다» 가 깨진다.
+  //   FOR KEY SHARE 로 고르면 진행 중인 비활성 전환(FOR UPDATE)을 기다렸다가 바뀐 state 로 다시 거른다.
+  const ins = await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, confidence, state, evidence, created_at)
-     VALUES($1,$2,'llm',$3,$4,$5,now())
+     SELECT $1, c.id, 'llm', $3, $4, $5, now() FROM category c WHERE c.id=$2 AND c.state='active' FOR KEY SHARE OF c
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state, confidence=EXCLUDED.confidence, evidence=EXCLUDED.evidence, mapped_by='llm'`,
     [name, categoryId, opts.confidence ?? null, state, opts.evidence]);
+  if (!ins.rowCount) return { applied: false, state, threshold, skipped: "inactive_or_missing_category" };
   await auditKnowledge(name, "propose_category", null, { category_id: categoryId, state, mapped_by: "llm", confidence: opts.confidence ?? null, threshold: threshold ?? null }, ctx);
   return { applied: true, state, threshold };
 }

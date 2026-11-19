@@ -20,10 +20,13 @@
 //   L5 rejected 매핑은 «이미 든 지식» 이 아니다: rejected 로 걸린 활성 지식이 있는 채 분류가 비활성이 되면(전환 검사는 rejected 를
 //      세지 않는다) 그 지식을 같은 분류에 confirmed 로 다시 거는 연결은 400 · 매핑은 rejected 그대로
 //   L6 같은 상태에서 rejected 를 rejected 로 다시 거는 연결(무변경 · 되돌리기)은 막지 않는다
+//   P1 분류기 제안도 비활성 분류에는 넣지 않는다(비활성 전환 검사는 proposed 도 센다) → applied=false · 매핑 없음
+//   M1 관리기 분류 보정(move_category)도 비활성 분류로는 옮기지 않는다 → false · 옛 분류가 남는다
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { updateCategory } = await import(`${DIST}/v6/category-store.js`);
-const { upsertKnowledge, linkKnowledgeCategory } = await import(`${DIST}/v6/knowledge-store.js`);
+const { upsertKnowledge, linkKnowledgeCategory, proposeKnowledgeCategory } = await import(`${DIST}/v6/knowledge-store.js`);
+const { applyAction } = await import(`${DIST}/org/manage/run-manager.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -159,6 +162,16 @@ try {
     chk("L6 비활성 분류의 rejected 를 rejected 로 다시 거는 연결 → 된다", !r.threw, why(r));
     const st = (await itemsPool.query(`SELECT state FROM knowledge_category WHERE name=$1 AND category_id=$2`, [k, c.id])).rows[0]?.state;
     chk("L6 read-back. 매핑은 rejected 그대로", st === "rejected", `state=${st}`); }
+
+  { const dep = await mkCat("deprecated"); const k = await mkKnow();
+    let res; const r = await attempt(async () => { res = await proposeKnowledgeCategory(k, dep.id, { evidence: "pg-test", confidence: 0.99, state: "confirmed" }, { actor: TAG, source: "mcp" }); });
+    chk("P1 비활성 분류로의 분류기 제안 → applied=false", !r.threw && res?.applied === false, r.threw ? why(r) : JSON.stringify(res));
+    chk("P1 read-back. 매핑이 생기지 않았다", JSON.stringify(await mappings(k)) === "[]", JSON.stringify(await mappings(k))); }
+
+  { const a = await mkCat(), dep = await mkCat("deprecated"); const k = await mkKnow(); await map(k, a.id);
+    const moved = await applyAction({ op: "move_category", name: k, from_category_id: a.id, to_category_id: dep.id }, TAG);
+    chk("M1 비활성 분류로의 관리기 분류 보정 → false", moved === false, `applyAction=${moved}`);
+    chk("M1 read-back. 옛 분류가 남았다", JSON.stringify(await mappings(k)) === JSON.stringify([a.id]), JSON.stringify(await mappings(k))); }
 } finally {
   await cleanup().catch(() => {});
   await itemsPool.end().catch(() => {});

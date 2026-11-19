@@ -226,6 +226,13 @@ export async function applyAction(action: unknown, actor: string): Promise<boole
         logger.info({ name, from, current: cur?.category_id ?? null }, "관리기 분류 보정 건너뜀 — 발견 이후 분류가 바뀌었다");
         return false;
       }
+      //  비활성 분류로는 옮기지 않는다 — 발견 이후 대상 분류가 비활성이 됐으면 낡은 조치다(linkKnowledgeCategory 와 같은 잠금).
+      const target = (await client.query(`SELECT state FROM category WHERE id=$1 FOR KEY SHARE`, [to])).rows[0] as { state: string } | undefined;
+      if (target?.state !== "active") {
+        await client.query("ROLLBACK");
+        logger.info({ name, to, state: target?.state ?? null }, "관리기 분류 보정 건너뜀 — 대상 분류가 없거나 비활성이다");
+        return false;
+      }
       await client.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, to]);
       await client.query(
         `INSERT INTO knowledge_category(name, category_id, mapped_by, state, evidence)
