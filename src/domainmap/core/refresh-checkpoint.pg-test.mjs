@@ -21,7 +21,9 @@
 //   G7 브랜치를 되감은 push 는 「이미 적용」이 아니다 — 체크포인트..after 를 거꾸로 적용해 모듈 이름 변경도 되돌린다
 //   G8 체크포인트를 쓸 수 없을 때 브랜치 끝이 아닌 옛 push 의 재전송은 재기준하지 않는다(뒤로 가지 않는다)
 //   G9 되감기로 체크포인트가 브랜치 밖인데 push 가 브랜치 끝이 아니면 적용하지 않는다(브랜치에 없는 상태로 옮기지 않는다)
-//   G10 판정용 git 조회가 실패하면(브랜치 ref 없음) 503 으로 끊고 체크포인트를 쓰지 않는다 — 에러를 「아님」으로 읽지 않는다
+//   G10 판정·조회용 git 이 실패하면(브랜치 ref 없음 · after/체크포인트 조회 · diff) 아무것도 쓰지 않고 200
+//       「git check failed (<op>)」 — 실패를 「없다·아니다」 로 읽어 재기준·역방향 적용으로 가지 않는다
+//   G11 겹친 push 재시도에서 다른 refresh 가 남긴 체크포인트가 클론에 없으면, 오류로 돌지 않고 재기준 분기로 간다
 import pg from "pg";
 import http from "node:http";
 import express from "express";
@@ -369,18 +371,61 @@ try {
     chk("G9 브랜치 끝 push 는 체크포인트..after 로 적용", !r2.body.ignored && r2.body.base === m1 && (await checkpointOf(GR)) === m2, JSON.stringify(r2));
   });
 
-  await section("G10", async () => {
+  // 판정·조회 실패 — 가짜 git 이 주어진 인자 조각에서만 exit 128 을 내고 나머지는 진짜 git 에 넘긴다.
+  const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+  const fakeBin = path.join(ROOT, "fake-git-bin");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(path.join(fakeBin, "git"),
+    `#!/bin/sh\ncase " $* " in *"$FAKE_GIT_FAIL"*) echo "fake failure" >&2; exit 128;; esac\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  const PATH0 = process.env.PATH;
+  for (const [id, op, failOn, branch] of [
+    ["G10a", "merge-base", null, "ghost-branch"],
+    ["G10b", "rev-parse", (cp, tip) => `--end-of-options ${tip}^{commit}`, "main"],
+    ["G10c", "rev-parse", (cp, tip) => `--end-of-options ${cp}^{commit}`, "main"],
+    ["G10d", "diff", () => " diff --name-status ", "main"],
+  ]) {
+    await section(id, async () => {
+      const cp = await checkpointOf(GR);
+      const dir = `src/${id.toLowerCase()}`;
+      put(`${dir}/x.ts`, "x\n");
+      const tip = commit(id, "2026-04-16T00:00:00Z");
+      if (branch !== "main") await q(`UPDATE repo SET default_branch=$1 WHERE name=$2`, [branch, GR]);
+      if (failOn) { process.env.FAKE_GIT_FAIL = failOn(cp, tip); process.env.PATH = `${fakeBin}:${PATH0}`; }
+      try {
+        const r = await push(cp, tip, branch);
+        chk(`${id} 200 · git check failed (${op})`, r.status === 200 && r.body.ignored === `git check failed (${op}), will resync`, JSON.stringify(r));
+        chk(`${id} 아무것도 쓰지 않았다`, (await checkpointOf(GR)) === cp && (await unit(gId, dir)) === null);
+      } finally {
+        process.env.PATH = PATH0; delete process.env.FAKE_GIT_FAIL;
+        await q(`UPDATE repo SET default_branch='main' WHERE name=$1`, [GR]);
+      }
+    });
+  }
+
+  await section("G11", async () => {
     const cp = await checkpointOf(GR);
-    const older = execFileSync("git", ["-C", ORIGIN, "rev-parse", "HEAD~1"], { encoding: "utf8" }).trim();
-    // 클론에 없는 브랜치를 기본 브랜치로 둔다 — origin/<그 이름> 조회가 git 오류를 낸다.
-    await q(`UPDATE repo SET default_branch='ghost-branch' WHERE name=$1`, [GR]);
+    put("src/g11/x.ts", "x\n");
+    const tip = commit("g11", "2026-04-17T00:00:00Z");
+    const holder = await itemsPool.connect();
     try {
-      const r = await push(older, older, "ghost-branch");
-      chk("G10 판정 실패는 503", r.status === 503, JSON.stringify(r));
-      chk("G10 체크포인트를 쓰지 않았다", (await checkpointOf(GR)) === cp);
-    } finally {
-      await q(`UPDATE repo SET default_branch='main' WHERE name=$1`, [GR]);
-    }
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM repo WHERE name=$1 FOR UPDATE", [GR]);
+      const pending = push(cp, tip);
+      let waiting = false;
+      for (let i = 0; i < 200 && !waiting; i++) {
+        const [w] = await q(`SELECT count(*)::int n FROM pg_stat_activity
+                              WHERE wait_event_type='Lock' AND query ILIKE '%FROM repo WHERE name=%FOR UPDATE%' AND pid <> pg_backend_pid()`);
+        waiting = w.n > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 50));
+      }
+      chk("G11 웹훅이 repo 행 잠금에서 기다린다(전제)", waiting);
+      // 그 사이 다른 refresh 가 클론에 없는 커밋을 체크포인트로 남겼다.
+      await holder.query("UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2", [sha("c"), GR]);
+      await holder.query("COMMIT");
+      const r = await pending;
+      chk("G11 재시도에서 클론에 없는 체크포인트 → 재기준", r.status === 200 && !r.body.ignored && /not in clone/.test(r.body.note ?? ""), JSON.stringify(r));
+      chk("G11 체크포인트 = 브랜치 끝", (await checkpointOf(GR)) === tip);
+    } finally { holder.release(); }
   });
 } catch (e) {
   fail++; console.error("FAIL 예외", e);

@@ -12,6 +12,7 @@ import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import { isAuthError, describeGitError, hostOf } from "../org/credentials/git-credential-store.js";
 import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, commitTime, isAncestorStrict, commitExists } from "./git-sync.js";
+import { logger } from "../log.js";
 
 // sanitizeName 은 구 webhook.ts 표면(테스트·소비자) — 구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
 export { sanitizeName };
@@ -166,17 +167,50 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   if (!SHA_RE.test(after)) { res.status(400).json({ error: "invalid after sha" }); return; }
 
   const before = usablePushBase(ev.before);
-  const opts = { timeoutMs: GIT_TIMEOUT_MS };
-  const tipRef = `origin/${defaultBranch}`;
-  const stored = typeof repo.last_refreshed_sha === "string" && repo.last_refreshed_sha !== "" ? repo.last_refreshed_sha : null;
+  try {
+    await decideAndApply(res, provider, repo, cloneDir, before, after, `origin/${defaultBranch}`);
+  } catch (e) {
+    if (!(e instanceof GitCheckFailed)) throw e;
+    // Nothing was written: every git call that feeds a write runs before refresh(). Log the cause (op,
+    // refs, exit code / signal — never stderr, which can echo the remote URL) and ack with 200.
+    // Why not 5xx: GitHub does not redeliver a failed delivery by itself (only a manual redeliver),
+    // and GitLab disables a hook after repeated failures, so a 5xx buys no retry and risks the hook.
+    // Recovery is the next push (it diffs from the checkpoint) or refresh_all.
+    logger.warn({ repo: repo.name, op: e.op, refs: e.refs, code: e.code, signal: e.signal }, "domainmap webhook: git check failed, skipped");
+    res.status(200).json({ ignored: `git check failed (${e.op}), will resync`, head: after });
+  }
+}
 
-  // Diff `base..after` and refresh. With a base this is the checkpoint-guarded path; base null is a
+// A git lookup the webhook needed for a decision failed (as opposed to answering "no").
+class GitCheckFailed extends Error {
+  readonly code: unknown;
+  readonly signal: unknown;
+  constructor(readonly op: string, readonly refs: string[], cause: unknown) {
+    super(`git ${op} failed`);
+    this.code = (cause as { code?: unknown })?.code ?? null;
+    this.signal = (cause as { signal?: unknown })?.signal ?? null;
+  }
+}
+
+async function decideAndApply(
+  res: express.Response, provider: string, repo: any, cloneDir: string, before: string | null, after: string, tipRef: string,
+): Promise<void> {
+  const opts = { timeoutMs: GIT_TIMEOUT_MS };
+  // Every lookup below decides whether (and from where) to write, so an error is never read as "no" —
+  // it becomes GitCheckFailed and the handler acks without writing.
+  const check = async <T>(op: string, refs: string[], fn: () => Promise<T>): Promise<T> => {
+    try { return await fn(); } catch (e) { throw new GitCheckFailed(op, refs, e); }
+  };
+  const exists = (sha: string) => check("rev-parse", [sha], () => commitExists(cloneDir, sha, opts));
+  const ancestor = (a: string, d: string) => check("merge-base", [a, d], () => isAncestorStrict(cloneDir, a, d, opts));
+  const isTip = (sha: string) => check("rev-parse", [tipRef],
+    async () => (await git(["-C", cloneDir, "rev-parse", "--verify", `${tipRef}^{commit}`])).stdout.trim() === sha);
+
+  type Outcome = { kind: "applied"; tally: unknown; changes: number } | { kind: "skipped"; checkpoint: string };
+  // Diff `from..after` and refresh. With a base this is the checkpoint-guarded path; base null is a
   // re-baseline (refresh sets the checkpoint to `after` unconditionally).
-  type Outcome = { kind: "applied"; tally: unknown; changes: number } | { kind: "skipped"; checkpoint: string } | { kind: "no-sha" };
   const apply = async (from: string, base: string | null): Promise<Outcome> => {
-    let diffOut: string;
-    try { diffOut = (await git(["-C", cloneDir, "diff", "--name-status", "-M50", from, after])).stdout || ""; }
-    catch { return { kind: "no-sha" }; }
+    const diffOut = (await check("diff", [from, after], () => git(["-C", cloneDir, "diff", "--name-status", "-M50", from, after]))).stdout || "";
     const changes = parseDiff(diffOut);
     const head_committed_at = await commitTime(cloneDir, after, opts);
     // granularity:'file' — git diff speaks FILE paths but our code_units are module-level; the store
@@ -190,31 +224,15 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
     );
     return r.skipped ? { kind: "skipped", checkpoint: r.skipped.checkpoint } : { kind: "applied", tally: r.tally, changes: changes.length };
   };
-  // The decisions below (already applied? branch tip? checkpoint still on the branch?) guard writes that
-  // cannot be undone by a later push, so they must not fail open: a git error answers 503 and leaves the
-  // retry to the provider's redelivery rather than reading the error as "no".
-  const gitCheck = async <T>(fn: () => Promise<T>): Promise<T> => {
-    try { return await fn(); } catch { throw httpErr(503, "git ancestry check failed, retry later"); }
-  };
-  const isTip = (sha: string): Promise<boolean> =>
-    gitCheck(async () => (await git(["-C", cloneDir, "rev-parse", "--verify", `${tipRef}^{commit}`])).stdout.trim() === sha);
-  const ancestor = (a: string, d: string): Promise<boolean> => gitCheck(() => isAncestorStrict(cloneDir, a, d, opts));
   // note 가 undefined 면 JSON 직렬화에서 키 생략 — 구 응답과 동일.
   const done = (o: Outcome, base: string, note?: string): void => {
     if (o.kind === "applied") { res.status(200).json({ tally: o.tally, base, head: after, changes: o.changes, note }); return; }
-    if (o.kind === "no-sha") {
-      // before/after may not be in the local clone yet (force-push / stale). Don't 502
-      // (provider retry storms) — ack and let the next push / scheduled refresh reconcile.
-      res.status(200).json({ ignored: "sha not in clone yet, will resync", base, head: after }); return;
-    }
     res.status(200).json({ ignored: "checkpoint moved concurrently, will resync", base, head: after, checkpoint: o.checkpoint });
   };
 
-  // before/after may not be in the local clone yet (force-push / stale). Don't 5xx (provider retry
-  // storms) — ack and let the next push / scheduled refresh reconcile.
-  if (!(await commitExists(cloneDir, after, opts))) {
-    res.status(200).json({ ignored: "sha not in clone yet, will resync", head: after }); return;
-  }
+  // `after` not fetched yet (stale clone): ack, the next push / refresh_all reconciles. A failed lookup is
+  // not "absent" — it goes to the GitCheckFailed path instead.
+  if (!(await exists(after))) { res.status(200).json({ ignored: "sha not in clone yet, will resync", head: after }); return; }
 
   // Checkpoint the units cannot be diffed from: not a sha, or not a commit in the clone (history rewrite,
   // a sha set by hand). refresh() refuses any other base, and the scheduled refresh_all — the only other
@@ -224,15 +242,19 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   // redelivered old push would otherwise move the units and the checkpoint backwards. A non-tip push is
   // acked with 200 and recovery waits for the next push at the tip or refresh_all (which re-baselines an
   // unusable checkpoint) — with refresh_all disabled and no further push the units stay behind.
-  if (stored && (!SHA_RE.test(stored) || !(await commitExists(cloneDir, stored, opts)))) {
-    const why = SHA_RE.test(stored) ? "checkpoint not in clone" : "checkpoint is not a sha";
+  const rebaseline = async (why: string): Promise<void> => {
     if (!before) { res.status(200).json({ ignored: `${why} and no usable push base`, head: after }); return; }
     if (!(await isTip(after))) { res.status(200).json({ ignored: `${why} and push is not the branch tip, will resync`, head: after }); return; }
-    done(await apply(before, null), before, `${why}; re-baselined from push before`); return;
-  }
+    if (!(await exists(before))) { res.status(200).json({ ignored: `${why} and push before not in clone yet, will resync`, head: after }); return; }
+    done(await apply(before, null), before, `${why}; re-baselined from push before`);
+  };
+  const unusable = async (cp: string): Promise<string | null> =>
+    !SHA_RE.test(cp) ? "checkpoint is not a sha" : !(await exists(cp)) ? "checkpoint not in clone" : null;
 
+  const stored = typeof repo.last_refreshed_sha === "string" && repo.last_refreshed_sha !== "" ? repo.last_refreshed_sha : null;
   if (!stored) {
     if (!before) { res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return; }
+    if (!(await exists(before))) { res.status(200).json({ ignored: "sha not in clone yet, will resync", base: before, head: after }); return; }
     done(await apply(before, before), before); return;
   }
 
@@ -244,10 +266,12 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   // exactly the change to apply (backwards included) — but only when `after` is the branch tip; otherwise
   // the target is a state the branch no longer has either, so it is acked and left to the next push at
   // the tip or refresh_all (same stall condition as above). If a concurrent refresh moves the checkpoint
-  // (two pushes in quick succession), re-diff once from the checkpoint it left; a second miss is left to
-  // the next push / refresh_all.
+  // (two pushes in quick succession), re-diff once from the checkpoint it left — that checkpoint gets the
+  // same usability check; a second miss is left to the next push / refresh_all.
   let cp = stored;
   for (let attempt = 0; ; attempt++) {
+    const why = await unusable(cp);
+    if (why) { await rebaseline(why); return; }
     const cpOnBranch = await ancestor(cp, tipRef);
     if (cpOnBranch && await ancestor(after, cp)) {
       res.status(200).json({ ignored: "already applied (checkpoint at or past this push)", base: cp, head: after }); return;

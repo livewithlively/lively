@@ -128,24 +128,25 @@ export async function commitTime(cloneDir: string, sha: string, opts: GitOpts): 
   } catch { return null; }
 }
 
-// true iff `ancestor` is reachable from `descendant` (equal counts). Any git error (unknown sha) → false.
-export async function isAncestor(cloneDir: string, ancestor: string, descendant: string, opts: GitOpts): Promise<boolean> {
-  try { await git(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], undefined, undefined, opts); return true; }
-  catch { return false; }
-}
-
-// true iff `sha` names a commit object present in the clone.
-export async function commitExists(cloneDir: string, sha: string, opts: GitOpts): Promise<boolean> {
-  try { await git(["-C", cloneDir, "cat-file", "-e", `${sha}^{commit}`], undefined, undefined, opts); return true; }
-  catch { return false; }
-}
-
-// isAncestor for decisions that must not fail open: only git's "not an ancestor" answer (exit 1) is false;
-// any other failure (unknown ref, timeout, broken clone) throws, so the caller can refuse instead of guessing.
-export async function isAncestorStrict(cloneDir: string, ancestor: string, descendant: string, opts: GitOpts): Promise<boolean> {
-  try { await git(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], undefined, undefined, opts); return true; }
+// Yes/no git questions whose answer gates a write. git answers "no" with exit 1; anything else (exit 128
+// for an unknown ref or a broken clone, a timeout signal, ENOENT for a missing binary or cwd) is an error
+// and throws — reading it as "no" is how a failed lookup used to fall through to the wrong write.
+async function gitAnswer(args: string[], opts: GitOpts): Promise<boolean> {
+  try { await git(args, undefined, undefined, opts); return true; }
   catch (e) {
     if ((e as { code?: unknown })?.code === 1) return false;
     throw e;
   }
+}
+
+// `ancestor` is reachable from `descendant` (equal counts). Both must resolve — an unknown sha throws.
+export function isAncestorStrict(cloneDir: string, ancestor: string, descendant: string, opts: GitOpts): Promise<boolean> {
+  return gitAnswer(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], opts);
+}
+
+// `sha` names a commit in the clone. Absent, ambiguous or not a commit (exit 1 under --quiet) → false;
+// `cat-file -e <sha>^{commit}` is not used because it exits 128 for an absent object, the same code as
+// a real error.
+export function commitExists(cloneDir: string, sha: string, opts: GitOpts): Promise<boolean> {
+  return gitAnswer(["-C", cloneDir, "rev-parse", "--verify", "--quiet", "--end-of-options", `${sha}^{commit}`], opts);
 }
