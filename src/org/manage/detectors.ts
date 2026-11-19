@@ -389,6 +389,7 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
  *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
  *  ⚠ 지식×모듈 행을 그 모듈의 touch 전부와 조인하지 마라 — 모듈당 touch 수의 제곱으로 커진다. 모듈별 커밋에 시각 순번을 한 번
  *   매기고, 지식×모듈마다 «제외할 sha 수 + 1» 번째까지만 본다(그 안에 제외되지 않은 가장 늦은 커밋이 반드시 있다).
+ *   순번은 범위 조건(rn <= n)이 아니라 같음 조건(rn = 1..n)으로 잇는다 — 범위면 모듈 단위로 먼저 조인한 뒤 걸러 다시 제곱이 된다.
  *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
  */
 export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
@@ -429,7 +430,8 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
         SELECT o.name, o.unit_id, max(r.changed_at) AS changed_at
           FROM origin o
           JOIN kk       ON kk.name = o.name
-          JOIN ranked r ON r.unit_id = o.unit_id AND r.rn <= cardinality(o.shas) + 1 AND r.commit_sha <> ALL(o.shas)
+          CROSS JOIN LATERAL generate_series(1, cardinality(o.shas) + 1) AS g(i)
+          JOIN ranked r ON r.unit_id = o.unit_id AND r.rn = g.i AND r.commit_sha <> ALL(o.shas)
          GROUP BY o.name, o.unit_id, o.origin_at, kk.body_at
         HAVING max(r.changed_at) > kk.body_at + (${graceP} || ' days')::interval
            AND max(r.changed_at) > o.origin_at + (${graceP} || ' days')::interval
