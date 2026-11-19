@@ -390,10 +390,10 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
  *    — 걸면 lookback 을 둔 관리기에서 이 원천이 늘 빈다.
  *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
  *  ⚠ 지식×모듈 행을 그 모듈의 touch 전부와 조인하지 마라 — 모듈당 touch 수의 제곱으로 커진다. 모듈별 커밋에 시각 순번을 한 번
- *   매기고, 지식×모듈마다 «그 지식의 제외 sha 수 + 1» 번째까지만 본다(모듈의 sha 는 서로 달라 그 안에 제외되지 않은 가장 늦은
- *   커밋이 반드시 있다). 제외 sha 는 배열로 들고 다니지 말고 지식 단위 표에 안티조인한다 — 산출 sha 가 몰린 지식에서 배열 비교가
- *   제곱이 된다.
- *   순번은 범위 조건(rn <= n)이 아니라 같음 조건(rn = 1..n)으로 잇는다 — 범위면 모듈 단위로 먼저 조인한 뒤 걸러 다시 제곱이 된다.
+ *   매기고, 지식×모듈마다 «제외되지 않은 가장 작은 순번» 하나만 찾는다. 그 순번은 1 이거나 «제외된 순번 + 1» 중 하나라서
+ *   (빈자리는 제외된 순번 바로 뒤에서만 생긴다), 후보를 그 둘로 만들고 제외된 순번을 등호 안티조인으로 빼면 모든 조인이 등호다.
+ *   순번을 범위 조건(rn <= n)이나 generate_series 로 펼치지 마라 — 추정치가 낮으면 플래너가 nested loop 를 골라, 산출 sha 가
+ *   몰린 지식 하나가 (그 sha 수 × 모듈 커밋 수)를 훑는다(편중 데이터에서 같은 쿼리가 데이터 무작위성에 따라 3초와 10분으로 갈렸다).
  *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
  */
 export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
@@ -425,38 +425,44 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
           JOIN kk         ON kk.name = ak.name
           JOIN activity a ON a.id = ak.activity_id AND a.commit_sha IS NOT NULL
          WHERE ak.relation IN ('produced', 'decided')
-      ), origin_n AS (
-        SELECT name, count(*)::int AS n FROM origin_sha GROUP BY name
       ), unit_commit AS (
         SELECT t2.target_id AS unit_id, a2.commit_sha, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
           FROM activity_touch t2
           JOIN activity a2 ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
          WHERE t2.target_kind = 'code_unit' AND t2.target_id IN (SELECT unit_id FROM origin)
          GROUP BY t2.target_id, a2.commit_sha
-      ), unit_n AS (
-        SELECT unit_id, count(*)::int AS n FROM unit_commit GROUP BY unit_id
       ), ranked AS (
         SELECT uc.unit_id, uc.commit_sha, uc.changed_at,
                row_number() OVER (PARTITION BY uc.unit_id ORDER BY uc.changed_at DESC, uc.commit_sha) AS rn
           FROM unit_commit uc
+      ), excl_rank AS (
+        SELECT os.name, r.unit_id, r.rn
+          FROM origin_sha os
+          JOIN ranked r ON r.commit_sha = os.commit_sha
+      ), cand AS (
+        SELECT o.name, o.unit_id, 1::bigint AS rn FROM origin o
+        UNION
+        SELECT e.name, e.unit_id, e.rn + 1 FROM excl_rank e
+      ), first_kept AS (
+        SELECT c.name, c.unit_id, min(c.rn) AS rn
+          FROM cand c
+          LEFT JOIN excl_rank e ON e.name = c.name AND e.unit_id = c.unit_id AND e.rn = c.rn
+         WHERE e.name IS NULL
+         GROUP BY c.name, c.unit_id
       ), changed AS (
-        SELECT o.name, o.unit_id, max(r.changed_at) AS changed_at
+        SELECT o.name, o.unit_id, r.changed_at
           FROM origin o
           JOIN kk            ON kk.name = o.name
-          JOIN unit_n un     ON un.unit_id = o.unit_id
-          LEFT JOIN origin_n xn ON xn.name = o.name
-          CROSS JOIN LATERAL generate_series(1, LEAST(COALESCE(xn.n, 0) + 1, un.n)) AS g(i)
-          JOIN ranked r ON r.unit_id = o.unit_id AND r.rn = g.i
-         WHERE NOT EXISTS (SELECT 1 FROM origin_sha os WHERE os.name = o.name AND os.commit_sha = r.commit_sha)
-         GROUP BY o.name, o.unit_id, o.origin_at, kk.body_at
-        HAVING max(r.changed_at) > kk.body_at + (${graceP} || ' days')::interval
-           AND max(r.changed_at) > o.origin_at + (${graceP} || ' days')::interval
+          JOIN first_kept f  ON f.name = o.name AND f.unit_id = o.unit_id
+          JOIN ranked r      ON r.unit_id = f.unit_id AND r.rn = f.rn
+         WHERE r.changed_at > kk.body_at + (${graceP} || ' days')::interval
+           AND r.changed_at > o.origin_at + (${graceP} || ' days')::interval
       ), per_repo AS (
         SELECT c.name, r.name AS repo, max(c.changed_at) AS changed_at,
                json_agg(json_build_object('path', cu.path, 'changed_at', c.changed_at) ORDER BY c.changed_at DESC, cu.path) AS units
           FROM changed c
-          JOIN code_unit cu ON cu.id = c.unit_id AND COALESCE(cu.state, 'active') = 'active'
-          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL AND COALESCE(r.state, 'active') = 'active'
+          JOIN code_unit cu ON cu.id = c.unit_id AND (cu.state = 'active' OR cu.state IS NULL)
+          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL AND (r.state = 'active' OR r.state IS NULL)
          GROUP BY c.name, r.name
       ), pick AS (
         SELECT DISTINCT ON (p.name) p.name, p.repo, p.changed_at, p.units
