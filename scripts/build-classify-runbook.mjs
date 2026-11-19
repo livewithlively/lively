@@ -33,7 +33,9 @@ function knowledgeTypeDecl() {
   const field = knowledgeSave.input.type;
   const values = field?.unwrap?.().options;
   if (!Array.isArray(values) || !values.length) throw new Error("knowledge_save 의 type 입력 선언을 읽지 못했다 — 선언 모양이 바뀌었으면 이 함수를 맞춰라");
-  return { values, description: field.description ?? "" };
+  // 선언 설명 앞의 「page-type(#이슈, …):」 머리는 도구 호출자용이라 런북에선 뗀다(선언 문구는 그대로 둔다).
+  const description = String(field.description ?? "").replace(/^page-type\([^)]*\):\s*/, "");
+  return { values, description };
 }
 
 function render({ kinds, sources }, types) {
@@ -50,7 +52,7 @@ function render({ kinds, sources }, types) {
   L.push("## 0. 분류 모델 — 지식은 type 하나로 분류하고, kind 는 저장 자리다");
   L.push("");
   L.push(`- **지식의 분류 = \`type\` ${types.values.length}종: ${types.values.map((v) => "`" + v + "`").join("·")}.** 지식 하나에 하나만 단다(신규 저장 시 필수).`);
-  L.push(`  - 정의(\`knowledge_save\` 의 \`type\` 설명 그대로): ${inline(types.description)}`);
+  L.push(`  - 정의(\`knowledge_save\` 의 \`type\` 설명에서): ${inline(types.description)}`);
   L.push("- **종류(kind) R·K·H·W = 맥락이 저장되는 자리**이고 지식의 두 번째 분류가 아니다.");
   L.push("  - **R**(규칙/정책/페르소나) = 세션 주입 섹션 문서. 지식이 아니라 type 을 달지 않는다. **항상 주입.**");
   L.push(`  - **K**(지식) = type 이 how-to 가 아닌 지식(${types.values.filter((v) => v !== "how-to").join("·")}).`);
@@ -58,7 +60,7 @@ function render({ kinds, sources }, types) {
   L.push("  - **W**(과업) = 프로젝트·태스크. 지식이 아니라 type 을 달지 않는다.");
   L.push("- **주제 = 종류가 아니라 별도 축**: 분류축(category) `key` 하나. 위에 얹힌 고정 서랍장은 없다(#1631 — 축은 조직이 자기 일에서 뽑아낸다). 지식은 카테고리 1개(단일 home)에 속하고, 교차 주제는 `knowledge_link` 로 잇는다.");
   L.push("- **출처(provenance) = 종류가 아니라 기계적 사실**: `authored`(저작) · `observed`(외부 시스템 살아있는 미러). 외부 미러는 type 을 비운 채 들어올 수 있어 type 축 밖이다 — type 이 비었다고 미분류 지식으로 세지 않는다.");
-  L.push("- **`confidence` 는 칸이 둘이고 뜻이 다르다**(컬럼명은 `confidence` 유지): 지식의 `confidence` = 마지막으로 저장한 채널(`human` 사람 웹 · `ai` 에이전트 MCP · `observed` 외부 미러 · `rule` 시스템 결정론 파생)이고 서버가 채운다. 지식↔카테고리 연결의 `confidence` = 분류 신뢰도(0~1). 어느 쪽도 가치·주입을 결정하지 않는다.");
+  L.push("- **`confidence` 는 칸이 둘이고 뜻이 다르다**(컬럼명은 `confidence` 유지): 지식의 `confidence` = 마지막으로 저장한 채널(`human` 사람 웹 · `ai` 에이전트 MCP · `observed` 외부 미러 · `rule` 시스템 결정론 파생)이고 서버가 채운다(되돌리기와 이미 반영된 수정 제안의 반려는 이전 값을, 가져오기는 꾸러미에 실린 원본의 값을 유지하고, 수정 제안 승인은 제안자의 채널을 따른다). 지식↔카테고리 연결의 `confidence` = 분류 신뢰도(0~1). 어느 쪽도 가치·주입을 결정하지 않는다.");
   L.push("- **S(구조)·G(용어집/그래프) 는 ku 종류가 아니다** — 모양이 글이 아니라 노드+엣지라 domainmap 파생 그래프(**federated 뷰**)로 다룬다. 도메인 부채도 ku 아님(domainmap `debt_finding`).");
   L.push("- 옛 kind 코드 D·F·A·M·S·G·L·Z 는 시드에서 지워졌다(부팅마다 DELETE). D/F/A/M/L/Z 는 지식(type 으로 분류)으로, S/G 는 domainmap 파생(federated)으로 본다.");
   L.push("");
