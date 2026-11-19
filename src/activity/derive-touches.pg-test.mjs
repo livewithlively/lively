@@ -7,10 +7,12 @@
 //  사양:
 //   K1  크론 액션 derive_activity_touches 가 org_cron CHECK 에 등록돼 저장된다 · 스위치가 꺼져 있으면 아무것도 안 한다
 //   F1  스위치 저장은 l3_derive 만 바꾸고 l2_autoresolve 는 그대로 둔다
-//   S1  커밋·레포가 있는 기록은 pending, 레포가 없으면 no_repo · 호출자 touch 가 있거나 커밋이 없는 기록은 상태 행이 없다
+//   S1  커밋·레포가 있는 기록은 pending, 레포가 없으면 no_repo · 호출자 code_unit touch 가 있거나 커밋이 없는 기록은 상태 행이 없다
+//       · data_entity touch 만 넘긴 기록은 유도한다(호출자 touch 는 그대로)
 //   A2a 변경 파일을 최장 접두 규칙으로 매핑해 derived=true touch 를 넣고 ok(changed_files·unmatched_files)
 //   A2b 머지 커밋은 first-parent 로 읽는다(0줄 거짓 empty 가 아니다) · 빈 커밋은 empty · 매칭 0건은 ok(unmatched=changed)
 //   A2c 클론에 없는 커밋은 failed(error 기록) · 모듈이 없는 레포는 no_units(fetch 하지 않는다)
+//   A2d blob·tree sha 는 커밋이 아니라 failed(거짓 ok·거짓 empty 가 아니다) · 지워진 레포의 행은 no_repo 이고 fetch 실패로 세지 않는다
 //   I1  다시 돌리면 아무것도 바뀌지 않는다(종착 상태 · touch 수 그대로) · failed 는 다음 실행이 다시 잡고, 한 실행 안에서는 맴돌지 않는다
 //   L1  선점을 잃은 시도(attempted_at 이 다름)는 상태도 touch 도 쓰지 못한다
 //   L2  리스가 끝난 running 은 다시 선점되고, 옛 시도의 종료는 lost 다
@@ -21,10 +23,10 @@
 //   E1  30일이 지난 failed·pending·리스 끝난 running 은 expired 이고 다시 선점되지 않는다
 //   B1  클론 잠금을 못 얻으면 failed 가 아니라 pending 으로 남고 크론 상태는 ok 다
 //   D1  작업 기록이 지워지면 상태 행·touch 가 함께 사라지고, 시도 중 삭제와 겹쳐도 교착 없이 gone 으로 끝난다
-//   W1  크론 상태 — 레포 일부의 fetch 실패는 warn, 전부 실패는 error
+//   W1  크론 상태 — fetch 실패는 레포 일부든 전부든 warn(error 로 올려 브레이커가 잡을 끄지 않는다)
 //   W2  워커 SQL 이 실패하면 크론 상태가 error 다(빈 결과 ok 로 삼키지 않는다)
-//   P1  스위치가 켜져 있으면 작업 기록 직후 그 한 건을 유도한다
-//   M1  지표 — 완료율 (ok+empty)/(ok+empty+failed+expired), 매칭 0건 ok 수, pending 수
+//   P1  스위치가 켜져 있으면 작업 기록 직후 그 한 건을 유도한다 · 커밋이 클론에 이미 있으면 fetch 하지 않는다
+//   M1  지표 — 고정 픽스처에서 완료율 (ok+empty)/(ok+empty+failed+expired), 매칭 0건 ok 수, pending 수
 //   G1  유도 touch 가 도메인 부채의 commit 작업 수(active_commits)에 잡힌다
 import pg from "pg";
 import { execFileSync } from "node:child_process";
@@ -91,6 +93,8 @@ put("src/b/z.ts", "2");
 const C4 = commit("c4");
 g(WORK, "push", "-q", "origin", "main", "feature");
 const GHOST = "0123456789abcdef0123456789abcdef01234567";    // 클론에 없는 커밋
+const BLOB = g(WORK, "rev-parse", "HEAD:README.md");          // 클론에 있지만 커밋이 아닌 객체
+const TREE = g(WORK, "rev-parse", "HEAD^{tree}");
 
 // ── 레포·모듈 ──
 const repo = async (name, gitUrl) => (await Q(`INSERT INTO repo(name, git_url, default_branch, created_at) VALUES($1,$2,'main',now()) RETURNING id`, [name, gitUrl]))[0].id;
@@ -99,6 +103,8 @@ const R = await repo("r-main", "file://" + BARE);
 const U_A = await unit(R, "src/a"), U_ASUB = await unit(R, "src/a/sub"), U_B = await unit(R, "src/b"), U_AB = await unit(R, "src/ab");
 const R_NOU = await repo("r-nounits", "file://" + BARE);
 const R_BAD = await repo("r-bad", "file://" + join(TMP, "missing.git"));
+const R_DEL = await repo("r-del", "file://" + BARE);
+await unit(R_DEL, "src/a");
 await unit(R_BAD, "src/a");
 
 const log = async (o) => (await logActivity({ type: "feature", title: o.title ?? "t", ...o }, ME)).id;
@@ -109,9 +115,9 @@ const setFlag = (v) => rc.updateRuntimeConfig({ ontology_loops: { l3_derive: v }
 
 try {
   // ── K1 · F1 ──
-  await Q(`INSERT INTO org_cron(id, label, action, interval_sec, enabled) VALUES('derive-touches','t','derive_activity_touches',86400,false)`);
-  const def = (await Q(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conname='org_cron_action_chk'`))[0]?.d ?? "";
-  chk("K1 크론 CHECK 에 derive_activity_touches 가 있고 행이 저장된다", def.includes("derive_activity_touches"), def.slice(0, 80));
+  const ins = await itemsPool.query(`INSERT INTO org_cron(id, label, action, interval_sec, enabled) VALUES('derive-touches','t','derive_activity_touches',86400,false)`)
+    .then(() => null, (e) => e.message);
+  chk("K1 크론 행이 org_cron_action_chk 를 통과해 저장된다", ins === null, ins);
   const off = await runCronById("derive-touches");
   chk("K1 스위치가 꺼져 있으면 아무것도 안 한다", off.status === "ok" && /l3_derive/.test(show(off.summary)), show(off));
   await rc.updateRuntimeConfig({ ontology_loops: { l2_autoresolve: true } }, ME, "web");
@@ -130,11 +136,13 @@ try {
   const ANR = await log({ commit_sha: C4 });                                   // 레포 없음
   const AC = await log({ commit_sha: C4, repo: "r-main", touches: [{ target_kind: "code_unit", target_id: U_B }] });
   const AX = await log({});                                                    // 커밋 없음
+  const ADE = await log({ commit_sha: C1, repo: "r-main", touches: [{ target_kind: "data_entity", target_id: 999 }] });
   const rec = await dt.reconcileDeriveRows();
   chk("S1 커밋·레포가 있으면 pending", (await row(A1))?.status === "pending" && (await row(A1)).commit_sha === C1, show(await row(A1)));
   chk("S1 레포가 없으면 no_repo", (await row(ANR))?.status === "no_repo", show(await row(ANR)));
   chk("S1 호출자 touch 가 있거나 커밋이 없으면 상태 행이 없다", !(await row(AC)) && !(await row(AX)));
-  chk("S1 넣은 수", rec.inserted === 8, show(rec));
+  chk("S1 data_entity touch 만 넘긴 기록은 유도 대상이다", (await row(ADE))?.status === "pending", show(await row(ADE)));
+  chk("S1 넣은 수", rec.inserted === 9, show(rec));
 
   // ── A2a·A2b·A2c ──
   const run1 = await dt.deriveActivityTouches();
@@ -151,13 +159,29 @@ try {
   chk("A2c 클론에 없는 커밋은 failed 와 오류", rg.status === "failed" && /git show/.test(rg.error ?? ""), show(rg));
   chk("A2c 모듈 없는 레포는 no_units · fetch 목록에 없다", (await row(AN)).status === "no_units" && !run1.repos.some((r) => r.repo === "r-nounits"), show({ r: await row(AN), repos: run1.repos }));
   chk("A2c 한 실행에서 레포 fetch 는 한 번", run1.repos.filter((r) => r.repo === "r-main").length === 1, show(run1.repos));
+  const tde = await Q(`SELECT target_kind, target_id, derived FROM activity_touch WHERE activity_id=$1 ORDER BY target_kind, target_id`, [ADE]);
+  chk("S1 data_entity 기록에 code_unit 이 유도되고 호출자 touch 는 그대로", show(tde) === show([
+    { target_kind: "code_unit", target_id: Math.min(U_A, U_ASUB), derived: true }, { target_kind: "code_unit", target_id: Math.max(U_A, U_ASUB), derived: true },
+    { target_kind: "data_entity", target_id: 999, derived: false }]), show(tde));
 
   // ── I1 ──
   const before = (await Q(`SELECT count(*)::int AS n FROM activity_touch`))[0].n;
   const run2 = await dt.deriveActivityTouches();
   const after = (await Q(`SELECT count(*)::int AS n FROM activity_touch`))[0].n;
   chk("I1 다시 돌리면 failed 만 다시 잡고 touch 는 그대로", run2.claimed === 1 && run2.results.failed === 1 && before === after && run2.reconcile.inserted === 0, show({ run2, before, after }));
-  chk("I1 한 실행 안에서 failed 를 맴돌지 않는다", run1.claimed === 8 - 1 /* no_repo */, show(run1));
+  chk("I1 한 실행 안에서 failed 를 맴돌지 않는다", run1.claimed === 9 - 1 /* no_repo */, show(run1));
+
+  // ── A2d ──
+  const ABL = await log({ commit_sha: BLOB, repo: "r-main" });
+  const ATR = await log({ commit_sha: TREE, repo: "r-main" });
+  const ADL = await log({ commit_sha: C1, repo: "r-del" });
+  await Q(`DELETE FROM repo WHERE id=$1`, [R_DEL]);
+  const runD = await dt.deriveActivityTouches();
+  chk("A2d blob sha 는 failed — 거짓 ok·유도 touch 가 아니다", (await row(ABL)).status === "failed" && (await touches(ABL)).length === 0, show(await row(ABL)));
+  chk("A2d tree sha 는 failed — 거짓 empty 가 아니다", (await row(ATR)).status === "failed", show(await row(ATR)));
+  chk("A2d 지워진 레포의 행은 no_repo 이고 fetch 실패로 세지 않는다", (await row(ADL)).status === "no_repo"
+    && !runD.repos.some((r) => r.error) && dt.statusForDerive(runD.repos) === "ok", show({ r: await row(ADL), repos: runD.repos }));
+  await Q(`UPDATE activity_touch_derive SET status='ok' WHERE activity_id = ANY($1)`, [[ABL, ATR]]);   // 뒤 단계의 재시도 수에 섞이지 않게
 
   // ── L1 · L2 ──
   const AL = await log({ commit_sha: C1, repo: "r-main" });
@@ -223,7 +247,7 @@ try {
   const AB = await log({ commit_sha: C4, repo: "r-main" });
   const lockFile = join(process.env.DOMAINMAP_REPOS_DIR, ".r-main.fetch.lock");
   writeFileSync(lockFile, JSON.stringify({ pid: 1, at: Date.now(), token: "other" }));
-  const runB = await dt.deriveActivityTouches({ activityId: AB, lockWaitMs: 300 });
+  const runB = await dt.deriveActivityTouches({ lockWaitMs: 300 });   // 일일 실행은 늘 fetch 한다
   rmSync(lockFile, { force: true });
   chk("B1 클론 잠금을 못 얻으면 pending 이고 오류가 아니다", (await row(AB)).status === "pending" && !(await row(AB)).error && runB.repos[0]?.busy === true && dt.statusForDerive(runB.repos) === "ok",
     show({ r: await row(AB), runB }));
@@ -261,9 +285,8 @@ try {
   chk("W1 오류에 클론 주소를 싣지 않는다", !(await row(AW1)).error.includes("missing.git"), (await row(AW1)).error);
   await Q(`UPDATE activity_touch_derive SET attempted_at = now() - interval '1 day' WHERE activity_id=$1`, [AW1]);
   const w2 = await runCronById("derive-touches");
-  chk("W1 시도한 레포가 전부 실패하면 error", w2.status === "error", show(w2));
-  const last = (await Q(`SELECT last_status FROM org_cron WHERE id='derive-touches'`))[0].last_status;
-  chk("W1 크론 행에 상태가 남는다", last === "error", last);
+  const cron2 = (await Q(`SELECT last_status, fail_streak FROM org_cron WHERE id='derive-touches'`))[0];
+  chk("W1 시도한 레포가 전부 실패해도 warn — 브레이커 연속 실패에 세지 않는다", w2.status === "warn" && cron2.last_status === "warn" && cron2.fail_streak === 0, show({ w2: w2.status, cron2 }));
 
   // ── W2 ──
   await Q(`ALTER TABLE activity_touch_derive RENAME TO activity_touch_derive_x`);
@@ -276,14 +299,29 @@ try {
   let rp;
   for (let i = 0; i < 50; i++) { rp = await row(AP); if (rp && rp.status !== "pending" && rp.status !== "running") break; await new Promise((r) => setTimeout(r, 100)); }
   chk("P1 스위치가 켜져 있으면 기록 직후 유도한다", rp?.status === "ok" && (await touches(AP)).length === 2, show(rp));
+  await setFlag(false);
+  //  클론 잠금을 남이 쥔 상태로 둔다 — fetch 를 시도하면 busy 로 드러난다.
+  const lockP = join(process.env.DOMAINMAP_REPOS_DIR, ".r-main.fetch.lock");
+  writeFileSync(lockP, JSON.stringify({ pid: 1, at: Date.now(), token: "other" }));
+  const AQ = await log({ commit_sha: C4, repo: "r-main" });
+  const runQ = await dt.deriveActivityTouches({ activityId: AQ, lockWaitMs: 300 });
+  const AQ2 = await log({ commit_sha: GHOST, repo: "r-main" });
+  const runQ2 = await dt.deriveActivityTouches({ activityId: AQ2, lockWaitMs: 300 });
+  rmSync(lockP, { force: true });
+  chk("P1 커밋이 클론에 있으면 기록 직후 시도는 fetch 하지 않는다", (await row(AQ)).status === "ok" && !runQ.repos.some((r) => r.busy), show({ r: await row(AQ), repos: runQ.repos }));
+  chk("P1 클론에 없으면 fetch 를 시도한다", runQ2.repos.some((r) => r.busy) && (await row(AQ2)).status === "pending", show({ r: await row(AQ2), repos: runQ2.repos }));
 
   // ── M1 ──
-  await setFlag(false);
+  await Q(`DELETE FROM activity_touch_derive`);
+  const fx = [["ok", 2, 0, 0], ["ok", 1, 1, 0], ["empty", 0, 0, 0], ["failed", null, null, 0], ["expired", null, null, 0], ["no_repo", null, null, 0], ["no_units", null, null, 0], ["pending", null, null, 2]];
+  for (const [status, changed, unmatched, ageDays] of fx) {
+    const id = await log({});
+    await Q(`INSERT INTO activity_touch_derive(activity_id, commit_sha, repo_id, status, changed_files, unmatched_files, enqueued_at)
+             VALUES($1,'abc1234',$2,$3,$4,$5, now() - ($6 || ' days')::interval)`, [id, R, status, changed, unmatched, String(ageDays)]);
+  }
   const st = await dt.deriveStats();
-  const by = st.by_status;
-  const expect = ((by.ok ?? 0) + (by.empty ?? 0)) / ((by.ok ?? 0) + (by.empty ?? 0) + (by.failed ?? 0) + (by.expired ?? 0));
-  chk("M1 완료율 = (ok+empty)/(ok+empty+failed+expired)", st.completion_rate === Math.round(expect * 1000) / 1000 && (by.expired ?? 0) >= 3, show(st));
-  chk("M1 매칭 0건 ok 를 센다", st.ok_zero_match >= 1, show(st));
+  chk("M1 완료율 3/5 — no_repo·no_units·pending 은 분모에서 뺀다", st.completion_rate === 0.6, show(st));
+  chk("M1 매칭 0건 ok 1 · pending 1 · 가장 오래된 pending 2일", st.ok_zero_match === 1 && st.pending === 1 && st.oldest_pending_days === 2, show(st));
 
   // ── G1 ──
   const cat = (await Q(`INSERT INTO category(key, name, should) VALUES('d-derive','d','도메인 의도') RETURNING id`))[0].id;

@@ -6,14 +6,15 @@
 //  매핑해 채운다.
 //
 //  상태 표 activity_touch_derive 에 쓰는 것은 이 워커뿐이다. 작업 기록 테이블을 정본으로 보고 차이를 맞춘다.
-//   S1 새 행   — 커밋이 있고 상태 행도 touch 도 없는 작업 기록 → repo_id 없으면 no_repo, 있으면 pending
+//   S1 새 행   — 커밋이 있고 상태 행도 code_unit touch 도 없는 작업 기록 → repo_id 없으면 no_repo, 있으면 pending
+//               (호출자가 code_unit 을 선언했으면 그것이 우선이라 유도하지 않는다. data_entity 만 넘긴 기록은 유도한다)
 //   S2 재동기  — 상태 행의 commit_sha·repo_id 가 작업 기록과 다르면(상태 무관, running 포함) 두 칸을 맞추고 pending(또는 no_repo),
 //               enqueued_at=now(), 그 작업 기록의 유도 touch(derived=true)만 지운다
 //   S3 첫 모듈 — no_units 행의 레포에 active code_unit 이 생기면 pending
 //   S4 만료    — enqueued_at 이 30일을 넘긴 pending·failed·리스가 끝난 running → expired
 //   A1 선점    — 30일 안의 pending·failed·리스가 끝난 running → running, attempted_at=now()(SKIP LOCKED)
 //   A2 종료    — 한 트랜잭션: 작업 기록 행 확인 → 내 선점인지 확인(아니면 아무것도 안 씀) → sha·레포가 바뀌었으면 S2 와 같은 쓰기
-//               → 아니면 유도 touch 를 넣고 ok·empty·no_units·failed, 클론 잠금을 못 얻었으면 pending
+//               → 아니면 유도 touch 를 넣고 ok·empty·no_units·failed, 클론 잠금을 못 얻었으면 pending, 레포 행이 지워졌으면 no_repo
 //  종착은 ok·empty·expired·no_repo 이고 S2 로만 다시 열린다(no_units 는 S3 로도). 미매칭 파일은 다시 유도하지 않는다 —
 //  루트 파일처럼 영영 매칭되지 않는 경로를 매일 재처리하게 된다.
 //
@@ -23,7 +24,8 @@
 import type pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import { logger } from "../log.js";
-import { ensureClone, git, parseDiff, CloneBusyError } from "../domainmap/git-sync.js";
+import { existsSync } from "node:fs";
+import { ensureClone, git, parseDiff, repoClonePath, CloneBusyError } from "../domainmap/git-sync.js";
 import { unitOwner } from "../domainmap/core/aggregate.js";
 import { describeGitError } from "../org/credentials/git-credential-store.js";
 
@@ -84,13 +86,13 @@ export async function reconcileDeriveRows(activityId?: number): Promise<Reconcil
     `SELECT a.id FROM activity a
       WHERE NULLIF(a.commit_sha,'') IS NOT NULL ${idCond}
         AND NOT EXISTS (SELECT 1 FROM activity_touch_derive d WHERE d.activity_id = a.id)
-        AND NOT EXISTS (SELECT 1 FROM activity_touch t WHERE t.activity_id = a.id)
+        AND NOT EXISTS (SELECT 1 FROM activity_touch t WHERE t.activity_id = a.id AND t.target_kind = 'code_unit')
       ORDER BY a.id`, idParams)).rows as { id: number }[];
   for (const { id } of fresh) {
     const done = await withTx(async (c) => {
       const a = await lockActivity(c, id);
       if (!a?.commit_sha) return false;
-      if ((await c.query(`SELECT 1 FROM activity_touch WHERE activity_id=$1 LIMIT 1`, [id])).rowCount) return false;
+      if ((await c.query(`SELECT 1 FROM activity_touch WHERE activity_id=$1 AND target_kind='code_unit' LIMIT 1`, [id])).rowCount) return false;
       const r = await c.query(
         `INSERT INTO activity_touch_derive(activity_id, commit_sha, repo_id, status, enqueued_at)
          VALUES($1,$2,$3,$4,now()) ON CONFLICT (activity_id) DO NOTHING`,
@@ -153,7 +155,7 @@ async function claim(runStartedAt: string, limit: number, activityId?: number): 
       RETURNING d.activity_id, d.commit_sha, d.repo_id, d.attempted_at::text AS attempted_at`, params)).rows as Claimed[];
 }
 
-export type FinishResult = "ok" | "empty" | "no_units" | "failed" | "pending" | "lost" | "gone" | "resynced";
+export type FinishResult = "ok" | "empty" | "no_units" | "no_repo" | "failed" | "pending" | "lost" | "gone" | "resynced";
 
 /** A2 — 선점(attempted_at)이 그대로일 때만 쓴다. 매핑은 이 트랜잭션에서 읽은 active code_unit 으로 한다. */
 export async function finishDerive(cl: Claimed, outcome: DeriveOutcome): Promise<FinishResult> {
@@ -173,6 +175,8 @@ export async function finishDerive(cl: Claimed, outcome: DeriveOutcome): Promise
         `UPDATE activity_touch_derive SET status=$2, changed_files=$3, unmatched_files=$4, error=$5 WHERE activity_id=$1`,
         [cl.activity_id, status, changed, unmatched, error]);
     };
+    //  레포 행이 지워졌으면 다시 열 길이 S2(작업 기록의 레포 변경)뿐이다 — no_units 로 두면 남은 code_unit 행 때문에 S3 가 헛돌 수 있다.
+    if (!(await c.query(`SELECT 1 FROM repo WHERE id=$1`, [cl.repo_id])).rowCount) { await set("no_repo", null, null, null); return "no_repo"; }
     const units = (await c.query(
       `SELECT id, path FROM code_unit WHERE repo_id=$1 AND COALESCE(state,'active')='active'`, [cl.repo_id])).rows as { id: number; path: string }[];
     if (!units.length) { await set("no_units", null, null, null); return "no_units"; }
@@ -182,14 +186,15 @@ export async function finishDerive(cl: Claimed, outcome: DeriveOutcome): Promise
     }
     if (outcome.kind === "error") { await set("failed", null, null, outcome.error.slice(0, 500)); return "failed"; }
     if (!outcome.files.length) { await set("empty", 0, 0, null); return "empty"; }
-    const owner = unitOwner(units.map((u) => u.path));
     const idByPath = new Map(units.map((u) => [u.path, u.id]));
+    const ownerPath = unitOwner([...idByPath.keys()]);
+    const ownerId = (p: string): number | undefined => { const u = ownerPath(p); return u === null ? undefined : idByPath.get(u); };
     const ids = new Set<number>();
     let unmatched = 0;
     for (const paths of outcome.files) {
-      const owned = paths.map(owner).filter((p): p is string => p !== null);
+      const owned = paths.map(ownerId).filter((id): id is number => id !== undefined);
       if (!owned.length) { unmatched++; continue; }
-      for (const p of owned) ids.add(idByPath.get(p)!);
+      for (const id of owned) ids.add(id);
     }
     for (const id of [...ids].sort((x, y) => x - y)) {
       await c.query(
@@ -205,27 +210,39 @@ export async function finishDerive(cl: Claimed, outcome: DeriveOutcome): Promise
 /**
  * 커밋 한 건의 변경 파일. 머지 커밋은 --diff-merges=first-parent 가 없으면 0줄이 나와 오류가 아니라 조용한 거짓 empty 가 된다.
  *  --no-renames 로 옮긴 파일은 옛 경로·새 경로를 각각 한 줄로 받는다(둘 다 매핑 대상이다).
+ *  ^{commit} 으로 커밋만 받는다 — blob sha 는 그 경로 하나를 「바뀐 파일」 처럼, tree sha 는 0줄(거짓 empty)을 내기 때문이다.
  */
 export async function changedFiles(cloneDir: string, sha: string): Promise<string[][]> {
   const out = (await git(
-    ["-C", cloneDir, "-c", "core.quotePath=false", "show", "--diff-merges=first-parent", "--no-renames", "--name-status", "--format=", sha],
+    ["-C", cloneDir, "-c", "core.quotePath=false", "show", "--diff-merges=first-parent", "--no-renames", "--name-status", "--format=", `${sha}^{commit}`],
     undefined, undefined, { timeoutMs: GIT_TIMEOUT_MS })).stdout || "";
   return parseDiff(out).map((ch) => [ch.path ?? ch.to, ch.from].filter((p): p is string => typeof p === "string" && p !== ""));
 }
 
-interface RepoFetch { name: string; cloneDir?: string; busy?: boolean; error?: string; noUnits?: boolean }
+interface RepoFetch { name: string; gitUrl?: string; cloneDir?: string; busy?: boolean; error?: string; noUnits?: boolean; noRepo?: boolean }
 
-async function prepareRepo(repoId: number | null, lockWaitMs?: number): Promise<RepoFetch> {
+/** 커밋이 이미 클론에 있는가 — 기록 직후 시도가 기록마다 원격 fetch 를 하지 않게 먼저 본다. */
+async function hasCommit(cloneDir: string, sha: string | null): Promise<boolean> {
+  if (!sha || !SHA_RE.test(sha) || !existsSync(cloneDir)) return false;
+  try { await git(["-C", cloneDir, "cat-file", "-e", `${sha}^{commit}`], undefined, undefined, { timeoutMs: GIT_TIMEOUT_MS }); return true; }
+  catch { return false; }
+}
+
+async function prepareRepo(repoId: number | null, lockWaitMs?: number, probeSha?: string | null): Promise<RepoFetch> {
   const repo = repoId == null ? null
     : ((await itemsPool.query(`SELECT name, git_url FROM repo WHERE id=$1`, [repoId])).rows[0] as { name: string; git_url: string | null } | undefined);
-  if (!repo) return { name: String(repoId), error: "no such repo" };
+  //  지워진 레포는 fetch 실패가 아니다 — A2 가 no_repo 로 닫는다.
+  if (!repo) return { name: String(repoId), noRepo: true };
   //  모듈이 없는 레포는 fetch 하지 않는다 — 결과는 어차피 no_units 다(A2 가 다시 본다).
   const units = (await itemsPool.query(
     `SELECT 1 FROM code_unit WHERE repo_id=$1 AND COALESCE(state,'active')='active' LIMIT 1`, [repoId])).rowCount;
   if (!units) return { name: repo.name, noUnits: true };
   if (!repo.git_url) return { name: repo.name, error: "no git_url" };
+  if (probeSha !== undefined && await hasCommit(repoClonePath(repo.name), probeSha)) {
+    return { name: repo.name, gitUrl: repo.git_url, cloneDir: repoClonePath(repo.name) };
+  }
   try {
-    return { name: repo.name, cloneDir: await ensureClone(repo.name, repo.git_url, { timeoutMs: GIT_TIMEOUT_MS, lockWaitMs }) };
+    return { name: repo.name, gitUrl: repo.git_url, cloneDir: await ensureClone(repo.name, repo.git_url, { timeoutMs: GIT_TIMEOUT_MS, lockWaitMs }) };
   } catch (e) {
     if (e instanceof CloneBusyError) return { name: repo.name, busy: true };
     return { name: repo.name, error: `git clone/fetch 실패: ${describeGitError(e, repo.git_url)}` };
@@ -234,11 +251,11 @@ async function prepareRepo(repoId: number | null, lockWaitMs?: number): Promise<
 
 async function attempt(rf: RepoFetch, sha: string | null): Promise<DeriveOutcome> {
   //  fetch 전에 모듈이 없던 레포 — A2 가 그때도 없으면 no_units, 그사이 생겼으면 pending 으로 다음 실행에 넘긴다.
-  if (rf.noUnits || rf.busy) return { kind: "retry" };
+  if (rf.noUnits || rf.busy || rf.noRepo) return { kind: "retry" };
   if (rf.error || !rf.cloneDir) return { kind: "error", error: rf.error ?? "clone unavailable" };
   if (!sha || !SHA_RE.test(sha)) return { kind: "error", error: "invalid commit sha" };
   try { return { kind: "files", files: await changedFiles(rf.cloneDir, sha) }; }
-  catch (e) { return { kind: "error", error: `git show 실패(클론에 없는 커밋일 수 있다): ${describeGitError(e)}` }; }
+  catch (e) { return { kind: "error", error: `git show 실패(클론에 없는 커밋일 수 있다): ${describeGitError(e, rf.gitUrl)}` }; }
 }
 
 export interface DeriveRunSummary {
@@ -266,21 +283,25 @@ export async function deriveActivityTouches(opts: { activityId?: number; maxRows
     claimed += batch.length;
     for (const cl of batch) {
       let rf = fetched.get(cl.repo_id);
-      if (!rf) { rf = await prepareRepo(cl.repo_id, opts.lockWaitMs); fetched.set(cl.repo_id, rf); }
+      //  기록 직후 시도(activityId)는 그 커밋이 클론에 이미 있으면 fetch 하지 않는다.
+      if (!rf) { rf = await prepareRepo(cl.repo_id, opts.lockWaitMs, opts.activityId != null ? cl.commit_sha : undefined); fetched.set(cl.repo_id, rf); }
       const r = await finishDerive(cl, await attempt(rf, cl.commit_sha));
       results[r] = (results[r] ?? 0) + 1;
     }
   }
-  const repos = [...fetched.values()].filter((r) => !r.noUnits)
+  const repos = [...fetched.values()].filter((r) => !r.noUnits && !r.noRepo)
     .map((r) => ({ repo: r.name, ...(r.error ? { error: r.error } : {}), ...(r.busy ? { busy: true as const } : {}) }));
   return { reconcile, claimed, results, repos };
 }
 
-/** 크론 상태 — 레포 일부의 fetch 가 실패하면 warn, 시도한 레포가 전부 실패하면 error(error 가 이어지면 크론이 스스로 멈춘다). */
-export function statusForDerive(repos: DeriveRunSummary["repos"]): "ok" | "warn" | "error" {
-  const failed = repos.filter((r) => r.error).length;
-  if (failed && failed === repos.length) return "error";
-  return failed ? "warn" : "ok";
+/**
+ * 크론 상태 — fetch 실패는 warn 까지만 올린다. error 는 워커 SQL 오류(던져서 엔진이 기록)뿐이다.
+ *  평시엔 이번 실행에 선점된 행이 재시도 중인 failed 행뿐이라, 고장 난 레포 하나가 「시도한 레포 전부」 가 되기 쉽다.
+ *  그걸 error 로 올리면 연속 실패 브레이커(scheduler/engine.ts)가 잡을 꺼 다른 레포의 유도·만료까지 멈춘다.
+ *  refresh_all 도 같은 fetch 실패를 ok 로 기록한다(scheduler/actions/repo-refresh.ts).
+ */
+export function statusForDerive(repos: DeriveRunSummary["repos"]): "ok" | "warn" {
+  return repos.some((r) => r.error) ? "warn" : "ok";
 }
 
 export interface DeriveStats {

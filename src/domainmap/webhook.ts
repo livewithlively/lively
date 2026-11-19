@@ -78,10 +78,13 @@ export function parsePushEvent(provider: string, body: any): { ref: unknown; bef
 // 클론 보장 + **웹훅 고유 에러 번역** — 구현은 git-sync.ensureClone 단일 출처, 401/502 httpErr 번역만 여기 잔류
 //  (호출부 의미 보존: 미검증/인증실패는 401 안내, 그 외 clone/fetch 실패는 502. git_url(토큰 포함 가능) 절대 비노출).
 //  ⚠ 번역 스코프는 clone/fetch 만(onGitError) — 이름 검증 400 은 그 앞, prepareGitAuth 실패는 종전대로 raw 전파.
+// Clone-lock wait inside the webhook response budget — a provider times out the delivery well before git-sync's default.
+const WEBHOOK_LOCK_WAIT_MS = 2_500;
 async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
   if (!sanitizeName(repoName)) throw httpErr(400, "invalid repo name for clone dir");
   return ensureCloneRaw(repoName, gitUrl, {
     timeoutMs: GIT_TIMEOUT_MS,
+    lockWaitMs: WEBHOOK_LOCK_WAIT_MS,
     onGitError: (e) => {
       // Scrub: git errors can echo the remote URL (token) → git_url 절대 비노출. 인증계열은 401 안내로만 분류.
       if (isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)) {
@@ -153,8 +156,9 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   if (!repo.git_url) { res.status(200).json({ ignored: "no git_url configured" }); return; }
 
   // Sync the local clone, then diff before..after.
-  //  Another fetch holds the clone lock → ack 200 and skip: a 5xx can make the provider disable the hook, and the next
-  //  push or git-pull tick refreshes from the checkpoint anyway.
+  //  Another fetch holds the clone lock → ack 200 and skip: a 5xx can make the provider disable the hook. The skipped
+  //  range is recovered by refresh_all (git-pull.ts), which diffs from repo.last_refreshed_sha — this push's `before`
+  //  is not kept anywhere, so the next push alone does not cover it.
   let cloneDir: string;
   try { cloneDir = await ensureClone(repo.name, repo.git_url); }
   catch (e) {
