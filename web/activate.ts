@@ -13,6 +13,7 @@
 //     사람은 "난 비번이 없는데" 하고 **체크를 풀어** 관리 권한 없는 토큰을 받는다 — 조용한 권한 손실이다.
 //     그래서 /api/ui/me/logins 의 hasPassword 를 보고 칸 자체를 없앤다.
 import { api, busy, el, state, toast, usernameAnchor } from './core.js';
+import { markShareGuideSeen, mountShareGuide } from './v2/share-guide.js';   // #5598 승인 직후 «누가 무엇을 보나요»
 
 export async function renderActivate(view: any): Promise<void> {
   const params = new URLSearchParams((location.hash.split('?')[1] || ''));
@@ -103,6 +104,7 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
       slot.replaceChildren(el('div', { class: 'install-ok' },
         el('p', { style: 'font-weight:600', text: '✓ 승인됐습니다.' }),
         el('p', { text: '이제 터미널로 돌아가세요 — 로그인이 이어집니다. (터미널에서 한 번 더 “계속할까요?”를 확인해 주세요.)' })));
+      void showShareGuideAfterApprove(slot);
     } catch (e: any) {
       (approveBtn as HTMLButtonElement).disabled = false;
       toast(e?.message || '승인 실패', true);
@@ -122,6 +124,28 @@ async function drawLookup(slot: any, raw: string): Promise<void> {
         `${when} 요청됨. 이 이름은 요청 기기가 스스로 주장한 값입니다 — 본인 기기가 맞는지 확인하세요.`),
       cpBlock,
       el('div', { style: 'display:flex;gap:8px;margin-top:8px' }, approveBtn, denyBtn)));
+}
+
+/**
+ * #5598 — 승인 직후, 아직 «누가 무엇을 보나요» 를 확인하지 않은 사람에게 그 안내를 승인 카드 바로 아래에 붙인다.
+ *  CLI · 데스크톱 앱으로 설치하는 사람도 로그인 승인 때 브라우저를 한 번은 반드시 연다(kit/cli/lively.mjs cmdLogin — 기기 승인).
+ *  그래서 웹을 쓰지 않는 사람이 안내를 볼 수 있는 자리가 여기다. 이미 확인했으면 붙이지 않는다 · 못 읽으면 붙이지 않는다(막지 않는다).
+ */
+async function showShareGuideAfterApprove(slot: HTMLElement): Promise<void> {
+  try {
+    const p: any = await api('/api/ui/me/liv-profile');
+    if (p?.share_guide_seen_at) return;
+  } catch { return; }
+  const host = el('div', { class: 'sg-inline' });
+  (slot.closest('.card') || slot).after(host);
+  const g = mountShareGuide(host, {
+    finishLabel: '확인했어요 · 터미널로',
+    onFinish: () => {
+      markShareGuideSeen();
+      g.destroy();
+      host.replaceChildren(el('p', { class: 'admin-hint', style: 'text-align:center', text: '확인했어요. 터미널이나 라이블리 앱으로 돌아가면 설치가 이어져요.' }));
+    },
+  });
 }
 
 function timeAgo(iso: string): string {
