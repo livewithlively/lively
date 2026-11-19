@@ -323,7 +323,7 @@ function closePopover(): void {
 }
 function onDocDown(e: MouseEvent): void {
   const t = e.target as HTMLElement;
-  if (popEl && !popEl.contains(t) && !t.closest('.v2-rail-stack') && !t.closest('.v2-secdd') && !t.closest('.v2-ws')) closePopover();
+  if (popEl && !popEl.contains(t) && !t.closest('.v2-rail-stack') && !t.closest('.v2-secdd') && !t.closest('.v2-ws') && !t.closest('.v2-mws')) closePopover();   // .v2-mws — 폰 맨 윗줄 타일(#5615): 제 클릭이 여닫기다
 }
 function onDocKey(e: KeyboardEvent): void { if (e.key === 'Escape') closePopover(); }
 //  #3870 — 본문(앱 액자·세션 터미널)을 누른 것은 위 mousedown 에 오지 않는다. 그걸 안 받으면 메뉴는 빈 사이드바를

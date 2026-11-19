@@ -193,6 +193,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const sheet = el('div', { class: 'v2-msheet', hidden: true, role: 'dialog', 'aria-label': '나' }) as HTMLElement;
   const secBtns = new Map<RailSection, HTMLButtonElement>();
   let moreBtn: HTMLButtonElement | null = null;
+  let meFaceKey = '';
   const tabIcon = (name: string): SVGElement => icon(name, 'v2-mtab-ic');
   function onSectionTap(sec: RailSection): void {
     if (!isPhone()) return;
@@ -245,8 +246,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
             n > 0 ? el('span', { class: 'v2-msheet-bd', text: n > 99 ? '99+' : String(n) }) : null),
           LIV_ENTRY_VISIBLE ? row(icon('liv', 'v2-mtab-ic'), '리브', { href: '#/liv' }, 'a') : null,   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
           row(icon('apps', 'v2-mtab-ic'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }),
-          guide ? row(icon('learn', 'v2-mtab-ic'), guide.title, { href: appHref(guide) }, 'a') : null,
-          row(icon('gear', 'v2-mtab-ic'), '내 프로필 · 환경설정', { onclick: () => { closeAll(); openMeModal({}); } }))));
+          guide ? row(icon('learn', 'v2-mtab-ic'), guide.title, { href: appHref(guide) }, 'a') : null)));
   }
   function toggleSheet(): void {
     if (!isPhone()) return;
@@ -267,10 +267,10 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       return b;
     });
     //  [나](#5615) — 슬랙 모바일의 [You]. 아이콘 자리에 내 얼굴(작은 원)이 선다 — «나» 라는 글자보다 먼저 읽힌다.
-    const me: any = state.me || {};
     moreBtn = el('button', { class: 'v2-mtab v2-mtab--me', type: 'button', onclick: () => toggleSheet(), 'aria-haspopup': 'dialog' },
-      el('span', { class: 'v2-mtab-icw' }, profileAvatar(me.avatar, personName(me) || '나', me.userId, 'v2-mtab-ava', { char: me.avatar_char, color: me.avatar_color })),
+      el('span', { class: 'v2-mtab-icw' }),
       el('span', { class: 'v2-mtab-t', text: '나' })) as HTMLButtonElement;
+    meFaceKey = '';
     tabs.replaceChildren(...btns, moreBtn, sheet);
     paintTabs();
   }
@@ -284,7 +284,18 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       if (k === 'home') b.removeAttribute('aria-expanded');
       else b.setAttribute('aria-expanded', String(open === 'side' && k === sec));
     }
-    if (moreBtn) { moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); moreBtn.classList.toggle('has-dot', unreadCount() > 0); }
+    if (moreBtn) {
+      const n = unreadCount();
+      moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); moreBtn.classList.toggle('has-dot', n > 0);
+      moreBtn.setAttribute('aria-label', n > 0 ? `나 — 안 읽은 알림 ${n}개` : '나');
+      //  내 얼굴은 [나] 창에서 바뀔 수 있고 부팅 때 state.me 가 늦게 올 수 있다 — 칠할 때마다 값이 바뀌었으면 갈아 끼운다(#5615 리뷰).
+      const me: any = state.me || {};
+      const key = [me.avatar, personName(me), me.userId, me.avatar_char, me.avatar_color].join('|');
+      if (key !== meFaceKey) {
+        meFaceKey = key;
+        moreBtn.querySelector('.v2-mtab-icw')?.replaceChildren(profileAvatar(me.avatar, personName(me) || '나', me.userId, 'v2-mtab-ava', { char: me.avatar_char, color: me.avatar_color }));
+      }
+    }
     sheet.hidden = !sheetOpen;
   }
   buildTabs();
