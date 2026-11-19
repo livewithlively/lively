@@ -142,6 +142,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         ui_mode?: "v2" | "classic"; // #1719
         workspace_kind?: "personal" | "team"; // #1750
         workspace_hub_url?: string | null;    // #1750
+        ontology_loops?: { l2_autoresolve?: boolean };
       } = {};
       // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
@@ -696,6 +697,17 @@ export const runtimeConfigCapabilities: Capability[] = [
         }
         patch.session_share = p;
       }
+      if (input.ontology_loops !== undefined) {
+        const raw = input.ontology_loops;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "ontology_loops 는 객체여야 합니다");
+        const out: { l2_autoresolve?: boolean } = {};
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          if (k !== "l2_autoresolve") throw new HttpError(400, `ontology_loops 키 '${k}' 는 지원되지 않습니다(l2_autoresolve)`);
+          if (typeof v !== "boolean") throw new HttpError(400, `ontology_loops.${k} 는 true/false 여야 합니다`);
+          out[k] = v;
+        }
+        patch.ontology_loops = out;
+      }
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
@@ -717,6 +729,8 @@ export const runtimeConfigCapabilities: Capability[] = [
       ui_mode: z.enum(["v2", "classic"]).optional().describe("#1719 기본 화면 셸 — v2(새 1탭 셸, 기본) | classic(종전 탭 셸 — 고를 때만, 어떤 경로로도 기본이 되지 않는다). 사람별 로컬 오버라이드는 브라우저에서"),
       workspace_kind: z.enum(["personal", "team"]).optional().describe("#1750 이 워크스페이스의 종류 — team(기본: 여러 사람의 팀 워크스페이스, 기존 셀프호스트) | personal(한 사람의 개인 워크스페이스). 좌상단 스위처 배지·승격 동선의 근거"),
       workspace_hub_url: z.string().nullable().optional().describe("#1750 계정의 워크스페이스 목록·만들기 허브 링크(매니지드 app.lvly.io/home). null/'' 로 내림(기본 null = 셀프호스트)"),
+      ontology_loops: z.object({ l2_autoresolve: z.boolean().optional().describe("관리기(mismatch·outdated)가 실행 끝에 열린 발견을 다시 판정해 더는 성립하지 않으면 resolved 로 닫는다(기본 꺼짐)") })
+        .optional().describe("지식 연결 루프 스위치 — 보낸 키만 바뀐다"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
       work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),

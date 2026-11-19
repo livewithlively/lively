@@ -73,6 +73,29 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
     UPDATE knowledge SET created_at = updated_at WHERE created_at IS NULL;
     ALTER TABLE knowledge ALTER COLUMN created_at SET DEFAULT now();
+    -- body_updated_at: 본문(body_md)이 마지막으로 바뀐 시각. updated_at 은 제목·분류·속성·렌더링 갱신에도 오르므로
+    --  «근거가 바뀌었는데 본문은 그대로» 를 재는 관리기(outdated)가 본문 수정과 메타 수정을 가르지 못했다.
+    --  앱 코드가 아니라 트리거로 채운다 — 본문을 쓰는 길이 upsert 말고도 미러·세션 되돌리기·섹션·시드로 여럿이고,
+    --  무중단 배포 중 아직 도는 옛 버전은 이 칸을 모른다. 기존 행은 updated_at 으로 채운다(읽는 쪽은 COALESCE(body_updated_at, updated_at)).
+    --  트리거는 없을 때만 만든다 — 부팅마다 DROP/CREATE 하면 knowledge 표에 배타 잠금을 건다.
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS body_updated_at TIMESTAMPTZ;
+    UPDATE knowledge SET body_updated_at = updated_at WHERE body_updated_at IS NULL;
+    CREATE OR REPLACE FUNCTION knowledge_touch_body_updated_at() RETURNS trigger AS $fn$
+      BEGIN
+        IF TG_OP = 'INSERT' THEN
+          NEW.body_updated_at := now();
+        ELSIF NEW.body_md IS DISTINCT FROM OLD.body_md THEN
+          NEW.body_updated_at := now();
+        END IF;
+        RETURN NEW;
+      END
+    $fn$ LANGUAGE plpgsql;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='knowledge_body_updated_at_trg' AND tgrelid='knowledge'::regclass) THEN
+        CREATE TRIGGER knowledge_body_updated_at_trg BEFORE INSERT OR UPDATE OF body_md ON knowledge
+          FOR EACH ROW EXECUTE FUNCTION knowledge_touch_body_updated_at();
+      END IF;
+    END $$;
     -- sync_state(#4059): 수집기 표식(seen_by)·비게 된 시각(unclaimed_since) — 노션 전체 점검 스윕이 자기 몫만 정리하는 근거.
     --  위 CREATE 에 원래 있던 칸이지만, 그 줄이 들어가기 전에 만든 DB 에선 미러 쓰기가 통째로 실패하므로 멱등 보강(값 없는 추가 = 재작성 없음).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}'::jsonb;

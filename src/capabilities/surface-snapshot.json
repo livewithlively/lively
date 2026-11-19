@@ -813,7 +813,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "9ada4903f3354cea"
+  "input_hash": "42ee0a0a0b444f9e"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -1493,7 +1493,7 @@
   "rest": [
    "POST /api/ui/org/manager-findings"
   ],
-  "input_hash": "b6787edc57665d13"
+  "input_hash": "c1c9469fba236831"
  },
  {
   "name": "org_manager_remove",

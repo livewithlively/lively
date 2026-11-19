@@ -16,7 +16,9 @@ import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
 import type { SearchRouteDiag } from "../../v6/knowledge-search.js";
 import type { SimilarDiag } from "../../v6/knowledge-similar.js";
 import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   // #5201 세션의 지식 찾기 기록
-import { canSeeKnowledge } from "../../v6/visibility.js";
+import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
+import { contradictsWarning } from "../../v6/knowledge-links.js";
+import { openReviewHints } from "../../org/store/managers.js";
 import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
 
@@ -398,7 +400,8 @@ export const knowledgeGet: Capability = {
   name: "knowledge_get",
   title: "지식 상세",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(grep→get 루프 왕복 0)
-  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악.",
+  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악. " +
+    "links.superseded 는 대체된 이웃(후속 superseded_by 포함)이다. 응답에 contradicts_warning(이 지식과 모순으로 이어진 지식)이나 review_hint(근거·코드가 바뀌어 다시 읽어 볼 발견)가 있으면 근거로 쓰기 전에 확인하라.",
   scope: "memory",
   input: knowledgeGetInput,
   expose: {
@@ -433,7 +436,8 @@ export const knowledgeGet: Capability = {
         },
       }
       : {};
-    if (input.offset == null && input.limit == null) return { knowledge, ...revInfo };
+    const flags = await knowledgeGetFlags(input.name, ctx?.viewer ?? null);
+    if (input.offset == null && input.limit == null) return { knowledge, ...revInfo, ...flags };
     // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
     const lines = (knowledge.body_md ?? "").split("\n");
     const from = Math.max(1, input.offset ?? 1);
@@ -444,9 +448,31 @@ export const knowledgeGet: Capability = {
       knowledge: { ...knowledge, body_md: slice.join("\n") },
       body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
       ...revInfo,
+      ...flags,
     };
   },
 };
+
+/**
+ * knowledge_get 에만 싣는 주의 표시 두 가지 — 검색 결과에는 싣지 않는다(검색은 후보를 훑는 단계고, 근거로 삼는 단계가 get 이다).
+ *  · contradicts_warning: 이 지식과 contradicts 로 이어진 active 이웃(해제된 관리기 링크 제외). recheck=링크 이후 두 문서가 모두 고쳐짐.
+ *  · review_hint: 이 지식에 열린 outdated · code_drift 발견.
+ *  없으면 키를 싣지 않는다 — knowledge_get 은 세션마다 상시 불리므로 빈 키도 소음이다.
+ */
+//  조회 실패는 표시를 빼고 넘어간다 — 부가 표시 때문에 지식 본문을 못 읽게 되면 안 된다.
+async function knowledgeGetFlags(name: string, viewer: Viewer | null): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const contra = await contradictsWarning(name, viewer).catch(() => []);
+  if (contra.length) {
+    out.contradicts_warning = {
+      note: "이 지식과 모순으로 이어진 지식이 있다 — 근거로 쓰기 전에 양쪽을 대조하라. 모순이 아니면 knowledge_link(unlink) 로 해제하거나, 관리기 발견이면 반려한다. recheck=true 는 연결 뒤 두 문서가 모두 고쳐져 이미 풀렸을 수 있다는 뜻이다.",
+      with: contra,
+    };
+  }
+  const hints = await openReviewHints(name).catch(() => []);
+  if (hints.length) out.review_hint = hints;
+  return out;
+}
 
 // 정적 REST 경로(/knowledge/search·/knowledge/semantic·/knowledge/similar·/knowledge-graph·/knowledge-tree)
 //  — /knowledge/:name 계열보다 **먼저** 마운트돼야 한다.

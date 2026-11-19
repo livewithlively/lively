@@ -3,6 +3,7 @@
 //  분리 이유: 엣지 수렴(스윕·재작성)은 CRUD 와 트랜잭션 경계·멱등 규율이 달라 한 파일에 있을 이유가 없었다.
 //  공개 표면은 그대로 — knowledge-store.ts 가 이 모듈을 재수출하므로 기존 호출부는 무수정.
 //  ⚠ 방향: knowledge-store → 이 모듈(재수출 + upsert 경로의 materializeWikiLinksBestEffort). 되import 금지(순환).
+import type { PoolClient } from "pg";
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { type WriteCtx } from "./content-audit.js";
@@ -19,13 +20,17 @@ import { logger } from "../log.js";
 //  origin(#907): 'user'=사람·에이전트가 명시 · 'wikilink'=본문 [[…]] 파생 · 'connector:<sys>'=커넥터 물질화.
 //   UI·해제 가드가 '이 엣지를 여기서 떼도 되나'를 판단해야 해서 조회에 싣는다(파생 엣지는 본문이 SoT다).
 export interface KnowledgeLinkRow { name: string; relation: string; title: string | null; origin: string }
+//  origin 'manager:<key>' = 관리기 판정이 만든 링크(지식 간 모순). 사람이 해제하면 지우지 않고 dismissed_at 을 찍는다(아래 unlinkKnowledge).
+export const MANAGER_LINK_ORIGIN_PREFIX = "manager:";
 export async function linkKnowledge(fromName: string, toName: string, relation = "related", ctx?: WriteCtx): Promise<void> {
   if (fromName === toName) throw new Error("자기 자신과 링크할 수 없습니다");
   await itemsPool.query(
     `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
      VALUES($1,$2,$3,'user',now(),now())
-     ON CONFLICT (tenant_id, from_name, to_name, relation) DO UPDATE SET updated_at=now(), origin='user'`,
-    [fromName, toName, relation]); // 커넥터 물질화 행과 충돌 시 origin 을 user 로 승격 — 다음 싱크의 재작성 DELETE 에서 보호(#551)
+     ON CONFLICT (tenant_id, from_name, to_name, relation) DO UPDATE SET updated_at=now(), origin='user', dismissed_at=NULL`,
+    //  커넥터 물질화 행과 충돌 시 origin 을 user 로 승격 — 다음 싱크의 재작성 DELETE 에서 보호(#551).
+    //  해제(dismissed)된 관리기 링크를 사람이 다시 걸면 되살린다 — 사람의 새 판단이 옛 «확인함» 보다 최신이다.
+    [fromName, toName, relation]);
   await auditKnowledge(fromName, "link_knowledge", null, { to_name: toName, relation }, ctx);
 }
 export async function unlinkKnowledge(fromName: string, toName: string, relation: string, ctx?: WriteCtx): Promise<void> {
@@ -40,24 +45,110 @@ export async function unlinkKnowledge(fromName: string, toName: string, relation
     throw new Error(
       `'${fromName}' 본문의 [[${toName}]] 에서 자동 생성된 연결이라 여기서 해제가 허용되지 않습니다 — 본문에서 [[${toName}]] 를 지우면 연결도 사라집니다(관계를 바꾸려면 knowledge_link 로 명시하세요).`);
   }
-  await itemsPool.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3`, [fromName, toName, relation]);
-  await auditKnowledge(fromName, "unlink_knowledge", { to_name: toName, relation }, null, ctx);
+  //  관리기 링크는 지우지 않고 해제 시각만 찍는다 — 지우면 관리기가 같은 쌍을 다음 주기에 또 링크한다.
+  //   감사는 같은 트랜잭션이라 «해제됐는데 기록이 없다» 가 생기지 않는다. 되돌리기(link_knowledge 재호출)는 user 링크로 되살린다.
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const dismissed = await client.query(
+      `UPDATE knowledge_link SET dismissed_at=COALESCE(dismissed_at, now())
+        WHERE from_name=$1 AND to_name=$2 AND relation=$3 AND origin LIKE '${MANAGER_LINK_ORIGIN_PREFIX}%'`, [fromName, toName, relation]);
+    if (!dismissed.rowCount) await client.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3`, [fromName, toName, relation]);
+    await auditKnowledge(fromName, "unlink_knowledge", { to_name: toName, relation }, null, ctx, client);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** 관리기 모순 판정 → contradicts 링크(origin 'manager:<key>'). 호출자의 트랜잭션(client) 안에서 돈다 — 발견 저장과 한 묶음이어야
+ *  «반려와 동시에 들어온 재보고» 가 반려된 쌍의 링크를 되살리지 않는다(발견 행 잠금이 둘을 줄 세운다).
+ *  a·b 는 호출자가 least/greatest 로 맞춘 쌍이다. 이미 있으면(해제된 행 포함) 건드리지 않는다 — linkKnowledge 처럼 origin 을
+ *  승격하거나 dismissed_at 을 비우면 사람이 «확인함» 으로 내린 링크가 다음 보고에 되살아난다. 반대 방향 링크(사람이 b→a 로 건
+ *  모순)가 있으면 만들지 않는다 — 같은 모순이 두 줄로 보인다. 양쪽 지식이 없으면(LLM 이 이름을 잘못 적음) 조용히 건너뛴다. */
+export async function linkManagerContradiction(
+  client: PoolClient, a: string, b: string, managerKey: string, ctx?: WriteCtx,
+): Promise<boolean> {
+  if (!a || !b || a === b) return false;
+  const origin = MANAGER_LINK_ORIGIN_PREFIX + managerKey;
+  const r = await client.query(
+    `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
+     SELECT $1, $2, 'contradicts', $3, now(), now()
+      WHERE EXISTS (SELECT 1 FROM knowledge WHERE name=$1) AND EXISTS (SELECT 1 FROM knowledge WHERE name=$2)
+        AND NOT EXISTS (SELECT 1 FROM knowledge_link WHERE from_name=$2 AND to_name=$1 AND relation='contradicts')
+     ON CONFLICT (tenant_id, from_name, to_name, relation) DO NOTHING`, [a, b, origin]);
+  if (!r.rowCount) return false;
+  await auditKnowledge(a, "link_knowledge", null, { to_name: b, relation: "contradicts", origin }, ctx, client);
+  return true;
+}
+
+/** 관리기 모순 발견이 반려되면 그 쌍의 관리기 링크도 해제한다(호출자 트랜잭션 안). 사람이 건 링크(origin user)는 그대로 둔다 —
+ *  반려는 관리기 판정에 대한 답이지 사람의 판단을 덮는 것이 아니다. 방향은 둘 다 본다(정규화 전에 만들어진 발견·링크). */
+export async function dismissManagerContradiction(client: PoolClient, x: string, y: string, ctx?: WriteCtx): Promise<number> {
+  const r = await client.query(
+    `UPDATE knowledge_link SET dismissed_at=now()
+      WHERE relation='contradicts' AND origin LIKE '${MANAGER_LINK_ORIGIN_PREFIX}%' AND dismissed_at IS NULL
+        AND ((from_name=$1 AND to_name=$2) OR (from_name=$2 AND to_name=$1))
+      RETURNING from_name, to_name`, [x, y]);
+  for (const row of r.rows as Array<{ from_name: string; to_name: string }>) {
+    await auditKnowledge(row.from_name, "unlink_knowledge", { to_name: row.to_name, relation: "contradicts" }, null, ctx, client);
+  }
+  return r.rowCount ?? 0;
 }
 // 양방향 — outgoing(이 지식이 가리키는) + incoming(이 지식을 가리키는 = 백링크). 비활성 지식은 제외.
 // viewer(#1291) — 이웃 지식의 **제목**이 그대로 실려 나가는 자리다. 특히 incoming(백링크)은 남이 건 엣지라,
 //  대상 제한 문서가 공개 문서를 가리키면 그 제목이 공개 문서 화면에 뜬다. 안 보이는 이웃은 행 자체를 뺀다.
 //  술어는 단일 진입점(knowledgeVisWhere)으로 — 종전엔 knowledgeVisSql 을 직접 불러 축 꺼짐 · 긴급 열람 · 앱 맥락 범위(#5100)를 못 봤다
 //   (범위를 선언한 앱이 범위 안 문서를 열면 범위 밖 이웃의 제목이 링크로 실려 나갔다). 두 쿼리는 자리번호가 같아($1=name) 술어 하나를 함께 쓴다.
-export async function listKnowledgeLinks(name: string, viewer?: Viewer): Promise<{ outgoing: KnowledgeLinkRow[]; incoming: KnowledgeLinkRow[] }> {
+//  superseded(P1d): 대체된 이웃은 위 두 목록에서 빠지므로 따로 싣는다 — 빠진 채로 두면 「이 문서가 가리키던 근거가 대체됐다」 는
+//   사실이 응답에서 사라진다. 후속 이름(superseded_by)은 그 후속이 보는 사람에게 안 보이면 null(maskHiddenPointers 와 같은 규칙 —
+//   이 모듈은 knowledge-store 를 import 할 수 없어 SQL 로 같은 판정을 한다).
+export interface SupersededNeighborRow { name: string; title: string | null; relation: string; direction: "outgoing" | "incoming"; superseded_by: string | null }
+export async function listKnowledgeLinks(name: string, viewer?: Viewer): Promise<{ outgoing: KnowledgeLinkRow[]; incoming: KnowledgeLinkRow[]; superseded: SupersededNeighborRow[] }> {
   const params: unknown[] = [name];
   const vis = await knowledgeVisWhere(viewer, params);
   const outgoing = await q(itemsPool,
     `SELECT l.to_name AS name, l.relation, l.origin, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.to_name
-     WHERE l.from_name=$1 AND k.lifecycle='active' AND ${vis} ORDER BY l.relation, k.updated_at DESC`, params);
+     WHERE l.from_name=$1 AND l.dismissed_at IS NULL AND k.lifecycle='active' AND ${vis} ORDER BY l.relation, k.updated_at DESC`, params);
   const incoming = await q(itemsPool,
     `SELECT l.from_name AS name, l.relation, l.origin, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.from_name
-     WHERE l.to_name=$1 AND k.lifecycle='active' AND ${vis} ORDER BY l.relation, k.updated_at DESC`, params);
-  return { outgoing, incoming };
+     WHERE l.to_name=$1 AND l.dismissed_at IS NULL AND k.lifecycle='active' AND ${vis} ORDER BY l.relation, k.updated_at DESC`, params);
+  const sParams: unknown[] = [name];
+  const sVis = await knowledgeVisWhere(viewer, sParams, "k");
+  const succVis = await knowledgeVisWhere(viewer, sParams, "succ");
+  const superseded = await q(itemsPool,
+    `SELECT k.name, k.title, n.relation, n.direction,
+            CASE WHEN succ.name IS NOT NULL AND NOT (${succVis}) THEN NULL ELSE k.superseded_by END AS superseded_by
+       FROM (SELECT to_name AS name, relation, 'outgoing' AS direction FROM knowledge_link WHERE from_name=$1 AND dismissed_at IS NULL
+             UNION ALL
+             SELECT from_name, relation, 'incoming' FROM knowledge_link WHERE to_name=$1 AND dismissed_at IS NULL) n
+       JOIN knowledge k ON k.name = n.name
+       LEFT JOIN knowledge succ ON succ.name = k.superseded_by
+      WHERE k.lifecycle='superseded' AND ${sVis}
+      ORDER BY n.direction DESC, n.relation, k.updated_at DESC`, sParams) as SupersededNeighborRow[];
+  return { outgoing, incoming, superseded };
+}
+
+/** contradicts 경고(P1c) — 이 지식과 모순으로 이어진 active 이웃. 해제(dismissed)된 링크는 뺀다.
+ *  recheck: 링크를 건(또는 사람이 다시 건) 뒤 두 문서의 본문이 모두 바뀌었다 — 모순이 이미 풀렸을 수 있어 «다시 확인» 으로 낮춘다.
+ *  이웃 이름·제목이 실리는 자리라 knowledgeVisWhere 를 탄다. */
+export interface ContradictsWarningRow { name: string; title: string | null; origin: string; linked_at: string; recheck: boolean }
+export async function contradictsWarning(name: string, viewer?: Viewer): Promise<ContradictsWarningRow[]> {
+  const params: unknown[] = [name];
+  const vis = await knowledgeVisWhere(viewer, params, "o");
+  return await q(itemsPool,
+    `SELECT o.name, o.title, l.origin, l.updated_at AS linked_at,
+            (COALESCE(me.body_updated_at, me.updated_at) > l.updated_at
+             AND COALESCE(o.body_updated_at, o.updated_at) > l.updated_at) AS recheck
+       FROM knowledge_link l
+       JOIN knowledge me ON me.name = $1
+       JOIN knowledge o ON o.name = CASE WHEN l.from_name = $1 THEN l.to_name ELSE l.from_name END
+      WHERE (l.from_name = $1 OR l.to_name = $1) AND l.relation = 'contradicts' AND l.dismissed_at IS NULL
+        AND o.lifecycle = 'active' AND ${vis}
+      ORDER BY recheck, l.updated_at DESC`, params) as ContradictsWarningRow[];
 }
 // ════════ #907 본문 [[위키링크]] → 자동 엣지(origin='wikilink'). **본문이 SoT**. ════════
 //  왜: [[…]] 를 본문에 적어도 엣지가 안 생겼다 — knowledge_link 를 따로 부르지 않으면 백링크·그래프뷰·recall
@@ -264,7 +355,7 @@ export async function knowledgeGraphData(limit = 500, viewer?: Viewer): Promise<
        WHERE kc.name=k.name AND kc.state<>'rejected' ORDER BY kc.created_at LIMIT 1
      ) cat ON true
      WHERE k.lifecycle='active' AND ${vis} ORDER BY k.updated_at DESC LIMIT $1`, params);
-  const edges = await q(itemsPool, `SELECT from_name, to_name, relation FROM knowledge_link`);
+  const edges = await q(itemsPool, `SELECT from_name, to_name, relation FROM knowledge_link WHERE dismissed_at IS NULL`);
   // #551 페이지 트리 위계 엣지(parent_name) — relation='child'(자식→부모). 아틀라스가 트리+링크를 함께 표현.
   const hierarchy = await q(itemsPool,
     `SELECT k.name AS from_name, k.parent_name AS to_name, 'child' AS relation

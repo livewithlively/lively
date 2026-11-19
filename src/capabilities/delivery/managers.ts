@@ -8,10 +8,10 @@ import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import {
   listManagers, getManager, upsertManager, removeManager,
-  listFindings, resolveFinding, upsertFinding, managerOverview, applyFindings,
+  listFindings, resolveFinding, upsertFinding, reportContradiction, managerOverview, applyFindings,
   MANAGER_KIND_LABEL, type ManagerKind,
 } from "../../org/store/managers.js";
-import { runManagerByRef, applyAction } from "../../org/manage/run-manager.js";
+import { runManagerByRef, applyFinding } from "../../org/manage/run-manager.js";
 import { itemsPool } from "../../db/client.js";
 import { actorOf, restWork, str } from "./shared.js";
 
@@ -117,7 +117,7 @@ export const managersCapabilities: Capability[] = [
     }),
 
   restWork("org_manager_finding_resolve", "발견 처리(승인·반려·해결)",
-    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다) · resolved=사람이 직접 고침. " +
+    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다 · 모순이면 관리기가 건 contradicts 링크도 해제) · resolved=사람이 직접 고침. " +
     "apply=true 면 accepted 시 조치안(예: 분류 이동)을 실제로 적용한다 — 되돌릴 수 있는 조치만 수행된다.",
     [{ method: "POST", paths: ["/api/ui/org/manager-findings/:id/resolve"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id), ...(req.body as object ?? {}),
@@ -130,9 +130,13 @@ export const managersCapabilities: Capability[] = [
 
       let applied = false;
       if (state === "accepted" && input.apply === true) {
-        const cur = (await itemsPool.query(
-          `SELECT proposed_action FROM org_manager_finding WHERE id=$1`, [id])).rows[0] as { proposed_action: unknown } | undefined;
-        if (cur?.proposed_action) applied = await applyAction(cur.proposed_action, actorOf(user));
+        //  적용과 닫기가 한 트랜잭션이다(applyFinding). 발견 이후 분류가 바뀌어 낡은 조치면 «분류 변경으로 해소» 로 닫히고 그 행을 돌려준다.
+        const r = await applyFinding(id, actorOf(user));
+        applied = r === "applied";
+        if (r === "stale") {
+          const closed = (await itemsPool.query(`SELECT * FROM org_manager_finding WHERE id=$1`, [id])).rows[0];
+          return { finding: closed, applied };
+        }
       }
       const finding = await resolveFinding(id, state, actorOf(user),
         input.resolution === undefined || input.resolution === null ? null : String(input.resolution).slice(0, 2000));
@@ -158,7 +162,7 @@ export const managersCapabilities: Capability[] = [
         ids = open.filter((f) => f.actionable).map((f) => f.id);
       }
       if (!ids.length) throw new HttpError(400, "적용할 발견이 없습니다 — ids 또는 manager_id 를 주세요");
-      const r = await applyFindings(ids, actorOf(user), applyAction);
+      const r = await applyFindings(ids, actorOf(user), applyFinding);
       return r;
     }, {
       ids: z.array(z.number().int().positive()).optional().describe("적용할 발견 id 들"),
@@ -175,7 +179,7 @@ export const managersCapabilities: Capability[] = [
       const mk = str(input.manager_key, "manager_key", 64);
       const m = await getManager(mk);
       if (!m) throw new HttpError(404, `관리기를 찾을 수 없습니다: ${mk}`);
-      const r = await upsertFinding(m.id, m.kind, {
+      const f = {
         target_kind: (input.target_kind ? String(input.target_kind) : "knowledge") as "knowledge" | "category" | "domain",
         target_ref: str(input.target_ref, "target_ref", 300),
         dedup_key: input.dedup_key === undefined || input.dedup_key === null ? "" : String(input.dedup_key).slice(0, 300),
@@ -183,13 +187,19 @@ export const managersCapabilities: Capability[] = [
         summary: str(input.summary, "summary", 1000),
         evidence: input.evidence === undefined || input.evidence === null ? undefined : String(input.evidence).slice(0, 10_000),
         proposed_action: (input.proposed_action ?? undefined) as Record<string, unknown> | undefined,
-      });
+      };
+      //  모순은 두 지식의 쌍이다 — 방향을 서버가 정하고 contradicts 링크까지 한 번에(reportContradiction 머리말).
+      if (m.kind === "contradiction" && f.target_kind === "knowledge" && f.dedup_key && f.dedup_key !== f.target_ref) {
+        const r = await reportContradiction(m, f);
+        return { result: r.result, linked: r.linked };
+      }
+      const r = await upsertFinding(m.id, m.kind, f);
       return { result: r };
     }, {
       manager_key: z.string().describe("이 발견을 낸 관리기 key(프롬프트가 알려준 값)"),
       target_kind: z.enum(["knowledge", "category", "domain"]).optional().describe("기본 knowledge"),
       target_ref: z.string().describe("대상 식별자 — 지식 name 또는 카테고리 key"),
-      dedup_key: z.string().nullable().optional().describe("같은 대상의 다른 문제를 가르는 값(모순이면 상대 지식 이름). 단일 문제면 비움"),
+      dedup_key: z.string().nullable().optional().describe("같은 대상의 다른 문제를 가르는 값(모순이면 상대 지식 이름 — 두 이름의 순서는 서버가 정하고 두 지식을 contradicts 로 잇는다). 단일 문제면 비움"),
       severity: z.enum(["note", "warn", "high"]).optional(),
       summary: z.string().describe("무엇이 문제인지 한 줄"),
       evidence: z.string().nullable().optional().describe("근거 — 양쪽에서 인용한 문장(모순) 또는 정의↔코드 파일:라인(코드괴리). 필수에 가깝다"),
