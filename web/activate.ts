@@ -136,6 +136,9 @@ async function showShareGuideAfterApprove(slot: HTMLElement): Promise<void> {
     const p: any = await api('/api/ui/me/liv-profile');
     if (p?.share_guide_seen_at) return;
   } catch { return; }
+  try { mountAfterApprove(slot); } catch (e) { console.warn('[activate] 안내를 붙이지 못했다 — 승인은 이미 끝났다', e); }
+}
+function mountAfterApprove(slot: HTMLElement): void {
   const host = el('div', { class: 'sg-inline' });
   (slot.closest('.card') || slot).after(host);
   const g = mountShareGuide(host, {

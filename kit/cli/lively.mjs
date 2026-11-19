@@ -3619,18 +3619,25 @@ export async function sayShareGuide({ pause = false, out = say } = {}) {
   const gw = gateway();
   const link = gw ? `${gw}/ui/#/share-guide` : "";
   const width = Number(process.stderr.columns) || 80;
-  for (const l of shareGuideLines({ color: TTY, mode, link, narrow: width < SG_W + 6 })) out(l);
+  for (const l of shareGuideLines({ color: !!TTY, mode, link, narrow: width < SG_W + 6 })) out(l);
   if (!pause || PROMPTER || !interactive()) return;
   const t = ttyIO();
+  let done = () => {};
   try {
     t.out.write(`  ${TTY ? `${ESC}[7;1m Enter ${ESC}[0m` : "[Enter]"} 를 누르면 계속합니다 `);
     await new Promise((resolve) => {
-      t.in.once("data", () => resolve());
-      t.in.once("end", () => resolve());
+      done = resolve;
+      for (const ev of ["data", "end", "close", "error"]) t.in.once(ev, done);
       t.in.resume?.();
     });
     t.out.write("\n");
-  } finally { t.close(); }
+  } finally {
+    for (const ev of ["data", "end", "close", "error"]) t.in.removeListener?.(ev, done);
+    // ⚠ Windows 는 ttyIO 가 process.stdin 을 돌려주고 close() 가 아무것도 안 한다 — 흐르는 stdin 이 이벤트 루프를 붙잡아
+    //  설치가 끝나도 프로세스가 안 끝난다. askHidden 처럼 반드시 멈춘다.
+    try { t.in.pause?.(); } catch { /* */ }
+    t.close();
+  }
 }
 async function cmdGuide() { await sayShareGuide({ pause: false }); }
 

@@ -15,7 +15,8 @@
 //   C4  color=false 면 ANSI 가 하나도 없다 · narrow 면 테두리가 없다 · 링크가 비면 링크 줄이 없다
 //   W1  배선 — 셸(main.ts)이 첫 안내를 띄우고 다시 보기 주소를 가로챈다 · 승인 페이지가 승인 뒤 안내를 붙인다 · 스타일이 실린다
 //   W2  배선 — 서버 표식 share_guide_seen: 받는다 · 처음 시각을 지킨다 · GET 이 돌려준다
-//   W3  배선 — setup 두 출구(클라우드 · 자체 호스팅)가 설치 끝에 상자를 찍는다 · 멈춤은 앱(PROMPTER)·비대화형에선 하지 않는다 · lively guide
+//   W3  배선 — setup 두 출구(클라우드 · 자체 호스팅)가 설치 끝에 상자를 찍는다 · 멈춤은 앱(PROMPTER)·비대화형에선 하지 않는다 ·
+//       ★Enter 뒤 stdin 을 멈춘다(Windows 행) · tty 가 닫혀도 풀린다 · lively guide
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -187,6 +188,10 @@ test("W3 배선 — setup 두 출구 · 멈춤 조건 · lively guide", () => {
   const exits = setup.match(/await cmdInstall\(opts\);\n\s*await sayShareGuide\(\{ pause: true \}\);\n\s*setupDoneHints\(\);/g) || [];
   assert.equal(exits.length, 2, "클라우드 · 자체 호스팅 두 출구 모두");
   assert.match(src, /if \(!pause \|\| PROMPTER \|\| !interactive\(\)\) return;/, "앱 · 비대화형에선 멈추지 않는다");
+  const say = src.slice(src.indexOf("export async function sayShareGuide("), src.indexOf("async function cmdGuide()"));
+  assert.match(say, /finally \{[\s\S]*t\.in\.pause\?\.\(\)[\s\S]*t\.close\(\);/, "★Enter 를 받은 뒤 stdin 을 멈춘다 — Windows 는 close() 가 stdin 을 닫지 않아 흐르는 stdin 이 설치를 안 끝나게 한다");
+  assert.match(say, /\["data", "end", "close", "error"\]/, "tty 가 닫히거나 깨져도 기다림이 풀린다");
+  assert.match(say, /color: !!TTY/, "★파이프면 isTTY 가 undefined 라 그대로 넘기면 기본값(색 켬)이 끼어든다 — 로그 파일에 색 코드가 섞인다");
   assert.match(src, /case "guide": return cmdGuide\(\);/);
   assert.match(src, /\n  guide {18}누가 무엇을 보나요/, "도움말에 있다");
 });

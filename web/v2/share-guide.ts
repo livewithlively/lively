@@ -137,6 +137,7 @@ export function mountShareGuide(host: HTMLElement, opts: Opts = {}): ShareGuide 
     const lead = S.lead(mode);
     q('lead').innerHTML = lead; q('lead').hidden = !lead;
     q('extra').innerHTML = S.extra ? S.extra() : '';
+    // extra 를 innerHTML 로 새로 세웠으니 단추도 새것이다 — 매번 붙여도 겹치지 않는다.
     q('more')?.addEventListener('click', () => (pop.hidden ? openPop() : closePop()));
     showScene(S.scene);
     q('prev').style.visibility = step === 0 ? 'hidden' : 'visible';

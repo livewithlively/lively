@@ -1542,8 +1542,7 @@ async function onHash(): Promise<void> {
   if (!tabsApi) return;
   if (suppressHash > 0) { suppressHash--; return; }
   let hash = location.hash || '#/';
-  // #4051 — «내 AI 계정» 창으로 가는 주소(알림 «사람 없이 도는 작업이 멈췄어요» 가 가리킨다). 화면(탭)이 아니라 **창**이라
-  //  탭을 만들지 않는다 — 창을 열고 주소만 지금 탭의 자리로 되돌린다(안 되돌리면 창을 닫은 뒤 새로고침에서 다시 열린다).
+  // #5598 — «누가 무엇을 보나요» 다시 보기 주소(CLI 설치 끝 상자의 링크). 화면이 아니라 창이라 탭을 만들지 않는다(아래 #4051 과 같은 방식).
   if (SHARE_GUIDE_ROUTE.test(hash)) {
     openShareGuide({ again: true });
     const back = tabsApi.active().route || '#/';
@@ -1551,6 +1550,8 @@ async function onHash(): Promise<void> {
     location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
     return;
   }
+  // #4051 — «내 AI 계정» 창으로 가는 주소(알림 «사람 없이 도는 작업이 멈췄어요» 가 가리킨다). 화면(탭)이 아니라 **창**이라
+  //  탭을 만들지 않는다 — 창을 열고 주소만 지금 탭의 자리로 되돌린다(안 되돌리면 창을 닫은 뒤 새로고침에서 다시 열린다).
   if (ME_AI_ROUTE.test(hash)) {
     openMeModal({ tab: 'aiacct' });
     const back = tabsApi.active().route || '#/';
