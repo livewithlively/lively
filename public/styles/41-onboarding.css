@@ -176,7 +176,7 @@
      민낯은 «가운데 한 칸» 이라 애초에 그리드가 필요 없다. display:block 이면 숨긴 형제는 그대로 빠지고
      본문만 폭을 다 쓴다 — 셸이 열을 어떻게 바꾸든 무관해진다. */
 #v2-root.ob-bare.has-topbar, #v2-root.ob-bare { display: block; padding-left: 0; }
-#v2-root.ob-bare > .v2-main { width: 100%; height: 100vh; }
+#v2-root.ob-bare > .v2-main { width: 100%; height: calc(100vh - var(--v2-pv-h, 0px)); }   /* --v2-pv-h: 미리보기 띠(#5581) */
 #v2-root.ob-bare .v2-side, #v2-root.ob-bare > .v2-split-x, #v2-root.ob-bare .v2-tabs, #v2-root.ob-bare .v2-tl-btn,
 #v2-root.ob-bare > .v2-rail,
 /* 맨 윗줄(뒤로·앞으로·검색·레일 토글)은 **사이드바 밖**에 산다 — 브라우저는 .v2-topbar, 데스크톱은 창 제목줄
@@ -627,17 +627,17 @@
 .ob-up-stat:empty{display:none}
 
 /* ── 소개 영상(#5550) — 처음 설정 첫 장면 · 사용 가이드의 «소개 영상 보기» (web/v2/welcome-film.ts) ──────────────
-   영상은 늘 어두운 그림이다(테마와 무관) — 그래서 그 위의 조작줄은 테마 토큰이 아니라 흰 잉크(--on-fill)와 검은 스크림만 쓴다.
-   DS-EXCEPTION: 영상 바탕색(#060A13 — 영상 첫 프레임의 바탕과 같은 값)과 영상 위 스크림의 검정 · 흰 알파. 영상이 뜨기 전 · 레터박스에
+   영상은 늘 밝은 제품 화면이다(테마와 무관) — 그 위의 단추 · 조작줄은 테마 토큰이 아니라 흰 잉크(--on-fill)와 검은 스크림만 쓴다.
+   DS-EXCEPTION: 영상 바탕색(#F3F6FB — 영상 첫 프레임의 바탕과 같은 값)과 영상 위 스크림의 검정 · 흰 알파. 영상이 뜨기 전 · 레터박스에
    다른 색이 비치면 테두리가 번쩍인다. 근거: ui-design-system-agent ▸ exception-policy §1 '외부 자산 위의 오버레이'. 2026-11-16, #5550 */
-.wf{position:relative; width:100%; aspect-ratio:16 / 9; border-radius:16px; overflow:hidden; isolation:isolate; background:#060A13; color:var(--on-fill);
+.wf{position:relative; width:100%; aspect-ratio:16 / 9; border-radius:16px; overflow:hidden; isolation:isolate; background:#F3F6FB; color:var(--on-fill);
   box-shadow:0 26px 64px rgba(var(--shadow-ink), .30), 0 0 0 1px rgba(var(--shadow-ink), .14)}
-.wf-v{display:block; width:100%; height:100%; object-fit:cover; background:#060A13; cursor:pointer; outline:none}
+.wf-v{display:block; width:100%; height:100%; object-fit:cover; background:#F3F6FB; cursor:pointer; outline:none}
 .wf-big{position:absolute; inset:0; margin:auto; width:76px; height:76px; border:0; border-radius:50%; display:grid; place-items:center; cursor:pointer;
-  background:rgba(255, 255, 255, .16); color:var(--on-fill); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+  background:rgba(0, 0, 0, .5); color:var(--on-fill); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
   box-shadow:0 10px 30px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .22); opacity:0; pointer-events:none; transform:scale(.92); transition:opacity .18s ease, transform .18s ease, background .12s ease}
 .wf:not(.is-playing) .wf-big{opacity:1; pointer-events:auto; transform:none}
-.wf-big:hover{background:rgba(255, 255, 255, .26)}
+.wf-big:hover{background:rgba(0, 0, 0, .64)}
 .wf-big:focus-visible, .wf-btn:focus-visible, .wf-track:focus-visible, .wf-close:focus-visible{outline:2px solid var(--on-fill); outline-offset:2px}
 .wf-big-ic{width:30px; height:30px; margin-left:3px; fill:currentColor; stroke:currentColor; stroke-width:1.6; stroke-linejoin:round; stroke-linecap:round}
 .wf.is-ended .wf-big-ic{margin-left:0; fill:none; stroke-width:2}
@@ -652,6 +652,13 @@
 .wf-track::before{content:''; position:absolute; left:0; right:0; height:4px; border-radius:999px; background:rgba(255, 255, 255, .28)}
 .wf-fill{position:absolute; left:0; right:0; height:4px; border-radius:999px; background:var(--on-fill); transform:scaleX(0); transform-origin:0 50%}
 .wf-time{flex:none; padding:0 4px; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; opacity:.88}
+/* [소리 켜기] — 음소거로 도는 동안만 오른쪽 위에 뜬다. 한 번 켜면 걷히고, 그 뒤로는 조작줄의 스피커로 켜고 끈다. */
+.wf-unmute{position:absolute; top:12px; right:12px; display:none; align-items:center; gap:6px; height:34px; padding:0 13px 0 10px; border:0; border-radius:999px; cursor:pointer;
+  background:rgba(0, 0, 0, .55); color:var(--on-fill); font:inherit; font-size:12.5px; font-weight:600; -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  box-shadow:0 6px 18px rgba(0, 0, 0, .25), inset 0 0 0 1px rgba(255, 255, 255, .18)}
+.wf-unmute:hover{background:rgba(0, 0, 0, .7)}
+.wf-unmute:focus-visible{outline:2px solid var(--on-fill); outline-offset:2px}
+.wf.is-muted.is-playing .wf-unmute{display:inline-flex}
 .wf:fullscreen{border-radius:0; aspect-ratio:auto; width:100vw; height:100vh}
 .wf:fullscreen .wf-v{object-fit:contain}
 @media (prefers-reduced-motion: reduce){ .wf-big, .wf-bar{transition:none} }

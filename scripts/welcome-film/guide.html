@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>사용 가이드 — 라이블리 동작원리 — 원본</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="tour.css">
+<link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div id="fit">
+<div id="stage">
+
+  <div id="bg"></div>
+
+  <!-- 제품 화면 — guide-app.gen.html(제품의 스타일시트 · DOM)을 1160×593 으로 세워 1.517 배로 보여 준다(둘러보기 영상과 같은 창) -->
+  <div id="win">
+    <iframe id="app" src="guide-app.gen.html" width="1160" height="593" tabindex="-1"></iframe>
+  </div>
+
+  <!-- ① 표지 · 맺음 — 네 걸음 -->
+  <section class="dg" id="dLoop">
+    <p class="dg-eyebrow" id="lpEye">사용 가이드</p>
+    <h1 class="dg-title" id="lpTitle">라이블리 동작원리</h1>
+    <div class="lp-row">
+      <div class="lp-card" id="lp1"><span class="lp-n">1</span><span class="lp-gi" data-gi="apps"></span><b>모으기</b><span class="lp-d">쓰는 앱에서 자료를 가져옵니다</span><em>수집기 · 자료</em></div>
+      <svg class="lp-arr" id="lpA1" viewBox="0 0 100 24"><path d="M6 12h80 M78 5l9 7-9 7"/></svg>
+      <div class="lp-card" id="lp2"><span class="lp-n">2</span><span class="lp-gi" data-gi="wiki"></span><b>정리하기</b><span class="lp-d">남길 것만 지식으로 씁니다</span><em>증류기 · 지식</em></div>
+      <svg class="lp-arr" id="lpA2" viewBox="0 0 100 24"><path d="M6 12h80 M78 5l9 7-9 7"/></svg>
+      <div class="lp-card" id="lp3"><span class="lp-n">3</span><span class="lp-gi" data-gi="ctx"></span><b>건네기</b><span class="lp-d">AI에게 필요한 만큼만 건넵니다</span><em>AI 주입기 · 세션</em></div>
+      <svg class="lp-arr" id="lpA3" viewBox="0 0 100 24"><path d="M6 12h80 M78 5l9 7-9 7"/></svg>
+      <div class="lp-card" id="lp4"><span class="lp-n">4</span><span class="lp-gi" data-gi="chat"></span><b>다시 쌓기</b><span class="lp-d">일하며 알게 된 것을 남깁니다</span><em>세션 · 지식 저장</em></div>
+    </div>
+    <svg class="lp-back" id="lpBack" viewBox="0 0 1920 1080"><path id="lpBackPath" d="M1585 772 C 1585 892, 1430 902, 960 902 C 490 902, 335 892, 335 790"/><path id="lpBackHead" d="M321 802 L335 784 L349 802"/></svg>
+    <p class="lp-back-t" id="lpBackT">일할수록 팀의 지식이 다시 쌓입니다</p>
+  </section>
+
+  <!-- ② 지식이란 -->
+  <section class="dg" id="dKn">
+    <div class="src-c" id="kS1"><span class="src-lg" data-logo="slack"></span><div><small>#영업 · 김민수</small><p>Team 요금은 29,000원으로 가죠</p></div></div>
+    <div class="src-c" id="kS2"><span class="src-lg" data-logo="notion"></span><div><small>노션 · 팀 문서</small><p>요금제 개편안 v2</p></div></div>
+    <div class="src-c" id="kS3"><span class="src-ic" data-ic="doc"></span><div><small>내 컴퓨터 · 영업회의</small><p>영업회의_1009.pdf</p></div></div>
+    <div class="src-c" id="kS4"><span class="src-ic" data-ic="mailopen"></span><div><small>메일 · 고객사</small><p>RE: 연간 계약이면 할인 되나요?</p></div></div>
+    <div class="src-c" id="kS5"><span class="src-ic" data-ic="list"></span><div><small>내 컴퓨터 · 영업</small><p>가격표.xlsx</p></div></div>
+    <div class="src-c" id="kS6"><span class="src-lg" data-logo="slack"></span><div><small>#영업 · 이지원</small><p>Pro 는 20명까지로 하죠</p></div></div>
+
+    <div class="lane" id="knLaneA"><span class="lane-lgs"><span class="src-lg" data-logo="slack"></span><span class="src-lg" data-logo="notion"></span><span class="src-lg" data-logo="github"></span></span><div><b>쌓인 자료에서</b><span class="lane-chips"><i>수집기</i><em>→</em><i>자료</i><em>→</em><i class="dk">증류기</i></span></div></div>
+    <div class="lane" id="knLaneB"><span class="lane-lgs"><span class="src-lg" data-claude></span></span><div><b>AI와 일하면서</b><span class="lane-chips"><i>세션</i><em>→</em><i class="dk">지식 저장</i></span></div></div>
+    <svg class="lane-wires" viewBox="0 0 1920 1080"><path id="knWA" d="M910 392 C 1010 392, 1030 470, 1140 470"/><path id="knWB" d="M910 652 C 1010 652, 1030 560, 1140 560"/></svg>
+
+    <article class="kdoc" id="kDoc">
+      <div class="kdoc-h"><span class="lp-gi sm" data-gi="wiki"></span><span class="kdoc-cat">영업</span><span class="kdoc-kind">지식</span></div>
+      <h2>3단계 요금제 — Basic · Pro · Team</h2>
+      <ul><li><b>Basic</b> 월 9,000원 · 5명까지</li><li><b>Pro</b> 월 19,000원 · 20명까지</li><li><b>Team</b> 월 29,000원 · 인원 제한 없음</li><li class="muted">연간 계약은 두 달 할인</li></ul>
+      <div class="kdoc-f"><span>출처 자료 6건</span><span>판 1</span></div>
+    </article>
+  </section>
+
+  <!-- ③ 새로 만들지 않고 고친다 -->
+  <section class="dg" id="dFix">
+    <div class="src-c fx-new" id="fxSrc"><span class="src-lg" data-logo="slack"></span><div><small>#영업 · 11월 12일</small><p>Team 요금, 다음 달부터 32,000원으로 올리죠</p><span class="fx-tag">새 자료</span></div></div>
+    <svg class="fx-arr" id="fxA1" viewBox="0 0 80 24"><path d="M4 12h62 M58 5l9 7-9 7"/></svg>
+    <div class="fx-mc" id="fxMc"><span class="fx-gear" data-gear></span><b>증류기</b><span>남길 것인가?</span></div>
+    <svg class="fx-arr" id="fxA2" viewBox="0 0 80 24"><path d="M4 12h62 M58 5l9 7-9 7"/></svg>
+    <div class="fx-sim" id="fxSim">
+      <div class="fx-sim-h"><span class="src-ic" data-ic="search"></span><b>비슷한 지식 찾기</b></div>
+      <div class="fx-sim-r on" id="fxR1"><span>3단계 요금제</span><b>91%</b></div>
+      <div class="fx-sim-r" id="fxR2"><span>경쟁사 요금 비교</span><b>64%</b></div>
+      <div class="fx-sim-r" id="fxR3"><span>할인 승인 규칙</span><b>58%</b></div>
+    </div>
+    <svg class="fx-arr" id="fxA3" viewBox="0 0 80 24"><path d="M4 12h62 M58 5l9 7-9 7"/></svg>
+    <article class="kdoc fx-doc" id="fxDoc">
+      <div class="kdoc-h"><span class="lp-gi sm" data-gi="wiki"></span><span class="kdoc-cat">영업</span><span class="kdoc-kind">지식</span><span class="fx-ed" id="fxEd"><s>판 3</s> → <b>판 4</b></span></div>
+      <h2>3단계 요금제</h2>
+      <ul><li><b>Basic</b> 월 9,000원</li><li><b>Pro</b> 월 19,000원</li><li class="fx-line" id="fxLine"><b>Team</b> 월 <span class="old" id="fxOld">29,000원</span> <mark id="fxNew">32,000원</mark></li></ul>
+      <div class="kdoc-f"><span id="fxSrcN">출처 자료 6건</span><span class="fx-plus" id="fxPlus">+1</span></div>
+    </article>
+    <div class="fx-stats" id="fxStats">
+      <span class="fx-st" id="fxSt1"><small>새로 만든 지식</small><b>0</b></span>
+      <span class="fx-st on" id="fxSt2"><small>고친 지식</small><b>1</b></span>
+      <span class="fx-st" id="fxSt3"><small>지식 수</small><b>212건 그대로</b></span>
+    </div>
+  </section>
+
+  <!-- ④ 건네기 — 통째로가 아니라 세 번에 나눠 -->
+  <section class="dg" id="dHand">
+    <div class="hd-stack" id="hdStack">
+      <span class="hd-sheet s3" id="hdS3"></span><span class="hd-sheet s2" id="hdS2"></span>
+      <div class="hd-front"><span class="lp-gi" data-gi="wiki"></span><small>팀의 지식</small><b><span id="hdN">212</span><em>건</em></b><span class="hd-sub">WIKI 전체</span></div>
+    </div>
+    <div class="hd-ghost" id="hdGhost">지식 212건 통째로</div>
+    <div class="hd-rows">
+      <div class="hd-row" id="hdR1"><span class="hd-num">1</span><div><b>대화를 시작할 때</b><span>팀 규칙 · 업무 분류 목록만</span></div><i class="hd-hook">세션 시작 훅</i></div>
+      <div class="hd-row" id="hdR2"><span class="hd-num">2</span><div><b>말을 보낼 때마다</b><span>가까운 지식 몇 건의 제목 · 요약</span></div><i class="hd-hook">작업 중 훅</i></div>
+      <div class="hd-row" id="hdR3"><span class="hd-num">3</span><div><b>더 필요할 때</b><span>AI가 찾아 필요한 부분만 읽기</span></div><i class="hd-hook is-tool">MCP 도구</i></div>
+    </div>
+    <span class="hd-pk" id="hdP1">규칙 · 분류 목록</span>
+    <span class="hd-pk" id="hdP2">지식 3건 · 제목 · 요약</span>
+    <span class="hd-pk" id="hdP3">본문 30줄</span>
+    <div class="hd-ai" id="hdAi">
+      <div class="hd-ai-h"><span class="src-lg big" data-claude></span><b>AI 세션</b></div>
+      <small>AI가 받는 맥락</small>
+      <div class="hd-meter"><span class="hd-fill" id="hdFill"></span><span class="hd-over" id="hdOver"></span></div>
+      <div class="hd-ml"><span id="hdPct">0%</span><span class="hd-keep" id="hdKeep">지식이 늘어도 그대로</span></div>
+    </div>
+  </section>
+
+  <!-- 손 -->
+  <span class="click" id="click"></span>
+  <svg class="cursor" id="cursor" width="40" height="40" viewBox="0 0 24 24"><path d="M5 3l14 8-6.2 1.6L10 19z" fill="#15233B" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+
+  <!-- 맺음 -->
+  <section id="end">
+    <div class="logo"><span class="dot"></span><span class="wm">Lively</span></div>
+    <p class="endline" id="endLine">일할수록 팀의 맥락이 쌓입니다.</p>
+  </section>
+
+</div>
+</div>
+
+<!-- 미리 보기 조작 — 굽는 쪽(?render)에서는 숨는다 -->
+<div id="hud"><button id="hudPlay">⏯</button><input id="hudBar" type="range" min="0" max="1000" value="0"><span id="hudT">0.00</span></div>
+<script type="module" src="guide.js"></script>
+</body>
+</html>

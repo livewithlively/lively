@@ -47,6 +47,13 @@ export interface TuiBanner {
 /** 대화창 안에서 웹 터미널 설정이 바뀌었다고 알리는 같은 문서 신호(localStorage 의 storage 신호는 **다른** 문서에만 간다). */
 export const TERM_PREFS_EVENT = 'lively:term-prefs';
 
+/**
+ * #5580 후속 — 세션이 **일하던 중에** 끊긴 턴의 끝에 서는 한 줄. 그 턴은 마지막 말 뒤에도 도구를 돌리다 끊겼다 — 화면에 남은 마지막 말
+ *  («…살펴보고 있습니다») 이 그 턴의 결론처럼 보이면 사람은 «최신 답이 아니라 예전 답이 보인다» 고 읽는다(원준 2026-11-19, GovTech 세션:
+ *  14:45 의 진행 문장 뒤로 질문·답·삭제를 다 하고 15:01 명령을 돌리다 끊겼다). 끊겼다는 사실과 그 뒤 작업의 결과가 보고되지 않았다는 것만 말한다.
+ */
+export const CUT_TURN_TEXT = 'AI 가 일하던 중에 세션이 끊겼어요. 위의 마지막 말 뒤에 한 작업은 결과를 알리지 못했어요.';
+
 export interface ChatViewOpts {
   who: { me: string; ai: string };                 // 이름표(위치가 아니라 이름으로 화자를 밝힌다)
   placeholder: string;
@@ -110,7 +117,7 @@ export interface ChatView {
    * 그 턴 끝 — 흘러오던 덩이를 마감하고 상태점을 끈다. turnEnd — tui 의 턴 끝 줄(`✻ Churned for 3m 51s · done 6:43 PM`) 재료:
    *  그 턴의 turn_duration 기록(uuid·timestamp·pendingBackgroundAgentCount). 기록이 없는 마감(Stop 훅 요약·폴링 마감)엔 주지 않는다.
    */
-  settle(t: ChatTurn, o?: { exit?: number | null; interrupted?: boolean; durationMs?: number; turnEnd?: { uuid?: string; ts?: string; pendingBg?: number } }): void;
+  settle(t: ChatTurn, o?: { exit?: number | null; interrupted?: boolean; cut?: boolean; durationMs?: number; turnEnd?: { uuid?: string; ts?: string; pendingBg?: number } }): void;
   /** 이 턴이 '지금 도는 중'임을 표시(깜빡이는 점 + 경과 시간 줄). */
   running(t: ChatTurn | null): void;
   busy(on: boolean): void;
@@ -1400,7 +1407,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     node.replaceChildren(el('span', { class: 'tui-done-g', 'aria-hidden': 'true', text: '✻' + VS15 }),
       ...segEls(turnEndSegs({ pendingBg: waiting, durationMs: Number(node.dataset.ms) || 0, uuid: node.dataset.uuid, ts: node.dataset.ts })));
   }
-  function settle(t: ChatTurn, o?: { exit?: number | null; interrupted?: boolean; durationMs?: number; turnEnd?: { uuid?: string; ts?: string; pendingBg?: number } }): void {
+  function settle(t: ChatTurn, o?: { exit?: number | null; interrupted?: boolean; cut?: boolean; durationMs?: number; turnEnd?: { uuid?: string; ts?: string; pendingBg?: number } }): void {
     for (const [i, b] of t.r.blocks) {
       b.el.classList.remove('livc-said-live');
       if (b.buf.trim()) { b.el.replaceChildren(renderBody(b.buf)); decorateCode(b.el); b.el.append(copyBtn(b.buf, 'livc-said-copy', '답 복사')); } else b.el.remove();
@@ -1419,6 +1426,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       //   터미널과 같은 낱말이 선다) 또는 백그라운드 에이전트가 아직 돌면 `✻ Waiting for 1 background agent to finish`. 한 턴에 한 번만.
       if (o?.interrupted && !t.work.querySelector(':scope > .tui-interrupted')) appendWork(t, el('div', { class: 'tui-res tui-err tui-interrupted' }, rl('Interrupted · What should Claude do instead?')));
       if (o?.exit != null && o.exit !== 0) appendWork(t, el('div', { class: 'livc-err tui-res tui-err' }, rl('이번 요청은 끝까지 가지 못했습니다. 다시 말씀해 주시면 이어서 해 보겠습니다.')));
+      if (o?.cut && !t.work.querySelector(':scope > .livc-cut')) appendWork(t, el('div', { class: 'livc-err livc-cut tui-res tui-err' }, rl(CUT_TURN_TEXT)));
       if (o?.turnEnd && !t.work.querySelector(':scope > .tui-done')) {
         const node = el('div', { class: 'tui-done' }) as HTMLElement;
         node.dataset.ms = String(Number(o.durationMs) || 0);
@@ -1435,6 +1443,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     }
     if (o?.interrupted) appendWork(t, el('div', { class: 'livc-mark', text: '중단함' }));
     if (o?.exit != null && o.exit !== 0) appendWork(t, el('div', { class: 'livc-err', text: '이번 요청은 끝까지 가지 못했습니다. 다시 말씀해 주시면 이어서 해 보겠습니다.' }));
+    if (o?.cut && !t.work.querySelector(':scope > .livc-cut')) appendWork(t, el('div', { class: 'livc-err livc-cut', text: CUT_TURN_TEXT }));
     if (o?.durationMs && o.durationMs > 3000) {
       const w = t.work.querySelector(':scope > .livc-who');
       if (w && !w.querySelector('.livc-dur')) w.append(el('span', { class: 'livc-dur', text: fmtDur(o.durationMs) }));

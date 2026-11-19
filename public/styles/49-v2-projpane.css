@@ -191,3 +191,33 @@ body.pj-lock { overflow: hidden; }
 .pj-rsz::after { content: ""; position: absolute; left: 50%; bottom: 8px; width: 32px; height: 3px; margin-left: -16px; border-radius: 99px; background: var(--muted-3-line); transition: background .12s ease, width .12s ease, margin-left .12s ease; }
 .pj-rsz:hover::after, .pj-rsz.on::after { background: var(--blue); width: 48px; margin-left: -24px; }
 .pj-body.edit .pj-rsz { display: none; }
+
+/* ══ 새 태스크(원준 2026-11-17, #5581) — 클릭업처럼 목록 머리 바로 밑의 흐린 줄. 누르면 그 자리에서 제목·본문 칸이 펴진다. ══════
+   종전 «태스크 추가» 점선 입력칸(곁칸 맨 아래 · 이름만)을 대신한다. 칸은 .pj-top 안에 서 있어 목록을 내려도 늘 보인다.
+   같은 상자(.pj-card)를 줄의 «고치기»(제목·본문)도 쓴다. */
+.pj-topdyn { flex: none; display: flex; flex-direction: column; }
+.pj-topdyn > * { flex: none; }
+.pj-add { flex: none; }
+.pj-add-ghost { display: flex; align-items: center; gap: 7px; width: 100%; padding: 7px 12px 8px 14px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted-2); cursor: pointer; text-align: left; }
+.pj-add-ghost .pn-i.sm { width: 15px; height: 15px; }
+.pj-add-ghost:hover, .pj-add-ghost:focus-visible { color: var(--blue); background: var(--bg-punch); }
+.pj-card { display: flex; flex-direction: column; padding: 8px 10px 7px 10px; border: 1px solid var(--blue); border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 3px rgba(45,107,240,.1); }
+.pj-add-form { display: none; margin: 2px 10px 8px 10px; }
+.pj-add.on .pj-add-ghost { display: none; }
+.pj-add.on .pj-add-form { display: flex; }
+.pj-add-l1 { display: flex; align-items: center; gap: 7px; }
+/* 전역 input[type="text"]·textarea 가 테두리·바탕·안여백을 입힌다 — 상자 안에 상자가 또 서지 않게 (0,2,0) 으로 벗긴다. */
+.pj-card .pj-add-t { flex: 1; min-width: 0; width: auto; height: 22px; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); }
+.pj-card .pj-add-b { display: block; width: auto; min-height: 40px; max-height: 26vh; margin: 4px 0 0 22px; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; background: none; resize: none; overflow: auto; font: inherit; font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); }
+.pj-card .pj-add-t::placeholder, .pj-card .pj-add-b::placeholder { color: var(--muted-3); font-weight: 400; }
+.pj-add-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line-row); }
+.pj-add-hint { min-width: 0; font-size: 10.5px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pj-add-x { font-size: 12px; padding: 3px 6px; color: var(--ink-sub); flex: none; }
+.pj-add-ok { flex: none; height: 24px; padding: 0 11px; border: 0; border-radius: 7px; background: var(--blue-fill); color: var(--on-fill); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.pj-add-ok:disabled { opacity: .4; cursor: default; }
+/* 줄의 «고치기» — 펼친 줄 속에서 같은 상자. 세션에 이미 넣은 태스크면 한 줄 알림. */
+.pj-card.pj-edit { margin: 0; }
+.pj-edit-note { margin: 6px 0 0 22px; font-size: 11px; color: var(--muted-head); }
+/* 방금 더한 줄 — 한 번 반짝인다 */
+@keyframes pj-fresh { from { background: color-mix(in srgb, var(--blue) 16%, transparent); } to { background: transparent; } }
+.pp-row.pj-fresh { animation: pj-fresh 1.6s ease-out; }

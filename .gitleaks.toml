@@ -44,6 +44,10 @@ regexes = [
   #  기존 domain-wiki-md 시험과 같은 값). generic-api-key 가 커밋 09a07d98a 의 `const NOTION_KEY = "…"` 를 잡았다. 시험은 이제
   #  이름을 NOTION_PAGE 로 두지만, 스캔은 PR 범위·히스토리 전수라 그 커밋이 남아 있는 동안 빨갛다 → 그 리터럴 하나만 정확히 뺀다.
   '''notion-310746a5-e573-8002-a8e4-cc75b89ec108''',
+  # DB 소스 시크릿 참조 PG 시험(#1764)의 정리 줄 — `allowed_db_secret_refs: rc0.allowed_db_secret_refs` 의 오른쪽(변수 식)을
+  #  generic-api-key 가 값으로 오인했다(키 이름에 secret). 시험은 이제 배열을 펼쳐 넘겨 그 꼴을 남기지 않지만, 커밋 5b961b21e 와
+  #  stage 로 체리픽된 같은 커밋이 히스토리에 남는다 → 그 식 하나만 정확히 뺀다(파일 단위 제외 아님).
+  '''rc0\.allowed_db_secret_refs''',
 ]
 
 # ── 벤더링한 서드파티 번들의 압축 코드 (#3537) ────────────────────────────────

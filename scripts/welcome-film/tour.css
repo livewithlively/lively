@@ -1,0 +1,71 @@
+/* 라이블리 둘러보기 영상 — 1920×1080 무대, 밝은 바탕. 가운데 창은 제품 화면 그대로(tour-app.gen.html)이고
+   여기는 그 둘레(바탕 · 창틀 · 손 · 자막 · 맺음)만 그린다. 색은 제품 토큰(public/styles/01-base.css)에서 옮겼다. */
+:root { --ink: #15233B; --sub: #49566B; --muted: #576889; --blue: #2D6BF0; --mint: #16C79A; --line: #DCE4F0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #DDE3EC; overflow: hidden; }
+body { font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; text-rendering: geometricPrecision; }
+#fit { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+#stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #F3F6FB; }
+
+/* 바탕 — 거의 흰 면에 아주 옅은 빛 두 덩이. 움직이지 않는다. */
+#bg { position: absolute; inset: 0;
+  background:
+    radial-gradient(1100px 760px at 12% -8%, rgba(45,107,240,.10), transparent 70%),
+    radial-gradient(1000px 700px at 96% 108%, rgba(22,199,154,.09), transparent 70%),
+    linear-gradient(180deg, #F7F9FD 0%, #EEF2F9 100%); }
+
+/* 창 */
+#win { position: absolute; left: 80px; top: 44px; width: 1760px; height: 900px; border-radius: 20px; overflow: hidden; background: #fff;
+  border: 1px solid rgba(21,35,59,.10);
+  box-shadow: 0 2px 4px rgba(21,35,59,.05), 0 18px 40px rgba(21,35,59,.10), 0 50px 110px rgba(21,35,59,.13);
+  opacity: 0; will-change: transform, opacity; }
+#app { position: absolute; left: 0; top: 0; border: 0; display: block; transform-origin: 0 0; transform: scale(1.51724); pointer-events: none; }
+#veil { position: absolute; left: 115px; top: 0; right: 0; bottom: 0; background: rgba(255,255,255,.66); opacity: 0; }
+
+/* 맞이 — 창 전체가 흐려진 위에 가운데 한 줄 */
+#welVeil { position: absolute; inset: 0; background: radial-gradient(1300px 760px at 50% 46%, rgba(248,250,254,.86), rgba(240,244,250,.66)); opacity: 0; }
+#wel { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; padding-bottom: 40px; }
+.wel-dot { width: 58px; height: 58px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #5FF0C2, var(--mint) 55%, #0FA37E); box-shadow: 0 10px 30px rgba(22,199,154,.35); opacity: 0; }
+#welT { margin-top: 38px; font-size: 92px; line-height: 1.1; font-weight: 700; letter-spacing: -0.045em; color: var(--ink); opacity: 0; }
+#welS { margin-top: 30px; font-size: 42px; font-weight: 600; letter-spacing: -0.03em; color: var(--sub); opacity: 0; }
+
+/* 짚기 */
+.ring { position: absolute; left: 0; top: 0; border: 3px solid var(--blue); border-radius: 16px; box-shadow: 0 0 0 6px rgba(45,107,240,.16); opacity: 0; }
+.tip { position: absolute; left: 0; top: 0; display: flex; align-items: baseline; gap: 14px; padding: 15px 24px 16px; border-radius: 14px; background: var(--ink); color: #fff; white-space: nowrap;
+  box-shadow: 0 10px 28px rgba(21,35,59,.24); opacity: 0; will-change: transform, opacity; }
+.tip::before { content: ''; position: absolute; left: -8px; top: 50%; width: 18px; height: 18px; margin-top: -9px; background: var(--ink); border-radius: 3px; transform: rotate(45deg); }
+.tip.up::before { left: var(--ax, 40px); top: -8px; margin: 0 0 0 -9px; }
+.tip.dn::before { left: var(--ax, 40px); top: auto; bottom: -8px; margin: 0 0 0 -9px; }
+.tip.sm b { font-size: 27px; } .tip.sm span { font-size: 25px; }
+.tip b { position: relative; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+.tip span { position: relative; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; color: rgba(255,255,255,.78); }
+
+/* 무엇이든 — 질문 카드가 화면 가득 흩뿌려진다 */
+#burst { position: absolute; left: 0; top: 0; width: 1920px; height: 960px; pointer-events: none; }
+.q { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 12px; max-width: 640px; padding: 14px 20px 15px 14px; border-radius: 16px; background: #fff;
+  border: 1px solid rgba(21,35,59,.08); box-shadow: 0 2px 4px rgba(21,35,59,.05), 0 14px 34px rgba(21,35,59,.13); opacity: 0; will-change: transform, opacity; white-space: nowrap; }
+.q b { flex: none; padding: 5px 11px; border-radius: 999px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; color: var(--pc); background: color-mix(in srgb, var(--pc) 12%, #fff); }
+.q span { font-size: 24px; font-weight: 600; letter-spacing: -0.025em; color: var(--ink); }
+.q[data-p="영업"] { --pc: #2D6BF0; } .q[data-p="개발"] { --pc: #0E7C86; } .q[data-p="대표"] { --pc: #15233B; } .q[data-p="마케팅"] { --pc: #D9480F; }
+.q[data-p="재무"] { --pc: #1F9D55; } .q[data-p="디자인"] { --pc: #C2255C; } .q[data-p="CS"] { --pc: #7048E8; } .q[data-p="인사"] { --pc: #B36E18; }
+.q[data-p="연구"] { --pc: #1971C2; } .q[data-p="기획"] { --pc: #5C7CFA; } .q[data-p="운영"] { --pc: #2B8A3E; } .q[data-p="법무"] { --pc: #495057; }
+#burstVeil { position: absolute; inset: 0; background: rgba(243,246,251,.72); opacity: 0; }
+
+/* 손 */
+.cursor { position: absolute; left: 0; top: 0; opacity: 0; filter: drop-shadow(0 4px 7px rgba(21,35,59,.32)); will-change: transform; transform-origin: 20% 15%; }
+.click { position: absolute; left: 0; top: 0; width: 76px; height: 76px; margin: -38px 0 0 -38px; border-radius: 50%; background: rgba(45,107,240,.18); border: 2.5px solid rgba(45,107,240,.55); opacity: 0; }
+
+/* 자막 — 창 아래 한 줄 */
+.cap { position: absolute; left: 0; right: 0; top: 982px; text-align: center; font-size: 42px; line-height: 1.3; font-weight: 600; letter-spacing: -0.025em; color: var(--ink); white-space: nowrap; opacity: 0; will-change: transform, opacity; }
+
+/* 맺음 */
+#end { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; opacity: 0; }
+.logo { display: flex; align-items: center; gap: 22px; }
+.logo .dot { width: 48px; height: 48px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #5FF0C2, var(--mint) 55%, #0FA37E); box-shadow: 0 8px 26px rgba(22,199,154,.35); }
+.logo .wm { font-size: 104px; font-weight: 600; letter-spacing: -0.045em; line-height: 1; color: var(--ink); }
+.endline { margin-top: 44px; font-size: 54px; font-weight: 600; letter-spacing: -0.03em; color: var(--sub); }
+
+/* ── 미리 보기 조작 ── */
+#hud { position: fixed; left: 12px; right: 12px; bottom: 10px; display: flex; gap: 10px; align-items: center; font: 12px ui-monospace, monospace; color: #42526e; z-index: 10; }
+#hud input { flex: 1; } #hud button { font: inherit; padding: 2px 8px; }
+.render #hud { display: none; }
