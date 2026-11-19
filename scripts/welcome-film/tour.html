@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>라이블리 둘러보기 영상 — 원본</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="tour.css">
+</head>
+<body>
+<div id="fit">
+<div id="stage">
+
+  <div id="bg"></div>
+
+  <!-- 제품 화면 — tour-app.gen.html(제품의 스타일시트 · DOM)을 1160×593 으로 세워 1.517 배로 보여 준다 -->
+  <div id="win">
+    <iframe id="app" src="tour-app.gen.html" width="1160" height="593" tabindex="-1"></iframe>
+    <div id="veil"></div>
+  </div>
+
+  <!-- 맞이 — 화면 전체를 흐리게 하고 가운데에 -->
+  <div id="welVeil"></div>
+  <section id="wel">
+    <span class="wel-dot" id="welDot"></span>
+    <h1 id="welT">라이블리에 오신 것을 환영합니다</h1>
+    <p id="welS">지금부터 라이블리를 쓰는 기본을 하나씩 보여 드릴게요.</p>
+  </section>
+
+  <!-- 짚는 테두리와 말 -->
+  <span class="ring" id="ringWs"></span>
+  <span class="ring" id="ringHome"></span>
+  <span class="ring" id="ringCtx"></span>
+  <span class="ring" id="ringRecent"></span>
+  <span class="ring" id="ringApps"></span>
+  <span class="ring" id="ringMe"></span>
+  <span class="ring" id="ringProj"></span>
+  <span class="ring" id="ringPre"></span>
+  <span class="ring" id="ringDock"></span>
+  <div class="tip" id="tipWs"><b>워크스페이스</b><span>개인 공간 · 팀 공간을 오가요</span></div>
+  <div class="tip" id="tipHome"><b>홈</b><span>AI에게 일을 시키는 곳</span></div>
+  <div class="tip" id="tipCtx"><b>수집 · 증류</b><span>쓰는 앱의 자료를 모아 지식으로 정리하는 곳</span></div>
+  <div class="tip" id="tipRecent"><b>최근 연 앱</b><span>우클릭하면 독에 고정 · 독에서 삭제</span></div>
+  <div class="tip" id="tipApps"><b>앱</b><span>모든 앱을 여기서 찾아요</span></div>
+  <div class="tip" id="tipMe"><b>내 프로필 · 환경설정</b><span>내 정보와 설정을 바꾸는 곳</span></div>
+  <div class="tip up" id="tipProj"><b>프로젝트</b><span>비워 두면 시킨 말로 이름이 지어져요</span></div>
+  <div class="tip up" id="tipPre"><b>선행</b><span>이어지는 일이면 골라요 · 안 골라도 돼요</span></div>
+  <div class="tip up sm" id="tipDkProj"><b>프로젝트</b><span>이 세션이 할 일을 순서대로</span></div>
+  <div class="tip up sm" id="tipDkFiles"><b>자료</b><span>이 일의 파일이 다 모이는 곳</span></div>
+  <div class="tip up sm" id="tipDkWeb"><b>웹</b><span>AI가 직접 쓰는 브라우저 · 데스크톱 앱</span></div>
+
+  <div id="burstVeil"></div>
+  <!-- 무엇이든 — 여러 사람이 시킬 법한 일이 화면 가득 -->
+  <div id="burst">
+    <div class="q" data-p="영업"><b>영업</b><span>고객사 홈페이지 돌면서 담당자 연락처, 엑셀로 정리해 줘</span></div>
+    <div class="q" data-p="개발"><b>개발</b><span>지난주 배포 뒤로 생긴 에러, 어느 커밋에서 깨졌는지 찾아 줘</span></div>
+    <div class="q" data-p="대표"><b>대표</b><span>이번 주 슬랙에서 결정된 것만 모아서 월요일 브리핑 써 줘</span></div>
+    <div class="q" data-p="마케팅"><b>마케팅</b><span>경쟁사 3곳 최근 게시물 보고 다음 주 콘텐츠 아이디어 10개</span></div>
+    <div class="q" data-p="재무"><b>재무</b><span>법인카드 내역이랑 영수증 맞춰 보고 안 맞는 것만 골라 줘</span></div>
+    <div class="q" data-p="디자인"><b>디자인</b><span>피그마 코멘트 중에 아직 답 안 한 것만 모아 줘</span></div>
+    <div class="q" data-p="CS"><b>CS</b><span>어제 들어온 문의 메일 유형별로 나누고 답장 초안까지</span></div>
+    <div class="q" data-p="인사"><b>인사</b><span>지원자 이력서 읽고 사람마다 면접 질문 뽑아 줘</span></div>
+    <div class="q" data-p="연구"><b>연구</b><span>이 주제 최신 논문 20편 찾아서 표로 요약해 줘</span></div>
+    <div class="q" data-p="기획"><b>기획</b><span>노션 회의록 다 읽고 아직 안 끝난 할 일만 뽑아 줘</span></div>
+    <div class="q" data-p="대표"><b>대표</b><span>투자사 목록 웹에서 찾아서 우리랑 맞는 곳만 추려 줘</span></div>
+    <div class="q" data-p="운영"><b>운영</b><span>항공권·호텔 가격 비교해서 출장 일정안 짜 줘</span></div>
+    <div class="q" data-p="마케팅"><b>마케팅</b><span>광고 대시보드 들어가서 지난주 성과 보고서로 만들어 줘</span></div>
+    <div class="q" data-p="법무"><b>법무</b><span>이 계약서에서 우리한테 불리한 조항 짚어 줘</span></div>
+    <div class="q" data-p="영업"><b>영업</b><span>지원사업 공고 사이트에서 우리한테 맞는 것만 골라 줘</span></div>
+    <div class="q" data-p="개발"><b>개발</b><span>이 저장소에서 결제 로직 어디 있는지 설명해 줘</span></div>
+    <div class="q" data-p="CS"><b>CS</b><span>자주 묻는 질문, 지식으로 정리해서 팀에 공유해 줘</span></div>
+    <div class="q" data-p="디자인"><b>디자인</b><span>레퍼런스 사이트 10곳 캡처해서 무드보드 만들어 줘</span></div>
+    <div class="q" data-p="인사"><b>인사</b><span>이번 달 입사자 온보딩 일정표 만들고 캘린더 초대 보내 줘</span></div>
+    <div class="q" data-p="재무"><b>재무</b><span>거래처별 미수금 정리해서 독촉 메일 초안 써 줘</span></div>
+  </div>
+
+  <!-- 손 -->
+  <span class="click" id="click"></span>
+  <svg class="cursor" id="cursor" width="40" height="40" viewBox="0 0 24 24"><path d="M5 3l14 8-6.2 1.6L10 19z" fill="#15233B" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+
+  <!-- 자막 -->
+  <p class="cap" id="s0">먼저 왼쪽 사이드바부터 볼게요.</p>
+  <p class="cap" id="s1">맨 위에서는 일할 워크스페이스를 고릅니다.</p>
+  <p class="cap" id="s2">그 아래 두 칸은 늘 고정된 앱, 홈과 수집 · 증류입니다.</p>
+  <p class="cap" id="s3">다른 앱을 열면, 선 아래에 최근 연 앱이 쌓이고,</p>
+  <p class="cap" id="s4">맨 아래에는 모든 앱을 여는 앱 칸과, 내 프로필 · 환경설정이 있습니다.</p>
+  <p class="cap" id="h0">이제 홈에서 AI에게 일을 시켜 볼게요.</p>
+  <p class="cap" id="c6a">프로젝트는 비워 둬도, 시킨 말로 이름이 지어져 저절로 생깁니다.</p>
+  <p class="cap" id="c6b">이어지는 일이면 선행 프로젝트를 고르세요. 지난 일의 지식을 이어받습니다.</p>
+  <p class="cap" id="c6">그리고 평소 말하듯 시키면 됩니다.</p>
+  <p class="cap" id="c7">AI가 내 일의 맥락을 먼저 읽고 답합니다.</p>
+  <p class="cap" id="c9">우측 사이드바를 열면, 이런 것도 할 수 있어요.</p>
+  <p class="cap" id="c10">할 일을 미리 적어 두면, AI가 하나씩 끝내며 체크도 하고요.</p>
+  <p class="cap" id="c11">대화하며 만든 파일, 내가 올린 파일, AI가 참고한 파일도 여기서 다 보여요.</p>
+  <p class="cap" id="c12">AI가 직접 쓰는 웹 브라우저도 있어요.</p>
+  <p class="cap" id="c14">웹에서 하는 일도 말로 시키면 되고,</p>
+  <p class="cap" id="c15">로그인만 해 두면, 메일을 써서 보내는 것까지 AI가 해요.</p>
+  <p class="cap" id="c16">이런 일도 다 시킬 수 있습니다.</p>
+  <p class="cap" id="c17">웹을 오가고, 파일을 만들고, 앱을 넘나드는 일까지요.</p>
+  <p class="cap" id="c8">나머지 앱은 여기에 모여 있습니다.</p>
+
+  <!-- 맺음 -->
+  <section id="end">
+    <div class="logo"><span class="dot"></span><span class="wm">Lively</span></div>
+    <p class="endline" id="endLine">이제 시작해 볼까요.</p>
+  </section>
+
+</div>
+</div>
+
+<!-- 미리 보기 조작 — 굽는 쪽(?render)에서는 숨는다 -->
+<div id="hud"><button id="hudPlay">⏯</button><input id="hudBar" type="range" min="0" max="1000" value="0"><span id="hudT">0.00</span></div>
+<script type="module" src="tour.js"></script>
+</body>
+</html>
