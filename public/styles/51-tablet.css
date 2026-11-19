@@ -13,7 +13,7 @@
 @supports (height: 100dvh) {
   @media (min-width: 901px) {
     body[data-ui="v2"], body[data-ui="v2"] #app { height: 100dvh; }
-    #v2-root:not(.v2-relay-landing) { height: 100dvh; }
+    #v2-root:not(.v2-relay-landing) { height: calc(100dvh - var(--v2-pv-h, 0px)); }   /* --v2-pv-h: 미리보기 띠(#5581, 40-v2.css) */
   }
 }
 

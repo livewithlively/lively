@@ -34,7 +34,7 @@ body[data-ui="v2"] { height: 100vh; overflow: hidden; margin: 0; }
 body[data-ui="v2"] #app { display: block !important; height: 100vh; }
 body[data-ui="v2"] #org-banner, body[data-ui="v2"] #desktop-update, body[data-ui="v2"] header.topbar, body[data-ui="v2"] main#view, body[data-ui="v2"] footer.app-foot, body[data-ui="v2"] #skip-link { display: none !important; }
 /* 세 칸 + 사이 손잡이 둘(v2/split.ts) — 너비는 변수, 손잡이가 바꾼다(기억됨). no-aside 면 우패널·그 손잡이는 0. */
-#v2-root { --v2-side-w: 316px; --v2-aside-w: 316px; height: 100vh; display: grid; grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); background: var(--bg); color: var(--ink); }
+#v2-root { --v2-side-w: 316px; --v2-aside-w: 316px; height: calc(100vh - var(--v2-pv-h, 0px)); display: grid; grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); background: var(--bg); color: var(--ink); }
 #v2-root.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
 #v2-root.no-aside .v2-aside { display: none; }
 #v2-root.no-aside > .v2-split-x + .v2-main + .v2-split-x { display: none; }
@@ -2380,7 +2380,7 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
   #v2-root:not(.no-aside) .v2-tl-btn, #v2-root.no-tl .v2-tl-btn { display: none; }
   #v2-root.no-aside:not(.no-tl) .v2-tabs { padding-right: 112px; }   /* 탭도 [모든 탭] 끝막이도 서랍 버튼 밑으로 안 숨게 */
   #v2-root.d-aside .v2-tl-btn { color: var(--ink); background: var(--canvas); }
-  #v2-root.d-aside .v2-aside { display: flex; position: fixed; top: 44px; right: 10px; bottom: 10px; z-index: 45;
+  #v2-root.d-aside .v2-aside { display: flex; position: fixed; top: calc(44px + var(--v2-pv-h, 0px)); right: 10px; bottom: 10px; z-index: 45;
     width: clamp(300px, var(--v2-aside-w, 316px), 420px); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
     background: var(--bg); box-shadow: 0 24px 64px rgba(var(--shadow-ink), .22), 0 4px 14px rgba(var(--shadow-ink), .10);
     animation: v2-drawer-in .18s ease; }
@@ -2454,7 +2454,7 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 @media (max-width: 900px) {
   /* 뿌리 — 100dvh: iOS 사파리 주소창이 접히고 펴져도 입력칸이 화면 밖으로 안 밀린다(100vh 는 주소창을 포함한 높이). */
   body[data-ui="v2"], body[data-ui="v2"] #app { height: 100dvh; }
-  #v2-root, #v2-root.no-aside { display: flex; flex-direction: column; height: 100dvh; grid-template-columns: none; }
+  #v2-root, #v2-root.no-aside { display: flex; flex-direction: column; height: calc(100dvh - var(--v2-pv-h, 0px)); grid-template-columns: none; }   /* --v2-pv-h: 미리보기 띠(#5581) */
   #v2-root > .v2-split-x { display: none; }
   .v2-main { flex: 1; min-height: 0; }
   /* 상단 바 — [☰] [현재 앱 이름] [타임라인]. 상태 표시줄(노치) 아래로 내려앉는다(viewport-fit=cover 일 때만 값이 있다). */
@@ -3582,4 +3582,27 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 /* 폰 — 아래 탭 바(50-mobile.css .v2-mtabs · 56px)를 덮지 않게 그 위에 뜬다. 막대는 몸(body)에 붙어 #v2-root 의 --v2-mtabs-h 를 못 받아 값을 그대로 쓴다. */
 @media (max-width: 640px) {
   .v2-review-bar:not(.v2-review-bar--dock):not(.v2-review-bar--top) { bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 8px); }
+}
+
+/* ── 미리보기 안 표시 · [워크스페이스로 돌아가기] (#5581, web/v2/preview-strip.ts) ─────────────────────────────
+   브라우저: 창 맨 위 띠(#v2-root 바로 앞). 본문을 덮지 않고 --v2-pv-h 만큼 #v2-root 높이를 줄여 밀어 내린다.
+   데스크톱 앱: 타이틀바 줄(.v2-topbar) 안의 알약. 그 줄은 창 끌기 자리라 알약은 no-drag 로 되돌린다(누르는 것만 no-drag 규칙).
+   색은 경고 계열 — 앱의 파랑·민트와 확실히 달라야 «여기는 다른 곳» 이 한눈에 읽힌다(어두운 판은 90-dark.css 의 같은 토큰). */
+html.v2-pv-on { --v2-pv-h: calc(34px + env(safe-area-inset-top, 0px)); }
+.v2-pvstrip { display: flex; align-items: center; gap: 8px; height: var(--v2-pv-h); box-sizing: border-box; min-width: 0;
+  padding: env(safe-area-inset-top, 0px) 8px 0 12px; background: var(--warn-bg); color: var(--warn-ink);
+  border-bottom: 1px solid var(--warn-line, var(--line)); font-size: 13px; line-height: 1; }
+.v2-pv-tag { flex: none; padding: 4px 8px; border-radius: 999px; background: var(--warn); color: #2B1D00; font-size: 12px; font-weight: 700; letter-spacing: .01em; }
+.v2-pv-id { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; opacity: .8; }
+.v2-pv-back { flex: none; margin-left: auto; height: 26px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--warn-line, var(--line));
+  background: var(--bg); color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.v2-pv-back:hover { border-color: var(--warn); }
+.v2-pv-back:focus-visible { outline: 2px solid var(--warn); outline-offset: 1px; }
+#v2-root.has-topbar > .v2-topbar > .v2-pv-chip { flex: none; align-self: center; display: flex; align-items: center; gap: 6px; margin: 0 6px;
+  padding: 2px 2px 2px 3px; border-radius: 999px; background: var(--warn-bg); border: 1px solid var(--warn-line, var(--line)); -webkit-app-region: no-drag; }
+.v2-pv-chip .v2-pv-tag { padding: 3px 8px; }
+.v2-pv-chip .v2-pv-back { height: 22px; padding: 0 10px; margin-left: 0; border-radius: 999px; font-size: 12.5px; }
+@media (max-width: 640px) {
+  .v2-pv-id { display: none; }
+  .v2-pv-back { margin-left: auto; }
 }

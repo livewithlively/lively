@@ -176,7 +176,7 @@
      민낯은 «가운데 한 칸» 이라 애초에 그리드가 필요 없다. display:block 이면 숨긴 형제는 그대로 빠지고
      본문만 폭을 다 쓴다 — 셸이 열을 어떻게 바꾸든 무관해진다. */
 #v2-root.ob-bare.has-topbar, #v2-root.ob-bare { display: block; padding-left: 0; }
-#v2-root.ob-bare > .v2-main { width: 100%; height: 100vh; }
+#v2-root.ob-bare > .v2-main { width: 100%; height: calc(100vh - var(--v2-pv-h, 0px)); }   /* --v2-pv-h: 미리보기 띠(#5581) */
 #v2-root.ob-bare .v2-side, #v2-root.ob-bare > .v2-split-x, #v2-root.ob-bare .v2-tabs, #v2-root.ob-bare .v2-tl-btn,
 #v2-root.ob-bare > .v2-rail,
 /* 맨 윗줄(뒤로·앞으로·검색·레일 토글)은 **사이드바 밖**에 산다 — 브라우저는 .v2-topbar, 데스크톱은 창 제목줄

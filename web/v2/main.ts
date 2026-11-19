@@ -14,6 +14,7 @@ import { resumeSetupWatch } from './setup-watch.js'; // #5167 처음 설정 뒤 
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
 import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
+import { mountPreviewStrip } from './preview-strip.js';   // #5581 미리보기 안 표시 · 워크스페이스로 돌아가기
 import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
@@ -591,6 +592,8 @@ export async function bootV2(): Promise<void> {
       webTopbar.append(mobile.asideBtn);
     }
     if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
+    //  #5581 — 미리보기 안이면 «미리보기» 표시와 [워크스페이스로 돌아가기]. 브라우저는 창 맨 위 띠, 데스크톱 앱은 타이틀바 줄 안의 알약(preview-strip.ts).
+    mountPreviewStrip({ root, titlebarHost: titlebar ? titlebar.host : null, embedded: EMBEDDED, solo: SOLO });
     //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
     //   상태로 길이 조절 정도로 고정"). 종전엔 사이드바를 통째로 접었는데(`side-off`), 그러면 목록이 사라져
     //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
