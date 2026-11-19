@@ -15,11 +15,11 @@ export type WriteCtx = { actor?: string | null; source?: string; reason?: string
 //  keyCol 로 존재검사(이미 있으면 거부=복원 대상 아님), cols 순서로 placeholder INSERT, RETURNING 으로 after 반환.
 //  감사(entity_key 도출이 엔티티마다 다름)는 호출자가 after 로 수행. 구 restoreKnowledge/Category/Project 동형 추출.
 export async function restoreSnapshot<T>(
-  table: string, cols: string, keyCol: string, before: Record<string, unknown>,
+  table: string, cols: string, keyCol: string, before: Record<string, unknown>, db: pg.Pool | pg.PoolClient = itemsPool,
 ): Promise<T> {
   const keyVal = before[keyCol];
   if (keyVal == null) throw new Error(`복원 스냅샷에 ${keyCol} 이(가) 없습니다`);
-  if (await one(itemsPool, `SELECT 1 FROM ${table} WHERE ${keyCol}=$1`, [keyVal])) {
+  if (await one(db, `SELECT 1 FROM ${table} WHERE ${keyCol}=$1`, [keyVal])) {
     throw new Error(`${table} ${keyCol}=${String(keyVal)} 은(는) 이미 존재합니다(삭제 상태가 아님)`);
   }
   // 스냅샷에 **있는 키만** INSERT — cols 가 나중에 늘어나면(예: #592 knowledge.is_folder, category.view_mode)
@@ -28,7 +28,7 @@ export async function restoreSnapshot<T>(
   const colList = cols.split(",").map((c) => c.trim()).filter((c) => c in before);
   const placeholders = colList.map((_, i) => `$${i + 1}`).join(", ");
   const values = colList.map((c) => before[c] ?? null);
-  return one(itemsPool,
+  return one(db,
     `INSERT INTO ${table}(${colList.join(", ")}) VALUES(${placeholders}) RETURNING ${cols}`, values) as Promise<T>;
 }
 

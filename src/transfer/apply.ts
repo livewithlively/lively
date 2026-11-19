@@ -256,7 +256,9 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
         is_folder: k.is_folder,
         parent_name: parentLocal && (written.has(k.parent!) || target.names.has(parentLocal)) ? parentLocal : null,
         sort: k.sort,
-        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? undefined) : undefined,
+        //  덮어쓰기는 꾸러미를 따른다 — 꾸러미에 값이 없거나 대상에서 그 이름을 못 찾으면 null(비움). undefined 는 저장에서
+        //   «기존 값 유지» 라, 쓰면 꾸러미와 무관한 옛 포인터가 남는다.
+        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? null) : null,
       };
       const wantFields: Record<string, unknown> = { ...k.fields };
       if (k.provenance === "observed" && k.external_url) wantFields[ORIGIN_URL_FIELD] = k.external_url;
@@ -437,7 +439,7 @@ export async function undoImport(batchId: number, ctx: WriteCtx): Promise<{ batc
           await upsertKnowledge({
             name: b.name, title: b.title ?? undefined, body_md: b.body_md, type: b.type ?? undefined, category: b.category ?? undefined,
             provenance: b.provenance, summary: b.summary, searchable: b.searchable, is_folder: b.is_folder, parent_name: b.parent_name,
-            sort: b.sort, supersedes: b.supersedes ?? undefined,
+            sort: b.sort, supersedes: b.supersedes,
           }, ctx);
           const cur = await snapshot(b.name);
           await setFieldsExactly(b.name, b.fields, cur?.fields ?? {}, ctx);
