@@ -139,3 +139,13 @@ export async function commitExists(cloneDir: string, sha: string, opts: GitOpts)
   try { await git(["-C", cloneDir, "cat-file", "-e", `${sha}^{commit}`], undefined, undefined, opts); return true; }
   catch { return false; }
 }
+
+// isAncestor for decisions that must not fail open: only git's "not an ancestor" answer (exit 1) is false;
+// any other failure (unknown ref, timeout, broken clone) throws, so the caller can refuse instead of guessing.
+export async function isAncestorStrict(cloneDir: string, ancestor: string, descendant: string, opts: GitOpts): Promise<boolean> {
+  try { await git(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], undefined, undefined, opts); return true; }
+  catch (e) {
+    if ((e as { code?: unknown })?.code === 1) return false;
+    throw e;
+  }
+}

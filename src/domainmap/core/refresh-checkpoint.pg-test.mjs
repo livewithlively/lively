@@ -20,6 +20,8 @@
 //      (웹훅이 멈추지 않는다) · 응답 문구로 원인을 가른다
 //   G7 브랜치를 되감은 push 는 「이미 적용」이 아니다 — 체크포인트..after 를 거꾸로 적용해 모듈 이름 변경도 되돌린다
 //   G8 체크포인트를 쓸 수 없을 때 브랜치 끝이 아닌 옛 push 의 재전송은 재기준하지 않는다(뒤로 가지 않는다)
+//   G9 되감기로 체크포인트가 브랜치 밖인데 push 가 브랜치 끝이 아니면 적용하지 않는다(브랜치에 없는 상태로 옮기지 않는다)
+//   G10 판정용 git 조회가 실패하면(브랜치 ref 없음) 503 으로 끊고 체크포인트를 쓰지 않는다 — 에러를 「아님」으로 읽지 않는다
 import pg from "pg";
 import http from "node:http";
 import express from "express";
@@ -223,11 +225,11 @@ try {
   server = http.createServer(app);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const port = server.address().port;
-  const push = async (before, after) => {
+  const push = async (before, after, branch = "main") => {
     const res = await fetch(`http://127.0.0.1:${port}/api/webhook/gitlab`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-gitlab-token": process.env.WEBHOOK_SECRET },
-      body: JSON.stringify({ object_kind: "push", ref: "refs/heads/main", before, after, project: { path_with_namespace: `grp/${GR}`, name: GR } }),
+      body: JSON.stringify({ object_kind: "push", ref: `refs/heads/${branch}`, before, after, project: { path_with_namespace: `grp/${GR}`, name: GR } }),
     });
     return { status: res.status, body: await res.json() };
   };
@@ -348,6 +350,37 @@ try {
     chk("G8 체크포인트·모듈을 쓰지 않았다", (await checkpointOf(GR)) === sha("e") && (await unit(gId, "src/late")) === null);
     const r2 = await push(n1, n2);
     chk("G8 브랜치 끝 push 는 재기준한다", !r2.body.ignored && (await checkpointOf(GR)) === n2, JSON.stringify(r2));
+  });
+  await section("G9", async () => {
+    const n2 = await checkpointOf(GR);
+    put("src/m/x.ts", "m\n");
+    const m1 = commit("m1", "2026-04-14T00:00:00Z");
+    const r0 = await push(n2, m1);
+    chk("G9 전제 — m1 반영", !r0.body.ignored && (await checkpointOf(GR)) === m1, JSON.stringify(r0));
+    g(["reset", "-q", "--hard", n2]);
+    put("src/v/b.ts", "4\n");
+    const m2 = commit("m2", "2026-04-15T00:00:00Z");
+    // 브랜치 끝은 m2, 체크포인트 m1 은 브랜치 밖. 옛 push(…→n2)가 다시 배달됐다.
+    const r = await push(n2, n2);
+    chk("G9 브랜치 밖 체크포인트 + 브랜치 끝 아닌 push → 적용하지 않는다",
+      r.status === 200 && /off the branch/.test(r.body.ignored ?? ""), JSON.stringify(r));
+    chk("G9 체크포인트 그대로", (await checkpointOf(GR)) === m1);
+    const r2 = await push(n2, m2);
+    chk("G9 브랜치 끝 push 는 체크포인트..after 로 적용", !r2.body.ignored && r2.body.base === m1 && (await checkpointOf(GR)) === m2, JSON.stringify(r2));
+  });
+
+  await section("G10", async () => {
+    const cp = await checkpointOf(GR);
+    const older = execFileSync("git", ["-C", ORIGIN, "rev-parse", "HEAD~1"], { encoding: "utf8" }).trim();
+    // 클론에 없는 브랜치를 기본 브랜치로 둔다 — origin/<그 이름> 조회가 git 오류를 낸다.
+    await q(`UPDATE repo SET default_branch='ghost-branch' WHERE name=$1`, [GR]);
+    try {
+      const r = await push(older, older, "ghost-branch");
+      chk("G10 판정 실패는 503", r.status === 503, JSON.stringify(r));
+      chk("G10 체크포인트를 쓰지 않았다", (await checkpointOf(GR)) === cp);
+    } finally {
+      await q(`UPDATE repo SET default_branch='main' WHERE name=$1`, [GR]);
+    }
   });
 } catch (e) {
   fail++; console.error("FAIL 예외", e);

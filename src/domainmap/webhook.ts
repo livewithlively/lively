@@ -11,7 +11,7 @@ import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import { isAuthError, describeGitError, hostOf } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, commitTime, isAncestor, commitExists } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, commitTime, isAncestorStrict, commitExists } from "./git-sync.js";
 
 // sanitizeName 은 구 webhook.ts 표면(테스트·소비자) — 구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
 export { sanitizeName };
@@ -190,9 +190,15 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
     );
     return r.skipped ? { kind: "skipped", checkpoint: r.skipped.checkpoint } : { kind: "applied", tally: r.tally, changes: changes.length };
   };
-  const isTip = async (sha: string): Promise<boolean> => {
-    try { return (await git(["-C", cloneDir, "rev-parse", tipRef])).stdout.trim() === sha; } catch { return false; }
+  // The decisions below (already applied? branch tip? checkpoint still on the branch?) guard writes that
+  // cannot be undone by a later push, so they must not fail open: a git error answers 503 and leaves the
+  // retry to the provider's redelivery rather than reading the error as "no".
+  const gitCheck = async <T>(fn: () => Promise<T>): Promise<T> => {
+    try { return await fn(); } catch { throw httpErr(503, "git ancestry check failed, retry later"); }
   };
+  const isTip = (sha: string): Promise<boolean> =>
+    gitCheck(async () => (await git(["-C", cloneDir, "rev-parse", "--verify", `${tipRef}^{commit}`])).stdout.trim() === sha);
+  const ancestor = (a: string, d: string): Promise<boolean> => gitCheck(() => isAncestorStrict(cloneDir, a, d, opts));
   // note 가 undefined 면 JSON 직렬화에서 키 생략 — 구 응답과 동일.
   const done = (o: Outcome, base: string, note?: string): void => {
     if (o.kind === "applied") { res.status(200).json({ tally: o.tally, base, head: after, changes: o.changes, note }); return; }
@@ -204,12 +210,20 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
     res.status(200).json({ ignored: "checkpoint moved concurrently, will resync", base, head: after, checkpoint: o.checkpoint });
   };
 
+  // before/after may not be in the local clone yet (force-push / stale). Don't 5xx (provider retry
+  // storms) — ack and let the next push / scheduled refresh reconcile.
+  if (!(await commitExists(cloneDir, after, opts))) {
+    res.status(200).json({ ignored: "sha not in clone yet, will resync", head: after }); return;
+  }
+
   // Checkpoint the units cannot be diffed from: not a sha, or not a commit in the clone (history rewrite,
   // a sha set by hand). refresh() refuses any other base, and the scheduled refresh_all — the only other
   // path that re-baselines — may be disabled, so the webhook would stall for good. Re-baseline from the
   // push's own range instead; whatever happened between the checkpoint and `before` is lost either way.
   // Only for a push whose `after` is the fetched branch tip: a re-baseline writes unconditionally, so a
-  // redelivered old push would otherwise move the units and the checkpoint backwards.
+  // redelivered old push would otherwise move the units and the checkpoint backwards. A non-tip push is
+  // acked with 200 and recovery waits for the next push at the tip or refresh_all (which re-baselines an
+  // unusable checkpoint) — with refresh_all disabled and no further push the units stay behind.
   if (stored && (!SHA_RE.test(stored) || !(await commitExists(cloneDir, stored, opts)))) {
     const why = SHA_RE.test(stored) ? "checkpoint not in clone" : "checkpoint is not a sha";
     if (!before) { res.status(200).json({ ignored: `${why} and no usable push base`, head: after }); return; }
@@ -227,13 +241,19 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   // two. A push at or behind a checkpoint that is still on the branch (out-of-order delivery, redelivery)
   // is already applied — diffing checkpoint..after would walk the units backwards. A checkpoint the
   // branch no longer contains means the branch was rewound or rewritten, and checkpoint..after is
-  // exactly the change to apply (backwards included). If a concurrent refresh moves the checkpoint
+  // exactly the change to apply (backwards included) — but only when `after` is the branch tip; otherwise
+  // the target is a state the branch no longer has either, so it is acked and left to the next push at
+  // the tip or refresh_all (same stall condition as above). If a concurrent refresh moves the checkpoint
   // (two pushes in quick succession), re-diff once from the checkpoint it left; a second miss is left to
   // the next push / refresh_all.
   let cp = stored;
   for (let attempt = 0; ; attempt++) {
-    if (await isAncestor(cloneDir, after, cp, opts) && await isAncestor(cloneDir, cp, tipRef, opts)) {
+    const cpOnBranch = await ancestor(cp, tipRef);
+    if (cpOnBranch && await ancestor(after, cp)) {
       res.status(200).json({ ignored: "already applied (checkpoint at or past this push)", base: cp, head: after }); return;
+    }
+    if (!cpOnBranch && !(await isTip(after))) {
+      res.status(200).json({ ignored: "checkpoint is off the branch and push is not the branch tip, will resync", base: cp, head: after }); return;
     }
     const o = await apply(cp, cp);
     if (o.kind === "skipped" && attempt === 0) { cp = o.checkpoint; continue; }
