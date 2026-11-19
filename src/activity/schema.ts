@@ -100,4 +100,26 @@ export async function initActivitySchema(): Promise<void> {
   // change_log.activity_id — 이 변경을 유발한 작업 귀속(누가/왜). FK 없이 plain INT(change_log 의
   //  (entity_type,entity_id) FK-less 관성 유지 — 과거 project 감사행도 NULL 로 안전).
   await pool.query(`ALTER TABLE change_log ADD COLUMN IF NOT EXISTS activity_id INT;`);
+  // 커밋 작업 기록 → activity_touch 유도(activity/derive-touches.ts).
+  //  derived — 유도로 넣은 touch. 호출자가 넘긴 touch 는 작업 기록 갱신 때도 더해질 수 있어 상태 행의 유무로는 둘을 못 가른다.
+  //   sha·레포가 바뀌면 유도 touch 만 지우고 호출자 touch 는 남겨야 한다.
+  await pool.query(`ALTER TABLE activity_touch ADD COLUMN IF NOT EXISTS derived BOOLEAN NOT NULL DEFAULT false;`);
+  //  상태 표 — 쓰는 것은 유도 워커뿐이다. 작업 기록 저장과 도메인맵 refresh 트랜잭션은 이 표를 건드리지 않는다
+  //   (사용자의 activity_log 호출이 유도 때문에 기다리거나 교착에 말려들지 않게). 전이 규칙은 derive-touches.ts 머리말.
+  //   repo_id 에 FK 를 두지 않는다 — 레포 행이 지워져도 상태 이력은 남고, 유도는 failed 로 끝난다.
+  await pool.query(`
+  CREATE TABLE IF NOT EXISTS activity_touch_derive(
+    activity_id INT PRIMARY KEY REFERENCES activity(id) ON DELETE CASCADE,
+    commit_sha TEXT,
+    repo_id INT,
+    enqueued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    attempted_at TIMESTAMPTZ,
+    status TEXT NOT NULL,
+    changed_files INT,
+    unmatched_files INT,
+    error TEXT,
+    CONSTRAINT activity_touch_derive_status_chk
+      CHECK (status IN ('pending','running','ok','empty','failed','expired','no_repo','no_units')));
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS activity_touch_derive_status_idx ON activity_touch_derive(status, activity_id);`);
 }

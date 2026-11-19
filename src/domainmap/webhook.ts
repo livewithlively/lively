@@ -11,7 +11,7 @@ import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import { isAuthError, describeGitError, hostOf } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, CloneBusyError } from "./git-sync.js";
 
 // sanitizeName 은 구 webhook.ts 표면(테스트·소비자) — 구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
 export { sanitizeName };
@@ -153,7 +153,14 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   if (!repo.git_url) { res.status(200).json({ ignored: "no git_url configured" }); return; }
 
   // Sync the local clone, then diff before..after.
-  const cloneDir = await ensureClone(repo.name, repo.git_url);
+  //  Another fetch holds the clone lock → ack 200 and skip: a 5xx can make the provider disable the hook, and the next
+  //  push or git-pull tick refreshes from the checkpoint anyway.
+  let cloneDir: string;
+  try { cloneDir = await ensureClone(repo.name, repo.git_url); }
+  catch (e) {
+    if (e instanceof CloneBusyError) { res.status(200).json({ ignored: "clone busy, will resync" }); return; }
+    throw e;
+  }
 
   // Validate SHAs BEFORE handing to git (defense-in-depth; argv already prevents
   // shell injection, but garbage refs must not reach git as a range).

@@ -155,10 +155,10 @@ const announcementSafe = (v: unknown): UiAnnouncement | null => {
     tone: a.tone === "warn" ? "warn" : "info",
   };
 };
-export interface OntologyLoops { l2_autoresolve: boolean }
+export interface OntologyLoops { l2_autoresolve: boolean; l3_derive: boolean }
 export const ontologyLoopsSafe = (v: unknown): OntologyLoops => {
   const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
-  return { l2_autoresolve: o.l2_autoresolve === true };
+  return { l2_autoresolve: o.l2_autoresolve === true, l3_derive: o.l3_derive === true };
 };
 const uiProfileSafe = (v: unknown): UiProfile => (v === "personal" ? "personal" : "full");
 const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
