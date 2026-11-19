@@ -126,7 +126,7 @@ export const orgContentCapabilities: Capability[] = [
   //  D-GT: 분류기준·저장방식·전달방식·소스별 수집방식의 단일 출처. 읽기전용(scope null = 인증만), REST 전용.
   //  런북(build-classify-runbook.mjs)과 동일 데이터(learnGroundTruth) → 양 표면 non-stale 일관.
   restRead("learn", "지식유형/수집 안내",
-    "통합 지식스토어가 분류하는 12개 지식 종류(정의·분류기준·저장방식·전달방식)와 데이터소스별 수집방식을 ground-truth(kind_registry·data_source)에서 그대로 반환한다(비개발자 학습 화면 #/learn).",
+    "맥락이 저장되는 자리(kind R·K·H·W — 정의·분류기준·저장방식·전달방식)와 데이터소스별 수집방식을 ground-truth(kind_registry·data_source)에서 그대로 반환한다(비개발자 학습 화면 #/learn). 지식 자체의 분류는 kind 가 아니라 type(knowledge_save 의 type)이다.",
     [{ method: "GET", paths: ["/api/ui/learn"], parse: () => ({}) }],
     async () => learnGroundTruth()),
 
