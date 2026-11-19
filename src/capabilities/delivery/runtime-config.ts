@@ -727,7 +727,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
       allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
       allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
-      allowed_db_secret_refs: z.array(z.string()).optional().describe(`db 소스 auth_ref 가 참조 가능한 비번 참조 화이트리스트(값 아님) — ${SECRET_REF_FORMS}`),
+      allowed_db_secret_refs: z.array(z.string()).optional().describe(`db 소스 auth_ref 가 참조 가능한 비번 참조 화이트리스트(값 아님) — ${SECRET_REF_FORMS}. 여기 적은 비밀은 등록한 DB 접속에 비밀번호로 쓰이니 DB 비밀번호 참조만 적는다(비밀이 나가는 경계)`),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
       pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
       session_share: z.object({

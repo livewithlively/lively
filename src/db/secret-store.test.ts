@@ -8,8 +8,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { logger } from "../log.js";
 import {
-  readDbSecret, forgetDbSecret, interpretSecretValue, DbSecretError, __setSecretStoreDepsForTest,
-  SECRET_TTL_MS, SECRET_MAX_STALE_MS, type DbSecretReason, type SecretStoreDeps,
+  readDbSecret, forgetDbSecret, interpretSecretValue, DbSecretError, __setSecretStoreDepsForTest, secretVersion,
+  SECRET_TTL_MS, SECRET_MAX_STALE_MS, SECRET_STALE_RETRY_MS, type DbSecretReason, type SecretStoreDeps,
 } from "./secret-store.js";
 
 const MARKER = "pw-MARKER-7f3a"; // 시크릿 값 — 로그 · 오류 문장 어디에도 나오면 안 된다
@@ -82,7 +82,9 @@ const awsFetch = (async (input: string | URL | Request, init?: RequestInit): Pro
 let awsCreds: (() => Promise<{ accessKeyId: string; secretAccessKey: string } | null>) = async () => ({ accessKeyId: "AKIDTEST", secretAccessKey: "test-secret-key" });
 
 let clock = 1_000_000;
+let metaBase = ""; // 메타데이터 주소 — 시험 중간에 서버가 사라지는 경우를 기억을 지우지 않고 흉내 낸다
 const setup = (over: Partial<SecretStoreDeps> = {}): void => {
+  metaBase = meta.base;
   meta.reset(TOKEN_OK);
   sm.reset(smValue(MARKER));
   awsCalls = [];
@@ -91,7 +93,7 @@ const setup = (over: Partial<SecretStoreDeps> = {}): void => {
   clock = 1_000_000;
   __setSecretStoreDepsForTest({
     now: () => clock,
-    gcpMetadataBase: () => meta.base,
+    gcpMetadataBase: () => metaBase,
     gcpSecretManagerBase: `${sm.base}/v1`,
     retryDelayMs: 0,
     aws: { fetch: awsFetch, creds: () => awsCreds(), now: () => new Date("2026-11-19T00:00:00Z"), retryDelayMs: 0 },
@@ -327,6 +329,59 @@ t("기억: 값이 바뀌면 «교체» 를 로그에 남긴다(값 없이)", asy
   const before = logs.length;
   await readDbSecret(GREF, { fresh: true });
   assert.ok(logs.slice(before).some((l) => l.includes("바뀌었다")), "교체 로그가 없다");
+});
+
+t("값 판 번호: 첫 읽기 1 · 같은 값 다시 읽기는 그대로 · 바뀌면 오른다", async () => {
+  setup();
+  assert.equal(secretVersion(GREF), 0);
+  await readDbSecret(GREF);
+  assert.equal(secretVersion(GREF), 1);
+  await readDbSecret(GREF, { fresh: true });
+  assert.equal(secretVersion(GREF), 1, "같은 값인데 판 번호가 올랐다");
+  sm.reset(smValue(MARKER + "-2"));
+  await readDbSecret(GREF, { fresh: true });
+  assert.equal(secretVersion(GREF), 2);
+});
+t("기억: 옛 값으로 버틴 뒤 30초는 저장소에 다시 묻지 않고, 지나면 다시 묻는다", async () => {
+  setup();
+  await readDbSecret(GREF);
+  clock += SECRET_TTL_MS;
+  sm.reset({ status: 503, text: "x" });
+  await readDbSecret(GREF); // 버틴다(세 번 시도)
+  assert.equal(sm.calls.length, 3);
+  clock += SECRET_STALE_RETRY_MS - 1;
+  assert.deepEqual(await readDbSecret(GREF), { password: MARKER });
+  assert.equal(sm.calls.length, 3, "버티는 중인데 새 연결마다 저장소를 다시 기다렸다");
+  clock += 1;
+  assert.deepEqual(await readDbSecret(GREF), { password: MARKER });
+  assert.equal(sm.calls.length, 6, "30초가 지났는데 다시 묻지 않았다");
+});
+t("GCP: 한 번 답한 메타데이터 서버의 일시 장애는 «자격 없음» 이 아니라 일시 오류 — 기억한 값으로 버틴다", async () => {
+  setup();
+  meta.reset({ ...TOKEN_OK, json: { access_token: "tok-1", expires_in: 600, token_type: "Bearer" } });
+  await readDbSecret(GREF); // 메타데이터 서버가 답했다
+  clock += 600_000; // 토큰도 기억도 지났다(1시간 안)
+  metaBase = CLOSED_BASE;
+  assert.deepEqual(await readDbSecret(GREF), { password: MARKER });
+  const r = await reasonOf(readDbSecret(GREF, { fresh: true })); // fresh 는 버티지 않는다 — 까닭을 본다
+  assert.equal(r.reason, "unavailable");
+});
+t("기억: fresh 읽기는 옛 값으로 버틸 수 있는 보통 읽기에 합류하지 않는다", async () => {
+  setup();
+  await readDbSecret(GREF);
+  clock += SECRET_TTL_MS;
+  sm.reset({ status: 503, text: "x", delayMs: 20 });
+  const a = readDbSecret(GREF); // 보통 읽기 — 버틸 것이다
+  const b = reasonOf(readDbSecret(GREF, { fresh: true })); // 같은 때의 fresh — 옛 값을 «새로 읽은 값» 으로 받으면 안 된다
+  assert.deepEqual(await a, { password: MARKER });
+  assert.equal((await b).reason, "unavailable");
+});
+t("GCP: 함께 기다린 토큰 받기가 실패하면 각자의 참조로 오류를 낸다", async () => {
+  setup({ gcpMetadataBase: () => CLOSED_BASE });
+  const other = "gcp-sm:my-project/other";
+  const [r1, r2] = await Promise.all([reasonOf(readDbSecret(GREF)), reasonOf(readDbSecret(other))]);
+  assert.ok(r1.message.includes(`(${GREF})`), r1.message);
+  assert.ok(r2.message.includes(`(${other})`), r2.message);
 });
 
 // ── B · D. AWS ──

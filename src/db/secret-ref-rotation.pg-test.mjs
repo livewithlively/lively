@@ -8,7 +8,7 @@
 //   R0 허용 목록에 없는 참조는 접속 단계에서도 막히고 저장소를 부르지 않는다
 //   R1 등록 즉시(재시작 없이) 저장소 참조로 접속된다
 //   R2 DB 비밀번호와 시크릿을 함께 바꾸면, 풀을 지우지 않은 채 다음 새 연결이 다시 읽어 붙는다(기존 연결도 산다)
-//   R3 시크릿과 DB 가 어긋나면 «다시 읽어 한 번 더 … 또 실패» 와 원래 SQLSTATE
+//   R3 시크릿과 DB 가 어긋나면(다시 읽어도 같은 값) 다시 붙지 않고 «값이 그대로» 와 원래 SQLSTATE
 //   R4 다시 읽기가 막히면(범위 부족) 그 까닭이 소스 이름과 함께 나온다
 //   R5 주소에 사용자 이름이 없으면 시크릿 JSON 의 username 으로 붙는다
 //   R6 등록 도구 · 런타임 설정 도구가 저장소 참조를 받고, 형식 오류 · 허용 목록 밖은 막는다(어느 꼴도 아닌 값은 되싣지 않는다)
@@ -166,7 +166,8 @@ try {
     await setPw(ROLE, "pw-C"); // 시크릿은 pw-B 그대로
     const b = smCalls;
     const e = await errOf(pool.query("SELECT 1"));
-    chk("R3 어긋나면 «다시 읽어 한 번 더 … 또 실패» 와 원래 SQLSTATE", /또 실패/.test(e?.message ?? "") && e?.code === "28P01", `${e?.code} ${e?.message}`);
+    // 다시 읽어도 시크릿이 그대로라 다시 붙지 않는다(실패 로그인을 늘리지 않는다 — 격리 리뷰 지적 1).
+    chk("R3 어긋나면 «값이 그대로라 다시 붙지 않았다» 와 원래 SQLSTATE", /값이 그대로/.test(e?.message ?? "") && e?.code === "28P01", `${e?.code} ${e?.message}`);
     chk("R3 다시 읽기는 한 번", smCalls === b + 1, `smCalls ${b}→${smCalls}`);
     chk("R3 오류 문장에 비밀번호가 없다", !/pw-[A-Z]/.test(e?.message ?? ""), e?.message);
     held.forEach((c) => c.release());

@@ -84,10 +84,19 @@ export class DbSecretError extends Error {
       providerCode: this.providerCode, providerMessage: this.providerMessage, source,
     });
   }
+  /** 같은 오류를 다른 참조의 것으로 — 여러 참조가 함께 기다린 GCP 토큰 받기가 실패했을 때 각자의 참조로 낸다. */
+  forRef(ref: string): DbSecretError {
+    if (ref === this.ref) return this;
+    return new DbSecretError(this.reason, ref, this.detail, {
+      providerCode: this.providerCode, providerMessage: this.providerMessage, source: this.source,
+    });
+  }
 }
 
 export const SECRET_TTL_MS = 5 * 60_000;
 export const SECRET_MAX_STALE_MS = 60 * 60_000;
+/** 저장소가 막혀 옛 값으로 버틴 뒤 이만큼은 다시 묻지 않고 옛 값을 곧바로 준다 — 새 연결마다 시간 초과를 기다리지 않게. */
+export const SECRET_STALE_RETRY_MS = 30_000;
 const METADATA_TIMEOUT_MS = 3_000;
 const STORE_TIMEOUT_MS = 10_000;
 const TOKEN_SKEW_MS = 60_000;
@@ -130,8 +139,10 @@ export function __setSecretStoreDepsForTest(over: Partial<SecretStoreDeps> | nul
 export function __resetSecretStoreForTest(): void {
   cache.clear();
   inflight.clear();
+  versions.clear();
   gcpToken = null;
   gcpTokenInflight = null;
+  gcpMetadataSeen = false;
 }
 
 const sleep = (ms: number): Promise<void> => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
@@ -168,14 +179,22 @@ export function interpretSecretValue(text: string, ref: string): DbSecret {
 // ── GCP Secret Manager ──
 let gcpToken: { token: string; exp: number } | null = null;
 let gcpTokenInflight: Promise<string> | null = null;
+/** 이 프로세스에서 GCP 메타데이터 서버가 한 번이라도 답했는가 — 그 뒤의 연결 실패 · 시간 초과는 «자격 없음» 이 아니라 일시 오류다. */
+let gcpMetadataSeen = false;
 
-async function fetchGcpToken(ref: string): Promise<string> {
+// 토큰은 여러 참조가 함께 기다린다 — 오류는 참조 없이("") 만들고 gcpAccessToken 이 부른 쪽의 참조로 바꿔 낸다.
+async function fetchGcpToken(): Promise<string> {
+  const ref = "";
   const url = `${deps.gcpMetadataBase()}/computeMetadata/v1/instance/service-accounts/default/token`;
   for (let attempt = 1; ; attempt++) {
     let res: Response;
     try {
       res = await deps.fetch(url, { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(METADATA_TIMEOUT_MS), redirect: "error" });
     } catch (e) {
+      if (gcpMetadataSeen) {
+        if (attempt < ATTEMPTS) { await sleep(deps.retryDelayMs * attempt); continue; }
+        throw new DbSecretError("unavailable", ref, `GCP 메타데이터 서버가 잠시 응답하지 않습니다(${netWhy(e)})`);
+      }
       throw new DbSecretError("no_credentials", ref,
         `GCP 메타데이터 서버에 닿지 않습니다(${netWhy(e)}) — 게이트웨이가 GCP VM · GKE · Cloud Run 안에서 돌고 서비스 계정이 붙어 있어야 합니다`);
     }
@@ -185,6 +204,7 @@ async function fetchGcpToken(ref: string): Promise<string> {
       throw new DbSecretError("no_credentials", ref,
         `메타데이터 주소의 응답이 GCP 메타데이터 서버가 아닙니다(HTTP ${res.status}) — GCP 밖에서 도는 게이트웨이는 gcp-sm 참조를 읽을 수 없습니다`);
     }
+    gcpMetadataSeen = true;
     if (res.status === 200) {
       const j = (await res.json().catch(() => null)) as { access_token?: unknown; expires_in?: unknown } | null;
       if (!j || typeof j.access_token !== "string" || j.access_token === "") {
@@ -210,8 +230,12 @@ async function fetchGcpToken(ref: string): Promise<string> {
 async function gcpAccessToken(ref: string, force: boolean): Promise<string> {
   if (force) gcpToken = null;
   if (gcpToken && gcpToken.exp - TOKEN_SKEW_MS > deps.now()) return gcpToken.token;
-  gcpTokenInflight ??= fetchGcpToken(ref).finally(() => { gcpTokenInflight = null; });
-  return gcpTokenInflight;
+  gcpTokenInflight ??= fetchGcpToken().finally(() => { gcpTokenInflight = null; });
+  try {
+    return await gcpTokenInflight;
+  } catch (e) {
+    throw e instanceof DbSecretError ? e.forRef(ref) : e;
+  }
 }
 
 interface GoogleError { status: number; grpc: string; reason: string; message: string }
@@ -340,11 +364,24 @@ async function readAwsSecret(ref: Extract<SecretRef, { kind: "aws-sm" }>): Promi
 }
 
 // ── 읽기 + 기억 ──
-interface Entry { value: DbSecret; at: number }
+interface Entry {
+  value: DbSecret;
+  at: number;
+  /** 저장소가 막혀 이 값으로 버티는 중이면, 이 시각 전에는 다시 묻지 않는다. */
+  retryAfter?: number;
+}
 const cache = new Map<string, Entry>();
-const inflight = new Map<string, Promise<DbSecret>>();
+/** 진행 중 읽기 — fresh 읽기는 fresh 읽기에만 합류한다(옛 값으로 버틸 수 있는 보통 읽기의 결과를 «새로 읽은 값» 으로 받지 않게). */
+const inflight = new Map<string, { p: Promise<DbSecret>; fresh: boolean }>();
+/** 참조별 값 판 번호 — 값이 바뀌어 기억할 때마다 1 오른다. 풀이 «내 접속이 실패한 뒤 값이 바뀌었나» 를 가리는 데 쓴다. */
+const versions = new Map<string, number>();
 
 const sameSecret = (a: DbSecret, b: DbSecret): boolean => a.password === b.password && a.username === b.username;
+
+/** 참조의 지금 값 판 번호(아직 읽은 적 없으면 0). 값 자체는 내주지 않는다. */
+export function secretVersion(raw: string): number {
+  return versions.get(raw) ?? 0;
+}
 
 async function fetchSecret(raw: string): Promise<DbSecret> {
   const p = parseSecretRef(raw);
@@ -357,36 +394,46 @@ async function fetchSecret(raw: string): Promise<DbSecret> {
 
 /**
  * 시크릿 저장소 참조(gcp-sm: · aws-sm:)의 값을 읽는다. 5분 안에 읽은 값은 다시 묻지 않는다.
- *  fresh — 기억한 값을 건너뛰고 지금 다시 읽는다(접속 인증이 실패한 뒤). 같은 참조의 읽기가 이미 진행 중이면 그 결과를 함께 쓴다.
+ *  fresh — 기억한 값을 건너뛰고 지금 다시 읽는다(접속 인증이 실패한 뒤). 옛 값으로 버티지 않는다.
+ *  같은 참조의 읽기가 이미 진행 중이면 그 결과를 함께 쓴다(fresh 는 fresh 읽기에만 합류한다).
  */
 export async function readDbSecret(raw: string, opts: { fresh?: boolean } = {}): Promise<DbSecret> {
+  const fresh = opts.fresh === true;
+  const now = deps.now();
   const hit = cache.get(raw);
-  if (!opts.fresh && hit && deps.now() - hit.at < SECRET_TTL_MS) return hit.value;
+  if (!fresh && hit) {
+    if (now - hit.at < SECRET_TTL_MS) return hit.value;
+    // 저장소가 막혀 옛 값으로 버티는 중 — 잠시는 다시 묻지 않는다(1시간 상한은 그대로).
+    if (hit.retryAfter !== undefined && now < hit.retryAfter && now - hit.at < SECRET_MAX_STALE_MS) return hit.value;
+  }
   const running = inflight.get(raw);
-  if (running) return running;
-  const p = (async (): Promise<DbSecret> => {
+  if (running && (running.fresh || !fresh)) return running.p;
+  const entry: { p: Promise<DbSecret>; fresh: boolean } = { p: Promise.resolve({ password: "" }), fresh };
+  entry.p = (async (): Promise<DbSecret> => {
     try {
       const value = await fetchSecret(raw);
       const prev = cache.get(raw);
       cache.set(raw, { value, at: deps.now() });
+      if (!prev || !sameSecret(prev.value, value)) versions.set(raw, secretVersion(raw) + 1);
       if (!prev) logger.info({ ref: raw }, "DB 소스 시크릿을 읽었다");
       else if (!sameSecret(prev.value, value)) logger.info({ ref: raw }, "DB 소스 시크릿 값이 바뀌었다(교체) — 새 값으로 접속한다");
       return value;
     } catch (e) {
       const err = e instanceof DbSecretError ? e : new DbSecretError("unavailable", raw, netWhy(e));
       const stale = cache.get(raw);
-      if (!opts.fresh && stale && err.reason === "unavailable" && deps.now() - stale.at < SECRET_MAX_STALE_MS) {
+      if (!fresh && stale && err.reason === "unavailable" && deps.now() - stale.at < SECRET_MAX_STALE_MS) {
+        stale.retryAfter = deps.now() + SECRET_STALE_RETRY_MS;
         logger.warn({ ref: raw, reason: err.reason, code: err.providerCode }, "DB 소스 시크릿 다시 읽기 일시 실패 — 기억한 값을 계속 쓴다");
         return stale.value;
       }
       logger.warn({ ref: raw, reason: err.reason, code: err.providerCode, provider: err.providerMessage }, "DB 소스 시크릿을 읽지 못했다");
       throw err;
     } finally {
-      inflight.delete(raw);
+      if (inflight.get(raw) === entry) inflight.delete(raw);
     }
   })();
-  inflight.set(raw, p);
-  return p;
+  inflight.set(raw, entry);
+  return entry.p;
 }
 
 /**
