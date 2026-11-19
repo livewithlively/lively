@@ -15,19 +15,119 @@
 //   timeout(클라이언트 백스톱 — 초과·오류 시 커넥션 파기로 서버측 중단 유도).
 //  읽기전용 4중: START TRANSACTION READ ONLY(InnoDB 쓰기 거부 ER1792 — spike 실측) + 단일 SELECT 게이트
 //   (firewall) + 계정 SELECT-only(운영 전제) + reader 엔드포인트(innodb_read_only).
+import crypto from "node:crypto";
 import net from "node:net";
 import mysql from "mysql2/promise";
 import awsSslProfiles from "aws-ssl-profiles";
-import { getSourceConfig, type DbSource } from "./sources.js";
+import { getSourceConfig, readSourceSecret, type DbSource } from "./sources.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { inspectMysqlUrl, isSecretRefAllowed, pinHost, type MysqlSslMode } from "./source-guard.js";
+import { isSecretStoreRef } from "./secret-ref.js";
+import { secretAuthRetryFailed } from "./secret-store.js";
+import { logger } from "../log.js";
 import type { FieldMeta } from "./mask.js";
 
+// ── 소스 풀 — 호출자(tools/db · catalog)가 쓰는 면은 getConnection · query 둘이다. ──
+//  #1764: 시크릿 저장소 참조(gcp-sm: · aws-sm:) 소스는 인증 실패(ER_ACCESS_DENIED_ERROR 1045) 때 시크릿을 fresh 로 다시 읽고,
+//   값이 바뀌었으면 새 값으로 만든 풀로 바꿔 끼워 한 번 더 시도한다. mysql2 는 pg 처럼 연결마다 비밀번호를 묻는 길이 없어
+//   (client_handshake.js 가 connection.config.password 를 그대로 읽는다) 풀을 갈아 끼우는 쪽이 공개 API 만 쓰는 길이다.
+//   옛 풀은 진행 중 질의가 끝날 시간(소스 timeoutMs + 10초) 뒤에 닫는다 — mysql2 의 end() 는 쓰는 중인 연결까지 끊는다.
+//  환경변수 참조 · 비밀번호 없음은 다시 읽을 것이 없어 종전 그대로(오류도 그대로) 흘린다.
+export interface MysqlSourcePool {
+  getConnection(): Promise<mysql.PoolConnection>;
+  query(sql: string, values?: unknown[]): Promise<[unknown, unknown]>;
+  end(): Promise<void>;
+}
+
+/** mysql 접속 인증 실패 — ER_ACCESS_DENIED_ERROR(1045). 1044(스키마 권한 없음)는 비밀번호와 무관해 넣지 않는다. */
+export const isMysqlAuthFailure = (e: unknown): boolean => {
+  const x = e as { code?: unknown; errno?: unknown } | null;
+  return x?.code === "ER_ACCESS_DENIED_ERROR" || x?.errno === 1045;
+};
+
+export interface MysqlResolved {
+  options: mysql.PoolOptions;
+  /** 접속 자격(사용자 이름 + 비밀번호)의 지문 — 값 자체는 두지 않고 같은지만 가린다. 저장소 참조가 아니면 "". */
+  credKey: string;
+}
+
+export class SourceMysqlPool implements MysqlSourcePool {
+  private inner: mysql.Pool;
+  private credKey: string;
+  private refreshing: Promise<void> | null = null;
+  private readonly retired = new Set<mysql.Pool>();
+  constructor(
+    private readonly src: { name: string; secretSource: string | null; timeoutMs: number },
+    first: MysqlResolved,
+    /** 저장소 참조면 fresh 로 다시 읽어 풀 옵션을 만드는 함수 — 아니면 null(다시 읽지 않는다). */
+    private readonly reresolve: (() => Promise<MysqlResolved>) | null,
+    private readonly create: (o: mysql.PoolOptions) => mysql.Pool = (o) => mysql.createPool(o),
+  ) {
+    this.inner = create(first.options);
+    this.credKey = first.credKey;
+  }
+
+  getConnection(): Promise<mysql.PoolConnection> {
+    return this.run((p) => p.getConnection());
+  }
+
+  query(sql: string, values?: unknown[]): Promise<[unknown, unknown]> {
+    return this.run((p) => p.query(sql, values) as unknown as Promise<[unknown, unknown]>);
+  }
+
+  async end(): Promise<void> {
+    const all = [this.inner, ...this.retired];
+    this.retired.clear();
+    await Promise.all(all.map((p) => p.end().catch(() => undefined)));
+  }
+
+  private async run<T>(op: (p: mysql.Pool) => Promise<T>): Promise<T> {
+    const used = this.inner;
+    try {
+      return await op(used);
+    } catch (e) {
+      if (!this.reresolve || !isMysqlAuthFailure(e)) throw e;
+      const ref = this.src.secretSource ?? "";
+      if (this.inner === used) {
+        logger.info({ source: this.src.name, ref }, "DB 인증 실패 — 시크릿을 다시 읽는다");
+        await this.refresh(used); // 못 읽으면 그 까닭(DbSecretError)이 그대로 나간다
+      }
+      if (this.inner === used) throw secretAuthRetryFailed(this.src.name, ref, e, true); // 값이 그대로 — 다시 붙어도 같은 실패
+      try {
+        return await op(this.inner);
+      } catch (e2) {
+        if (isMysqlAuthFailure(e2)) throw secretAuthRetryFailed(this.src.name, ref, e2);
+        throw e2;
+      }
+    }
+  }
+
+  // 한 번에 하나만 다시 읽는다 — 동시에 실패한 요청들은 같은 읽기를 기다렸다가 바뀐 풀로 간다.
+  private refresh(used: mysql.Pool): Promise<void> {
+    this.refreshing ??= (async () => {
+      const next = await this.reresolve!();
+      if (this.inner !== used || next.credKey === this.credKey) return;
+      const old = this.inner;
+      this.inner = this.create(next.options);
+      this.credKey = next.credKey;
+      this.retired.add(old);
+      const t = setTimeout(() => {
+        this.retired.delete(old);
+        void old.end().catch(() => undefined);
+      }, this.src.timeoutMs + 10_000);
+      t.unref?.();
+    })().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+}
+
 // ── 풀 레지스트리 — pool.ts(pg) 패턴 미러: 키 `name@fingerprint`, 생성 프라미스 즉시 등록(경쟁 차단). ──
-const pools = new Map<string, Promise<mysql.Pool>>();
+const pools = new Map<string, Promise<MysqlSourcePool>>();
 const fingerprint = (src: DbSource): string => `${src.url}|${src.authMode}|${src.secretSource ?? ""}`;
 
-export async function getMysqlPool(source: string): Promise<mysql.Pool> {
+export async function getMysqlPool(source: string): Promise<MysqlSourcePool> {
   const cfg = getSourceConfig(source);
   if (!cfg) throw new Error(`알 수 없는 db source '${source}'`);
   if (cfg.driver !== "mysql") throw new Error(`db source '${source}' 는 mysql 드라이버가 아닙니다`);
@@ -40,9 +140,10 @@ export async function getMysqlPool(source: string): Promise<mysql.Pool> {
       void op.then((p) => p.end()).catch(() => { /* drain 실패 무시 — 이미 detach */ });
     }
   }
-  const created = (async (): Promise<mysql.Pool> => {
-    const opts = await resolveMysqlPoolOptions(cfg);
-    return mysql.createPool(opts);
+  const created = (async (): Promise<MysqlSourcePool> => {
+    const first = await resolveMysqlPoolOptions(cfg);
+    const reresolve = isSecretStoreRef(cfg.secretSource) ? () => resolveMysqlPoolOptions(cfg, true) : null;
+    return new SourceMysqlPool(cfg, first, reresolve);
   })();
   pools.set(key, created);
   created.catch(() => {
@@ -61,9 +162,10 @@ export function invalidateMysqlPool(source: string): void {
   }
 }
 
-// url(mysql://user@host:port/db[?ssl=require]) → mysql2 풀 옵션. 비번은 auth_ref(env) 화이트리스트 해소,
-//  host 는 pinHost 로 IP 핀(DNS 리바인딩 차단 — allowed_db_hosts 면 사설도 허용). pg resolveConnectionString 미러.
-async function resolveMysqlPoolOptions(src: DbSource): Promise<mysql.PoolOptions> {
+// url(mysql://user@host:port/db[?ssl=require]) → mysql2 풀 옵션. 비번은 auth_ref 화이트리스트 해소(환경변수 이름 =
+//  process.env · gcp-sm:/aws-sm: = 시크릿 저장소, #1764), host 는 pinHost 로 IP 핀(DNS 리바인딩 차단 — allowed_db_hosts 면
+//  사설도 허용). pg resolvePgPoolSpec 미러. freshSecret = 기억한 시크릿을 건너뛰고 다시 읽는다(인증 실패 뒤).
+async function resolveMysqlPoolOptions(src: DbSource, freshSecret = false): Promise<MysqlResolved> {
   if (src.authMode !== "password") {
     throw new Error(`db source '${src.name}' auth_mode '${src.authMode}' 미지원 — 1차 password 만(iam/mtls/vault 후속)`);
   }
@@ -72,20 +174,31 @@ async function resolveMysqlPoolOptions(src: DbSource): Promise<mysql.PoolOptions
   if (!mi.ok || !mi.host) throw new Error(`db source '${src.name}' url 불량: ${mi.error ?? "host 없음"}`);
 
   const rc = await getRuntimeConfig(); // 시크릿참조·host 화이트리스트 — pg 와 공용 경계
+  const storeRef = isSecretStoreRef(src.secretSource) ? src.secretSource : null;
   let password: string | undefined;
   if (src.secretSource) {
     if (!isSecretRefAllowed(src.secretSource, rc.allowed_db_secret_refs)) {
       throw new Error(`db source '${src.name}' auth_ref '${src.secretSource}' 가 허용목록(allowed_db_secret_refs)에 없습니다`);
     }
-    password = process.env[src.secretSource] || undefined;
+    if (!storeRef) password = process.env[src.secretSource] || undefined;
   }
   const ip = await pinHost(mi.host, rc.allowed_db_hosts); // 검증 + IP 핀
   const port = mi.port ?? 3306;
 
+  // 저장소 참조 — 주소 · host 검증 뒤에 읽는다(형식 오류가 네트워크보다 먼저). 사용자 이름은 주소에 없을 때만 시크릿에서.
+  let user = mi.user;
+  let credKey = "";
+  if (storeRef) {
+    const s = await readSourceSecret(src.name, storeRef, freshSecret);
+    password = s.password;
+    if (!user && s.username) user = s.username;
+    credKey = crypto.createHash("sha256").update(`${user ?? ""}\0${s.password}`).digest("hex");
+  }
+
   const opts: mysql.PoolOptions = {
     host: ip,
     port,
-    user: mi.user,
+    user,
     database: mi.database, // 커넥션을 소스 스키마로 고정 — 미수식 테이블이 이 스키마로 해석(firewall 전제)
     password,
     connectionLimit: 10,
@@ -105,7 +218,7 @@ async function resolveMysqlPoolOptions(src: DbSource): Promise<mysql.PoolOptions
       return s;
     };
   }
-  return opts;
+  return { options: opts, credKey };
 }
 
 // ssl 모드 → mysql2 ssl 옵션 (#743, 순수 함수·단위테스트). require=전송 암호화만(CA 미검증 — #715 잠정, 하위호환) /
