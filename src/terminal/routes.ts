@@ -1988,7 +1988,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const stNodeId = relayNodeId(st.node_id, isSelfNode);
     if (stNodeId) {
       const nodeId = stNodeId;
-      if (nodeSessionsFor(me).some((x) => x.node?.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+      //  #5620 — 스냅샷에 있다는 것만으로 «이미 살아 있다» 고 답하지 않는다. 세션이 멈춘 뒤 그 컴퓨터의 다음 보고까지
+      //   (실측 약 15초) 스냅샷엔 죽은 세션이 남아 있고, 종전엔 그 틈의 복원이 전부 already:true 로 끝났다 — 화면은 같은 자리에
+      //   머물고 보낸 말은 없는 세션에 들어가다 실패했다(«두 번 쳐야 한다»). 그 컴퓨터가 연결돼 있으면 아래에서 직접 묻는다(gone op).
+      //   묻지 못하면(오프라인·무응답) 종전대로 스냅샷을 믿는다 — 모르면 같은 세션을 둘로 만들지 않는다(#835).
+      const listed = nodeSessionsFor(me).some((x) => x.node?.id === nodeId && x.id === id);
+      if (listed && !nodeOnline(nodeId)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       // #1849 — "연결돼 있지 않습니다"에서 끝내지 않는다: 게이트웨이는 그 노드의 연결 이력을 갖고 있으므로
       //  **왜 그런지(잠자기 추정)와 무엇을 하면 되는지**까지 말할 수 있다. 진단 조회가 실패해도 원래 문구는 나간다.
       if (!nodeOnline(nodeId)) {
@@ -1999,7 +2004,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       // 라이브 경합은 **노드에 묻는다**(gone op) — 스냅샷은 재시작 직후·생성 직후 비어 있고 뷰어별 필터라(admin) 살아 있는 세션을
       //  놓칠 수 있다. 확답을 못 받으면 복원하지 않는다(모르면 같은 세션을 둘로 만들지 않는다 — #835 '확답 only').
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
-      if (gone === false) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+      if (gone === false || (gone === null && listed)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       if (gone === null) throw new HttpError(409, "그 컴퓨터(노드)가 응답하지 않아 세션 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하세요.");
       // #2022 — 게이트웨이가 **노드 스냅샷에서 발견한** 행은 workspace 좌표를 모른다(그 컴퓨터에서 직접 띄운 세션).
       //  아래 폴백(root_key || "shared")이 그걸 추측하면 그 세션이 **엉뚱한 폴더에서** 되살아난다 —

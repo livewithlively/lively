@@ -24,6 +24,7 @@ import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { isIdLabel, sessNameFace } from './lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(사이드바 행과 같은 것)
 import { livWorkWhy, taskMarkOf } from './lib/liv-work.js';   // #5579 — AI · 예약 작업이 연 세션의 «열린 까닭» 한 문장
 import { remoteNodeOf } from './lib/node-coord.js';   // #4904 — 노드 좌표가 «정말 다른 컴퓨터» 인가(세션 호스트는 아니다)
+import { latchAfterRow, stoppedCanRevive } from './lib/stop-latch.js';   // #5620 — 멈춘 세션에 친 첫 말이 묻히지 않게
 import { createChatView, TERM_PREFS_EVENT, termMobile, type ChatTurn, type ChatView } from './chat-view.js';
 import { ccModelName, ctxFeed, ctxNew, ctxTokens, lineNotice, parseTaskNotification, taskNoticeSegs, turnEndOf, type TuiSeg } from './chat-tui.js';   // #4707 tui 환영 상자의 모델 이름 · 보조 에이전트 완료 알림 한 줄
 import { parseTermPrefs, serializeTermPrefs, TERM_CURSORS, TERM_FONTS, TERM_PREFS_KEY, TERM_THEMES, type TermPrefs } from './lib/term-prefs.js';   // #4707 웹 터미널 설정 = 대화창 설정
@@ -289,6 +290,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   있다(scripts/session-open-restore.test.mjs ⑦-b). 여기 적으면 그 가드가 엉뚱한 블록을 잰다.
   let goneByFrame = false;                      // 프레임이 «이 박스 없다» 고 알려 왔다(아래 onTermMsg 의 gone 신호)
   let goneCanRestore = false;                   //  그때 함께 온 «되살릴 수 있다»(서버 메타 canRestore)
+  //  #5620 — 그 «없다» 를 들은 시각과, 그 뒤 목록이 «멈춤» 을 실어 온 적이 있나. 목록 행이 걸쇠를 풀어도 되는지는 이 둘이 정한다(lib/stop-latch.ts).
+  let goneAt = 0;
+  let listSawGone = false;
   //  #5580 후속 — 세션이 꺼질 때 **끝나지 않았던** 마지막 턴(그 턴의 끝 줄 turn_duration 이 없다). 끝난 사유가 고장으로 확인되면
   //   그 턴 끝에 «일하던 중에 끊겼다» 를 단다(markCut). 사유는 늦게 올 수 있다 — 서버는 사라진 세션을 3분 뒤에야 lost 로 적는다.
   let cutTurn: ChatTurn | null = null;
@@ -1532,6 +1536,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (goneByFrame && !termFrame) return;       // 이미 걷었다(부팅 게이트와 4410 이 둘 다 알릴 수 있다)
     termGoneN += 1;                              // ⚠ **실제로 걷은 횟수**만 센다 — 한 프레임의 중복 신고로 상한을 태우지 않는다
     goneByFrame = true;
+    goneAt = Date.now(); listSawGone = false;    // #5620 — 이 뒤에 오는 목록 행만 이 말을 뒤집을 수 있다
     if (end) frameEnd = end;
     if (running && cur) cutTurn = cur.t;         // 끝나지 않은 턴 — 고장으로 끝났으면 아래 markCut 이 마감하며 표시한다
     if (termFrame) { termFrame.remove(); termFrame = null; }
@@ -2884,7 +2889,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const pd = addPending(text);
     view.scrollToBottom();
     try {
-      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number; transport?: string; fallback?: string; steered?: boolean };
+      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number; transport?: string; fallback?: string; steered?: boolean; queued?: boolean };
       if (r?.outbox_id) pd.obId = Number(r.outbox_id);
       // #2055 — app-server 로 보내려다 실패해 종전 경로로 내려갔다. 조용히 접으면 "왜 느리지"의 원인을 아무도 모른다.
       view.setNote(r?.fallback ? `대화 통로를 못 열어 터미널 경로로 보냈어요 — ${r.fallback}` : '');
@@ -2905,7 +2910,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       // ⚠ 이 말은 **정말 다른 컴퓨터일 때만** 맞다. app-server 세션은 여기서 도는데 게이트웨이 박스가 노드로도
       //  등록돼 있으면 노드 좌표가 붙어(같은 함정) 방금 보낸 말이 "그 컴퓨터로 전달했어요"로 덮였다(실측).
-      if (remoteNode() && !chatFirst()) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
+      //  #5620 — 큐에 들어갔으면(queued) 그 컴퓨터로 간 것이 아니다 — 그때는 큐의 상태 줄(syncOutbox)이 사실을 말한다.
+      if (remoteNode() && !chatFirst() && !r?.queued) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
       // 어디를 지켜볼까 — 박스 파일, 노드면 중앙 기록(uuid 를 알 때만; 모르면 update() 가 가져올 때). ⚠ 노드에 박스 경로를 걸면 409 반복.
       if (!src) src = remoteNode() ? logSrc() : { kind: 'box', id: target.id };   // src 가 이미 정해졌으면 그대로(위 watch 주석)
       if (src) schedule();
@@ -2914,6 +2920,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  #4996 — 다른 사람이 터미널을 쥐고 있어 대화창으로 비켜 서 있었다 — 말을 보냈으니 이제 터미널로(중간 과정은 터미널에서만 보인다).
       if (yieldTerm && !modeChosen) takeTermAfterSend(pd);
     } catch (e: any) {
+      //  #5620 — 서버가 «멈춘 세션이라 넣지 않았다 — 되살리면 들어간다» 고 답했다(이 화면은 아직 살아 있다고 믿던 틈). 그 자리에서
+      //   되살려 **이 말을** 넣는다 — 방금 그린 말풍선을 그대로 잇는다(같은 말이 두 개 서지 않게). 이미 되살리는 중이면 아래 실패 길로.
+      if (stoppedCanRevive(e) && !reviving && !destroyed) { await reviveWithPrompt(text, pd); return; }
       //  #4850 — 도는 턴 뒤에서 기다리던 말이면 그 턴은 계속 돈다(도는 표시를 끄지 않는다). 말풍선은 붙듦을 놓고 그 자리에 실패를 남긴다.
       const behind = waitingBehind(pd);
       dropPending(pd);
@@ -3008,7 +3017,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.error(pd.t, '보내지 못했어요 — 세션은 다시 열었는데 이 말은 전달하지 못했습니다. 친 글은 입력칸에 돌려 두었어요.');
     if (!view.input.value) { view.input.value = text; view.input.dispatchEvent(new Event('input')); }
   }
-  async function reviveWithPrompt(text: string): Promise<void> {
+  async function reviveWithPrompt(text: string, drawn?: Pending): Promise<void> {
     if (reviving) {
       if (!view.input.value) { view.input.value = text; view.input.dispatchEvent(new Event('input')); }
       toast('세션을 이어서 여는 중이에요 — 열리면 그 세션에서 보내 주세요.');
@@ -3016,7 +3025,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     reviving = true;
     view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
-    const pd = addPending(text);
+    //  #5620 — 보통 보내기가 그린 말풍선(drawn)이 있으면 그것을 잇는다 — 서버가 «멈춘 세션» 이라고 돌려보낸 말이다.
+    const pd = drawn ?? addPending(text);
     //  #4695 T5 — 하네스 종료 규칙이 끈 세션에 말을 걸면 여기로 온다(컨테이너 → tmux → 하네스 이어 열기 → 전달). 운영 p50 약 5초다.
     pd.state.textContent = '준비 중이에요 — AI 를 다시 띄워 이 말을 전달합니다(보통 5초 안팎 걸립니다).';
     view.scrollToBottom();
@@ -3387,7 +3397,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     target = t;
     //  #3847 — 행이 다시 «살아 있다» 고 오면 프레임 걸쇠를 푼다. **얼리지 않는다**(2026-09-08 교훈):
     //   관측이 회복된 것일 수 있고, 그 판정의 정본은 목록이다. 다시 죽어 있으면 프레임이 다시 알려 온다.
-    if (goneByFrame && t.live && t.alive && !t.raw?.restorable) goneByFrame = false;
+    //  #5620 — 단 **그 말보다 먼저 만들어진 낡은 행**으로는 풀지 않는다. 세션이 멈춘 뒤 약 15초 동안 목록은 그 세션을 «살아 있다» 로
+    //   내는데, 종전엔 그 행이 곧바로 걸쇠를 풀어 «아래에 말을 걸면 이어서 열려요» 를 보고 친 말이 되살리기 대신 멈춘 세션의 큐에
+    //   묻혔다(«두 번 쳐야 한다»). 목록이 «멈춤» 을 한 번 실어 왔거나(따라잡았다) 충분히 지난 뒤에만 «살아 있음» 을 믿는다.
+    if (goneByFrame) {
+      const l = latchAfterRow({ gone: true, at: goneAt, listSaw: listSawGone }, !!(t.live && t.alive && !t.raw?.restorable), Date.now());
+      goneByFrame = l.gone; listSawGone = l.listSaw;
+    }
     head.dataset.sid = t.id;   // #3784 우클릭 메뉴가 읽는 세션 id — 겉(머리줄)이 다른 세션으로 바뀌면 같이 바뀐다
     if (!hcat && t.raw?.harness) { void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); }); }
     paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
@@ -3430,7 +3446,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (warmOwed && !modeChosen && mode === 'chat' && !chatHome() && hasTerm()) startTermWarm();
     //   말로 되살리는 중(reviving)에도 넘기지 않는다 — 곧 새 화면(같은 id 로 다시 마운트)이 숨겨 붙였다가 그린 순간 넘긴다. 그 사이 목록이 «살아 있다» 를
     //   먼저 실어 오면 종전엔 이 줄이 옛 화면을 빈 터미널로 넘겼고, 다시 마운트되며 대화창으로 돌아갔다가 또 터미널로 갔다(매니지드 실측 2026-10-16).
-    if (!termWarm && !reviving && !yieldTerm && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
+    //   #5620 — 걸쇠가 서 있는 동안(낡은 «살아 있음» 행)에도 넘기지 않는다 — 넘기면 죽은 터미널에 다시 붙었다 걷히며 깜빡이고 그 사이 걸쇠가 풀린다.
+    if (!goneByFrame && !termWarm && !reviving && !yieldTerm && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
     // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
     //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
     const ls = logSrc();
