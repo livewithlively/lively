@@ -20,6 +20,9 @@ const root = path.resolve(here, '../..');
 const args = process.argv.slice(2);
 const opt = (name, dflt) => { const i = args.indexOf('--' + name); return i < 0 ? dflt : (args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : true); };
 const FPS = Number(opt('fps', 60));
+//  --speed 1.15 = 장면을 1.15배 빨리 돌려 굽는다(원본 시간표는 그대로, 영상 길이만 1/1.15). 온보딩 영상(기초)은 1.15 로 굽는다
+//  (원준 2026-11-20 «아주 약간 느려서 답답해»). 포스터 시각(--poster)은 구운 영상의 시각이다.
+const SPEED = Number(opt('speed', 1));
 const SCALE = Number(opt('scale', 2));          // 2 = 두 배로 그려 줄인다(움직이는 글자의 가장자리가 곱다)
 const WORKERS = Number(opt('workers', 6));
 const CRF = String(opt('crf', 20));
@@ -85,7 +88,7 @@ try {
     console.log('  ' + file + ` (${n}장 · ${step}s 간격)`);
   } else {
     //  프레임을 디스크에 쌓지 않는다(두 배율 PNG 4천 장 = 수 GB) — 찍는 대로 차례를 맞춰 ffmpeg 에 흘려 넣는다.
-    const total = Math.round(duration * FPS);
+    const total = Math.round(duration / SPEED * FPS);
     const media = path.join(root, 'public/media'); mkdirSync(media, { recursive: true });
     //  --dest out 이면 제품 자리(public/media)가 아니라 out/ 에 둔다(보여 주고 고르기 전의 판).
     const destDir = opt('dest') === 'out' ? outDir : media;
@@ -115,7 +118,7 @@ try {
         while (f - written > 48) await new Promise((r) => setTimeout(r, 15));   // 앞 프레임이 밀리면 기다린다(메모리 상한)
         //  한 프레임이 멈추면(디스크가 꽉 찬 맥 · 얼어붙은 렌더러) 다른 워커들도 차례 게이트(48)에 걸려 영원히 기다린다 —
         //  CPU 0% 로 진행 줄만 멈춘 채 몇십 분이 간다(2026-11-19 실측). 60초 안에 못 찍으면 실패로 끝낸다.
-        const frame = (async () => { await page.evaluate((x) => window.__film.seek(x), f / FPS); return page.screenshot({ type: 'png', timeout: 60000 }); })();
+        const frame = (async () => { await page.evaluate((x) => window.__film.seek(x), f / FPS * SPEED); return page.screenshot({ type: 'png', timeout: 60000 }); })();
         let timer;
         const stuck = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`프레임 ${f} 을 60초 안에 못 찍었다 — 디스크 여유(df -h)와 크롬을 보라`)), 60000); });
         try { pending.set(f, await Promise.race([frame, stuck])); } finally { clearTimeout(timer); }
