@@ -43,6 +43,10 @@ export async function initV6GraphSource(pool: Pool): Promise<void> {
     --  커넥터는 자기 origin 링크만 삭제·재작성한다(사람이 만든 링크 불가침). 비파괴 ADD COLUMN(기존 행=user).
     ALTER TABLE knowledge_link ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'user';
     CREATE INDEX IF NOT EXISTS knowledge_link_origin_idx ON knowledge_link(origin) WHERE origin <> 'user';
+    -- dismissed_at: 사람이 «확인했다» 고 내린 관리기 링크(origin 'manager:<key>'). 지우지 않고 남기는 이유는 관리기가 같은 쌍을
+    --  다시 보고할 때 되살리지 않기 위해서다(지우면 다음 주기에 같은 링크가 또 생긴다). 읽는 곳은 전부 dismissed_at IS NULL 로 거른다.
+    --  사람이 같은 쌍을 다시 걸면(linkKnowledge) 비워져 되살아난다. 값 없는 ADD 라 재작성 없음.
+    ALTER TABLE knowledge_link ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;
   `);
 
   // ── ⑭-b2) project_edge — 프로젝트↔프로젝트 그래프(후속 관계 등, knowledge_link idiom). ──

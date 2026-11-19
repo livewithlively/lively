@@ -3,8 +3,10 @@
 //  이 파일에서 가장 조심한 것은 **멱등 발견**이다. 관리기는 주기적으로 도는데 같은 문제는 매번 다시 발견된다.
 //  그때마다 새 행을 만들면 큐가 같은 항목의 사본으로 뒤덮여 아무도 안 보고, 무엇보다 사람이 내린 '반려'가
 //  다음 주기에 무의미해진다(반려한 것이 새 항목으로 또 올라온다). 그래서 재발견은 카운트만 올린다.
+import type { PoolClient } from "pg";
 import { itemsPool, q } from "../../db/client.js";
 import { audit } from "./audit.js";
+import { linkManagerContradiction, dismissManagerContradiction } from "../../v6/knowledge-links.js";
 import { isApplicableAction } from "../manage/action-whitelist.js";
 import type { Finding } from "../manage/detectors.js";
 
@@ -65,8 +67,15 @@ export async function getManager(idOrKey: number | string): Promise<ManagerRow |
  *  반대로 accepted/resolved 는 되살린다 — 고쳤는데 또 발견됐다면 그건 새 사실이다(안 고쳐졌거나 재발).
  *  요약·근거·조치안은 매번 갱신한다(최신 수치를 보여줘야 판단할 수 있다).
  */
-export async function upsertFinding(managerId: number, kind: string, f: Finding): Promise<"new" | "again" | "skipped"> {
-  const r = await itemsPool.query(`
+export async function upsertFinding(managerId: number, kind: string, f: Finding, db: Pick<PoolClient, "query"> = itemsPool): Promise<"new" | "again" | "skipped"> {
+  return (await upsertFindingRow(managerId, kind, f, db)).result;
+}
+
+/** upsertFinding 과 같고 발견 id 도 돌려준다 — 저장 직후 그 발견에 조치를 거는 자리(auto)가 쓴다. */
+export async function upsertFindingRow(
+  managerId: number, kind: string, f: Finding, db: Pick<PoolClient, "query"> = itemsPool,
+): Promise<{ result: "new" | "again" | "skipped"; id: number | null }> {
+  const r = await db.query(`
     INSERT INTO org_manager_finding(manager_id, kind, target_kind, target_ref, dedup_key,
                                     severity, summary, evidence, proposed_action)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
@@ -80,13 +89,49 @@ export async function upsertFinding(managerId: number, kind: string, f: Finding)
       -- 반려는 존중(그대로 rejected), 그 외는 다시 열린다.
       state = CASE WHEN org_manager_finding.state='rejected' THEN 'rejected' ELSE 'open' END,
       resolved_at = CASE WHEN org_manager_finding.state='rejected' THEN org_manager_finding.resolved_at ELSE NULL END
-    RETURNING (xmax = 0) AS inserted, state`,
+    RETURNING id, (xmax = 0) AS inserted, state`,
     [managerId, kind, f.target_kind, f.target_ref, f.dedup_key ?? "",
      f.severity, f.summary, f.evidence ?? null,
      f.proposed_action == null ? null : JSON.stringify(f.proposed_action)]);
-  const row = r.rows[0] as { inserted: boolean; state: string } | undefined;
-  if (!row) return "skipped";
-  return row.inserted ? "new" : (row.state === "rejected" ? "skipped" : "again");
+  const row = r.rows[0] as { id: string | number; inserted: boolean; state: string } | undefined;
+  if (!row) return { result: "skipped", id: null };
+  return { result: row.inserted ? "new" : (row.state === "rejected" ? "skipped" : "again"), id: Number(row.id) };
+}
+
+/**
+ * 모순(contradiction) 보고 — 발견 저장과 contradicts 링크(origin 'manager:<key>')를 한 트랜잭션에서 한다.
+ *
+ *  쌍 키는 서버가 정한다: target_ref=least, dedup_key=greatest(DB 정렬 규칙 — 후보 SQL 의 o.name > k.name 과 같은 비교).
+ *   종전엔 어느 쪽을 target_ref 로 둘지 LLM 이 골라, 같은 쌍이 방향만 바뀌어 두 행으로 열리고 한쪽 반려가 다른 쪽에 안 먹었다.
+ *  정규화 전에 만들어진 행(반대 방향)이 있으면 그 행을 계속 쓴다 — 새 방향으로 또 한 행을 만들지 않으려는 것이다.
+ *   어느 방향이든 반려된 행이 있으면 저장도 링크도 하지 않는다(사람의 «아니다» 가 최신이다).
+ */
+export async function reportContradiction(
+  m: { id: number; key: string; kind: string }, f: Finding,
+  ctx?: { actor?: string | null; source?: string; allowLink?: boolean },
+): Promise<{ result: "new" | "again" | "skipped"; linked: boolean }> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const pair = (await client.query(`SELECT least($1::text, $2::text) AS a, greatest($1::text, $2::text) AS b`,
+      [f.target_ref, f.dedup_key ?? ""])).rows[0] as { a: string; b: string };
+    //  같은 쌍의 기존 행을 먼저 잠근다 — 동시에 도는 반려(resolveFinding)와 이 보고가 같은 행에서 줄을 선다.
+    const prior = (await client.query(
+      `SELECT target_ref, dedup_key, state FROM org_manager_finding
+        WHERE manager_id=$1 AND ((target_ref=$2 AND dedup_key=$3) OR (target_ref=$3 AND dedup_key=$2))
+        ORDER BY (target_ref=$2) DESC, id FOR UPDATE`, [m.id, pair.a, pair.b])).rows as Array<{ target_ref: string; dedup_key: string; state: string }>;
+    if (prior.some((p) => p.state === "rejected")) { await client.query("COMMIT"); return { result: "skipped", linked: false }; }
+    const key = prior[0] ?? { target_ref: pair.a, dedup_key: pair.b };
+    const { result } = await upsertFindingRow(m.id, m.kind, { ...f, target_ref: key.target_ref, dedup_key: key.dedup_key }, client);
+    //  allowLink=false — 보고한 사람이 두 지식을 다 볼 수 없다. 발견은 저장하되 링크는 만들지 않는다(링크는 양 끝 이름을 남의 화면에 싣는다).
+    const linked = result === "skipped" || ctx?.allowLink === false ? false
+      : await linkManagerContradiction(client, pair.a, pair.b, m.key, { actor: ctx?.actor ?? `manager:${m.key}`, source: ctx?.source ?? "mcp" });
+    await client.query("COMMIT");
+    return { result, linked };
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally { client.release(); }
 }
 
 export interface FindingRow {
@@ -101,7 +146,7 @@ export interface FindingRow {
   action_level?: string;
   /**
    * 파생(#1419 T9) — 기계가 적용할 수 있는 조치안이 붙어 있나.
-   *  판정은 applyAction 과 **같은 화이트리스트**(isApplicableAction)를 쓴다 — 서로 다르면
+   *  판정은 applyFinding 과 **같은 화이트리스트**(isApplicableAction)를 쓴다 — 서로 다르면
    *  '적용' 버튼이 있는데 눌러도 아무 일이 없는 상태가 된다(사용자는 실패했다고 인지하지 못한다).
    */
   actionable?: boolean;
@@ -129,7 +174,7 @@ export async function listFindings(opts: {
      WHERE ${w.join(" AND ")}
      ORDER BY CASE f.severity WHEN 'high' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, f.last_seen_at DESC
      LIMIT ${limP} OFFSET ${offP}`, params);
-  // 적용 가능 여부는 applyAction 과 **같은 판정**으로 파생한다(#1419 T9) — 화면이 자기 규칙을 따로 갖지 않게.
+  // 적용 가능 여부는 applyFinding 과 **같은 판정**으로 파생한다(#1419 T9) — 화면이 자기 규칙을 따로 갖지 않게.
   return (rows as FindingRow[]).map((f) => ({ ...f, actionable: isApplicableAction(f.proposed_action) }));
 }
 
@@ -138,32 +183,87 @@ export async function listFindings(opts: {
  *  report 는 쌓기만, auto 는 사람 없이 즉시, **propose 는 미리 만들어 두고 사람이 한 번에** 적용한다.
  *  적용된 것은 accepted 로 닫는다. 적용 불가·실패는 열린 채로 남긴다(조용히 닫으면 안 고쳐진 게 사라진다).
  */
+export type ApplyFindingResult = "applied" | "stale" | "skipped" | "failed";
 export async function applyFindings(
   ids: number[], actor: string,
-  apply: (action: unknown, actor: string) => Promise<boolean>,
-): Promise<{ applied: number; failed: number; skipped: number }> {
-  if (!ids.length) return { applied: 0, failed: 0, skipped: 0 };
+  apply: (id: number, actor: string) => Promise<ApplyFindingResult>,
+): Promise<{ applied: number; failed: number; skipped: number; stale: number }> {
+  if (!ids.length) return { applied: 0, failed: 0, skipped: 0, stale: 0 };
   const rows = await q(itemsPool,
     `SELECT id, proposed_action FROM org_manager_finding WHERE id = ANY($1::bigint[]) AND state='open'`, [ids]);
-  let applied = 0, failed = 0, skipped = 0;
+  let applied = 0, failed = 0, skipped = 0, stale = 0;
   for (const r of rows as Array<{ id: number; proposed_action: unknown }>) {
     if (!isApplicableAction(r.proposed_action)) { skipped++; continue; }
-    if (await apply(r.proposed_action, actor)) {
-      await resolveFinding(Number(r.id), "accepted", actor, "제안된 조치 일괄 적용");
-      applied++;
-    } else failed++;
+    //  적용과 발견 전환(accepted · 낡았으면 resolved)은 apply 가 한 트랜잭션에서 한다 — 그 사이 사람이 반려한 발견을 덮지 않게.
+    const res = await apply(Number(r.id), actor);
+    if (res === "applied") applied++;
+    else if (res === "stale") stale++;
+    else if (res === "skipped") skipped++;
+    else failed++;
   }
-  return { applied, failed, skipped };
+  return { applied, failed, skipped, stale };
 }
 
-/** 발견 처리 — 사람이 승인/반려/해결로 닫는다. */
+/**
+ * 발견 처리 — 승인/반려/해결로 닫는다.
+ *  onlyOpen: 자동 전환(일괄 적용·재판정 해소)은 열린 발견만 닫는다 — 그 사이 사람이 반려한 발견을 resolved 로 덮으면
+ *   다음 탐지가 그 발견을 다시 연다(upsertFinding 은 rejected 만 존중한다). 사람의 처리는 상태와 무관하게 덮는다(종전 동작).
+ *  모순 발견을 반려하면 같은 트랜잭션에서 그 쌍의 관리기 링크를 해제한다 — 링크가 남으면 반려한 모순이 knowledge_get 경고로 계속 뜬다.
+ */
 export async function resolveFinding(
   id: number, state: "accepted" | "rejected" | "resolved", actor?: string, resolution?: string | null,
-): Promise<FindingRow | null> {
-  const r = await itemsPool.query(
-    `UPDATE org_manager_finding SET state=$2, resolved_at=now(), resolved_by=$3, resolution=$4
-      WHERE id=$1 RETURNING *`, [id, state, actor ?? null, resolution ?? null]);
-  return (r.rows[0] as FindingRow) ?? null;
+  opts: { onlyOpen?: boolean; source?: string; allowDismiss?: boolean } = {},
+): Promise<(FindingRow & { links_dismissed?: number }) | null> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query(
+      `UPDATE org_manager_finding SET state=$2, resolved_at=now(), resolved_by=$3, resolution=$4
+        WHERE id=$1${opts.onlyOpen ? " AND state='open'" : ""} RETURNING *`, [id, state, actor ?? null, resolution ?? null]);
+    const row = (r.rows[0] as FindingRow & { links_dismissed?: number }) ?? null;
+    //  allowDismiss=false — 반려한 사람이 두 지식을 다 쓸 수 없다. 발견만 반려하고 링크는 둔다(knowledge_link 해제와 같은 문턱).
+    //  반려를 나중에 accepted·resolved 로 바꿔도 해제한 링크는 되살리지 않는다 — 되살리기는 사람이 다시 링크하는 길 하나다.
+    if (row && state === "rejected" && opts.allowDismiss !== false && row.kind === "contradiction" && row.target_kind === "knowledge" && row.dedup_key) {
+      row.links_dismissed = await dismissManagerContradiction(client, row.target_ref, row.dedup_key, { actor: actor ?? null, source: opts.source ?? "web" });
+    }
+    await client.query("COMMIT");
+    return row;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally { client.release(); }
+}
+
+/** 열린 발견 하나를 잠근 채 넘긴다 — 조치 적용과 상태 전환을 한 트랜잭션으로 묶는 자리(applyFinding)가 쓴다.
+ *  열려 있지 않으면 null(이미 누가 닫았다). */
+export async function lockOpenFinding(client: Pick<PoolClient, "query">, id: number): Promise<{ id: number; proposed_action: unknown } | null> {
+  const r = await client.query(
+    `SELECT id, proposed_action FROM org_manager_finding WHERE id=$1 AND state='open' FOR UPDATE`, [id]);
+  const row = r.rows[0] as { id: string | number; proposed_action: unknown } | undefined;
+  return row ? { id: Number(row.id), proposed_action: row.proposed_action } : null;
+}
+export async function closeFindingIn(
+  client: Pick<PoolClient, "query">, id: number, state: "accepted" | "resolved", actor: string, resolution: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE org_manager_finding SET state=$2, resolved_at=now(), resolved_by=$3, resolution=$4 WHERE id=$1 AND state='open'`,
+    [id, state, actor, resolution]);
+}
+
+/**
+ * 지식 하나에 열려 있는 «다시 읽어 보라» 발견(outdated · code_drift) — knowledge_get 응답의 review_hint.
+ *  종류·id·처음 잡힌 시각만 싣는다. 요약·근거는 LLM 이 쓴 글이라 다른 지식의 이름이 들어갈 수 있고 그 공개범위를 거를 수 없다.
+ *  발견이 마지막으로 잡힌(last_seen_at) 뒤 본문이 바뀐 지식은 뺀다 — 발견은 재판정 스위치가 꺼져 있거나 재판정이 없는 종류
+ *   (code_drift)면 열린 채 남으므로, 고친 뒤에도 힌트가 매 세션 뜨지 않게. 다음 탐지가 또 잡으면 last_seen_at 이 올라 다시 뜬다.
+ */
+export async function openReviewHints(name: string): Promise<Array<{ kind: string; finding_id: number; detected_at: string }>> {
+  const rows = await q(itemsPool,
+    `SELECT f.kind, f.id, f.first_seen_at FROM org_manager_finding f
+       JOIN knowledge k ON k.name = f.target_ref
+      WHERE f.target_kind='knowledge' AND f.target_ref=$1 AND f.state='open' AND f.kind IN ('outdated','code_drift')
+        AND COALESCE(k.body_updated_at, k.updated_at) <= f.last_seen_at
+      ORDER BY f.first_seen_at LIMIT 5`, [name]);
+  return rows.map((r) => ({ kind: String(r.kind), finding_id: Number(r.id), detected_at: String(new Date(String(r.first_seen_at)).toISOString()) }));
 }
 
 export interface ManagerUpsertInput {

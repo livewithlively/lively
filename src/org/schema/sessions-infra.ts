@@ -31,6 +31,7 @@ export const CRON_ACTION_ALLOWLIST = [
   "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
   "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
   "project_gc",            // 자동 생성 프로젝트 정리(방치·장기 미활동)
+  "derive_activity_touches", // 커밋 작업 기록 → activity_touch 유도(ontology_loops.l3_derive)
 ] as const;
 
 /**

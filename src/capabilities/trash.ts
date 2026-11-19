@@ -8,6 +8,7 @@ import { listDeleted, countDeleted, getDeleteSnapshot, purgeDeleted, isDeletedNo
 import { auditOrgContent } from "../v6/content-audit.js";
 import { restoreSource, countTrashedFileSources } from "../v6/source-store.js";
 import { restoreKnowledge } from "../v6/knowledge-store.js";
+import { withPointerMask } from "./knowledge/shared.js";
 import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
 import { canSeeProjectRowVis, projectVisFor, type ProjectVis, type Viewer } from "../v6/visibility.js";
@@ -270,4 +271,4 @@ const contentPurge: Capability = {
   },
 };
 
-export const trashCapabilities: Capability[] = [deletedList, trashCounts, contentRestore, contentSnapshot, contentPurge];
+export const trashCapabilities: Capability[] = [deletedList, trashCounts, ...withPointerMask([contentRestore], "item"), contentSnapshot, contentPurge];

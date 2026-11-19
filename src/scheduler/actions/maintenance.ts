@@ -34,3 +34,15 @@ export async function runPreviewReconcile(): Promise<{ status: string; summary: 
   const { reconcilePreviewEnvs } = await import("../../preview/preview-envs.js");
   return { status: "ok", summary: { envs: await reconcilePreviewEnvs() } };
 }
+
+// 커밋 작업 기록 → activity_touch 유도(activity/derive-touches.ts). 스위치 ontology_loops.l3_derive 가 꺼져 있으면 아무것도 안 한다.
+//  켜는 순간의 첫 실행이 곧 백필이다 — 상태 행도 touch 도 없는 커밋 작업 기록을 모두 넣고 처리한다. 다시 켤 때도 같은 대조가 꺼진 동안의 차이를 메운다.
+export async function runDeriveActivityTouches(): Promise<{ status: string; summary: unknown }> {
+  const { getRuntimeConfig } = await import("../../org/store/runtime-config.js");
+  if (!(await getRuntimeConfig()).ontology_loops.l3_derive) {
+    return { status: "ok", summary: { skipped: "ontology_loops.l3_derive 꺼짐" } };
+  }
+  const { deriveActivityTouches, deriveStats, statusForDerive } = await import("../../activity/derive-touches.js");
+  const run = await deriveActivityTouches();
+  return { status: statusForDerive(run.repos), summary: { ...run, stats: await deriveStats() } };
+}

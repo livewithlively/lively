@@ -261,7 +261,7 @@ export async function buildExport(sel: ExportSelection, viewer: Viewer, opts: { 
   // 본문 밖 연결 — 본문 [[…]] 에서 생긴 엣지는 본문이 진실이라 빼고, 사람이 단 연결만 싣는다.
   const linkRows = await q(itemsPool,
     `SELECT from_name, to_name, relation FROM knowledge_link
-      WHERE from_name = ANY($1::text[]) AND COALESCE(origin, 'user') <> 'wikilink'
+      WHERE from_name = ANY($1::text[]) AND COALESCE(origin, 'user') <> 'wikilink' AND dismissed_at IS NULL
       ORDER BY from_name, to_name, relation`, [names]) as Array<{ from_name: string; to_name: string; relation: string }>;
   const linksBy = new Map<string, Array<{ to: string; relation: string }>>();
   for (const l of linkRows) {

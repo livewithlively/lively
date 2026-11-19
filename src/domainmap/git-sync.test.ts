@@ -20,7 +20,10 @@
 // 14  | 다중 라인 혼합 + 후행 개행         | 순서 보존한 전 행 파싱
 // 15  | 경로에 공백/한글                   | 탭 분리라 원형 보존
 import assert from "node:assert/strict";
-import { parseDiff, sanitizeName, repoClonePath, reposDir } from "./git-sync.js";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseDiff, sanitizeName, repoClonePath, reposDir, withCloneLock, CloneBusyError, CLONE_LOCK_STALE_MS } from "./git-sync.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -83,5 +86,53 @@ t("repoClonePath 은 reposDir 하위 단일 세그먼트(경로탈출 불가)", 
   assert.equal(repoClonePath("../../etc"), reposDir() + "/.._.._etc");
   assert.throws(() => repoClonePath(""), /invalid repo name for clone dir/);
 });
+
+// ── 레포별 clone/fetch 잠금 — 두 색 프로세스·세 호출부(웹훅·git-pull·touch 유도)가 같은 클론을 fetch 한다 ──
+//  잠금이 조용히 새면 git 의 ref 잠금 충돌이 웹훅 502·유도 failed 로 번지고, 낡은 잠금을 못 걷으면 fetch 가 영영 멈춘다.
+{
+  const prevDir = process.env.DOMAINMAP_REPOS_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "clone-lock-"));
+  process.env.DOMAINMAP_REPOS_DIR = dir;
+  const lockFile = join(dir, ".r.fetch.lock");
+  const at = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+  try {
+    await at("잠금을 쥔 동안 다른 시도는 상한까지 기다린 뒤 CloneBusyError · 끝나면 잠금 파일이 없다", async () => {
+      let inner: unknown;
+      await withCloneLock("r", async () => {
+        inner = await withCloneLock("r", async () => "x", 150).catch((e) => e);
+      });
+      assert.ok(inner instanceof CloneBusyError, String(inner));
+      assert.equal(existsSync(lockFile), false);
+    });
+    await at("앞 잠금이 풀리면 기다리던 시도가 이어 받는다", async () => {
+      const order: string[] = [];
+      let release!: () => void;
+      const first = withCloneLock("r", () => new Promise<void>((r) => { order.push("a"); release = r; }));
+      await new Promise((r) => setTimeout(r, 20));
+      const second = withCloneLock("r", async () => { order.push("b"); }, 2_000);
+      setTimeout(() => release(), 150);
+      await Promise.all([first, second]);
+      assert.deepEqual(order, ["a", "b"]);
+    });
+    await at("낡은 잠금(상한 나이 초과)은 걷고 잡는다", async () => {
+      writeFileSync(lockFile, JSON.stringify({ pid: 1, at: Date.now() - CLONE_LOCK_STALE_MS - 1_000, token: "old" }));
+      assert.equal(await withCloneLock("r", async () => "ran", 100), "ran");
+    });
+    await at("내 잠금이 아닌 파일은 지우지 않는다(낡은 것으로 걷힌 뒤 남이 다시 잡은 경우)", async () => {
+      await withCloneLock("r", async () => {
+        writeFileSync(lockFile, JSON.stringify({ pid: 1, at: Date.now(), token: "someone-else" }));
+      });
+      assert.equal(JSON.parse(readFileSync(lockFile, "utf8")).token, "someone-else");
+      rmSync(lockFile);
+    });
+    await at("fn 이 던져도 잠금은 풀린다", async () => {
+      await assert.rejects(withCloneLock("r", async () => { throw new Error("boom"); }), /boom/);
+      assert.equal(existsSync(lockFile), false);
+    });
+  } finally {
+    if (prevDir === undefined) delete process.env.DOMAINMAP_REPOS_DIR; else process.env.DOMAINMAP_REPOS_DIR = prevDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log(`\n${pass} passed`);

@@ -26,7 +26,7 @@ import { denyLifecycleChange } from "./lifecycle-guard.js";
 import { denyMirrorContentWrite } from "./mirror-guard.js";
 import { proposeRevision, pendingStagedRevisionId } from "../../v6/knowledge-revision-store.js";
 import {
-  assertKnowledgeWritable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo,
+  assertKnowledgeWritable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo, withPointerMask,
 } from "./shared.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
@@ -75,8 +75,8 @@ const knowledgeSaveInput = {
     .describe("지식은 항상 recalled 고정이라 저작자가 지정할 수 없다(#335) — 보내지 않는 것이 정상이고, 보낸다면 recalled 만 허용된다. '세션마다 항상 주입'은 관리 ▸ 세션 주입 섹션 문서(org_update_section)로, WIKI 인덱스 핀은 knowledge_set_wiki 로 지정한다."),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
-  supersedes: z.string().optional()
-    .describe(`이 지식이 대체하는 기존 지식의 name. ${softCapHint(CAPS.supersedes)}`),
+  supersedes: z.string().nullable().optional()
+    .describe(`이 지식이 대체하는 기존 지식의 name(표시용 역방향 기록 — 옛 지식을 대체됨으로 만드는 것은 knowledge_set_lifecycle 의 superseded_by). 보내지 않으면 기존 값 유지, null 이면 비움. ${softCapHint(CAPS.supersedes)}`),
   type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
     .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
   category: z.string().optional().describe("분류 key 1개(단일 — category_list). 신규 필수."),
@@ -117,7 +117,7 @@ export const knowledgeSave: Capability = {
     "문법은 Obsidian 과 동일: [[name]] · [[name|표시글]]('|' 뒤는 표시 텍스트지 관계가 아니다) · [[name#헤딩]] · ![[name]]. 자동 엣지는 전부 relation=related — **related 가 아닌 관계(refines·contradicts·depends_on)는 knowledge_link 로 명시**하라(그 엣지는 본문과 무관하게 보존된다). 코드펜스·인라인코드 안의 [[…]] 는 링크로 잡히지 않는다(문법 예시를 쓸 때 유용). " +
     "응답의 wikilink_warning 은 본문이 **없는 지식**을 가리켰다는 뜻이다(저장은 성공) — 오타면 고치고, 아직 없는 지식이면 그대로 둬도 대상이 생기는 대로 자동으로 이어진다. " +
     "**중복 방지(중요): 신규로 만들기 전에 knowledge_similar(또는 knowledge_search)로 같은 내용이 이미 있는지 먼저 확인하라.** 있으면 새로 만들지 말고 그 지식을 **같은 name 으로 갱신**하라(에이전트는 자기 글을 삭제할 수 없으니 사후 정리보다 사전 확인이 맞다). " +
-    "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 supersedes 로 기존을 대체하거나 한쪽으로 병합을 검토하라. " +
+    "신규 저장 응답에 similar 가 오면(유사도 높음) 중복일 수 있으니 — 별개 주제가 아니라면 기존을 knowledge_set_lifecycle(superseded, superseded_by=새 지식 name)로 대체하거나 한쪽으로 병합을 검토하라. " +
     "**검토 게이트(#783): 조직이 '에이전트 지식 검토'를 켜 두면** 네가 저장한 지식은 곧바로 유효해지지 않고 사람 승인 대기로 갈 수 있다 — 응답의 gate 필드가 그 결과를 알려준다(pending=검토대기 저장 · stage=수정 제안만 접수, 라이브 본문 미변경 · review=반영됐으나 사후검토 대상). " +
     "gate 가 오면 그 사실을 사용자에게 그대로 알려라(‘저장했다’가 아니라 ‘검토 대기로 접수됐다’). 게이트가 꺼져 있으면 gate 필드는 없고 종전처럼 즉시 반영된다. " +
     "**자료를 지식으로 증류할 땐 derived_from(자료 id 배열)을 실어라(#4824)** — 저장·원본 연결·공개범위가 한 번에 된다(source_link_knowledge 를 따로 부르지 않는다). 잠긴 자료(볼 수 있는 사람만)에서 나온 지식은 그 사람들만 보도록 저장되고, 잠긴 자료를 더 넓게 보이는 기존 지식에 합치는 저장은 409 로 거절된다(새 이름으로 따로 저장하라). 증류 배치에서는 derived_from 없는 저장이 거절된다. " +
@@ -175,7 +175,7 @@ export const knowledgeSave: Capability = {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
           body_md, provenance, lifecycle,
-          supersedes: b.supersedes ? String(b.supersedes) : undefined,
+          supersedes: b.supersedes === null ? null : b.supersedes ? String(b.supersedes) : undefined,   // null = 비움(미전송 = 기존 값 유지)
           type: b.type ? String(b.type) : undefined,
           category,
           is_folder,
@@ -401,12 +401,12 @@ export const knowledgeSave: Capability = {
             note: "검토 대기(pending)로 저장됐습니다 — 사람이 승인하기 전까지 검색·세션주입·목록에 노출되지 않습니다(knowledge_get·knowledge_list(lifecycle='pending')로는 조회 가능). 같은 name 으로 다시 저장하면 이 초안이 갱신됩니다." }
         : null;
       // 저장-시 중복감지(#172) — 신규(version=1)일 때만, 방금 저장된 임베딩으로 최근접 검색(재임베딩 X).
-      //  임베딩 off / 유사 없음이면 그냥 { knowledge }. 비차단 경고 — 중복이면 supersedes/병합을 사람·에이전트가 판단.
+      //  임베딩 off / 유사 없음이면 그냥 { knowledge }. 비차단 경고 — 중복이면 대체(set_lifecycle superseded_by)·병합을 사람·에이전트가 판단.
       if ((knowledge as any)?.version === 1) {
         // 중복경고도 뷰어 기준 — 안 보이는 문서를 "비슷한 게 있다"고 알려주면 그 제목·발췌가 그대로 나간다.
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY }, ctx?.viewer ?? null);
         if (similar.length) {
-          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 기존을 knowledge_set_lifecycle(superseded, superseded_by=새 지식 name)로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
       return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
@@ -514,12 +514,15 @@ export const knowledgeSave: Capability = {
 const knowledgeSetLifecycleInput = {
   name: z.string().min(1).max(64),
   lifecycle: z.enum(["active", "pending", "superseded", "archived"]),
+  superseded_by: z.string().min(1).max(64).optional()
+    .describe("lifecycle='superseded' 일 때 이 지식을 대체하는 후속 지식의 name(지금 active 여야 한다). superseded 로 바꿀 때 필수 — 이미 superseded 이고 후속이 있으면 생략 시 유지, 다른 이름을 주면 교체. 다른 lifecycle 에는 보내지 않는다(그 전환이 후속을 비운다)."),
 };
 type KnowledgeSetLifecycleInput = z.infer<z.ZodObject<typeof knowledgeSetLifecycleInput>>;
 export const knowledgeSetLifecycle: Capability = {
   name: "knowledge_set_lifecycle",
   title: "지식 lifecycle",
   description: "active/pending/superseded/archived 전환. pending→active = 검토 승인(#638/#783 게이트). active→pending = 검토대기로 되돌림. 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551). " +
+    "superseded(새 지식으로 대체됨)는 superseded_by 에 후속 지식 name 을 함께 줘야 한다 — 후속이 없으면 400 이니 archived 로 보관한다. 외부 미러 지식은 superseded 로 바꿀 수 없다(원본이 상태를 정한다). " +
     "⚠ 승인(→active)과 '검토 대기 중 지식의 상태 변경'은 **사람 전용**(웹) — 에이전트(MCP)는 403. 자기가 쓴 지식을 스스로 승인할 수 없다. " +
     "외부 미러의 archived→active «복원» 은 사람도 403 — 원본에서 복원하면 싱크가 따라온다(#638). 미러의 pending→active 검토 승인은 정상 경로다.",
   scope: "memory",
@@ -528,9 +531,14 @@ export const knowledgeSetLifecycle: Capability = {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/lifecycle"],
       parse: (req) => {
-        const lifecycle = String(((req.body ?? {}) as Record<string, unknown>).lifecycle ?? "");
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const lifecycle = String(b.lifecycle ?? "");
         if (!["active", "pending", "superseded", "archived"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending|superseded|archived");
-        return { name: String(req.params?.name ?? ""), lifecycle };
+        //  REST 는 zod 를 타지 않으므로 MCP 입력(min 1 · max 64)과 같은 상한을 여기서 건다.
+        if (b.superseded_by != null && (typeof b.superseded_by !== "string" || !b.superseded_by || b.superseded_by.length > 64)) {
+          throw new HttpError(400, "superseded_by 는 지식 name(1~64자 문자열)");
+        }
+        return { name: String(req.params?.name ?? ""), lifecycle, superseded_by: (b.superseded_by as string | undefined) ?? undefined };
       } }],
   },
   handler: async (input: KnowledgeSetLifecycleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
@@ -543,8 +551,10 @@ export const knowledgeSetLifecycle: Capability = {
       externalSystem: gate.external_system,
     });
     if (denied) throw new HttpError(403, denied);
+    //  후속도 쓰기 게이트를 탄다 — 안 보이는 지식을 후속으로 걸면 그 이름이 포인터로 새고, 존재 여부도 판정 문구로 샌다.
+    if (input.superseded_by) await assertKnowledgeWritable(input.superseded_by, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx) };
+    return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx, { supersededBy: input.superseded_by }) };
   },
 };
 
@@ -944,12 +954,12 @@ export const knowledgeMove: Capability = {
   },
 };
 
-export const authoringCapabilities: Capability[] = [
+export const authoringCapabilities: Capability[] = withPointerMask([
   // #1442 knowledgeSetTitle 은 **맨 뒤**에 붙인다 — 앞에 끼우면 기존 op 들의 등록 순서(= tools/list 순 ·
   //  REST 마운트 순 · 표면 스냅샷)가 통째로 밀린다. 새 op 추가만이 표면 변화이도록 자리를 고른다.
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeSetTitle, knowledgeSetFields,
   knowledgeSetSearchable,   // #5169 — 같은 까닭으로 맨 뒤(새 op 추가만이 표면 변화)
-];
+]);
 // #592 트리 이동 — 원본 등록 배열에서 **맨 뒤**(다른 :name 하위 경로들 뒤)였다. 도메인은 저작이지만
 //  등록 순서(= tools/list 순 · REST 마운트 순 · 표면 스냅샷)를 바꾸지 않으려 자리를 지켜 따로 내보낸다.
-export const authoringMoveCapabilities: Capability[] = [knowledgeMove];
+export const authoringMoveCapabilities: Capability[] = withPointerMask([knowledgeMove]);

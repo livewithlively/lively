@@ -42,7 +42,7 @@ export const ITEMS_CONTENT_TABLES: readonly string[] = [
   "task_link", "task_tag", "task_tag_link", "task_time_entry",
   "team", "team_member",
   // 활동·도메인맵
-  "activity", "activity_touch", "change_log", "code_unit", "data_entity",
+  "activity", "activity_touch", "activity_touch_derive", "change_log", "code_unit", "data_entity",
   "debt_finding", "mapping", "repo", "scan_run", "dash_watch", "kind_registry",
 ];
 

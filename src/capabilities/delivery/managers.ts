@@ -2,16 +2,17 @@
 //
 //  ⚠ org_manager_finding_report 는 **AI 가 쓰는 도구**다(모순·코드괴리 판정 배치가 결과를 되돌려 적는 경로).
 //   나머지는 사람 화면용. 둘을 같은 파일에 두되 성격이 다름을 명시한다.
-import type { Capability } from "../types.js";
+import type { Capability, CapabilityCtx } from "../types.js";
+import { assertKnowledgeWritable } from "../knowledge/shared.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import {
   listManagers, getManager, upsertManager, removeManager,
-  listFindings, resolveFinding, upsertFinding, managerOverview, applyFindings,
+  listFindings, resolveFinding, upsertFinding, reportContradiction, managerOverview, applyFindings,
   MANAGER_KIND_LABEL, type ManagerKind,
 } from "../../org/store/managers.js";
-import { runManagerByRef, applyAction } from "../../org/manage/run-manager.js";
+import { runManagerByRef, applyFinding } from "../../org/manage/run-manager.js";
 import { itemsPool } from "../../db/client.js";
 import { actorOf, restWork, str } from "./shared.js";
 
@@ -117,27 +118,46 @@ export const managersCapabilities: Capability[] = [
     }),
 
   restWork("org_manager_finding_resolve", "발견 처리(승인·반려·해결)",
-    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다) · resolved=사람이 직접 고침. " +
+    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다 · 모순이면 처리하는 사람이 두 지식을 모두 쓸 수 있을 때만 관리기가 건 contradicts 링크도 해제하고, 해제한 링크 수를 links_dismissed 로 돌려준다) · resolved=사람이 직접 고침. " +
     "apply=true 면 accepted 시 조치안(예: 분류 이동)을 실제로 적용한다 — 되돌릴 수 있는 조치만 수행된다.",
     [{ method: "POST", paths: ["/api/ui/org/manager-findings/:id/resolve"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id), ...(req.body as object ?? {}),
     }) }],
-    async (input: Record<string, unknown>, user: LivelyUser) => {
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = Number(input.id);
       if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "발견 id 필요");
       const state = String(input.state ?? "resolved") as "accepted" | "rejected" | "resolved";
       if (!["accepted", "rejected", "resolved"].includes(state)) throw new HttpError(400, "state 는 accepted|rejected|resolved");
 
-      let applied = false;
+      const resolution = input.resolution === undefined || input.resolution === null ? null : String(input.resolution).slice(0, 2000);
+      const source = ctx?.source ?? "web";
       if (state === "accepted" && input.apply === true) {
-        const cur = (await itemsPool.query(
-          `SELECT proposed_action FROM org_manager_finding WHERE id=$1`, [id])).rows[0] as { proposed_action: unknown } | undefined;
-        if (cur?.proposed_action) applied = await applyAction(cur.proposed_action, actorOf(user));
+        //  적용과 닫기가 한 트랜잭션이다(applyFinding). 그 결과를 아래 resolveFinding 으로 다시 덮지 않는다 —
+        //   applied·stale 은 이미 닫혔고, skipped 는 열린 발견(적용할 조치가 없음)만 accepted 로 닫는다(그 사이 남이 반려했으면 그대로),
+        //   failed 는 열어 둔다(조용히 닫으면 안 고쳐진 게 사라진다).
+        const r = await applyFinding(id, actorOf(user), resolution);
+        if (r === "skipped") await resolveFinding(id, "accepted", actorOf(user), resolution, { onlyOpen: true, source });
+        const finding = (await itemsPool.query(`SELECT * FROM org_manager_finding WHERE id=$1`, [id])).rows[0];
+        if (!finding) throw new HttpError(404, "발견을 찾을 수 없습니다");
+        return { finding, applied: r === "applied", result: r };
       }
-      const finding = await resolveFinding(id, state, actorOf(user),
-        input.resolution === undefined || input.resolution === null ? null : String(input.resolution).slice(0, 2000));
-      if (!finding) throw new HttpError(404, "발견을 찾을 수 없습니다");
-      return { finding, applied };
+      //  모순 반려는 그 쌍의 관리기 링크를 해제한다 — 링크 해제(knowledge_link unlink)와 같은 양 끝 판정을 통과할 때만.
+      //   못 보는 지식이 낀 쌍은 발견만 반려한다(이 길이 링크 쓰기 게이트를 돌아가지 않게).
+      let allowDismiss = true;
+      if (state === "rejected") {
+        const cur = (await itemsPool.query(`SELECT kind, target_kind, target_ref, dedup_key FROM org_manager_finding WHERE id=$1`, [id])).rows[0] as
+          { kind: string; target_kind: string; target_ref: string; dedup_key: string } | undefined;
+        if (cur?.kind === "contradiction" && cur.target_kind === "knowledge" && cur.dedup_key) {
+          const viewer = ctx?.viewer ?? null;
+          allowDismiss = await Promise.all([assertKnowledgeWritable(cur.target_ref, viewer), assertKnowledgeWritable(cur.dedup_key, viewer)])
+            .then(() => true, () => false);
+        }
+      }
+      const row = await resolveFinding(id, state, actorOf(user), resolution, { source, allowDismiss });
+      if (!row) throw new HttpError(404, "발견을 찾을 수 없습니다");
+      const { links_dismissed, ...finding } = row;
+      //  모순 반려에만 싣는다 — 0 은 «해제할 관리기 링크가 없었거나 처리자가 양 끝을 쓸 수 없어 두었다» 이다.
+      return { finding, applied: false, ...(state === "rejected" && finding.kind === "contradiction" ? { links_dismissed: links_dismissed ?? 0 } : {}) };
     }, {
       id: z.number().int().positive(),
       state: z.enum(["accepted", "rejected", "resolved"]).describe("rejected 는 존중된다 — 다음 주기에 되살아나지 않는다"),
@@ -158,7 +178,7 @@ export const managersCapabilities: Capability[] = [
         ids = open.filter((f) => f.actionable).map((f) => f.id);
       }
       if (!ids.length) throw new HttpError(400, "적용할 발견이 없습니다 — ids 또는 manager_id 를 주세요");
-      const r = await applyFindings(ids, actorOf(user), applyAction);
+      const r = await applyFindings(ids, actorOf(user), applyFinding);
       return r;
     }, {
       ids: z.array(z.number().int().positive()).optional().describe("적용할 발견 id 들"),
@@ -171,11 +191,11 @@ export const managersCapabilities: Capability[] = [
     "같은 (관리기·대상·dedup_key)는 한 행으로 합쳐지고 재보고는 카운트만 오른다. 사람이 반려한 것은 되살아나지 않는다. " +
     "⚠ 확신이 없으면 보고하지 마라 — 거짓 경보가 반복되면 이 큐 전체가 무시된다.",
     [{ method: "POST", paths: ["/api/ui/org/manager-findings"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>) => {
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const mk = str(input.manager_key, "manager_key", 64);
       const m = await getManager(mk);
       if (!m) throw new HttpError(404, `관리기를 찾을 수 없습니다: ${mk}`);
-      const r = await upsertFinding(m.id, m.kind, {
+      const f = {
         target_kind: (input.target_kind ? String(input.target_kind) : "knowledge") as "knowledge" | "category" | "domain",
         target_ref: str(input.target_ref, "target_ref", 300),
         dedup_key: input.dedup_key === undefined || input.dedup_key === null ? "" : String(input.dedup_key).slice(0, 300),
@@ -183,13 +203,25 @@ export const managersCapabilities: Capability[] = [
         summary: str(input.summary, "summary", 1000),
         evidence: input.evidence === undefined || input.evidence === null ? undefined : String(input.evidence).slice(0, 10_000),
         proposed_action: (input.proposed_action ?? undefined) as Record<string, unknown> | undefined,
-      });
+      };
+      //  모순은 두 지식의 쌍이다 — 방향을 서버가 정하고 contradicts 링크까지 한 번에(reportContradiction 머리말).
+      //  링크는 보고한 사람이 두 지식을 다 쓸 수 있을 때만 만든다(knowledge_link 와 같은 양 끝 판정). 판정 배치는 의뢰자의 신원으로
+      //   보고하므로 의뢰자가 못 보는 쌍은 발견만 남는다. 응답에 링크 여부를 싣지 않는다 — 안 보이는·없는 이름이 «링크 안 됨» 으로
+      //   갈리면 존재가 샌다.
+      if (m.kind === "contradiction" && f.target_kind === "knowledge" && f.dedup_key && f.dedup_key !== f.target_ref) {
+        const viewer = ctx?.viewer ?? null;
+        const allowLink = await Promise.all([assertKnowledgeWritable(f.target_ref, viewer), assertKnowledgeWritable(f.dedup_key, viewer)])
+          .then(() => true, () => false);
+        const r = await reportContradiction(m, f, { actor: actorOf(user), source: ctx?.source ?? "mcp", allowLink });
+        return { result: r.result };
+      }
+      const r = await upsertFinding(m.id, m.kind, f);
       return { result: r };
     }, {
       manager_key: z.string().describe("이 발견을 낸 관리기 key(프롬프트가 알려준 값)"),
       target_kind: z.enum(["knowledge", "category", "domain"]).optional().describe("기본 knowledge"),
       target_ref: z.string().describe("대상 식별자 — 지식 name 또는 카테고리 key"),
-      dedup_key: z.string().nullable().optional().describe("같은 대상의 다른 문제를 가르는 값(모순이면 상대 지식 이름). 단일 문제면 비움"),
+      dedup_key: z.string().nullable().optional().describe("같은 대상의 다른 문제를 가르는 값(모순이면 상대 지식 이름 — 두 이름의 순서는 서버가 정하고 두 지식을 contradicts 로 잇는다). 단일 문제면 비움"),
       severity: z.enum(["note", "warn", "high"]).optional(),
       summary: z.string().describe("무엇이 문제인지 한 줄"),
       evidence: z.string().nullable().optional().describe("근거 — 양쪽에서 인용한 문장(모순) 또는 정의↔코드 파일:라인(코드괴리). 필수에 가깝다"),

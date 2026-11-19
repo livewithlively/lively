@@ -11,7 +11,8 @@
 //    걸리도록 해 종전 catch 범위(prepareGitAuth 실패는 번역 대상 아님)를 정확히 보존한다.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { resolveGitSecret, hostOf, prepareGitAuth } from "../org/credentials/git-credential-store.js";
 import { stateDir } from "../ops/state-dir.js";
@@ -58,6 +59,66 @@ export async function git(args: string[], cwd: string | undefined, extraEnv: Rec
 export interface EnsureCloneOpts extends GitOpts {
   /** clone/fetch 실패 번역 훅(호출부 소유). 호출되면 반드시 throw 한다 — 미지정이면 raw 전파. */
   onGitError?: (e: unknown) => never;
+  /** 레포별 clone/fetch 잠금을 기다리는 상한(ms). 기본 CLONE_LOCK_WAIT_MS. */
+  lockWaitMs?: number;
+}
+
+// ── 레포별 clone/fetch 잠금 ──
+//  같은 클론을 웹훅·git-pull·작업 기록 touch 유도(activity/derive-touches.ts)가 함께 fetch 하고, blue/green 두 색
+//  프로세스가 같은 데이터 디렉터리를 본다. 그래서 프로세스 안 뮤텍스로는 못 막고 파일로 잠근다.
+//  DB advisory lock 을 쓰지 않는 이유: 세션 락은 풀 연결 하나를 fetch 내내 쥐고(레포 수만큼 점유), 본 작업이 두 번째
+//  연결을 쓰면 풀이 잠금만으로 바닥날 수 있다(dispatch-lock.ts 머리말과 같은 이유).
+//  pid 생존으로 낡은 잠금을 가리지 않는다 — 두 색이 다른 pid 네임스페이스(컨테이너)일 수 있어 남의 잠금을 죽은 것으로 볼 수 있다.
+//  그래서 나이만 본다: CLONE_LOCK_STALE_MS 는 git 한 번의 최대 타임아웃(git-pull 180s)보다 길어야 한다.
+export const CLONE_LOCK_WAIT_MS = 10_000;
+export const CLONE_LOCK_STALE_MS = 10 * 60_000;
+
+/** 잠금을 기다리다 상한에 닿았다 — 호출부는 오류가 아니라 「다음에 다시」로 다룬다. */
+export class CloneBusyError extends Error {
+  readonly code = "ECLONEBUSY";
+  constructor(repoName: string) { super(`clone busy: ${sanitizeName(repoName)}`); }
+}
+
+function cloneLockPath(repoName: string): string {
+  const safe = sanitizeName(repoName);
+  if (!safe) throw new Error("invalid repo name for clone dir");
+  // 클론 디렉터리 옆에 둔다 — 첫 clone 전에는 클론 디렉터리가 없다.
+  return join(reposDir(), `.${safe}.fetch.lock`);
+}
+
+function lockAgeMs(path: string): number | null {
+  try {
+    const at = Number((JSON.parse(readFileSync(path, "utf8")) as { at?: unknown }).at);
+    if (Number.isFinite(at)) return Date.now() - at;
+  } catch { /* 쓰는 도중이거나 깨진 파일 — mtime 으로 */ }
+  try { return Date.now() - statSync(path).mtimeMs; } catch { return null; }
+}
+
+/** 레포별 파일 잠금 아래에서 fn 을 돈다. waitMs 안에 못 얻으면 CloneBusyError. */
+export async function withCloneLock<T>(repoName: string, fn: () => Promise<T>, waitMs: number = CLONE_LOCK_WAIT_MS): Promise<T> {
+  const path = cloneLockPath(repoName);
+  mkdirSync(reposDir(), { recursive: true });
+  const token = randomUUID();
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      const fd = openSync(path, "wx");
+      try { writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now(), token })); } finally { closeSync(fd); }
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
+    }
+    const age = lockAgeMs(path);
+    if (age !== null && age > CLONE_LOCK_STALE_MS) { try { unlinkSync(path); } catch { /* 다른 쪽이 먼저 걷었다 */ } continue; }
+    if (Date.now() >= deadline) throw new CloneBusyError(repoName);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  try { return await fn(); }
+  finally {
+    // 내 잠금일 때만 지운다 — 낡은 것으로 걷힌 뒤 남이 새로 잡은 잠금을 지우지 않게.
+    try { if ((JSON.parse(readFileSync(path, "utf8")) as { token?: unknown }).token === token) unlinkSync(path); }
+    catch { /* 이미 없다 */ }
+  }
 }
 
 // Ensure a local clone exists & is up to date. Clones from git_url if missing,
@@ -71,15 +132,20 @@ export async function ensureClone(repoName: string, gitUrl: string, opts: Ensure
   const secret = await resolveGitSecret(null, hostOf(gitUrl) ?? "github.com").catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {
-    if (!existsSync(cloneDir)) {
-      mkdirSync(dir, { recursive: true }); // 호스트 환경: 부모 디렉 보장(클론 자체엔 무영향)
-      await git(["clone", gitUrl, cloneDir], undefined, auth.env, opts);
-    } else {
-      await git(["-C", cloneDir, "fetch", "--prune", "--quiet"], undefined, auth.env, opts);
-    }
-  } catch (e) {
-    if (opts.onGitError) opts.onGitError(e);
-    throw e;
+    // 잠금 대기 실패(CloneBusyError)는 onGitError 로 번역하지 않는다 — git 오류가 아니라 「다음에 다시」다.
+    await withCloneLock(repoName, async () => {
+      try {
+        if (!existsSync(cloneDir)) {
+          mkdirSync(dir, { recursive: true }); // 호스트 환경: 부모 디렉 보장(클론 자체엔 무영향)
+          await git(["clone", gitUrl, cloneDir], undefined, auth.env, opts);
+        } else {
+          await git(["-C", cloneDir, "fetch", "--prune", "--quiet"], undefined, auth.env, opts);
+        }
+      } catch (e) {
+        if (opts.onGitError) opts.onGitError(e);
+        throw e;
+      }
+    }, opts.lockWaitMs);
   } finally {
     await auth.cleanup();
   }

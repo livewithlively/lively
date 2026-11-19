@@ -17,23 +17,26 @@
 //                   (deduped) — fed straight into refresh()'s apply loop.
 //     summary     = { module_renames, new_dirs, noop_in_existing, noop_delete,
 //                     ambiguous_moves: [{from, to, votes, reason}] }
-export function aggregateFileChanges(fileChanges: unknown, unitPaths: unknown): { unitChanges: any[]; summary: any } {
-  const changes: any[] = Array.isArray(fileChanges) ? fileChanges : [];
-  // Existing units, longest-first so ownerOf picks the most specific (longest) unit.
-  const units = (Array.isArray(unitPaths) ? unitPaths : []).filter((u): u is string => typeof u === "string" && u !== "");
-  const unitSet = new Set(units);
-  const unitsByLen = [...units].sort((a, b) => b.length - a.length);
-
-  // ownerOf(p) = the LONGEST unit U where p === U OR p startsWith U + '/'.
-  // Segment-boundary safe: the trailing '/' means 'backend/src/campaigns' does NOT
-  // own 'backend/src/campaigns-v2/x.ts'. null if no unit owns p.
-  const ownerOf = (p: unknown): string | null => {
+// ownerOf(p) = the LONGEST unit U where p === U OR p startsWith U + '/'.
+// Segment-boundary safe: the trailing '/' means 'backend/src/campaigns' does NOT
+// own 'backend/src/campaigns-v2/x.ts'. null if no unit owns p.
+// Exported so commit→activity_touch derivation (activity/derive-touches.ts) maps files with the same rule.
+export function unitOwner(unitPaths: readonly string[]): (p: unknown) => string | null {
+  const unitsByLen = unitPaths.filter((u) => typeof u === "string" && u !== "").sort((a, b) => b.length - a.length);
+  return (p: unknown): string | null => {
     if (typeof p !== "string" || p === "") return null;
     for (const u of unitsByLen) {
       if (p === u || p.startsWith(u + "/")) return u;
     }
     return null;
   };
+}
+
+export function aggregateFileChanges(fileChanges: unknown, unitPaths: unknown): { unitChanges: any[]; summary: any } {
+  const changes: any[] = Array.isArray(fileChanges) ? fileChanges : [];
+  const units = (Array.isArray(unitPaths) ? unitPaths : []).filter((u): u is string => typeof u === "string" && u !== "");
+  const unitSet = new Set(units);
+  const ownerOf = unitOwner(units);
 
   // parentDir(p) = immediate parent directory, or null for a top-level file.
   const parentDir = (p: string): string | null => {
