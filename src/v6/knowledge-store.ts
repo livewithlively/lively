@@ -789,9 +789,14 @@ export async function linkKnowledgeCategory(name: string, categoryId: number, st
     `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1`,
     [name]) as { category_id: number; state: string; mapped_by: string } | undefined;
   //  비활성 분류는 지식을 새로 받지 않는다(upsertKnowledge 의 같은 규칙이 여기서 최종으로 걸린다 — 직접 연결 · 되돌리기도 이 문을 지난다).
-  //   FOR KEY SHARE 는 비활성 전환의 FOR UPDATE 와 부딪쳐, 전환이 진행 중이면 기다렸다가 바뀐 state 를 본다. 없는 id 는 아래 INSERT 의 FK 가 거절한다.
+  //   FOR KEY SHARE 는 비활성 전환의 FOR UPDATE 와 부딪쳐, 전환이 진행 중이면 기다렸다가 바뀐 state 를 본다.
+  //   없는 id(삭제와 겹친 연결 포함)는 404 다 — INSERT 의 FK 오류로 두면 REST 래퍼가 500 으로 덮는다.
+  //   rejected 매핑은 «이미 든 지식» 으로 치지 않는다 — 비활성 전환 검사가 rejected 를 세지 않으므로, 예외로 두면
+  //   rejected 로 걸어 두고 전환한 뒤 confirmed 로 다시 거는 두 번의 호출로 비활성 분류에 지식이 들어간다(pg-test L5).
   const cat = await one(db, `SELECT key, state FROM category WHERE id=$1 FOR KEY SHARE`, [categoryId]) as { key: string; state: string } | undefined;
-  if (cat && cat.state !== "active" && !(prev && Number(prev.category_id) === categoryId)) {
+  if (!cat) throw new HttpError(404, `category id ${categoryId} 가 없습니다 — category_list 에서 분류를 골라 다시 연결하세요.`);
+  const alreadyIn = prev && Number(prev.category_id) === categoryId && prev.state !== "rejected";
+  if (cat.state !== "active" && !alreadyIn) {
     throw new HttpError(400, inactiveCategoryMessage(cat.key, cat.state));
   }
   // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).

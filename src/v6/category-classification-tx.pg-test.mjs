@@ -17,6 +17,8 @@
 //   L3 경쟁: 비활성 전환이 커밋 전일 때 그 분류로 교체가 시작되고, 그 뒤 전환이 커밋된다 → 400 · 옛 분류가 남는다
 //      (잠그지 않고 state 를 읽으면 전환 전 값을 보고, 매핑 INSERT 의 FK 는 기다렸다가 비활성 분류에 넣는다)
 //   L4 직접 연결도 비활성 분류는 400 · 옛 분류가 남는다
+//   L5 rejected 매핑은 «이미 든 지식» 이 아니다: rejected 로 걸린 활성 지식이 있는 채 분류가 비활성이 되면(전환 검사는 rejected 를
+//      세지 않는다) 그 지식을 같은 분류에 confirmed 로 다시 거는 연결은 400 · 매핑은 rejected 그대로
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { updateCategory } = await import(`${DIST}/v6/category-store.js`);
@@ -118,7 +120,7 @@ try {
   { const a = await mkCat(); const k = await mkKnow(); await map(k, a.id);
     const missing = (await itemsPool.query(`SELECT COALESCE(max(id), 0) + 100000 AS id FROM category`)).rows[0].id;
     const r = await attempt(() => linkKnowledgeCategory(k, Number(missing), "confirmed", { actor: TAG, source: "web" }));
-    chk("L1 전제. 없는 분류로의 교체는 실패한다", r.threw, why(r));
+    chk("L1 전제. 없는 분류로의 교체는 404 로 실패한다", r.threw && r.status === 404, why(r));
     chk("L1 read-back. 옛 분류가 남았다(미분류가 되지 않는다)", JSON.stringify(await mappings(k)) === JSON.stringify([a.id]), JSON.stringify(await mappings(k))); }
 
   { const a = await mkCat(), b = await mkCat(), c = await mkCat(); const k = await mkKnow(); await map(k, a.id);
@@ -139,6 +141,15 @@ try {
     const r = await attempt(() => linkKnowledgeCategory(k, dep.id, "confirmed", { actor: TAG, source: "web" }));
     chk("L4 직접 연결도 비활성 분류는 400", r.threw && r.status === 400, why(r));
     chk("L4 read-back. 옛 분류가 남았다", JSON.stringify(await mappings(k)) === JSON.stringify([a.id]), JSON.stringify(await mappings(k))); }
+
+  { const c = await mkCat(); const k = await mkKnow();
+    await itemsPool.query(`INSERT INTO knowledge_category(name, category_id, mapped_by, state) VALUES($1, $2, 'manual', 'rejected')`, [k, c.id]);
+    const d = await attempt(() => updateCategory(c.id, { state: "deprecated" }, { actor: TAG, source: "web" }));
+    chk("L5 전제. rejected 매핑만 있는 분류는 비활성이 된다", !d.threw && (await catState(c.id)) === "deprecated", why(d));
+    const r = await attempt(() => linkKnowledgeCategory(k, c.id, "confirmed", { actor: TAG, source: "web" }));
+    chk("L5 rejected 매핑을 confirmed 로 다시 거는 연결도 비활성 분류는 400", r.threw && r.status === 400 && /비활성/.test(r.msg), why(r));
+    const st = (await itemsPool.query(`SELECT state FROM knowledge_category WHERE name=$1 AND category_id=$2`, [k, c.id])).rows[0]?.state;
+    chk("L5 read-back. 매핑은 rejected 그대로", st === "rejected", `state=${st}`); }
 } finally {
   await cleanup().catch(() => {});
   await itemsPool.end().catch(() => {});
