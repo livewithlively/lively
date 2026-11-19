@@ -256,8 +256,9 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
         is_folder: k.is_folder,
         parent_name: parentLocal && (written.has(k.parent!) || target.names.has(parentLocal)) ? parentLocal : null,
         sort: k.sort,
-        //  꾸러미에 값이 없으면 null(비움) — 덮어쓰기는 꾸러미를 따른다. undefined 는 저장에서 «기존 값 유지» 다.
-        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? undefined) : null,
+        //  덮어쓰기는 꾸러미를 따른다 — 꾸러미에 값이 없거나 대상에서 그 이름을 못 찾으면 null(비움). undefined 는 저장에서
+        //   «기존 값 유지» 라, 쓰면 꾸러미와 무관한 옛 포인터가 남는다.
+        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? null) : null,
       };
       const wantFields: Record<string, unknown> = { ...k.fields };
       if (k.provenance === "observed" && k.external_url) wantFields[ORIGIN_URL_FIELD] = k.external_url;
