@@ -163,6 +163,10 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_backfill_paused BOOLEAN NOT NULL DEFAULT false;
     -- #5204 지식 조각 검색 되돌리기. 끄면 찾기 · 자동 소환이 문서 벡터로 돌아간다(조각 색인과 임베딩은 계속 돈다).
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS knowledge_chunk_search BOOLEAN NOT NULL DEFAULT true;
+    -- 지식 연결 루프 스위치(키별 boolean). 키가 없으면 꺼짐 — 머지된 코드가 일일 반영으로 바로 배포되므로 켜는 시점은 조직이 정한다.
+    --  l2_autoresolve: 관리기(mismatch·outdated)가 실행 끝에 열린 발견을 다시 판정해 성립하지 않으면 닫는다.
+    --  l3_derive: 커밋 작업 기록의 변경 파일로 activity_touch 를 유도한다(activity/derive-touches.ts).
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ontology_loops JSONB NOT NULL DEFAULT '{}'::jsonb;
     -- #1291 맥락 유형별 공개범위 켜기/끄기. 키가 없으면 '켜짐'(현행 동작) — 새 축이 추가돼도 자동으로 켜진 채 시작한다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS visibility_axes JSONB NOT NULL DEFAULT '{}'::jsonb;
     -- #5598 새 프로젝트 공개 방식 — 'invite'(초대제: 만든 사람과 초대한 사람만) | 'open'(전체 공개: 초안만 닫혔다가 풀리면 전원).

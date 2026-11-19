@@ -59,13 +59,13 @@ export async function detectMismatch(m: ManagerRow, limit: number): Promise<Find
       SELECT k.name, k.title, c.id AS cat_id, c.key AS cat_key, c.name AS cat_name,
              (k.embedding_vector <=> c.embedding_vector) AS own_dist,
              (SELECT oc.key FROM category oc
-               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id
+               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
                ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) AS near_key,
              (SELECT oc.id FROM category oc
-               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id
+               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
                ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) AS near_id,
              (SELECT (k.embedding_vector <=> oc.embedding_vector) FROM category oc
-               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id
+               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
                ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) AS near_dist
         FROM knowledge_category kc
         JOIN knowledge k ON k.name = kc.name
@@ -108,6 +108,15 @@ export async function detectMismatch(m: ManagerRow, limit: number): Promise<Find
 //   진짜 신호(ⓐ)가 묻힌다 — 거짓 경보가 반복되면 배지 자체가 무시된다(#1153 이 이미 배운 것).
 export const OUTDATED_DEFAULT_DAYS = 30;
 
+//  시각 두 개를 «내용이 바뀐 때» 로 잰다. 행의 updated_at 은 내용과 무관하게 오른다 — 지식은 제목·분류·속성 저장에,
+//   자료는 커넥터의 다시 그리기(렌더링 변경)에. 그대로 쓰면 메타 수정만으로 발견이 사라지거나, 렌더링 일괄 갱신으로 발견이 쏟아진다.
+//   자료의 원본 수정 시각은 저장되지 않아 원본 시각(occurred_at)으로 대신한다. 둘 다 없는 자료만 행 시각이다.
+//  인용 관계는 derived_from(이 자료에서 나온 지식)만 본다 — cites(참고로 건 자료)가 새로워졌다고 결론이 낡은 것은 아니다.
+//  탐지(detectOutdated)와 재판정(reevaluateOpenFindings)이 같은 식을 쓴다 — 갈리면 재판정이 방금 연 발견을 닫는다.
+const OUTDATED_K_TIME = "COALESCE(k.body_updated_at, k.updated_at)";
+const OUTDATED_S_TIME = "COALESCE(s.occurred_at, s.updated_at)";
+const OUTDATED_JOIN = "JOIN knowledge_source ks ON ks.name = k.name AND ks.relation = 'derived_from' JOIN source s ON s.id = ks.source_id";
+
 export async function detectOutdated(m: ManagerRow, limit: number): Promise<Finding[]> {
   const params: unknown[] = [];
   const conds = scopeConds(m, params);
@@ -117,17 +126,16 @@ export async function detectOutdated(m: ManagerRow, limit: number): Promise<Find
   const limP = `$${params.length}`;
 
   const rows = await q(itemsPool, `
-    SELECT k.name, k.title, k.updated_at,
-           max(s.updated_at) AS src_updated,
+    SELECT k.name, k.title, ${OUTDATED_K_TIME} AS k_time,
+           max(${OUTDATED_S_TIME}) AS src_updated,
            count(*)::int AS src_count,
-           (array_agg(s.title ORDER BY s.updated_at DESC))[1] AS newest_src_title,
-           EXTRACT(EPOCH FROM (max(s.updated_at) - k.updated_at)) / 86400 AS days_behind
+           (array_agg(s.title ORDER BY ${OUTDATED_S_TIME} DESC))[1] AS newest_src_title,
+           EXTRACT(EPOCH FROM (max(${OUTDATED_S_TIME}) - ${OUTDATED_K_TIME})) / 86400 AS days_behind
       FROM knowledge k
-      JOIN knowledge_source ks ON ks.name = k.name
-      JOIN source s ON s.id = ks.source_id
+      ${OUTDATED_JOIN}
      WHERE ${conds.join(" AND ")}
-     GROUP BY k.name, k.title, k.updated_at
-    HAVING max(s.updated_at) > k.updated_at + (${daysP} || ' days')::interval
+     GROUP BY k.name, k.title, k.body_updated_at, k.updated_at
+    HAVING max(${OUTDATED_S_TIME}) > ${OUTDATED_K_TIME} + (${daysP} || ' days')::interval
      ORDER BY days_behind DESC
      LIMIT ${limP}`, params);
 
@@ -139,7 +147,7 @@ export async function detectOutdated(m: ManagerRow, limit: number): Promise<Find
       dedup_key: "",
       severity: (days > 90 ? "warn" : "note") as Finding["severity"],
       summary: `‘${r.title || r.name}’ 의 근거 자료가 ${days}일 더 최신입니다 — 내용이 낡았을 수 있습니다`,
-      evidence: `이 지식 갱신 ${new Date(String(r.updated_at)).toISOString().slice(0, 10)} · ` +
+      evidence: `이 지식 본문 갱신 ${new Date(String(r.k_time)).toISOString().slice(0, 10)} · ` +
         `인용 자료 ${r.src_count}건 중 최신 ${new Date(String(r.src_updated)).toISOString().slice(0, 10)}` +
         (r.newest_src_title ? ` (‘${String(r.newest_src_title).slice(0, 60)}’)` : "") +
         `. 근거가 바뀌었는데 결론이 안 바뀐 상태입니다.`,
@@ -147,6 +155,58 @@ export async function detectOutdated(m: ManagerRow, limit: number): Promise<Find
       proposed_action: { op: "review_knowledge", name: String(r.name), reason: "source_newer", days_behind: days },
     };
   });
+}
+
+// ════════ 열린 발견 재판정(결정적 종류) ════════
+//  탐지는 «지금 성립하는 것» 을 새로 열거나 다시 세기만 하고, 조건이 사라진 발견은 닫지 않았다 — 본문을 고쳐도 발견이 열린 채 쌓였다.
+//  여기서 이 관리기의 열린 발견 **전부**를 탐지와 같은 술어로 다시 본다. 스코프 조건(lookback·match_categories 등)과 배치 크기는
+//   걸지 않는다 — 범위에서 밀려났거나 이번 배치에 안 뽑혔다고 «해소» 로 닫으면 안 된다. 닫을 것과 사유만 돌려준다(닫기는 호출자가
+//   id 마다 state='open' 조건으로 — 재판정 도중 사람이 반려한 발견을 덮지 않게).
+export interface ReevalClose { id: number; resolution: string }
+export async function reevaluateOpenFindings(m: ManagerRow): Promise<ReevalClose[]> {
+  if (m.kind === "outdated") {
+    const rows = await q(itemsPool, `
+      SELECT f.id, k.name IS NOT NULL AND k.lifecycle = 'active' AS alive,
+             COALESCE(${OUTDATED_K_TIME} > f.last_seen_at, false) AS body_changed,
+             EXISTS (SELECT 1 FROM knowledge_source ks JOIN source s ON s.id = ks.source_id
+                      WHERE ks.name = k.name AND ks.relation = 'derived_from'
+                        AND ${OUTDATED_S_TIME} > ${OUTDATED_K_TIME} + ($2 || ' days')::interval) AS holds
+        FROM org_manager_finding f
+        LEFT JOIN knowledge k ON k.name = f.target_ref
+       WHERE f.manager_id = $1 AND f.state = 'open' AND f.target_kind = 'knowledge'`,
+      [m.id, m.stale_days ?? OUTDATED_DEFAULT_DAYS]);
+    return rows.filter((r) => !(r.alive && r.holds)).map((r) => ({
+      id: Number(r.id),
+      //  last_seen_at 은 술어가 마지막으로 성립한 시각이다. 그 뒤에 본문이 바뀌었으면 본문 수정으로 풀린 것이고,
+      //   아니면 판정식이 바뀌어(인용 관계·자료 시각) 더는 걸리지 않는 것이다. first_seen_at 은 재개된 발견에서 옛 수정을 잡아 쓰지 않는다.
+      resolution: !r.alive ? "대상 지식이 없거나 활성이 아니어서 해소" : r.body_changed ? "본문 갱신으로 해소" : "판정 기준 변경으로 해소",
+    }));
+  }
+  if (m.kind === "mismatch") {
+    //  dedup_key 는 탐지가 만든 «지금 분류 key -> 더 가까운 분류 key». 지금도 그 분류에 있고, 가장 가까운 다른 활성 분류가 같고,
+    //   거리차가 임계를 넘을 때만 성립한다. 키를 쪼개지 않고 탐지와 같은 식으로 다시 붙여 비교한다 — 분류 key 규칙이 도구 입력에서만
+    //   걸려(categories.ts KEY_RE) 다른 생성 경로의 key 에 '->' 가 없다고 보장할 수 없다.
+    const rows = await q(itemsPool, `
+      SELECT f.id,
+             EXISTS (
+               SELECT 1 FROM knowledge k
+                 JOIN knowledge_category kc ON kc.name = k.name AND kc.state <> 'rejected'
+                 JOIN category c ON c.id = kc.category_id
+                 CROSS JOIN LATERAL (
+                   SELECT oc.key, (k.embedding_vector <=> oc.embedding_vector) AS dist FROM category oc
+                    WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
+                    ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) near
+                WHERE k.name = f.target_ref AND k.lifecycle = 'active'
+                  AND k.embedding_vector IS NOT NULL AND c.embedding_vector IS NOT NULL
+                  AND COALESCE(k.is_folder, false) = false AND k.name <> ('category-home-' || c.key)
+                  AND (c.key || '->' || near.key) = f.dedup_key
+                  AND ((k.embedding_vector <=> c.embedding_vector) - near.dist) > $2) AS holds
+        FROM org_manager_finding f
+       WHERE f.manager_id = $1 AND f.state = 'open' AND f.target_kind = 'knowledge'`,
+      [m.id, m.threshold ?? MISMATCH_DEFAULT_MARGIN]);
+    return rows.filter((r) => !r.holds).map((r) => ({ id: Number(r.id), resolution: "분류 변경으로 해소" }));
+  }
+  return [];
 }
 
 // ════════ ③ 지식 간 모순 — 2단(후보 SQL → LLM) ════════
@@ -276,6 +336,8 @@ export interface CodeDriftCandidate {
 export interface CodeDriftKnowledgeCandidate {
   name: string; title: string | null; type: string | null;
   repos: string[]; category_keys: string[]; updated_at: string | null;
+  /** 작업 기록 원천(findCodeDriftTouchCandidates)만 — 지식 본문 뒤에 바뀐 모듈(repos[0] 의 것, 최근 순). */
+  changed_units?: Array<{ path: string; changed_at: string }>;
 }
 
 /** Postgres undefined_table — 선택 기능의 테이블이 없는 배포를 오류와 구분한다. */
@@ -308,6 +370,144 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
     if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
     throw e;
   }
+}
+
+/**
+ * 코드 괴리 후보 — **작업 기록 원천**. 지식을 산출·결정한 작업 기록이 건드린 모듈을, 지식 본문과 그 작업 뒤에 커밋 작업이 다시 건드린 것.
+ *  분류에 레포가 없어도 바뀐 모듈의 레포를 알기 때문에 그 레포를 싣는다(분류의 첫 레포는 대표값일 뿐 실제로 바뀐 곳이 아니다).
+ *
+ *  · 모듈 변경 시각은 그 모듈을 건드린 커밋 작업 기록의 시각이다 — 도메인맵의 모듈 내용 변경 시각이 아직 없어 대신 쓴다.
+ *    committed_at 이 없는 기록이면 커밋 시각이 아니라 기록 시각이다. 아래 findCodeDriftCandidates 가 쓰는 code_unit.updated_at 은
+ *    모듈이 생기거나 옮겨질 때만 오르는 구조 변경 시각이라(모듈 안 파일 수정은 refresh 가 건드리지 않는다) 여기 쓸 수 없다.
+ *  · 14일 여유: 같은 작업의 MR 이 늦게 머지돼 작업 기록 뒤 커밋이 다시 기록되는 경우를 오탐으로 올리지 않으려는 값이다.
+ *    본문 시각에도 붙이는 것은 본문을 고친 그 작업의 커밋이 뒤늦게 기록되는 경우도 같기 때문이다. 대가로 창 안의 변경은
+ *    뒤에 다른 변경이 오지 않는 한 영영 후보가 되지 않는다.
+ *  · 지식을 낸 작업의 커밋과 같은 sha 의 기록은 어느 모듈에서든 변경이 아니다 — 같은 커밋을 늦게 다시 기록한 것이다.
+ *    제외 집합은 지식 단위다(지식×모듈 단위로 모으면 다른 모듈에 붙은 재기록이 변경으로 세진다).
+ *  · 변경은 커밋이 달린 작업 기록의 touch 만 센다(유도·호출자 모두). 조사·리뷰 기록의 touch 는 «읽었다» 일 수 있다.
+ *  · 같은 모듈에 지식을 낸 작업이 여럿이면 가장 늦은 것을 기준으로 본다 — 변경 뒤 그 지식을 다시 냈으면 이미 대조한 것이다.
+ *  · 스코프의 lookback_days 는 걸지 않는다. 그 조건은 «최근에 고친 지식» 인데 이 원천은 «오래 안 고친 지식» 을 찾는다
+ *    — 걸면 lookback 을 둔 관리기에서 이 원천이 늘 빈다.
+ *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
+ *  ⚠ 지식×모듈 행을 그 모듈의 touch 전부와 조인하지 마라 — 모듈당 touch 수의 제곱으로 커진다. 모듈별 커밋에 시각 순번을 한 번
+ *   매기고, 지식×모듈마다 «제외되지 않은 가장 작은 순번» 하나만 찾는다. 그 순번은 1 이거나 «제외된 순번 + 1» 중 하나라서
+ *   (빈자리는 제외된 순번 바로 뒤에서만 생긴다), 후보를 그 둘로 만들고 제외된 순번을 등호 안티조인으로 빼면 모든 조인이 등호다.
+ *   순번을 범위 조건(rn <= n)이나 generate_series 로 펼치지 마라 — 추정치가 낮으면 플래너가 nested loop 를 골라, 산출 sha 가
+ *   몰린 지식 하나가 (그 sha 수 × 모듈 커밋 수)를 훑는다(편중 데이터에서 같은 쿼리가 데이터 무작위성에 따라 3초와 10분으로 갈렸다).
+ *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
+ */
+export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
+
+export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
+  const params: unknown[] = [];
+  const conds = scopeConds({ ...m, lookback_days: null }, params, "k");
+  params.push(CODE_DRIFT_TOUCH_GRACE_DAYS);
+  const graceP = `$${params.length}`;
+  params.push(limit);
+  const limP = `$${params.length}`;
+  try {
+    const rows = await q(itemsPool, `
+      WITH kk AS (
+        SELECT k.name, COALESCE(k.body_updated_at, k.updated_at) AS body_at
+          FROM knowledge k
+         WHERE ${conds.join(" AND ")}
+      ), origin AS (
+        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at
+          FROM activity_knowledge ak
+          JOIN kk               ON kk.name = ak.name
+          JOIN activity a       ON a.id = ak.activity_id
+          JOIN activity_touch t ON t.activity_id = a.id AND t.target_kind = 'code_unit'
+         WHERE ak.relation IN ('produced', 'decided')
+         GROUP BY ak.name, t.target_id
+      ), origin_sha AS (
+        SELECT DISTINCT ak.name, a.commit_sha
+          FROM activity_knowledge ak
+          JOIN kk         ON kk.name = ak.name
+          JOIN activity a ON a.id = ak.activity_id AND a.commit_sha IS NOT NULL
+         WHERE ak.relation IN ('produced', 'decided')
+      ), unit_commit AS (
+        SELECT t2.target_id AS unit_id, a2.commit_sha, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
+          FROM activity_touch t2
+          JOIN activity a2 ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
+         WHERE t2.target_kind = 'code_unit' AND t2.target_id IN (SELECT unit_id FROM origin)
+         GROUP BY t2.target_id, a2.commit_sha
+      ), ranked AS (
+        SELECT uc.unit_id, uc.commit_sha, uc.changed_at,
+               row_number() OVER (PARTITION BY uc.unit_id ORDER BY uc.changed_at DESC, uc.commit_sha) AS rn
+          FROM unit_commit uc
+      ), excl_rank AS (
+        SELECT os.name, r.unit_id, r.rn
+          FROM origin_sha os
+          JOIN ranked r ON r.commit_sha = os.commit_sha
+      ), cand AS (
+        SELECT o.name, o.unit_id, 1::bigint AS rn FROM origin o
+        UNION
+        SELECT e.name, e.unit_id, e.rn + 1 FROM excl_rank e
+      ), first_kept AS (
+        SELECT c.name, c.unit_id, min(c.rn) AS rn
+          FROM cand c
+          LEFT JOIN excl_rank e ON e.name = c.name AND e.unit_id = c.unit_id AND e.rn = c.rn
+         WHERE e.name IS NULL
+         GROUP BY c.name, c.unit_id
+      ), changed AS (
+        SELECT o.name, o.unit_id, r.changed_at
+          FROM origin o
+          JOIN kk            ON kk.name = o.name
+          JOIN first_kept f  ON f.name = o.name AND f.unit_id = o.unit_id
+          JOIN ranked r      ON r.unit_id = f.unit_id AND r.rn = f.rn
+         WHERE r.changed_at > kk.body_at + (${graceP} || ' days')::interval
+           AND r.changed_at > o.origin_at + (${graceP} || ' days')::interval
+      ), per_repo AS (
+        SELECT c.name, r.name AS repo, max(c.changed_at) AS changed_at,
+               json_agg(json_build_object('path', cu.path, 'changed_at', c.changed_at) ORDER BY c.changed_at DESC, cu.path) AS units
+          FROM changed c
+          JOIN code_unit cu ON cu.id = c.unit_id AND (cu.state = 'active' OR cu.state IS NULL)
+          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL AND (r.state = 'active' OR r.state IS NULL)
+         GROUP BY c.name, r.name
+      ), pick AS (
+        SELECT DISTINCT ON (p.name) p.name, p.repo, p.changed_at, p.units
+          FROM per_repo p
+         ORDER BY p.name, p.changed_at DESC, p.repo
+      )
+      SELECT k.name, k.title, k.type, k.updated_at, pick.repo, pick.units,
+             COALESCE((SELECT ARRAY_AGG(DISTINCT c.key) FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
+                        WHERE kc.name = k.name AND kc.state <> 'rejected'), ARRAY[]::text[]) AS category_keys
+        FROM pick JOIN knowledge k ON k.name = pick.name
+       ORDER BY pick.changed_at DESC, k.name
+       LIMIT ${limP}`, params);
+    return rows.map((r) => ({
+      name: String(r.name), title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
+      repos: [String(r.repo)], category_keys: (r.category_keys as string[]) ?? [],
+      updated_at: r.updated_at ? String(r.updated_at) : null,
+      changed_units: ((r.units as Array<{ path: string; changed_at: string }>) ?? [])
+        .map((u) => ({ path: String(u.path), changed_at: new Date(String(u.changed_at)).toISOString() })),
+    }));
+  } catch (e) {
+    if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // 도메인맵·작업 기록 표가 없는 배포 — 볼 것이 없다
+    throw e;
+  }
+}
+
+/**
+ * 두 지식 후보 원천을 limit 까지 합친다. 같은 지식은 작업 기록 원천의 것(바뀐 모듈의 레포)을 쓴다 — 지식 하나를 두 레포에서 대조하지 않게.
+ *  몫을 나누는 이유: 작업 기록 원천 후보는 본문을 고치기 전까지 빠지지 않아, 앞에서부터 채우면 매주 자리를 다 차지해 분류 원천이
+ *  영영 0건이 된다. 작업 기록 원천은 ceil(limit/2) 까지, 나머지는 분류 원천이고, 한쪽이 모자라면 다른 쪽이 남은 자리를 채운다.
+ */
+export function mergeCodeDriftKnowledgeCandidates(
+  touched: readonly CodeDriftKnowledgeCandidate[], byCategory: readonly CodeDriftKnowledgeCandidate[], limit: number,
+): CodeDriftKnowledgeCandidate[] {
+  const touchBy = new Map(touched.map((d) => [d.name, d] as const));
+  const out = new Map<string, CodeDriftKnowledgeCandidate>();
+  for (const d of touched.slice(0, Math.ceil(limit / 2))) out.set(d.name, d);
+  for (const d of byCategory) {
+    if (out.size >= limit) break;
+    if (!out.has(d.name)) out.set(d.name, touchBy.get(d.name) ?? d);
+  }
+  for (const d of touched) {
+    if (out.size >= limit) break;
+    if (!out.has(d.name)) out.set(d.name, d);
+  }
+  return [...out.values()];
 }
 
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {

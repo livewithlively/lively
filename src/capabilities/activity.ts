@@ -24,7 +24,7 @@ const activityLog: Capability = {
     "프로젝트(task)를 진척시킨 작업(activity)을 기록한다. type = 이 작업이 '무엇'인가(성격): " +
     "feature(기능개발)·fix(오류수정)·decision(의사결정)·docs(문서작성)·research(리서치·조사)·review(검토·리뷰)·chore(운영·잡무: 배포·리팩토링·의존성)·other(기타). " +
     "커밋은 유형이 아니다 — 커밋을 했으면 그 일의 성격(예 feature/fix)을 type 으로 두고 commit_sha+repo+touches 를 함께 넘겨라(commit_sha 존재가 곧 '커밋 발생'). " +
-    "commit_sha+touches(건드린 code_unit/data_entity)는 is(코드구조) 갱신 근거가 되고, 모든 유형은 should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
+    "commit_sha+touches(건드린 code_unit/data_entity)는 is(코드구조) 갱신 근거가 되고(code_unit touch 는 서버가 커밋의 변경 파일에서도 유도한다 — 기록할 때 code_unit touch 를 넘기면 그 기록은 유도하지 않고, 나중에 넘긴 touch 는 유도분과 함께 남으며 커밋이 바뀌어도 지워지지 않는다), 모든 유형은 should(도메인 의도) 점검 대상이다(점검했으나 변화 없으면 should_review='checked_no_change'로 명시). " +
     "실질 지식(의사결정·산출물)은 knowledge_save 로 따로 쓰고 ku_refs(produced/decided/references)로 연결한다 — 작업은 진척만 얇게. " +
     "진척시킨 프로젝트/태스크는 project_id(task_create_v6 의 id)로 연결한다. " +
     "author_agent(어떤 AI)와 session_id(어느 터미널 세션)는 게이트웨이가 접속 신원으로 자동 식별하므로 **넘기지 마라**(자기보고는 게이트웨이가 식별 못 했을 때만 폴백). 사람×AI 작업현황 집계의 축. " +

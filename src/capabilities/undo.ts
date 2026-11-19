@@ -117,7 +117,8 @@ const PROJECT_OPS: Record<string, Apply> = {
 export const knowledgeUpsertInput = (s: Record<string, any>) => ({
   name: String(s.name), title: s.title ?? undefined, body_md: String(s.body_md ?? ""),
   injection: s.injection ?? undefined, provenance: s.provenance ?? undefined,
-  supersedes: s.supersedes ?? undefined, summary: s.summary ?? null, sort: s.sort ?? undefined,
+  //  supersedes — 칸이 있으면 null 도 그대로(비움). ?? undefined 로 바꾸면 «보존» 이 돼 되돌리기로 값을 지울 수 없다.
+  supersedes: "supersedes" in s ? s.supersedes : undefined, summary: s.summary ?? null, sort: s.sort ?? undefined,
   is_wiki: s.is_wiki ?? undefined, type: s.type ?? undefined, is_folder: s.is_folder ?? undefined,
   parent_name: s.parent_name ?? null, confidence: s.confidence ?? undefined, source: s.source ?? undefined,
   // #5169 — 이 칸이 생기기 전 스냅샷엔 없다(undefined = 지금 값 보존 — resolveUpsertFacets).
@@ -128,7 +129,9 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
   update: async (r, d, ctx) => { await upsertKnowledge(knowledgeUpsertInput(rec(d === "before" ? r.before : r.after)), ctx); },
   set_lifecycle: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
-    await setKnowledgeLifecycle(String(r.entity_key), String(s.lifecycle), ctx);
+    //  스냅샷의 후속으로 다시 전환한다 — 그 사이 후속이 지워졌거나 active 가 아니면 400 을 그대로 낸다(포인터 없이 되살리지 않는다).
+    const supersededBy = s.lifecycle === "superseded" && "superseded_by" in s ? (s.superseded_by as string | null) : undefined;
+    await setKnowledgeLifecycle(String(r.entity_key), String(s.lifecycle), ctx, { supersededBy });
   },
   set_wiki: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);

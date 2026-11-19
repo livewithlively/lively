@@ -8,7 +8,7 @@ import { getRepo } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import type { Actor } from "./core/types.js";
 import { hostOf, isAuthError, describeGitError } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, repoClonePath, parseDiff } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, repoClonePath, parseDiff, CloneBusyError } from "./git-sync.js";
 
 // repoClonePath 는 구 git-pull.ts 표면(scheduler/actions/map-bootstrap.ts 가 동적 import).
 //  구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
@@ -47,6 +47,7 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
   let cloneDir: string;
   try { cloneDir = await ensureClone(repo.name, repo.git_url); }
   catch (e) {
+    if (e instanceof CloneBusyError) return { repo: repoName, status: "skipped", detail: "clone busy, will retry next tick" };
     // git_url(토큰 포함 가능)은 절대 안 싣는다 — 인증계열이면 자격 안내로, 그 외는 describeGitError 로 안전요약(URL 스크럽)해 진단가능성을 남긴다(#606).
     const detail = isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)
       ? `git 인증 실패 — 호스트 '${hostOf(repo.git_url) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정에 등록)`
