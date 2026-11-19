@@ -108,7 +108,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const paintWs = (): void => {
     const w = workspaceInfo();
     wsBtn.replaceChildren(workspaceFace(w as never, 'v2-mws-face'));
-    const label = `${w.name} 워크스페이스 — 바꾸기 · 설정`;
+    const label = `${w.name} 워크스페이스: 바꾸기 · 설정`;
     wsBtn.setAttribute('aria-label', label); wsBtn.title = label;
   };
   paintWs();
@@ -287,7 +287,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     if (moreBtn) {
       const n = unreadCount();
       moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); moreBtn.classList.toggle('has-dot', n > 0);
-      moreBtn.setAttribute('aria-label', n > 0 ? `나 — 안 읽은 알림 ${n}개` : '나');
+      moreBtn.setAttribute('aria-label', n > 0 ? `나: 안 읽은 알림 ${n}개` : '나');
       //  내 얼굴은 [나] 창에서 바뀔 수 있고 부팅 때 state.me 가 늦게 올 수 있다 — 칠할 때마다 값이 바뀌었으면 갈아 끼운다(#5615 리뷰).
       const me: any = state.me || {};
       const key = [me.avatar, personName(me), me.userId, me.avatar_char, me.avatar_color].join('|');
