@@ -1,4 +1,4 @@
-// 분류 저장의 원자성 — 비활성 전환 · 저장의 분류 조회 · 분류 교체 · 미러 재싱크의 type. 실제 Postgres 필요(기본 유닛 체인 밖).
+// 분류 저장의 원자성 — 비활성 전환 · 저장의 분류 조회 · 분류 교체. 실제 Postgres 필요(기본 유닛 체인 밖).
 //  CI 의 services:postgres 잡에서(run-tests --pg 가 자동 수집), 또는 로컬에서 수동 실행:
 //    npm run build && ITEMS_DATABASE_URL=... node src/v6/category-classification-tx.pg-test.mjs
 //
@@ -14,14 +14,13 @@
 //   U3 다른 분류의 지식을 비활성 분류로 옮기는 저장 → 400 · 본문도 매핑도 그대로
 //   L1 교체의 INSERT 가 실패하면(없는 분류) → 옛 분류가 남는다(DELETE 만 커밋되면 지식이 미분류가 된다)
 //   L2 경쟁: 같은 지식의 교체 둘이 겹친다(앞 교체가 커밋 전) → 뒤 교체가 기다렸다가 이긴다 · 매핑 1행(종전엔 23505)
-//   M1 미러 재싱크(본문 변경)는 사람이 붙인 type 을 지우지 않는다
+//   L3 경쟁: 비활성 전환이 커밋 전일 때 그 분류로 교체가 시작되고, 그 뒤 전환이 커밋된다 → 400 · 옛 분류가 남는다
+//      (잠그지 않고 state 를 읽으면 전환 전 값을 보고, 매핑 INSERT 의 FK 는 기다렸다가 비활성 분류에 넣는다)
+//   L4 직접 연결도 비활성 분류는 400 · 옛 분류가 남는다
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { updateCategory } = await import(`${DIST}/v6/category-store.js`);
 const { upsertKnowledge, linkKnowledgeCategory } = await import(`${DIST}/v6/knowledge-store.js`);
-const { mirrorKnowledgeV6 } = await import(`${DIST}/v6/mirror/mirror-knowledge.js`);
-
-delete process.env.ANTHROPIC_API_KEY; // 미러 신규 적재의 분류기(LLM) 호출 금지
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -29,7 +28,6 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n}. ${why}`); };
 const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 //  지식 이름은 slugify 를 거친다 — 밑줄로 시작하면 다른 이름이 돼 «기존 지식 수정» 행이 신규로 읽힌다.
 const TAG = "zz-cat-cls-tx-pg-";
-const SYS = TAG + "sys";
 
 let seq = 0;
 const mkCat = async (state = "active") => {
@@ -80,8 +78,7 @@ async function race(write, call) {
 
 async function cleanup() {
   await itemsPool.query(`DELETE FROM org_content_audit WHERE entity IN ('knowledge','category') AND entity_key LIKE $1`, [TAG + "%"]);
-  await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='knowledge' AND entity_key IN (SELECT name FROM knowledge WHERE external_system=$1)`, [SYS]);
-  await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1 OR external_system=$2`, [TAG + "%", SYS]);
+  await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [TAG + "%"]);
   await itemsPool.query(`DELETE FROM category WHERE key LIKE $1`, [TAG + "%"]);
 }
 
@@ -131,20 +128,17 @@ try {
     chk("L2 경쟁: 겹친 교체의 뒤쪽이 실패하지 않는다", !r.threw, `${why(r)} 잠금대기=${r.blocked}`);
     chk("L2 read-back. 매핑은 뒤 교체의 분류 1행", JSON.stringify(await mappings(k)) === JSON.stringify([c.id]), `${JSON.stringify(await mappings(k))} 잠금대기=${r.blocked}`); }
 
-  { const it = (body) => ({
-      type: "doc", provenance: { category: "collab_tool", system: SYS, instance: SYS + "inst", external_id: "doc-1" },
-      title: "미러 제목", body, occurred_at: "2026-11-01T00:00:00.000Z", fields: {}, raw: null });
-    const mirror = async (body) => {
-      const cl = await itemsPool.connect();
-      try { await cl.query("BEGIN"); await mirrorKnowledgeV6(cl, it(body), SYS, "doc-1"); await cl.query("COMMIT"); }
-      catch (e) { await cl.query("ROLLBACK").catch(() => {}); throw e; } finally { cl.release(); }
-    };
-    await mirror("원본 본문");
-    const name = (await itemsPool.query(`SELECT name FROM knowledge WHERE external_system=$1`, [SYS])).rows[0]?.name;
-    await itemsPool.query(`UPDATE knowledge SET type='decision' WHERE name=$1`, [name]);
-    await mirror("원본이 고쳐졌다");
-    const row = (await itemsPool.query(`SELECT type, body_md FROM knowledge WHERE name=$1`, [name])).rows[0];
-    chk("M1 미러 재싱크(본문 변경)는 사람이 붙인 type 을 지우지 않는다", row?.body_md === "원본이 고쳐졌다" && row?.type === "decision", JSON.stringify(row)); }
+  { const a = await mkCat(), c = await mkCat(); const k = await mkKnow(); await map(k, a.id);
+    const r = await race(
+      async (tx) => { await tx.query(`SELECT id FROM category WHERE id=$1 FOR UPDATE`, [c.id]); await tx.query(`UPDATE category SET state='deprecated' WHERE id=$1`, [c.id]); },
+      () => linkKnowledgeCategory(k, c.id, "confirmed", { actor: TAG, source: "web" }));
+    chk("L3 경쟁: 커밋 전 비활성 전환과 겹친 교체 → 400", r.threw && r.status === 400 && /비활성/.test(r.msg), `${why(r)} 잠금대기=${r.blocked}`);
+    chk("L3 read-back. 옛 분류가 남았다", JSON.stringify(await mappings(k)) === JSON.stringify([a.id]), `${JSON.stringify(await mappings(k))} 잠금대기=${r.blocked}`); }
+
+  { const a = await mkCat(), dep = await mkCat("deprecated"); const k = await mkKnow(); await map(k, a.id);
+    const r = await attempt(() => linkKnowledgeCategory(k, dep.id, "confirmed", { actor: TAG, source: "web" }));
+    chk("L4 직접 연결도 비활성 분류는 400", r.threw && r.status === 400, why(r));
+    chk("L4 read-back. 옛 분류가 남았다", JSON.stringify(await mappings(k)) === JSON.stringify([a.id]), JSON.stringify(await mappings(k))); }
 } finally {
   await cleanup().catch(() => {});
   await itemsPool.end().catch(() => {});
