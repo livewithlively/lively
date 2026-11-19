@@ -17,7 +17,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 
-const HOOK = path.join(fileURLToPath(import.meta.url), "..", "examples", "session-log-capture.org-hook.mjs");
+//  SLC_HOOK — 고치기 전 훅(git show)으로 같은 시험을 돌려 빨간불을 보는 자리(fail-first). 평소엔 비워 둔다.
+const HOOK = process.env.SLC_HOOK || path.join(fileURLToPath(import.meta.url), "..", "examples", "session-log-capture.org-hook.mjs");
 let pass = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 
@@ -26,6 +27,8 @@ let SERVER = {};        // sessionId → { bytes, chunks: [{at, body}] }
 let CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" };
 let appends = [];
 let requests = [];      // 모든 요청(GET watermark 포함) — 읽기전용은 «한 번도 안 부른다» 를 재기 위해
+let POST_DELAY_MS = 0;  // ⑧ 뒤에서 올리는 판을 오래 살려 두는 자리(느린 회선 흉내)
+let POST_FAIL = [];     // ⑧ 앞에서부터 하나씩 꺼내 그 상태로 POST 를 거절한다(예: [503] · [403, 403, …])
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, "http://x");
   requests.push({ method: req.method, path: u.pathname });
@@ -43,10 +46,15 @@ const server = http.createServer((req, res) => {
     if (req.method === "POST") {   // append
       const at = Number(u.searchParams.get("at"));
       const body = Buffer.concat(chunks);
-      appends.push({ sid, at, harness: u.searchParams.get("harness"), node: u.searchParams.get("node"),
-        execution: u.searchParams.get("execution"), headerSession: req.headers["x-lively-session"], body: body.toString() });
-      if (at === s.bytes) { s.bytes += body.length; s.chunks.push({ at, body: body.toString() }); res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: true, verdict: "append", bytes: s.bytes })); }
-      res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: false, verdict: "gap", bytes: s.bytes }));
+      const answer = () => {
+        appends.push({ sid, at, len: body.length, harness: u.searchParams.get("harness"), node: u.searchParams.get("node"),
+          execution: u.searchParams.get("execution"), headerSession: req.headers["x-lively-session"], body: body.length > 65536 ? "" : body.toString() });
+        const st = POST_FAIL.length ? POST_FAIL.shift() : 0;   // 0 = 이번 것은 받는다
+        if (st) { res.writeHead(st, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "x" })); }
+        if (at === s.bytes) { s.bytes += body.length; s.chunks.push({ at, body }); res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: true, verdict: "append", bytes: s.bytes })); }
+        res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: false, verdict: at < s.bytes ? "overlap" : "gap", bytes: s.bytes }));
+      };
+      return POST_DELAY_MS ? void setTimeout(answer, POST_DELAY_MS) : answer();
     }
     res.writeHead(404); res.end();
   });
@@ -74,7 +82,24 @@ async function mkTranscript(name, content) {
   await fsp.writeFile(p, content);
   return p;
 }
-const reset = () => { SERVER = {}; appends = []; requests = []; CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" }; };
+const reset = () => { SERVER = {}; appends = []; requests = []; POST_DELAY_MS = 0; POST_FAIL = []; CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" }; };
+//  ⑧ 뒤에서 올리는 판의 잠금·사본은 os.tmpdir() 에 생긴다 — 시험마다 따로 둔 TMPDIR 로 가둬 남의 판과 섞이지 않게 한다.
+const bgTmp = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-slog-bg-"));
+const BG_ENV = { TMPDIR: bgTmp, TMP: bgTmp, TEMP: bgTmp };
+const waitFor = async (cond, ms, what) => {
+  const t0 = Date.now();
+  while (!cond()) { if (Date.now() - t0 > ms) throw new Error(`${ms}ms 안에 안 됨 — ${what}`); await new Promise((r) => setTimeout(r, 50)); }
+};
+const bgLeft = () => fs.readdirSync(bgTmp).filter((f) => f.startsWith("lively-logcap-"));
+const MB = 1024 * 1024;
+//  큰 한 턴 — 그림·큰 도구 결과가 붙은 줄 여럿(줄 하나 1MB) 끝에 마지막 답. 8MB 를 몇 번 넘는다.
+const bigTurn = (mb, reply) => {
+  let s = JSON.stringify({ type: "user", message: { role: "user", content: "그림 보고 답해 줘" } }) + "\n";
+  const pad = "x".repeat(MB - 200);
+  for (let i = 0; i < mb; i++) s += JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", content: pad }] } }) + "\n";
+  return s + JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: reply }] } }) + "\n";
+};
+const serverText = (sid) => Buffer.concat((SERVER[sid]?.chunks || []).map((c) => c.body)).toString();
 
 try {
   // ── 🔴 조직 스위치 꺼짐 → 아무것도 안 보냄 ──
@@ -238,8 +263,83 @@ try {
     ok("⑦ 답 글을 모르면 종전 그대로(기다리지 않음)");
   }
 
+  // ── ⑧ #5611 — 한 턴에 8MB 넘게 늘어도 마지막 답까지 올린다 ──
+  //  실측(2026-11-20 맥미니 노드): 종전 훅은 턴마다 8MB 한 조각만 올려, 그림이 붙은 큰 턴 뒤 세션이 꺼지면 중앙 기록이
+  //  «그 턴 시작 + 8MB×n» 에서 멈췄다(22,165,171 = 5,387,955 + 2×8MB). 꺼진 세션 대화창은 그 기록을 읽어 마지막 답이 없었다.
+  {
+    reset(); POST_DELAY_MS = 300;
+    const reply = "다 만들었습니다 — 마지막 답";
+    const tp = await mkTranscript("t14.jsonl", bigTurn(20, reply));
+    const size = fs.statSync(tp).size;
+    const t0 = Date.now();
+    await runHook({ session_id: "s14", transcript_path: tp, last_assistant_message: reply }, { env: BG_ENV });
+    const took = Date.now() - t0, postsAtExit = appends.length;
+    await waitFor(() => SERVER.s14?.bytes === size, 30_000, `중앙 기록이 파일 끝(${size})까지 — 지금 ${SERVER.s14?.bytes}`);
+    assert.ok(serverText("s14").endsWith(reply + '"}]}}\n'), "🔴 마지막 답이 중앙 기록 끝에 있어야 한다");
+    assert.equal(appends.length, Math.ceil(size / (8 * MB)), "조각마다 한 번씩(겹쳐 올리지 않는다)");
+    assert.equal(postsAtExit, 1, `훅은 첫 조각만 올리고 턴을 놓는다 — 나머지는 뒤에서(훅이 끝날 때 ${postsAtExit}번 · ${took}ms)`);
+    await waitFor(() => bgLeft().length === 0, 5_000, `뒤에서 올린 판의 잠금·사본이 남았다: ${bgLeft().join(",")}`);
+    ok("⑧ 8MB 넘는 턴 — 첫 조각은 훅이, 나머지는 뒤에서 마지막 답까지 올리고 흔적을 남기지 않는다");
+  }
+  {
+    reset();
+    const reply = "앞에서 다 올림";
+    const tp = await mkTranscript("t15.jsonl", bigTurn(20, reply));
+    const size = fs.statSync(tp).size;
+    await runHook({ session_id: "s15", transcript_path: tp, last_assistant_message: reply }, { env: { ...BG_ENV, LIVELY_LOGCAP_BG_OFF: "1" } });
+    assert.equal(SERVER.s15?.bytes, size, `🔴 뒤에서 못 돌리는 자리면 예산 안에서 앞에서 잇는다 — ${SERVER.s15?.bytes}/${size}`);
+    assert.equal(bgLeft().length, 0, "뒤에서 도는 판을 띄우지 않았다");
+    ok("⑧ 뒤에서 못 돌리는 자리(LIVELY_LOGCAP_BG_OFF) — 훅 예산 안에서 끝까지");
+  }
+  {
+    reset(); POST_DELAY_MS = 600;
+    const tp = await mkTranscript("t16.jsonl", bigTurn(20, "첫 턴 답"));
+    await runHook({ session_id: "s16", transcript_path: tp, last_assistant_message: "첫 턴 답" }, { env: BG_ENV });
+    await waitFor(() => bgLeft().some((f) => f.startsWith("lively-logcap-lock-")), 5_000, "뒤에서 올리는 판이 잠금을 잡는다");
+    fs.appendFileSync(tp, U("또 물어봄") + A("둘째 턴 답"));
+    const size = fs.statSync(tp).size;
+    //  둘째 턴의 훅은 다른 실행 id 로 띄워 그 훅이 보낸 POST 만 따로 센다(뒤의 판은 첫 훅의 id 를 물려받았다).
+    await runHook({ session_id: "s16", transcript_path: tp, last_assistant_message: "둘째 턴 답" }, { env: { ...BG_ENV, LIVELY_SESSION_ID: "box-log-e2e-2" } });
+    await waitFor(() => SERVER.s16?.bytes === size, 30_000, `둘째 턴 몫까지 — 지금 ${SERVER.s16?.bytes}/${size}`);
+    const byHook2 = appends.filter((a) => a.headerSession === "box-log-e2e-2").length;
+    assert.equal(byHook2, 0, `뒤에서 올리는 판이 살아 있으면 다음 턴의 훅은 그 판에 맡긴다(겹쳐 보낸 POST ${byHook2})`);
+    assert.ok(serverText("s16").endsWith(A("둘째 턴 답")), "🔴 둘째 턴의 마지막 답까지 올라가야 한다");
+    await waitFor(() => bgLeft().length === 0, 5_000, "잠금이 풀린다");
+    ok("⑧ 뒤에서 올리는 중에 끝난 다음 턴 — 그 판이 이 턴 몫까지 잇는다");
+  }
+  {
+    reset(); POST_FAIL = [0, 413];   // 첫 조각은 받고, 뒤의 조각은 «너무 크다» 로 거절(영구 거절)
+    const tp = await mkTranscript("t17.jsonl", bigTurn(20, "거절됨"));
+    await runHook({ session_id: "s17", transcript_path: tp, last_assistant_message: "거절됨" }, { env: BG_ENV });
+    await waitFor(() => appends.length >= 2 && bgLeft().length === 0, 5_000, "영구 거절이면 뒤의 판이 접고 잠금을 푼다");
+    await new Promise((r) => setTimeout(r, 2500));   // 다시 해 보는 첫 간격(2초)을 넘겨 기다린다
+    assert.equal(appends.length, 2, `🔴 영구 거절(413)을 되풀이하지 않는다 — POST ${appends.length}번`);
+    assert.equal(SERVER.s17.bytes, 8 * MB, "받은 만큼만");
+    ok("⑧ 영구 거절이면 뒤의 판이 바로 접는다(되풀이 없음)");
+  }
+  {
+    reset(); POST_FAIL = [403];   // 첫 조각부터 영구 거절 — 뒤에서 띄우지도 않는다
+    const tp = await mkTranscript("t18.jsonl", bigTurn(20, "x"));
+    await runHook({ session_id: "s18", transcript_path: tp, last_assistant_message: "x" }, { env: BG_ENV });
+    await new Promise((r) => setTimeout(r, 800));
+    assert.equal(appends.length, 1, `거절된 대화를 뒤에서 다시 올리지 않는다 — POST ${appends.length}번`);
+    assert.equal(bgLeft().length, 0, "뒤에서 도는 판이 없다");
+    ok("⑧ 첫 조각부터 영구 거절이면 뒤에서 띄우지 않는다");
+  }
+  {
+    reset(); POST_FAIL = [0, 503];   // 뒤의 첫 조각이 일시 오류 — 2초 뒤 워터마크부터 다시
+    const reply = "일시 오류를 넘어 올림";
+    const tp = await mkTranscript("t19.jsonl", bigTurn(20, reply));
+    const size = fs.statSync(tp).size;
+    await runHook({ session_id: "s19", transcript_path: tp, last_assistant_message: reply }, { env: BG_ENV });
+    await waitFor(() => SERVER.s19?.bytes === size, 30_000, `일시 오류 뒤 끝까지 — 지금 ${SERVER.s19?.bytes}/${size}`);
+    await waitFor(() => bgLeft().length === 0, 5_000, "잠금이 풀린다");
+    ok("⑧ 일시 오류(503)는 잠시 뒤 서버 워터마크부터 다시 해서 끝까지");
+  }
+
   console.log(`\n${pass} passed`);
 } finally {
   server.close();
   await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
+  await fsp.rm(bgTmp, { recursive: true, force: true }).catch(() => {});
 }
