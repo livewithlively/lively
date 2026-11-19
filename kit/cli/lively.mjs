@@ -3529,6 +3529,7 @@ async function cmdSetup(opts = {}) {
   if (opts.cloud) {
     await cmdLogin({ cloud: opts.cloud });
     await cmdInstall(opts);
+    await sayShareGuide({ pause: true });
     setupDoneHints();
     return;
   }
@@ -3543,8 +3544,102 @@ async function cmdSetup(opts = {}) {
   else if (accepted === null) info("로그인 상태를 확인하지 못했습니다(네트워크?) — 그대로 설치를 시도합니다.");
   else await cmdLogin({});
   await cmdInstall(opts);
+  await sayShareGuide({ pause: true });
   setupDoneHints();
 }
+
+// ── «누가 무엇을 보나요» 상자(#5598) ─────────────────────────────────────────
+//  설치를 막 끝낸 사람은 «내 AI 사용이 부지불식간에 공유 · 기록된다» 를 가장 걱정한다(고위드 서비스전략실 2026-11-18).
+//  그래서 설치 끝에 한 번, 무엇이 누구에게 보이는지를 상자로 보여 준다. 사람이 직접 치는 터미널이면 Enter 를 받아
+//  한 번은 멈춘다(지나치지 않게) — 앱(이벤트 모드)·비대화형(CI·프로비저닝)에서는 멈추지 않는다.
+//  문구는 웹 카드(web/v2/share-guide.ts SG_STEPS)와 같은 사실만 쓴다. 상자 안엔 폭이 터미널마다 다른 기호(· — ↵)를 넣지 않는다
+//  (오른쪽 테두리가 어긋난다). 한글은 2칸으로 센다(cols). 창이 좁으면 테두리 없이 같은 줄을 찍는다.
+const SG_W = 70;   // 상자 안쪽 폭(칸)
+/**
+ * (순수 — 테스트 seam) 상자 줄들. color=false 면 ANSI 없이. mode: invite | open | all(워크스페이스의 새 프로젝트 공개 방식).
+ *  link 는 «1분 안내» 웹 주소(없으면 그 줄을 뺀다). narrow 면 테두리 없는 꼴.
+ */
+export function shareGuideLines({ color = true, mode = "invite", link = "", narrow = false } = {}) {
+  const k = (code) => (t) => (color ? `${ESC}[${code}m${t}${ESC}[0m` : t);
+  const C = {
+    line: k("38;5;63"), head: k("48;5;62;38;5;231;1"), headDim: k("48;5;62;38;5;189"),
+    priv: k("48;5;62;38;5;231;1"), pub: k("48;5;36;38;5;231;1"), sub: k("38;5;103"), dim: k("38;5;245"),
+    cmd: k("38;5;147"), link: k("4;38;5;147"), b: k("1"),
+  };
+  const pad = (t, w) => t + " ".repeat(Math.max(0, w - cols(stripAnsi(t))));
+  const projPub = mode !== "invite";
+  const rows = [
+    ["AI 세션", C.priv(" 비공개 "), "나와 초대한 사람만 봐요", ""],
+    ["프로젝트", projPub ? C.pub(" 전체 공개 ") : C.priv(" 비공개 "),
+      projPub ? (mode === "open" ? "결과를 남기면 팀 전원이 봐요" : "팀 전원이 봐요") : "나와 초대한 사람만 봐요",
+      "초대받아도 남의 세션 안은 못 봐요"],
+    ["지식", C.pub(" 전체 공개 "), "AI가 정리한 글만 팀에 자동 공유돼요", "내 질문과 대화 원문은 공유되지 않아요"],
+  ];
+  const ways = [
+    [C.dim("지식으로 남기기 싫으면"), C.cmd("lively run --readonly") + "  " + C.cmd("--incognito")],
+    [C.dim("쓰다가 라이블리를 끄려면"), "AI에게 " + C.cmd("/lively-disconnect")],
+  ];
+  if (narrow) {
+    const out = ["", "  " + C.b("라이블리 / 누가 무엇을 보나요"), ""];
+    for (const [what, tag, main, sub] of rows) {
+      out.push(`  ${pad(C.b(what), 10)}${tag} ${main}`);
+      if (sub) out.push(`  ${" ".repeat(10)}${C.sub(sub)}`);
+    }
+    out.push("");
+    for (const [a, b] of ways) out.push(`  ${a}: ${b}`);
+    if (link) out.push(`  1분 안내 보기: ${C.link(link)}`);
+    out.push("");
+    return out;
+  }
+  const V = C.line("│");
+  const row = (t) => `  ${V} ${pad(t, SG_W - 2)} ${V}`;
+  const rule = (ch = "─") => `  ${C.line("├" + ch.repeat(SG_W) + "┤")}`;
+  const headL = " 라이블리 / 누가 무엇을 보나요", headR = "처음 한 번만 보여 드려요 ";
+  const out = ["", `  ${C.line("╭" + "─".repeat(SG_W) + "╮")}`,
+    `  ${V}${C.head(headL + " ".repeat(SG_W - cols(headL) - cols(headR)))}${C.headDim(headR)}${V}`,
+    rule(), row("")];
+  for (const [what, tag, main, sub] of rows) {
+    out.push(row(pad(C.b(what), 10) + pad(tag, 12) + main));
+    if (sub) out.push(row(" ".repeat(22) + C.sub(sub)));
+    out.push(row(""));
+  }
+  out.push(rule("╌"));
+  for (const [a, b] of ways) out.push(row(pad(a, 26) + b));
+  if (link) { out.push(rule()); out.push(row("1분 안내 보기  " + C.link(link))); }
+  out.push(`  ${C.line("╰" + "─".repeat(SG_W) + "╯")}`, "");
+  return out;
+}
+/** 상자를 찍는다. pause 면 사람이 직접 치는 터미널에서만 Enter 를 기다린다. 서버를 못 읽어도(옛 서버·네트워크) 초대제 문구로 찍는다. */
+export async function sayShareGuide({ pause = false, out = say } = {}) {
+  let mode = "invite";
+  try {
+    const a = await api("/api/ui/v6/project-access", { timeoutMs: 5000 });
+    mode = a?.enforced === false ? "all" : a?.mode === "open" ? "open" : "invite";
+  } catch { /* 옛 서버 — 새 프로젝트 기본값(초대제)으로 */ }
+  const gw = gateway();
+  const link = gw ? `${gw}/ui/#/share-guide` : "";
+  const width = Number(process.stderr.columns) || 80;
+  for (const l of shareGuideLines({ color: !!TTY, mode, link, narrow: width < SG_W + 6 })) out(l);
+  if (!pause || PROMPTER || !interactive()) return;
+  const t = ttyIO();
+  let done = () => {};
+  try {
+    t.out.write(`  ${TTY ? `${ESC}[7;1m Enter ${ESC}[0m` : "[Enter]"} 를 누르면 계속합니다 `);
+    await new Promise((resolve) => {
+      done = resolve;
+      for (const ev of ["data", "end", "close", "error"]) t.in.once(ev, done);
+      t.in.resume?.();
+    });
+    t.out.write("\n");
+  } finally {
+    for (const ev of ["data", "end", "close", "error"]) t.in.removeListener?.(ev, done);
+    // ⚠ Windows 는 ttyIO 가 process.stdin 을 돌려주고 close() 가 아무것도 안 한다 — 흐르는 stdin 이 이벤트 루프를 붙잡아
+    //  설치가 끝나도 프로세스가 안 끝난다. askHidden 처럼 반드시 멈춘다.
+    try { t.in.pause?.(); } catch { /* */ }
+    t.close();
+  }
+}
+async function cmdGuide() { await sayShareGuide({ pause: false }); }
 
 // 설치 완료 안내 — 클라우드·자체 호스팅 **두 출구가 같은 말**을 하도록 한 자리에 둔다(정적 문구만 · #1024).
 //  자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
@@ -3570,6 +3665,7 @@ ${bold("시작하기")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
+  guide                  누가 무엇을 보나요 — AI 세션 · 프로젝트 · 지식의 공개 범위 다시 보기
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
@@ -3882,6 +3978,7 @@ async function dispatch(cmd, o, argv) {
     case "logout": return cmdLogout();
     // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.
     case "onboarding": return cmdOnboarding(argv.slice(argv.indexOf("onboarding") + 1));
+    case "guide": return cmdGuide();
     case "install": { await cmdInstall(o); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);
