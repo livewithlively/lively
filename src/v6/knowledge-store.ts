@@ -150,9 +150,10 @@ export async function listKnowledge(f: KnowledgeFilter = {}, viewer?: Viewer): P
 }
 
 // 대체·후속 포인터(supersedes·superseded_by)는 다른 지식의 이름을 담는다. 행 단위 공개범위(knowledgeVisWhere)는 칸 안의 이름을
-//  거르지 않으므로, 보는 사람에게 안 보이는 지식을 가리키면 응답에서 비운다. 없는 이름은 그대로 둔다(숨길 것이 없다).
-//  스냅샷·복원용 K_COLS 는 손대지 않는다 — 응답에만 거는 거름이다.
-async function maskHiddenPointers<T extends Record<string, unknown>>(rows: T[], viewer: Viewer | undefined): Promise<T[]> {
+//  거르지 않으므로, 보는 사람에게 안 보이는 지식을 가리키면 응답에서 비운다. 없는 지식을 가리키는 이름은 그대로 둔다 — 그래서
+//  null 과 이름으로 «없음» 과 «숨음» 이 갈리지만, 이름의 존재 여부는 knowledge_save 의 이름 충돌로 이미 알 수 있어 새로 새는 것은 없다.
+//  스냅샷·복원용 K_COLS 와 스토어 반환값은 손대지 않는다 — 응답에만 거는 거름이다(쓰기 도구 응답은 knowledge/shared.ts withPointerMask).
+export async function maskHiddenPointers<T extends Record<string, unknown>>(rows: T[], viewer: Viewer | undefined): Promise<T[]> {
   if (viewer === null) return rows;
   const refs = [...new Set(rows.flatMap((r) => [r.supersedes, r.superseded_by]).filter((v): v is string => typeof v === "string" && v !== ""))];
   if (!refs.length) return rows;
@@ -585,7 +586,7 @@ export async function getKnowledgeGateFields(name: string): Promise<{ lifecycle?
  *  · 후속은 지금 active 이고 자기 자신이 아니어야 한다. 그래서 체인에 고리가 생길 수 없다(고리 검사는 따로 두지 않는다).
  *  · 그 밖의 lifecycle 로 바꾸면 포인터를 비운다 — 포인터는 superseded 일 때만 뜻이 있다.
  *  · 미러 행(external_system)은 superseded 로 못 바꾼다 — 다음 싱크가 원본 상태로 lifecycle 을 되돌려 포인터만 남는다.
- *  옛 지식과 후속을 이름 순으로 행 잠금한 뒤 판정한다. 잠그지 않으면 A→B 와 B→A 가 동시에 «상대가 active» 를 보고 둘 다
+ *  옛 지식과 후속을 이름 순(COLLATE "C" — derived-visibility.ts 의 지식 잠금과 같은 순서)으로 행 잠금한 뒤 판정한다. 잠그지 않으면 A→B 와 B→A 가 동시에 «상대가 active» 를 보고 둘 다
  *  superseded 가 되고, 후속을 지우는 쪽(deleteKnowledge)도 판정과 쓰기 사이에 끼어든다. 잠금 모드가 FOR NO KEY UPDATE 인 까닭은
  *  지식을 가리키는 FK 삽입(링크·분류·자료 연결)이 거는 KEY SHARE 와 부딪치지 않게다(derived-visibility.ts 와 같은 선택).
  *  판정 오류를 여기(스토어)에서 HttpError 로 던지는 까닭: 되돌리기(undo.ts)는 이 함수를 직접 불러 핸들러 가드를 거치지 않는다.
@@ -600,7 +601,7 @@ export async function setKnowledgeLifecycle(
   const after = await withDerivedTx(async (client) => {
     const lockNames = lifecycle === "superseded" && want && want !== name ? [name, want] : [name];
     const rows = await q(client,
-      `SELECT ${K_SEL} FROM knowledge k WHERE k.name = ANY($1::text[]) ORDER BY k.name FOR NO KEY UPDATE`, [lockNames]) as KnowledgeRow[];
+      `SELECT ${K_SEL} FROM knowledge k WHERE k.name = ANY($1::text[]) ORDER BY k.name COLLATE "C" FOR NO KEY UPDATE`, [lockNames]) as KnowledgeRow[];
     const before = rows.find((r) => r.name === name);
     if (!before) throw new Error(`지식 '${name}' 없음`);
     let pointer: string | null = null;

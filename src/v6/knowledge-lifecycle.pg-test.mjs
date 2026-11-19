@@ -19,7 +19,9 @@
 //   L12 되돌리기(content_undo) — superseded 전환을 되돌리면 이전 상태·포인터 비움 / 포인터를 비운 전환을 되돌리면 그 후속으로 다시 건다 /
 //       그 사이 후속이 지워졌으면 400 을 그대로 낸다(포인터 없이 superseded 로 되살리지 않는다)
 //   L13 후속은 쓰기 게이트를 탄다 — 보는 사람에게 안 보이는 지식을 후속으로 걸 수 없다(없는 문서와 같은 404)
-//   L14 응답의 포인터 — 보는 사람에게 안 보이는 후속·대체 대상은 get·list 에서 null 로 나간다(특권 조회는 그대로)
+//   L14 응답의 포인터 — 보는 사람에게 안 보이는 후속·대체 대상은 get·list 와 쓰기 도구 응답(전환 · 저장 · 트리 이동 · 휴지통 복원)에서
+//       null 로 나간다. 저장된 값과 특권 조회는 그대로
+//   L16 REST 입력 — superseded_by 는 MCP 입력과 같은 길이 상한(64)
 //   L15 supersedes(후속 쪽 표시) — 본문만 다시 저장해도 유지 · null 로 비움 · 되돌리기로 이전 값
 import pg from "pg";
 
@@ -42,8 +44,9 @@ const { itemsPool } = await import(`${D}/db/client.js`);
 const kst = await import(`${D}/v6/knowledge-store.js`);
 const { setVisAxes } = await import(`${D}/v6/visibility-axes.js`);
 const { invalidateVisibilityCache } = await import(`${D}/v6/visibility.js`);
-const { authoringCapabilities } = await import(`${D}/capabilities/knowledge/authoring.js`);
+const { authoringCapabilities, authoringMoveCapabilities } = await import(`${D}/capabilities/knowledge/authoring.js`);
 const { undoCapabilities } = await import(`${D}/capabilities/undo.js`);
+const { trashCapabilities } = await import(`${D}/capabilities/trash.js`);
 
 let pass = 0, fail = 0;
 const chk = (n, c, why = "") => { if (c) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL ${n} — ${why}`); } };
@@ -60,7 +63,7 @@ const dangling = async () => (await q(
 async function holdRows(names) {
   const c = new pg.Client({ connectionString: dsnFor(DB) }); await c.connect();
   await c.query("BEGIN");
-  await c.query(`SELECT name FROM knowledge WHERE name = ANY($1::text[]) ORDER BY name FOR NO KEY UPDATE`, [names]);
+  await c.query(`SELECT name FROM knowledge WHERE name = ANY($1::text[]) ORDER BY name COLLATE "C" FOR NO KEY UPDATE`, [names]);
   return { release: async () => { await c.query("COMMIT"); await c.end(); } };
 }
 async function waitingOnLock(min) {
@@ -83,6 +86,8 @@ const k = (s) => `${TAG}-${s}`;
 const mk = (name, extra = {}) => kst.upsertKnowledge({ name, title: name, body_md: `본문 ${name}`, type: "reference", category: CK, ...extra }, { actor: ME, source: "web" });
 const setLc = capOf(authoringCapabilities, "knowledge_set_lifecycle");
 const save = capOf(authoringCapabilities, "knowledge_save");
+const move = capOf(authoringMoveCapabilities, "knowledge_move");
+const restoreCap = capOf(trashCapabilities, "content_restore");
 const undo = capOf(undoCapabilities, "content_undo");
 function capOf(arr, n) { return arr.find((c) => c.name === n); }
 const lc = (name, lifecycle, superseded_by, who = ME, ctx = mcp) =>
@@ -230,8 +235,29 @@ try {
   chk("L14 list — 안 보이는 후속은 null", lv && lv.superseded_by === null, show(lv && { s: lv.superseded_by }));
   const gp = await kst.getKnowledge(V1, null);
   chk("L14 특권 조회는 그대로", gp?.superseded_by === VH, show(gp && { s: gp.superseded_by }));
+  //  쓰기 응답 — 스토어는 RETURNING 행을 그대로 돌려주므로 도구 응답에서 가려야 한다
+  const w1 = await lc(V1, "superseded", undefined, OTHER);
+  chk("L14 쓰기 응답(전환 · 포인터 보존 호출) — 안 보이는 후속은 null · 저장값은 그대로",
+    w1.ok && w1.v.knowledge.superseded_by === null && (await row(V1)).superseded_by === VH, show(w1.ok ? { s: w1.v.knowledge.superseded_by } : w1));
+  const w2 = await attempt(() => save.handler({ name: VO, body_md: "본문만 다시" }, user(OTHER), web(OTHER)));
+  chk("L14 쓰기 응답(저장) — 안 보이는 대체 대상은 null · 저장값은 그대로",
+    w2.ok && w2.v.knowledge.supersedes === null && (await row(VO)).supersedes === VH, show(w2.ok ? { s: w2.v.knowledge.supersedes } : w2));
+  const w3 = await attempt(() => move.handler({ name: V1, parent_name: null }, user(OTHER), web(OTHER)));
+  chk("L14 쓰기 응답(트리 이동) — 안 보이는 후속은 null", w3.ok && w3.v.knowledge.superseded_by === null, show(w3.ok ? { s: w3.v.knowledge.superseded_by } : w3));
+  const V2 = k("v2");
+  await mk(V2);
+  await kst.setKnowledgeLifecycle(V2, "superseded", { actor: ME, source: "web" }, { supersededBy: VH });
+  await kst.deleteKnowledge(V2, { actor: ME, source: "web" });
+  const w4 = await attempt(() => restoreCap.handler({ entity: "knowledge", key: V2 }, user(OTHER), web(OTHER)));
+  chk("L14 휴지통 복원 응답 — 안 보이는 후속은 null · 되살린 값은 그대로",
+    w4.ok && w4.v.item.superseded_by === null && (await row(V2)).superseded_by === VH, show(w4.ok ? { s: w4.v.item.superseded_by } : w4));
   await setVisAxes({ knowledge: false });
   invalidateVisibilityCache();
+
+  // ── L16 ──
+  const l16 = await attempt(() => setLc.expose.rest[0].parse({ body: { lifecycle: "superseded", superseded_by: "x".repeat(65) }, params: { name: k("a") } }));
+  const l16ok = await attempt(() => setLc.expose.rest[0].parse({ body: { lifecycle: "superseded", superseded_by: "x".repeat(64) }, params: { name: k("a") } }));
+  chk("L16 REST superseded_by 65자 = 400 · 64자 통과", !l16.ok && l16.status === 400 && l16ok.ok && l16ok.v.superseded_by.length === 64, show({ l16, l16ok: l16ok.ok }));
 
   // ── L15 supersedes 3상 ──
   const S1 = k("s1"), S0 = k("s0"), SA = "pgt-lc-save";

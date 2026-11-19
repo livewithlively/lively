@@ -256,7 +256,8 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
         is_folder: k.is_folder,
         parent_name: parentLocal && (written.has(k.parent!) || target.names.has(parentLocal)) ? parentLocal : null,
         sort: k.sort,
-        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? undefined) : undefined,
+        //  꾸러미에 값이 없으면 null(비움) — 덮어쓰기는 꾸러미를 따른다. undefined 는 저장에서 «기존 값 유지» 다.
+        supersedes: k.supersedes ? (resolved.nameMap.get(k.supersedes) ?? undefined) : null,
       };
       const wantFields: Record<string, unknown> = { ...k.fields };
       if (k.provenance === "observed" && k.external_url) wantFields[ORIGIN_URL_FIELD] = k.external_url;
