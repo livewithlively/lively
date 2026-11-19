@@ -659,6 +659,9 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
          FROM (SELECT c.conv, t.task_id AS num
                  FROM (SELECT es.id AS session_id, es.task_id FROM execution_session es WHERE es.task_id = ANY(${nP}::int[])
                        UNION SELECT x.session_id, x.task_id FROM execution_session_task x WHERE x.task_id = ANY(${nP}::int[])) t
+                 -- 찾히는 번호 = 줄에 서는 번호(convTaskNos · sessionTaskIdsFor 와 같은 판정): 태스크·서브태스크 · 휴지통 아님.
+                 --  안 맞추면 휴지통 태스크 번호로 세션이 «맞는 결과» 로 뜨는데 그 줄에는 번호가 없다(격리 리뷰).
+                 JOIN project tk ON tk.id = t.task_id AND tk.level IN ('task','subtask') AND tk.trashed_at IS NULL
                  JOIN LATERAL (
                    SELECT t.session_id AS conv
                    UNION SELECT oc.conv_uuid FROM org_session_conv oc WHERE oc.box_id = t.session_id
