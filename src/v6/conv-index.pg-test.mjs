@@ -27,10 +27,10 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const A = "__convpg_a__", B = "__convpg_b__";
 const SID = (n) => `convpg-${n}`;
 const BOX = (n) => `box-__convpg-${n}`;
-const ALL = Array.from({ length: 84 }, (_, i) => SID(i));
-const ALL_BOX = Array.from({ length: 84 }, (_, i) => BOX(i));
+const ALL = Array.from({ length: 90 }, (_, i) => SID(i));
+const ALL_BOX = Array.from({ length: 90 }, (_, i) => BOX(i));
 const W2 = "00000000-0000-4000-8000-00000000c0a2", W3 = "00000000-0000-4000-8000-00000000c0a3";   // 다른 워크스페이스 · 보관된 워크스페이스
-const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__", "__convpg_num_proj__", "__convpg_num_task__"];
+const LIST_NAME = "__convpg_hidden_list__", PROJ_NAMES = ["__convpg_hidden_proj__", "__convpg_open_proj__", "__convpg_num_proj__", "__convpg_num_task__", "__convpg_key_proj__", "__convpg_key_task__"];
 
 const J = (o) => JSON.stringify(o) + "\n";
 const NOW = Date.now();
@@ -76,6 +76,7 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM org_session_trash WHERE session_id = ANY($1::text[]) OR session_id = ANY($2::text[])`, [ALL, ALL_BOX]);
   await itemsPool.query(`DELETE FROM org_session_conv WHERE box_id = ANY($1::text[])`, [ALL_BOX]);
   await itemsPool.query(`DELETE FROM execution_session_task WHERE session_id = ANY($1::text[])`, [ALL_BOX]);
+  await itemsPool.query(`DELETE FROM execution_session WHERE id = ANY($1::text[])`, [ALL_BOX]);
   await itemsPool.query(`DELETE FROM session_project WHERE session_id = ANY($1::text[])`, [ALL]);
   await itemsPool.query(`DELETE FROM org_session_state WHERE id = ANY($1::text[])`, [ALL_BOX]);
   await itemsPool.query(`DELETE FROM gw_workspace WHERE id = ANY($1::uuid[])`, [[W2, W3]]);
@@ -776,6 +777,55 @@ try {
     await C.indexConvSession("", SID(74));
     const spaced = await search(A, "987654");
     chk("D53 숫자 낱말은 느슨하게 찾지 않는다(띄어 쓴 숫자는 다른 것이다)", !ids(spaced).includes(SID(74)) && spaced.loosened.length === 0, JSON.stringify({ ids: ids(spaced), loosened: spaced.loosened }));
+  }
+
+  // ── D58~D61 #5607 세션의 번호(맡은 태스크) — 태스크 하나인 세션은 execution_session.task_id 한 칸뿐이다 ───────────────
+  //  상민님 2026-11-19: 고객사 CX 담당자가 세션 이름 옆 «#번호» 로 ⌘K 에서 찾았는데 안 나왔다. 매니지드 실측: 그 태스크를 맡은 세션 0건.
+  //   위 D52 는 순서 목록(execution_session_task — #4135, 태스크를 여럿 담은 세션에만 생긴다)에만 행을 넣어 초록이었다.
+  //   실제 세션 대부분은 task_id 한 칸뿐이다(v6/session-task.ts ensure · bind — 목록이 없는 세션은 목록을 만들지 않는다).
+  {
+    const t = (m) => new Date(NOW - 5_400_000 + m * 60_000).toISOString();
+    const KP = (await itemsPool.query(`INSERT INTO project(level, name, status, created_by) VALUES('project', $1, 'active', $2) RETURNING id`, [PROJ_NAMES[4], A])).rows[0].id;
+    const task = async () => (await itemsPool.query(`INSERT INTO project(level, name, status, created_by, parent_id) VALUES('task', $1, 'todo', $2, $3) RETURNING id`, [PROJ_NAMES[5], A, KP])).rows[0].id;
+    const T1 = await task(), T2 = await task(), T3 = await task(), T4 = await task(), T5 = await task();
+    const es = (box, taskId, seen) => itemsPool.query(`INSERT INTO execution_session(id, owner, harness, task_id, last_seen) VALUES($1, $2, 'claude', $3, $4)`, [box, A, taskId, seen]);
+    //  84 — 태스크 하나(T1)를 맡은 박스 84 가 돌린 대화(org_session_conv). 순서 목록 행은 없다(실제 세션과 같은 꼴).
+    await put(SID(84), A, U("번호표시험 하나 이야기", t(0)));
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(84), SID(84), A]);
+    await es(BOX(84), T1, t(0));
+    //  85 — 상태 미러로만 이어진 박스(org_session_state.claude_session_id) · 태스크 T2
+    await put(SID(85), A, U("번호표시험 둘 이야기", t(1)));
+    await itemsPool.query(`INSERT INTO org_session_state(id, owner, claude_session_id) VALUES($1, $2, $3)`, [BOX(85), A, SID(85)]);
+    await es(BOX(85), T2, t(1));
+    //  86 — 두 박스가 돌린 대화(되살리기는 박스 id 가 새로 난다): 옛 박스 86 은 T3 · 새 박스 87 은 T4 — 새 박스를 더 최근에 봤다
+    await put(SID(86), A, U("번호표시험 셋 이야기", t(2)));
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $3, $4), ($2, $3, $4)`, [BOX(86), BOX(87), SID(86), A]);
+    await es(BOX(86), T3, t(2));
+    await es(BOX(87), T4, t(3));
+    //  88 — 맡은 태스크(T5)가 휴지통 · 89 — 맡은 태스크가 없다
+    await put(SID(88), A, U("번호표시험 넷 이야기", t(4)));
+    await itemsPool.query(`INSERT INTO org_session_conv(box_id, conv_uuid, owner) VALUES($1, $2, $3)`, [BOX(88), SID(88), A]);
+    await es(BOX(88), T5, t(4));
+    await itemsPool.query(`UPDATE project SET trashed_at = now() WHERE id = $1`, [T5]);
+    await put(SID(89), A, U("번호표시험 다섯 이야기", t(5)));
+    for (const n of [84, 85, 86, 88, 89]) await C.indexConvSession("", SID(n));
+    const row = (r, sid) => r.results.find((x) => x.session_id === sid);
+
+    const by1 = await search(A, String(T1));
+    chk("D58 태스크 하나인 세션(task_id 한 칸 · 순서 목록 없음)도 그 태스크 번호로 찾는다 — 맞는 결과 · nums 에 그 번호",
+      row(by1, SID(84))?.tier === "match" && JSON.stringify(row(by1, SID(84))?.nums) === JSON.stringify([T1]), JSON.stringify(by1.results.map((x) => [x.session_id, x.tier, x.nums])));
+    const by2 = await search(A, "#" + T2);
+    chk("D58 상태 미러로만 이어진 박스의 세션도 그 태스크 번호(#붙여도)로 찾는다", row(by2, SID(85))?.tier === "match", JSON.stringify(by2.results.map((x) => [x.session_id, x.tier, x.nums])));
+
+    const words = await search(A, "번호표시험 이야기");
+    const no = (sid) => row(words, sid)?.task_no;
+    chk("D59 글자로 맞은 세션도 줄마다 자기 태스크 번호(task_no)를 싣는다 — 박스로 이은 것 · 상태 미러로 이은 것",
+      no(SID(84)) === T1 && no(SID(85)) === T2, JSON.stringify(words.results.map((x) => [x.session_id, x.task_no])));
+    chk("D60 맡은 태스크가 휴지통이거나 없으면 task_no 는 null(세션 머리줄의 #번호와 같은 판정)",
+      !!row(words, SID(88)) && no(SID(88)) === null && !!row(words, SID(89)) && no(SID(89)) === null, JSON.stringify(words.results.map((x) => [x.session_id, x.task_no])));
+    chk("D61 두 박스가 돌린 대화(되살리기)의 task_no 는 가장 최근에 본 박스의 태스크", no(SID(86)) === T4, JSON.stringify({ got: no(SID(86)), old: T3, cur: T4 }));
+    chk("D61 그 대화는 지금 태스크 번호로도 · 옛 박스가 맡았던 태스크 번호로도 찾는다",
+      row(await search(A, String(T4)), SID(86))?.tier === "match" && row(await search(A, String(T3)), SID(86))?.tier === "match");
   }
 
   // ── D54~D56 #4530 배포 뒤 — 한 글자 낱말 · 군말만 든 말은 훑지 않는다 · 뜻이 꽤 가까운 세션의 자리 ───────────────

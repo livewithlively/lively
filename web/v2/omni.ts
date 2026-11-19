@@ -101,6 +101,29 @@ interface Hit {
   /** 친 번호로 온 세션(그 번호의 프로젝트에 묶였거나 그 번호의 태스크를 맡았다) — 둘째 줄에 «#4530» 을 단다.
    *  ⚠ ident 에 넣지 않는다 — ident 는 «그 번호의 주인»(프로젝트·태스크 자신)이고 맨 위 셋의 첫 층이다. 세션은 그 주인 다음에 선다. */
   num?: string;
+  /** 세션의 번호 — 그 세션이 맡은 태스크 번호(세션 머리줄이 이름 뒤에 적는 `#번호` 와 같은 값 · 서버 task_no · 셸 목록 raw.taskNo).
+   *  목록 줄의 이름 뒤에 늘 선다(#5607). ⚠ ident 가 아니다 — 그 번호의 주인은 태스크(프로젝트 채널의 줄)이고, 세션은 같은 번호를
+   *  이름표로 단다. 친 번호와 같으면 맨 위 셋에서 그 주인 바로 다음에 선다(omni-rank topTier). */
+  sno?: string;
+}
+
+/** 줄 이름 뒤의 `#번호`(#5607) — 프로젝트·태스크는 제 번호, 세션은 맡은 태스크 번호. 지식 key 는 둘째 줄에 선다(metaLine). */
+function rowNo(h: Pick<Hit, 'kind' | 'ident' | 'sno'>): string {
+  if (h.kind === 'proj') return h.ident && /^[0-9]+$/.test(h.ident) ? h.ident : '';
+  if (h.kind === 'sess') return h.sno && /^[0-9]+$/.test(h.sno) ? h.sno : '';
+  return '';
+}
+/** 줄의 키 글 — 이름 뒤 번호는 «#번호», 지식은 key 그대로. 미리보기 머리가 같은 글을 쓴다. 없으면 ''. */
+function rowKeyText(h: Pick<Hit, 'kind' | 'ident' | 'sno'>): string {
+  const no = rowNo(h);
+  if (no) return '#' + no;
+  return h.kind === 'know' && h.ident ? h.ident : '';
+}
+/** 검색어가 번호 낱말 하나뿐이면 그 번호(«176» · «#176»), 아니면 ''. 셸 목록의 세션을 번호로 부를 때 쓴다(서버 termNumber 와 같은 꼴). */
+function queryNumber(terms: Term[]): string {
+  if (terms.length !== 1 || terms[0].quoted) return '';
+  const m = /^#?([0-9]{1,10})$/.exec(terms[0].t);
+  return m && Number(m[1]) > 0 ? String(Number(m[1])) : '';
 }
 
 interface OmniHooks {
@@ -468,6 +491,16 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   const hl = (text: string, extra?: string[]): Node[] => hlParts(text, extra && extra.length ? [...words, ...extraWords, ...extra] : extraWords.length ? [...words, ...extraWords] : words).map((p) =>
     (p.hit ? el('mark', { class: 'v2-omni-hl', text: p.t }) : document.createTextNode(p.t)) as Node);
 
+  /** 이름 뒤의 `#번호`(#5607) — 프로젝트·태스크는 제 번호, 세션은 맡은 태스크 번호. 친 번호와 같으면 «호명» 표시(exact).
+   *   세션 머리줄(session-chat paintTitle 의 `#번호`, 원준 2026-10-10)과 같은 글이다 — 거기서 본 번호를 쳐서 찾고, 찾은 줄에서 그 번호를 다시 본다. */
+  function noEl(h: Hit): HTMLElement | null {
+    const no = rowNo(h);
+    if (!no) return null;
+    const exact = identKind(no, terms) === 'exact';
+    const what = h.kind === 'sess' ? '이 세션이 맡은 태스크 번호' : (h.label || '프로젝트') + ' 번호';
+    return el('span', { class: 'v2-omni-no' + (exact ? ' exact' : ''), title: what }, ...hl('#' + no)) as HTMLElement;
+  }
+
   /** 목록 둘째 줄 — 어디에 있는 것인가(프로젝트 · 상위 · 주인) + 맞은 글 한 조각. 앞뒤 말까지는 미리보기 칸이 보인다. */
   function metaLine(h: Hit): HTMLElement | null {
     const bits: Node[] = [];
@@ -478,10 +511,15 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     if (h.why) { dot(); bits.push(el('span', { class: 'v2-omni-why', text: h.why })); }
     //  상위 프로젝트 «이름 ›» 뒤에는 가운뎃점을 찍지 않는다(«… › · …» 로 보였다, 실화면).
     if (h.context) { dot(); bits.push(el('span', { class: 'v2-omni-ctx', text: h.context })); if (h.context.endsWith('›')) glue = ' '; }
-    const id = identKind(h.ident, terms);
-    if (id && h.ident) { dot(); bits.push(el('code', { class: 'v2-omni-key' + (id === 'exact' ? ' exact' : '') }, ...hl(/^[0-9]+$/.test(h.ident) ? '#' + h.ident : h.ident))); }
-    //  번호로 온 세션 — 왜 떴는지(그 번호의 프로젝트·태스크의 세션이다)를 번호로 말한다.
-    if (h.num) { dot(); bits.push(el('code', { class: 'v2-omni-key exact', text: '#' + h.num })); }
+    //  지식의 key — **늘** 보인다(#5607, 상민님 2026-11-19 «검색결과에 키를 보여주는 게 좋을 듯»). 종전(#4530 3차)엔 key 를 쳤을 때만 섰다 —
+    //   그 전 판은 둘째 줄이 비면 key 를 보였는데 3차가 둘째 줄을 늘 채우면서 key 가 사라졌다. 번호(프로젝트·태스크·세션)는 이름 뒤에 선다(noEl).
+    if (h.kind === 'know' && h.ident) {
+      const id = identKind(h.ident, terms);
+      dot(); bits.push(el('code', { class: 'v2-omni-key kk' + (id === 'exact' ? ' exact' : ''), title: '지식 key — ' + h.ident }, ...hl(h.ident)));
+    }
+    //  번호로 온 세션 — 왜 떴는지(그 번호의 프로젝트·태스크의 세션이다)를 번호로 말한다. 그 세션이 이름 뒤에 단 번호와 같으면
+    //   되풀이하지 않는다(이름 뒤 번호가 «친 번호» 표시로 이미 말한다).
+    if (h.num && h.num !== rowNo(h)) { dot(); bits.push(el('code', { class: 'v2-omni-key exact', text: '#' + h.num })); }
     //  어디에 있는 것인가(세션의 프로젝트 · 자료의 출처) 뒤에 **왜 맞았는지**(고친 파일 · 맞은 말 한 조각)를 잇는다. 프로젝트 이름만 서면
     //   줄마다 미리보기를 봐야 맞은 말을 알았다 — 주로 쓰는 일이 대화 일부로 세션을 찾는 것이고, 폰에는 옆 칸이 없다(격리 리뷰).
     //   뒤에 이을 것이 없으면(자료 줄) 줄 전체를 쓴다(solo).
@@ -501,6 +539,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     hl,
     icon: (h, cls) => icon((h as Hit).kind, cls, (h as Hit).icon),
     kindLabel: (h) => (h as Hit).label || KIND_LABEL[(h as Hit).kind],
+    keyText: (h) => rowKeyText(h as Hit),
     when: (ms) => whenLabel(ms, Date.now()),
     open: (h, mode) => { const i = rowHits.findIndex((x) => x.key === h.key); if (i >= 0) go(i, mode); },
     openHref: (href, title) => {
@@ -575,6 +614,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
             el('span', { class: 'v2-omni-tl' },
               h.head ? el('span', { class: 'v2-omni-head', text: h.head }) : null,
               el('b', { class: 'v2-omni-t' }, ...hl(h.title)),
+              noEl(h),
               h.status ? el('span', { class: 'v2-omni-st', text: h.status }) : null),
             metaLine(h)),
           el('span', { class: 'v2-omni-meta' },
@@ -700,8 +740,9 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const base: Hit = { kind: o.kind, key: o.key, title: o.title, sub: '', href: o.href, at: o.at, label: o.label };
     if (o.key.startsWith('s:')) { const s = d.sessions.find((x) => x.id === o.key.slice(2)); if (s) return { ...sessHit(d, s), title: o.title, at: o.at }; }
     else if (o.key.startsWith('c:')) { const m = /^c:([^:]*):(.+)$/.exec(o.key); if (m) base.pv = { t: 'sess', node: m[1], sid: m[2] }; }
-    else if (o.key.startsWith('k:')) base.pv = { t: 'know', name: o.key.slice(2) };
-    else if (o.key.startsWith('p:')) { const id = Number(o.key.slice(2)); if (id) base.pv = o.label ? { t: 'task', id } : { t: 'proj', id }; }
+    //  열쇠가 곧 키다(k:<key> · p:<번호>) — 최근 연 것도 검색 결과 줄처럼 키를 단다(#5607).
+    else if (o.key.startsWith('k:')) { base.pv = { t: 'know', name: o.key.slice(2) }; base.ident = o.key.slice(2); }
+    else if (o.key.startsWith('p:')) { const id = Number(o.key.slice(2)); if (id) { base.pv = o.label ? { t: 'task', id } : { t: 'proj', id }; base.ident = String(id); } }
     else if (o.key.startsWith('src:')) base.pv = { t: 'src', id: o.key.slice(4) };
     return base;
   }
@@ -847,6 +888,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
             if ((h.at || 0) > (prev.at || 0)) prev.at = h.at;
           }
           if (prev.at === undefined && h.at !== undefined) prev.at = h.at;
+          if (!prev.sno && h.sno) prev.sno = h.sno;   // 셸 목록이 번호를 모르는 세션(기록만 남은 줄) — 서버가 잰 번호로
           if (!prev.status && h.status) prev.status = h.status;
           if (!prev.context && h.context) prev.context = h.context;
           if (!prev.label && h.label) prev.label = h.label;
@@ -905,13 +947,20 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
   function sessHit(d: V2Data, s: Sess): Hit {
     const t = sessText(s, projName(d, s.projectId));
     const proj = s.projectId ? projName(d, s.projectId) : '';   // 프로젝트가 없으면 빈 칸 — «프로젝트 없음» 을 줄마다 되풀이하지 않는다
+    const no = sessNo(s);
     return {
       kind: 'sess', key: 's:' + s.id, title: t.main || t.sub || s.id,
       sub: t.main && t.sub ? t.sub : '', meta: proj || undefined,
       href: '#/s/' + encodeURIComponent(s.id), at: s.lastSeen || undefined,
       context: isMineSess(s) ? undefined : ownerOf(s),
       pv: sessRef(s, proj),
+      ...(no ? { sno: no } : {}),
     };
+  }
+  /** 셸 목록이 아는 그 세션의 번호(맡은 태스크 번호 — 서버가 세션 행에 싣는 taskNo, 세션 머리줄의 `#번호`). 없으면 ''. */
+  function sessNo(s: Sess): string {
+    const n = Number(s.raw && s.raw.taskNo);
+    return Number.isInteger(n) && n > 0 ? String(n) : '';
   }
   /** 세션의 대화 좌표(대화 uuid · 노드) — 접힌 기록(logId)이 없으면 터미널 행의 대화 id, 기록만 남은 행은 id 자체가 uuid 다(sess-tail 과 같은 규칙). */
   function sessRef(s: Sess, proj: string): PvRef {
@@ -929,12 +978,18 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const q = input.value.trim();
     if (kindOn('sess')) {
       //  세션 — 낱말마다 이름·하는 일·프로젝트 이름 어디에든(순서 무관 · 조사 뗀 꼴로도). 휴지통 세션은 뺀다. 최근 것부터.
+      //  #5607 번호 하나를 쳤으면 그 번호를 단 세션(맡은 태스크 번호)과 그 번호의 프로젝트에 붙은 세션도 — 서버 대화 검색의 «번호로 찾기»
+      //   (conv-index-store identSessions)와 같은 뜻이다. 서버는 대화 기록이 있는 세션만 보므로 방금 만든 세션은 여기서만 잡힌다.
+      const qNo = queryNumber(terms);
       out.push(...d.sessions
         .filter((s) => !isTrashedSess(s))
-        .filter((s) => { const t = sessText(s, projName(d, s.projectId)); return matchAllAcross([t.main, t.sub, s.label, projName(d, s.projectId)], terms); })
+        .filter((s) => {
+          if (qNo && (sessNo(s) === qNo || String(s.projectId ?? '') === qNo)) return true;
+          const t = sessText(s, projName(d, s.projectId)); return matchAllAcross([t.main, t.sub, s.label, projName(d, s.projectId)], terms);
+        })
         .sort((a, b) => b.lastSeen - a.lastSeen)
         .slice(0, 8 * moreFactor)
-        .map((s) => sessHit(d, s)));
+        .map((s) => { const h = sessHit(d, s); return qNo && h.sno !== qNo && String(s.projectId ?? '') === qNo ? { ...h, num: qNo } : h; }));
     }
     if (kindOn('proj')) {
       //  프로젝트 이름 — 서버 결과가 오기 전에도 이름으로 부른 것은 바로(휴지통 제외). 서버 줄이 오면 빈 칸을 채운다.
@@ -1017,7 +1072,11 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     const best = (r && r.best) || null;
     const nums: number[] = Array.isArray(r && r.nums) ? r.nums.filter((n: unknown) => typeof n === 'number') : [];
     const proj = (s && s.projectId ? projName(d, s.projectId) : '') || String(r.project || '');
+    //  그 세션의 번호(맡은 태스크) — 서버가 줄마다 싣는다(#5607 task_no). 옛 서버면 셸 목록이 아는 번호로.
+    const tno = Number(r && r.task_no);
+    const no = Number.isInteger(tno) && tno > 0 ? String(tno) : (s ? sessNo(s) : '');
     return {
+      ...(no ? { sno: no } : {}),
       meta: proj || undefined,
       pv: s ? { ...(sessRef(s, proj) as Extract<PvRef, { t: 'sess' }>), sid, node } : { t: 'sess', sid, node, project: proj || undefined },
       kind: 'sess', key: s ? 's:' + s.id : 'c:' + node + ':' + sid,
