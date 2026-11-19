@@ -21,7 +21,9 @@
 //   T13 deprecated 레포의 모듈은 후보를 만들지 않는다
 //   M1  실행 경로 — 작업 기록 원천 지식은 모듈의 레포 위탁에 실리고, 분류 원천과 겹친 지식은 한 위탁에 한 번만 실린다
 //       · 분류 원천 지식은 그대로 분류 레포 위탁에 실린다 · 지시문에 바뀐 모듈이 실린다
-//   M2  두 원천을 합친 지식 후보도 batch_size 까지이고 작업 기록 원천이 먼저다
+//   T14 지식을 낸 커밋의 재기록은 그 커밋이 건드리지 않은 모듈에 붙어도 변경이 아니다(제외 sha 는 지식 단위)
+//   M2  두 원천을 합친 지식 후보도 batch_size 까지다 · 작업 기록 원천은 ceil(batch/2) 까지라 분류 원천 몫이 남는다
+//       · 분류 원천이 모자라면 작업 기록 원천이 남은 자리를 채운다
 //   E1  후보 SQL 오류(없는 열)는 빈 결과로 삼키지 않는다 — 함수는 던지고, 관리기 실행은 그 원천만 빼고 나머지를 위탁하며
 //       실패를 partial_error 로 싣는다
 import pg from "pg";
@@ -169,6 +171,14 @@ try {
   await kn(N(15), 0, CK);
   await act({ day: 0, repoId: R3, touches: [{ unit: U15 }], refs: [{ name: N(15) }] });
   await act({ day: 30, repoId: R3, touches: [{ unit: U15 }] });
+  // T14 제외 sha 는 지식 단위 — 지식을 낸 커밋을 다른 모듈(같은 지식의 다른 산출 작업이 건드린)에 붙여 다시 기록
+  const U16a = await unit(R1, "src/q"), U16b = await unit(R1, "src/r");
+  await kn(N(16), 0, CK);
+  await act({ day: 0, sha: "same16", committed: false, repoId: R1, touches: [{ unit: U16a }], refs: [{ name: N(16) }] });
+  await act({ day: 0, repoId: R1, touches: [{ unit: U16b }], refs: [{ name: N(16) }] });
+  await act({ day: 30, sha: "same16", committed: false, repoId: R1, touches: [{ unit: U16b }] });
+  //  분류 원천 순서를 고정한다(최근 갱신순) — M2 가 «분류 원천 몫» 으로 N12 를 기대한다.
+  await Q(`UPDATE knowledge SET updated_at=$2 WHERE name=$1`, [N(12), at(5)]);
 
   const scope = { match_categories: ["cdt-k", "cdt-r"], match_types: null, match_provenance: null, exclude_names: null, lookback_days: null };
   const cands = await det.findCodeDriftTouchCandidates(scope, 50);
@@ -194,6 +204,7 @@ try {
   chk("T11 가장 늦은 기록이 재기록이면 그 아래 다른 커밋의 시각을 쓴다",
     by.get(N(14))?.changed_units?.[0]?.changed_at === at(30), show(by.get(N(14))));
   chk("T13 deprecated 레포의 모듈은 후보를 만들지 않는다", !by.has(N(15)), show(names));
+  chk("T14 지식을 낸 커밋의 재기록은 다른 모듈에 붙어도 변경이 아니다(제외는 지식 단위)", !by.has(N(16)), show(names));
   chk("T 후보 전체가 기대와 같다", show([...names].sort()) === show([N(1), N(3), N(8), N(11), N(14)].sort()), show(names));
   const lb = await det.findCodeDriftTouchCandidates({ ...scope, lookback_days: 30 }, 50);
   chk("T12 lookback_days 가 있어도 이 원천은 오래 안 고친 지식을 낸다",
@@ -215,13 +226,18 @@ try {
   chk("M1 지시문에 바뀐 모듈이 실린다", /본문 뒤에 바뀐 모듈: src\/a\(/.test(calls.find((c) => c.repo === "cdt-r1")?.prompt ?? ""),
     calls.find((c) => c.repo === "cdt-r1")?.prompt?.slice(0, 400));
 
-  // ── M2 두 원천의 합도 batch_size 까지(작업 기록 원천이 앞) ──
-  const MB = await mstore.upsertManager({ key: "cdt-mb", kind: "code_drift", enabled: true, match_categories: ["cdt-k", "cdt-r"], batch_size: 2 }, ME, "web");
-  const bcalls = [];
-  await runManager(MB, async (prompt, opts) => { bcalls.push({ prompt, repo: opts.repo }); return { status: "ok", summary: { task_id: 1 } }; });
-  const bnames = [N(1), N(3), N(8), N(11), N(12), N(14)].filter((n) => bcalls.some((c) => c.prompt.includes(`) ${n} `)));
-  chk("M2 합친 지식 후보는 batch_size 까지이고 작업 기록 원천이 먼저다",
-    bnames.length === 2 && !bnames.includes(N(12)), show(bnames));
+  // ── M2 두 원천의 합도 batch_size 까지 · 원천별 몫 ──
+  const docsFor = async (key, batch) => {
+    const mgr = await mstore.upsertManager({ key, kind: "code_drift", enabled: true, match_categories: ["cdt-k", "cdt-r"], batch_size: batch }, ME, "web");
+    const got = [];
+    await runManager(mgr, async (prompt) => { got.push(prompt); return { status: "ok", summary: { task_id: 1 } }; });
+    return [N(1), N(3), N(8), N(11), N(12), N(14)].filter((n) => got.some((p) => p.includes(`) ${n} `)));
+  };
+  const b2 = await docsFor("cdt-mb2", 2);
+  chk("M2 합친 지식 후보는 batch_size 까지이고 작업 기록 원천 몫이 먼저다", b2.length === 2 && b2.includes(N(8)), show(b2));
+  chk("M2 작업 기록 원천 후보가 자리를 넘쳐도 분류 원천 몫이 남는다", b2.includes(N(12)), show(b2));
+  const b6 = await docsFor("cdt-mb6", 6);
+  chk("M2 분류 원천이 모자라면 작업 기록 원천이 남은 자리를 채운다", b6.length === 6 && b6.includes(N(14)), show(b6));
 
   // ── E1 SQL 오류 ──  (DB 는 끝에 통째로 지우므로 열 이름을 되돌리지 않는다)
   await Q(`ALTER TABLE activity_knowledge RENAME COLUMN relation TO relation_cdt`);

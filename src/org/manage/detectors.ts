@@ -377,18 +377,22 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
  *  분류에 레포가 없어도 바뀐 모듈의 레포를 알기 때문에 그 레포를 싣는다(분류의 첫 레포는 대표값일 뿐 실제로 바뀐 곳이 아니다).
  *
  *  · 모듈 변경 시각은 그 모듈을 건드린 커밋 작업 기록의 시각이다 — 도메인맵의 모듈 내용 변경 시각이 아직 없어 대신 쓴다.
- *    committed_at 이 없는 기록이면 커밋 시각이 아니라 기록 시각이다.
+ *    committed_at 이 없는 기록이면 커밋 시각이 아니라 기록 시각이다. 아래 findCodeDriftCandidates 가 쓰는 code_unit.updated_at 은
+ *    모듈이 생기거나 옮겨질 때만 오르는 구조 변경 시각이라(모듈 안 파일 수정은 refresh 가 건드리지 않는다) 여기 쓸 수 없다.
  *  · 14일 여유: 같은 작업의 MR 이 늦게 머지돼 작업 기록 뒤 커밋이 다시 기록되는 경우를 오탐으로 올리지 않으려는 값이다.
  *    본문 시각에도 붙이는 것은 본문을 고친 그 작업의 커밋이 뒤늦게 기록되는 경우도 같기 때문이다. 대가로 창 안의 변경은
  *    뒤에 다른 변경이 오지 않는 한 영영 후보가 되지 않는다.
- *  · 지식을 낸 작업의 커밋과 같은 sha 의 기록은 변경이 아니다 — 같은 커밋을 늦게 다시 기록한 것이다.
+ *  · 지식을 낸 작업의 커밋과 같은 sha 의 기록은 어느 모듈에서든 변경이 아니다 — 같은 커밋을 늦게 다시 기록한 것이다.
+ *    제외 집합은 지식 단위다(지식×모듈 단위로 모으면 다른 모듈에 붙은 재기록이 변경으로 세진다).
  *  · 변경은 커밋이 달린 작업 기록의 touch 만 센다(유도·호출자 모두). 조사·리뷰 기록의 touch 는 «읽었다» 일 수 있다.
  *  · 같은 모듈에 지식을 낸 작업이 여럿이면 가장 늦은 것을 기준으로 본다 — 변경 뒤 그 지식을 다시 냈으면 이미 대조한 것이다.
  *  · 스코프의 lookback_days 는 걸지 않는다. 그 조건은 «최근에 고친 지식» 인데 이 원천은 «오래 안 고친 지식» 을 찾는다
  *    — 걸면 lookback 을 둔 관리기에서 이 원천이 늘 빈다.
  *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
  *  ⚠ 지식×모듈 행을 그 모듈의 touch 전부와 조인하지 마라 — 모듈당 touch 수의 제곱으로 커진다. 모듈별 커밋에 시각 순번을 한 번
- *   매기고, 지식×모듈마다 «제외할 sha 수 + 1» 번째까지만 본다(그 안에 제외되지 않은 가장 늦은 커밋이 반드시 있다).
+ *   매기고, 지식×모듈마다 «그 지식의 제외 sha 수 + 1» 번째까지만 본다(모듈의 sha 는 서로 달라 그 안에 제외되지 않은 가장 늦은
+ *   커밋이 반드시 있다). 제외 sha 는 배열로 들고 다니지 말고 지식 단위 표에 안티조인한다 — 산출 sha 가 몰린 지식에서 배열 비교가
+ *   제곱이 된다.
  *   순번은 범위 조건(rn <= n)이 아니라 같음 조건(rn = 1..n)으로 잇는다 — 범위면 모듈 단위로 먼저 조인한 뒤 걸러 다시 제곱이 된다.
  *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
  */
@@ -408,20 +412,29 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
           FROM knowledge k
          WHERE ${conds.join(" AND ")}
       ), origin AS (
-        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at,
-               COALESCE(array_agg(DISTINCT a.commit_sha) FILTER (WHERE a.commit_sha IS NOT NULL), ARRAY[]::text[]) AS shas
+        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at
           FROM activity_knowledge ak
           JOIN kk               ON kk.name = ak.name
           JOIN activity a       ON a.id = ak.activity_id
           JOIN activity_touch t ON t.activity_id = a.id AND t.target_kind = 'code_unit'
          WHERE ak.relation IN ('produced', 'decided')
          GROUP BY ak.name, t.target_id
+      ), origin_sha AS (
+        SELECT DISTINCT ak.name, a.commit_sha
+          FROM activity_knowledge ak
+          JOIN kk         ON kk.name = ak.name
+          JOIN activity a ON a.id = ak.activity_id AND a.commit_sha IS NOT NULL
+         WHERE ak.relation IN ('produced', 'decided')
+      ), origin_n AS (
+        SELECT name, count(*)::int AS n FROM origin_sha GROUP BY name
       ), unit_commit AS (
         SELECT t2.target_id AS unit_id, a2.commit_sha, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
           FROM activity_touch t2
           JOIN activity a2 ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
          WHERE t2.target_kind = 'code_unit' AND t2.target_id IN (SELECT unit_id FROM origin)
          GROUP BY t2.target_id, a2.commit_sha
+      ), unit_n AS (
+        SELECT unit_id, count(*)::int AS n FROM unit_commit GROUP BY unit_id
       ), ranked AS (
         SELECT uc.unit_id, uc.commit_sha, uc.changed_at,
                row_number() OVER (PARTITION BY uc.unit_id ORDER BY uc.changed_at DESC, uc.commit_sha) AS rn
@@ -429,9 +442,12 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
       ), changed AS (
         SELECT o.name, o.unit_id, max(r.changed_at) AS changed_at
           FROM origin o
-          JOIN kk       ON kk.name = o.name
-          CROSS JOIN LATERAL generate_series(1, cardinality(o.shas) + 1) AS g(i)
-          JOIN ranked r ON r.unit_id = o.unit_id AND r.rn = g.i AND r.commit_sha <> ALL(o.shas)
+          JOIN kk            ON kk.name = o.name
+          JOIN unit_n un     ON un.unit_id = o.unit_id
+          LEFT JOIN origin_n xn ON xn.name = o.name
+          CROSS JOIN LATERAL generate_series(1, LEAST(COALESCE(xn.n, 0) + 1, un.n)) AS g(i)
+          JOIN ranked r ON r.unit_id = o.unit_id AND r.rn = g.i
+         WHERE NOT EXISTS (SELECT 1 FROM origin_sha os WHERE os.name = o.name AND os.commit_sha = r.commit_sha)
          GROUP BY o.name, o.unit_id, o.origin_at, kk.body_at
         HAVING max(r.changed_at) > kk.body_at + (${graceP} || ' days')::interval
            AND max(r.changed_at) > o.origin_at + (${graceP} || ' days')::interval
@@ -466,12 +482,25 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
   }
 }
 
-/** 두 원천에 같은 지식이 있으면 작업 기록 원천의 것(바뀐 모듈의 레포)을 쓴다 — 지식 하나를 두 레포에서 대조하지 않게. */
+/**
+ * 두 지식 후보 원천을 limit 까지 합친다. 같은 지식은 작업 기록 원천의 것(바뀐 모듈의 레포)을 쓴다 — 지식 하나를 두 레포에서 대조하지 않게.
+ *  몫을 나누는 이유: 작업 기록 원천 후보는 본문을 고치기 전까지 빠지지 않아, 앞에서부터 채우면 매주 자리를 다 차지해 분류 원천이
+ *  영영 0건이 된다. 작업 기록 원천은 ceil(limit/2) 까지, 나머지는 분류 원천이고, 한쪽이 모자라면 다른 쪽이 남은 자리를 채운다.
+ */
 export function mergeCodeDriftKnowledgeCandidates(
-  touched: readonly CodeDriftKnowledgeCandidate[], byCategory: readonly CodeDriftKnowledgeCandidate[],
+  touched: readonly CodeDriftKnowledgeCandidate[], byCategory: readonly CodeDriftKnowledgeCandidate[], limit: number,
 ): CodeDriftKnowledgeCandidate[] {
+  const touchBy = new Map(touched.map((d) => [d.name, d] as const));
   const out = new Map<string, CodeDriftKnowledgeCandidate>();
-  for (const d of [...touched, ...byCategory]) if (!out.has(d.name)) out.set(d.name, d);
+  for (const d of touched.slice(0, Math.ceil(limit / 2))) out.set(d.name, d);
+  for (const d of byCategory) {
+    if (out.size >= limit) break;
+    if (!out.has(d.name)) out.set(d.name, touchBy.get(d.name) ?? d);
+  }
+  for (const d of touched) {
+    if (out.size >= limit) break;
+    if (!out.has(d.name)) out.set(d.name, d);
+  }
   return [...out.values()];
 }
 

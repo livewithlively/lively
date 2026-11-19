@@ -169,9 +169,8 @@ export async function runManager(
       logger.warn({ manager: m.key, err: touchError }, "code_drift 작업 기록 원천 실패 — 나머지 원천으로 진행");
       return [] as CodeDriftKnowledgeCandidate[];
     });
-    //  두 원천의 합도 batch_size 까지다(작업 기록 원천이 앞) — 원천을 더해 대조 비용이 늘지 않게.
-    const allDocs = mergeCodeDriftKnowledgeCandidates(touched, await findCodeDriftKnowledgeCandidates(m, m.batch_size))
-      .slice(0, m.batch_size);
+    //  두 원천의 합도 batch_size 까지다 — 원천을 더해 대조 비용이 늘지 않게. 원천별 몫은 merge 머리말.
+    const allDocs = mergeCodeDriftKnowledgeCandidates(touched, await findCodeDriftKnowledgeCandidates(m, m.batch_size), m.batch_size);
     const withTouchError = (r: ManagerRunResult): ManagerRunResult =>
       touchError ? { ...r, partial_error: [r.partial_error, touchError].filter(Boolean).join(" · ") } : r;
     // 레포가 안 붙은 것은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
