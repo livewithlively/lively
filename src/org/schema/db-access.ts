@@ -9,8 +9,9 @@ import { ensureCheck } from "./ddl-util.js";
 
 export async function initDbAccessPolicies(pool: Pool): Promise<void> {
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
-  // 시크릿 금지: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode(password|iam|mtls|vault) + auth_ref(참조: env 이름/
-  //  파일경로/role/path)만. 실제 비번 등은 런타임에 참조에서 해소(src/db/sources.ts resolveConnectionString).
+  // 시크릿 금지: url 은 비밀번호 없는 접속문자열, 인증은 auth_mode(password|iam|mtls|vault) + auth_ref(참조: env 이름 ·
+  //  gcp-sm:<프로젝트>/<시크릿> · aws-sm:<리전>/<이름>(#1764))만. 실제 비번은 런타임에 참조에서 해소
+  //  (src/db/sources.ts resolvePgPoolSpec · mysql-engine.ts — 저장소 값은 게이트웨이 메모리에만, src/db/secret-store.ts).
   //  db_query 소스의 유일한 출처다(env DATABASE_URL·DB_SOURCES_JSON 자동등록은 2026-06-23 폐기 — src/db/sources.ts).
   //  여기 행은 무재시작 반영(db_query 가 매 호출 읽음 + 캐시 무효화).
   await pool.query(`
