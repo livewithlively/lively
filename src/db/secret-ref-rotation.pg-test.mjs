@@ -214,7 +214,8 @@ try {
     invalidatePool(s);
     await store.removeDbSource(s, ACTOR, "test").catch(() => {});
   }
-  await store.updateRuntimeConfig({ allowed_db_hosts: rc0.allowed_db_hosts, allowed_db_secret_refs: rc0.allowed_db_secret_refs }, ACTOR, "test").catch(() => {});
+  // 처음 값으로 되돌린다 — 배열은 펼쳐 넘긴다(`키: 변수 식` 꼴은 비밀 스캔의 generic-api-key 가 값으로 오인한다).
+  await store.updateRuntimeConfig({ allowed_db_hosts: [...rc0.allowed_db_hosts], allowed_db_secret_refs: [...rc0.allowed_db_secret_refs] }, ACTOR, "test").catch(() => {});
   await new Promise((r) => setTimeout(r, 300)); // 풀 drain
   for (const r of [ROLE, ROLE_ENV]) {
     await itemsPool.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename=$1`, [r]).catch(() => {});
