@@ -823,6 +823,8 @@ try {
       no(SID(84)) === T1 && no(SID(85)) === T2, JSON.stringify(words.results.map((x) => [x.session_id, x.task_no])));
     chk("D60 맡은 태스크가 휴지통이거나 없으면 task_no 는 null(세션 머리줄의 #번호와 같은 판정)",
       !!row(words, SID(88)) && no(SID(88)) === null && !!row(words, SID(89)) && no(SID(89)) === null, JSON.stringify(words.results.map((x) => [x.session_id, x.task_no])));
+    const byTrash = await search(A, String(T5));
+    chk("D60 휴지통 태스크의 번호로는 그 세션을 찾지 않는다 — 찾히는 번호 = 줄에 서는 번호(같은 판정)", !ids(byTrash).includes(SID(88)), JSON.stringify(byTrash.results.map((x) => [x.session_id, x.tier, x.nums])));
     chk("D61 두 박스가 돌린 대화(되살리기)의 task_no 는 가장 최근에 본 박스의 태스크", no(SID(86)) === T4, JSON.stringify({ got: no(SID(86)), old: T3, cur: T4 }));
     chk("D61 그 대화는 지금 태스크 번호로도 · 옛 박스가 맡았던 태스크 번호로도 찾는다",
       row(await search(A, String(T4)), SID(86))?.tier === "match" && row(await search(A, String(T3)), SID(86))?.tier === "match");
