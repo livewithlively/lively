@@ -24,6 +24,9 @@
 //   G10 판정·조회용 git 이 실패하면(브랜치 ref 없음 · after/체크포인트 조회 · diff) 아무것도 쓰지 않고 200
 //       「git check failed (<op>)」 — 실패를 「없다·아니다」 로 읽어 재기준·역방향 적용으로 가지 않는다
 //   G11 겹친 push 재시도에서 다른 refresh 가 남긴 체크포인트가 클론에 없으면, 오류로 돌지 않고 재기준 분기로 간다
+//   G12 브랜치 밖 after(재작성·되감기로 사라진 커밋)의 옛 push 재전송은 쓰지 않는다 — 체크포인트가 비어 있어도 같다
+//   G13 빈 문자열 체크포인트는 쓸 수 없는 체크포인트로 보고 재기준한다(영구 정지하지 않는다)
+//   G14 refresh_all 의 체크포인트 조회가 실패하면 「없다」 로 읽어 재기준하지 않고 이번 틱을 건너뛴다
 import pg from "pg";
 import http from "node:http";
 import express from "express";
@@ -145,6 +148,9 @@ try {
     try { await refresh(A, { base: sha("6"), changes: [{ status: "A", path: "src/nohead/x.ts" }] }, AGENT); } catch (e) { err = e; }
     chk("C3c base 만 있고 head 가 없으면 400 으로 거절", err?.status === 400 && (await unit(aId, "src/nohead")) === null, String(err?.message));
     chk("C3c 체크포인트 그대로", (await checkpointOf(A)) === sha("6"));
+    let err2 = null;
+    try { await refresh(A, { head: "", changes: [] }, AGENT); } catch (e) { err2 = e; }
+    chk("C3c 빈 head 는 400 · 빈 체크포인트를 저장하지 않는다", err2?.status === 400 && (await checkpointOf(A)) === sha("6"), String(err2?.message));
   });
 
   await section("C4", async () => {
@@ -249,11 +255,9 @@ try {
   });
 
   await section("G2", async () => {
-    const r = await push(c1, c2);
-    chk("G2 이미 반영한 push 는 무시", r.status === 200 && typeof r.body.ignored === "string" && r.body.ignored.startsWith("already applied"), JSON.stringify(r));
+    const rs = [await push(c1, c2), await push(c2, c3)];
+    chk("G2 역순 도착·같은 push 재전송은 이미 적용으로 무시", rs.every((r) => r.status === 200 && (r.body.ignored ?? "").startsWith("already applied")), JSON.stringify(rs));
     chk("G2 체크포인트를 되돌리지 않는다", (await checkpointOf(GR)) === c3);
-    const r2 = await push(c2, c3);
-    chk("G2 같은 push 재전송도 무시", r2.status === 200 && typeof r2.body.ignored === "string", JSON.stringify(r2));
   });
 
   await section("G3", async () => {
@@ -426,6 +430,68 @@ try {
       chk("G11 재시도에서 클론에 없는 체크포인트 → 재기준", r.status === 200 && !r.body.ignored && /not in clone/.test(r.body.note ?? ""), JSON.stringify(r));
       chk("G11 체크포인트 = 브랜치 끝", (await checkpointOf(GR)) === tip);
     } finally { holder.release(); }
+  });
+  await section("G12a", async () => {
+    // 재작성: P→A 적용, A 를 지우고 B 로 force-push(적용, cp=B), 옛 push P→A 재전송.
+    const P = await checkpointOf(GR);
+    put("src/g12a/x.ts", "a\n");
+    const A_ = commit("g12a-A", "2026-04-18T00:00:00Z");
+    await push(P, A_);
+    g(["reset", "-q", "--hard", P]);
+    put("src/g12b/x.ts", "b\n");
+    const B = commit("g12a-B", "2026-04-19T00:00:00Z");
+    const rb = await push(A_, B);
+    chk("G12a 전제 — B 적용", !rb.body.ignored && (await checkpointOf(GR)) === B, JSON.stringify(rb));
+    const r = await push(P, A_);
+    chk("G12a 재작성으로 사라진 커밋의 재전송은 쓰지 않는다", r.status === 200 && r.body.ignored === "push is not on the branch, will resync", JSON.stringify(r));
+    chk("G12a 체크포인트 = B", (await checkpointOf(GR)) === B);
+  });
+
+  await section("G12b", async () => {
+    // 되감기: B→C 적용, C→B 되감기 적용, 옛 push B→C 재전송.
+    const B = await checkpointOf(GR);
+    put("src/g12c/x.ts", "c\n");
+    const C = commit("g12b-C", "2026-04-20T00:00:00Z");
+    await push(B, C);
+    g(["reset", "-q", "--hard", B]);
+    const rr = await push(C, B);
+    chk("G12b 전제 — 되감기 적용", !rr.body.ignored && (await checkpointOf(GR)) === B, JSON.stringify(rr));
+    const r = await push(B, C);
+    chk("G12b 되감기로 사라진 커밋의 재전송은 쓰지 않는다", r.status === 200 && r.body.ignored === "push is not on the branch, will resync", JSON.stringify(r));
+    chk("G12b 체크포인트 = B", (await checkpointOf(GR)) === B);
+  });
+
+  await section("G12c", async () => {
+    const B = await checkpointOf(GR);
+    const gone = execFileSync("git", ["-C", ORIGIN, "rev-parse", "HEAD@{1}"], { encoding: "utf8" }).trim(); // 되감기 전 C
+    await q(`UPDATE repo SET last_refreshed_sha=NULL WHERE name=$1`, [GR]);
+    try {
+      const r = await push(B, gone);
+      chk("G12c 체크포인트가 비어 있어도 브랜치 밖 after 는 쓰지 않는다", r.status === 200 && r.body.ignored === "push is not on the branch, will resync" && (await checkpointOf(GR)) === null, JSON.stringify(r));
+    } finally { await q(`UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2`, [B, GR]); }
+  });
+
+  await section("G13", async () => {
+    const prev = await checkpointOf(GR);
+    await q(`UPDATE repo SET last_refreshed_sha='' WHERE name=$1`, [GR]);
+    put("src/g13/x.ts", "x\n");
+    const tip = commit("g13", "2026-04-21T00:00:00Z");
+    const r = await push(prev, tip);
+    chk("G13 빈 체크포인트 → 재기준", r.status === 200 && !r.body.ignored && /not a sha/.test(r.body.note ?? ""), JSON.stringify(r));
+    chk("G13 체크포인트 = 브랜치 끝", (await checkpointOf(GR)) === tip);
+  });
+
+  await section("G14", async () => {
+    const cp = await checkpointOf(GR);
+    put("src/g14/x.ts", "x\n");
+    commit("g14", "2026-04-22T00:00:00Z");
+    process.env.FAKE_GIT_FAIL = `--end-of-options ${cp}^{commit}`;
+    process.env.PATH = `${fakeBin}:${PATH0}`;
+    try {
+      const r = await refreshRepoFromGit(GR, { type: "agent", id: "refresh_all" });
+      chk("G14 조회 실패는 skipped", r.status === "skipped" && /git check failed/.test(r.detail ?? ""), JSON.stringify(r));
+      chk("G14 아무것도 쓰지 않았다", (await checkpointOf(GR)) === cp && (await unit(gId, "src/g14")) === null);
+    } finally { process.env.PATH = PATH0; delete process.env.FAKE_GIT_FAIL; }
   });
 } catch (e) {
   fail++; console.error("FAIL 예외", e);

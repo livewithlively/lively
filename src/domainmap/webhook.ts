@@ -171,7 +171,8 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
     await decideAndApply(res, provider, repo, cloneDir, before, after, `origin/${defaultBranch}`);
   } catch (e) {
     if (!(e instanceof GitCheckFailed)) throw e;
-    // Nothing was written: every git call that feeds a write runs before refresh(). Log the cause (op,
+    // Nothing was written: every git lookup used for a decision runs before refresh() (commitTime only
+    // stamps a time and falls back to now(), it decides nothing). Log the cause (op,
     // refs, exit code / signal — never stderr, which can echo the remote URL) and ack with 200.
     // Why not 5xx: GitHub does not redeliver a failed delivery by itself (only a manual redeliver),
     // and GitLab disables a hook after repeated failures, so a 5xx buys no retry and risks the hook.
@@ -234,6 +235,17 @@ async function decideAndApply(
   // not "absent" — it goes to the GitCheckFailed path instead.
   if (!(await exists(after))) { res.status(200).json({ ignored: "sha not in clone yet, will resync", head: after }); return; }
 
+  // The webhook writes only for a push whose `after` is on the fetched branch (an ancestor of, or equal
+  // to, origin/<default>). A commit the branch no longer has (rewritten or rewound away) is a stale or
+  // redelivered push: applying it would move the units and the checkpoint off the branch. Every write
+  // path below — no checkpoint, re-baseline, checkpoint diff and its retry — sits behind this check.
+  const offBranch = async (): Promise<boolean> => {
+    if (await ancestor(after, tipRef)) return false;
+    res.status(200).json({ ignored: "push is not on the branch, will resync", head: after });
+    return true;
+  };
+  if (await offBranch()) return;
+
   // Checkpoint the units cannot be diffed from: not a sha, or not a commit in the clone (history rewrite,
   // a sha set by hand). refresh() refuses any other base, and the scheduled refresh_all — the only other
   // path that re-baselines — may be disabled, so the webhook would stall for good. Re-baseline from the
@@ -242,6 +254,8 @@ async function decideAndApply(
   // redelivered old push would otherwise move the units and the checkpoint backwards. A non-tip push is
   // acked with 200 and recovery waits for the next push at the tip or refresh_all (which re-baselines an
   // unusable checkpoint) — with refresh_all disabled and no further push the units stay behind.
+  // Limit: the tip check and the unconditional write are not atomic — a concurrent fetch can move the
+  // tip in between (and a second re-baseline can race this one); the next push corrects it.
   const rebaseline = async (why: string): Promise<void> => {
     if (!before) { res.status(200).json({ ignored: `${why} and no usable push base`, head: after }); return; }
     if (!(await isTip(after))) { res.status(200).json({ ignored: `${why} and push is not the branch tip, will resync`, head: after }); return; }
@@ -251,8 +265,9 @@ async function decideAndApply(
   const unusable = async (cp: string): Promise<string | null> =>
     !SHA_RE.test(cp) ? "checkpoint is not a sha" : !(await exists(cp)) ? "checkpoint not in clone" : null;
 
-  const stored = typeof repo.last_refreshed_sha === "string" && repo.last_refreshed_sha !== "" ? repo.last_refreshed_sha : null;
-  if (!stored) {
+  // '' is unusable, not absent: refresh() compares it like any checkpoint and would skip every based refresh.
+  const stored = typeof repo.last_refreshed_sha === "string" ? repo.last_refreshed_sha : null;
+  if (stored == null) {
     if (!before) { res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return; }
     if (!(await exists(before))) { res.status(200).json({ ignored: "sha not in clone yet, will resync", base: before, head: after }); return; }
     done(await apply(before, before), before); return;
@@ -270,6 +285,7 @@ async function decideAndApply(
   // same usability check; a second miss is left to the next push / refresh_all.
   let cp = stored;
   for (let attempt = 0; ; attempt++) {
+    if (attempt > 0 && await offBranch()) return; // the tip may have moved (another fetch) since the first check
     const why = await unusable(cp);
     if (why) { await rebaseline(why); return; }
     const cpOnBranch = await ancestor(cp, tipRef);

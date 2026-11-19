@@ -66,6 +66,7 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
   const p: any = typeof payload === "string" ? JSON.parse(payload) : payload;
   const rawChanges: any[] = Array.isArray(p.changes) ? p.changes : [];
   const act: Actor = actor ?? { type: "agent", id: "agent" };
+  if (p.head != null && String(p.head) === "") throw httpErr(400, "refresh payload head must not be empty");
   if (p.base != null && p.head == null) throw httpErr(400, "refresh payload with base requires head");
   const result = await withTx<RefreshResult>(async (client) => {
     // Resolve repo inside the txn so a bad name rolls back cleanly with a 404. FOR UPDATE: see
