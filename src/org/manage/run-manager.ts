@@ -12,7 +12,8 @@ import {
 } from "../store/managers.js";
 import {
   detectMismatch, detectOutdated, findContradictionCandidates, findCodeDriftCandidates, reevaluateOpenFindings,
-  findCodeDriftKnowledgeCandidates, type CodeDriftCandidate, type CodeDriftKnowledgeCandidate,
+  findCodeDriftKnowledgeCandidates, findCodeDriftTouchCandidates, mergeCodeDriftKnowledgeCandidates,
+  type CodeDriftCandidate, type CodeDriftKnowledgeCandidate,
 } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 import { logger } from "../../log.js";
@@ -161,7 +162,9 @@ export async function runManager(
     //  구현이 보는 것이 갈라져 있었다. 그래서 «지식이 «이 함수가 X 를 막는다» 고 적었는데 그 심볼이 코드에
     //  없다» 는 자리를 아무도 안 봤다(실측: 08-28 지식이 적은 defaultWorkspaceId 가 열흘간 코드에 없었다).
     const allCats = await findCodeDriftCandidates(m, m.batch_size);
-    const allDocs = await findCodeDriftKnowledgeCandidates(m, m.batch_size);
+    const allDocs = mergeCodeDriftKnowledgeCandidates(
+      await findCodeDriftTouchCandidates(m, m.batch_size),
+      await findCodeDriftKnowledgeCandidates(m, m.batch_size));
     // 레포가 안 붙은 것은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
     //  AI 가 '코드를 못 찾겠다'만 보고하거나, 더 나쁘게는 **읽지도 않고 추측한다**. 비교할 is 가 없는 것과 같다.
     const cands = allCats.filter((c) => c.repos.length > 0);
@@ -296,11 +299,14 @@ function buildContradictionPrompt(m: ManagerRow, cands: Array<{ a: string; a_tit
 function buildCodeDriftPrompt(
   m: ManagerRow,
   cands: Array<{ key: string; name: string | null; should: string; repos: string[]; unit_count: number }>,
-  docs: Array<{ name: string; title: string | null; repos: string[] }> = [],
+  docs: Array<{ name: string; title: string | null; repos: string[]; changed_units?: Array<{ path: string; changed_at: string }> }> = [],
 ): string {
   const list = cands.map((c, i) =>
     `${i + 1}) ${c.key}${c.name ? ` (${c.name})` : ""} — 매핑 코드 ${c.unit_count}건`).join(" / ");
-  const docList = docs.map((d, i) => `${i + 1}) ${d.name}${d.title ? ` — ${d.title.slice(0, 60)}` : ""}`).join(" / ");
+  const docList = docs.map((d, i) => `${i + 1}) ${d.name}${d.title ? ` — ${d.title.slice(0, 60)}` : ""}` +
+    (d.changed_units?.length
+      ? ` [본문 뒤에 바뀐 모듈: ${d.changed_units.slice(0, 5).map((u) => `${u.path}(${u.changed_at.slice(0, 10)})`).join(", ")}]`
+      : "")).join(" / ");
   const crit = m.criteria_md?.trim() ? `이 조직의 판단 기준: ${m.criteria_md.trim().replace(/\s+/g, " ")}. ` : "";
   // 레포는 그룹 단위로 하나다(호출자가 갈라 넘긴다) — 작업 cwd 가 곧 그 레포의 워크트리라고 알려 준다.
   const repo = cands[0]?.repos[0] ?? docs[0]?.repos[0] ?? "";
@@ -317,6 +323,7 @@ function buildCodeDriftPrompt(
     `② 그 서술이 지금 코드에서 성립하는지 작업 폴더에서 Read/Grep 으로 확인해. ` +
     `특히 지식이 **이름을 대며** «이 함수·가드·설정 키가 X 를 한다» 고 적었으면 그 심볼이 실제로 있는지 본다 ` +
     `— 없으면 «고쳤다고 적혔는데 코드에 없는» 자리다(이 관리기가 존재하는 이유). ` +
+    `[본문 뒤에 바뀐 모듈] 이 붙은 지식은 그 작업이 건드린 모듈이 본문을 고친 뒤 다시 바뀐 것이다 — 그 모듈부터 본다. ` +
     `③ ⚠ **과거를 서술하는 문장은 괴리가 아니다** — 이 레포는 «종전엔 이랬다 → 그래서 이렇게 바꿨다» 를 ` +
     `본문에 남기는 관례가 있다. 옛 동작의 인용·실측 로그·시점이 박힌 수치는 현재 주장이 아니다. ` +
     `«지금 이렇다» 고 말하는 문장만 본다. ` +

@@ -336,6 +336,8 @@ export interface CodeDriftCandidate {
 export interface CodeDriftKnowledgeCandidate {
   name: string; title: string | null; type: string | null;
   repos: string[]; category_keys: string[]; updated_at: string | null;
+  /** 작업 기록 원천(findCodeDriftTouchCandidates)만 — 지식 본문 뒤에 바뀐 모듈(repos[0] 의 것, 최근 순). */
+  changed_units?: Array<{ path: string; changed_at: string }>;
 }
 
 /** Postgres undefined_table — 선택 기능의 테이블이 없는 배포를 오류와 구분한다. */
@@ -368,6 +370,84 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
     if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
     throw e;
   }
+}
+
+/**
+ * 코드 괴리 후보 — **작업 기록 원천**. 지식을 산출·결정한 작업 기록이 건드린 모듈을, 지식 본문과 그 작업 뒤에 커밋 작업이 다시 건드린 것.
+ *  분류에 레포가 없어도 바뀐 모듈의 레포를 알기 때문에 그 레포를 싣는다(분류의 첫 레포는 대표값일 뿐 실제로 바뀐 곳이 아니다).
+ *
+ *  · 14일 여유: 같은 작업의 MR 이 늦게 머지돼 작업 기록 뒤 커밋이 다시 기록되는 경우를 오탐으로 올리지 않으려는 값이다.
+ *  · 변경은 커밋이 달린 작업 기록의 touch 만 센다(유도·호출자 모두). 조사·리뷰 기록의 touch 는 «읽었다» 일 수 있다.
+ *  · 같은 모듈에 지식을 낸 작업이 여럿이면 가장 늦은 것을 기준으로 본다 — 변경 뒤 그 지식을 다시 냈으면 이미 대조한 것이다.
+ *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
+ *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다(runManager 가 오류로 기록한다).
+ */
+export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
+
+export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
+  const params: unknown[] = [];
+  const conds = scopeConds(m, params, "k");
+  params.push(CODE_DRIFT_TOUCH_GRACE_DAYS);
+  const graceP = `$${params.length}`;
+  params.push(limit);
+  const limP = `$${params.length}`;
+  try {
+    const rows = await q(itemsPool, `
+      WITH origin AS (
+        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at
+          FROM activity_knowledge ak
+          JOIN activity a       ON a.id = ak.activity_id
+          JOIN activity_touch t ON t.activity_id = a.id AND t.target_kind = 'code_unit'
+         WHERE ak.relation IN ('produced', 'decided')
+         GROUP BY ak.name, t.target_id
+      ), changed AS (
+        SELECT o.name, o.unit_id, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
+          FROM origin o
+          JOIN knowledge k       ON k.name = o.name
+          JOIN activity_touch t2 ON t2.target_kind = 'code_unit' AND t2.target_id = o.unit_id
+          JOIN activity a2       ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
+         WHERE ${conds.join(" AND ")}
+           AND COALESCE(a2.committed_at, a2.created_at) > COALESCE(k.body_updated_at, k.updated_at) + (${graceP} || ' days')::interval
+           AND COALESCE(a2.committed_at, a2.created_at) > o.origin_at + (${graceP} || ' days')::interval
+         GROUP BY o.name, o.unit_id
+      ), per_repo AS (
+        SELECT c.name, r.name AS repo, max(c.changed_at) AS changed_at,
+               json_agg(json_build_object('path', cu.path, 'changed_at', c.changed_at) ORDER BY c.changed_at DESC, cu.path) AS units
+          FROM changed c
+          JOIN code_unit cu ON cu.id = c.unit_id AND COALESCE(cu.state, 'active') = 'active'
+          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL
+         GROUP BY c.name, r.name
+      ), pick AS (
+        SELECT DISTINCT ON (p.name) p.name, p.repo, p.changed_at, p.units
+          FROM per_repo p
+         ORDER BY p.name, p.changed_at DESC, p.repo
+      )
+      SELECT k.name, k.title, k.type, k.updated_at, pick.repo, pick.units,
+             COALESCE((SELECT ARRAY_AGG(DISTINCT c.key) FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
+                        WHERE kc.name = k.name AND kc.state <> 'rejected'), ARRAY[]::text[]) AS category_keys
+        FROM pick JOIN knowledge k ON k.name = pick.name
+       ORDER BY pick.changed_at DESC, k.name
+       LIMIT ${limP}`, params);
+    return rows.map((r) => ({
+      name: String(r.name), title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
+      repos: [String(r.repo)], category_keys: (r.category_keys as string[]) ?? [],
+      updated_at: r.updated_at ? String(r.updated_at) : null,
+      changed_units: ((r.units as Array<{ path: string; changed_at: string }>) ?? [])
+        .map((u) => ({ path: String(u.path), changed_at: new Date(String(u.changed_at)).toISOString() })),
+    }));
+  } catch (e) {
+    if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // 도메인맵·작업 기록 표가 없는 배포 — 볼 것이 없다
+    throw e;
+  }
+}
+
+/** 두 원천에 같은 지식이 있으면 작업 기록 원천의 것(바뀐 모듈의 레포)을 쓴다 — 지식 하나를 두 레포에서 대조하지 않게. */
+export function mergeCodeDriftKnowledgeCandidates(
+  touched: readonly CodeDriftKnowledgeCandidate[], byCategory: readonly CodeDriftKnowledgeCandidate[],
+): CodeDriftKnowledgeCandidate[] {
+  const out = new Map<string, CodeDriftKnowledgeCandidate>();
+  for (const d of [...touched, ...byCategory]) if (!out.has(d.name)) out.set(d.name, d);
+  return [...out.values()];
 }
 
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {
