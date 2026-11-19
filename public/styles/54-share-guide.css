@@ -11,7 +11,8 @@
   --sky-a: #F3F5FF; --sky-b: #EAF6F2;
   --term-bg: #0F1524; --term-ink: #D8DFEE; --term-dim: #7F8BA6; --term-on: #A9B6FF; --term-ok: #63D7B2;
   --p-min: #E0517A; --p-jun: #1E8FD0; --p-so: #8656E6; --p-ha: #E39B2D;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sg-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sg-font: "Pretendard", -apple-system, "Apple SD Gothic Neo", sans-serif;
   color: var(--ink); line-height: 1.6; font-size: 15px;
 }
 :root[data-theme="dark"] .sg-root {
@@ -145,19 +146,19 @@
 .sg-kf span:last-child { color: var(--ink-sub); }
 
 /* 4장 — 터미널 */
-.sg-twin { width: 86cqw; background: var(--term-bg); border-radius: 2.4cqw; box-shadow: 0 2cqw 4cqw -2cqw rgba(0, 0, 0, .6); overflow: hidden; font: max(8.5px, 1.95cqw)/1.75 var(--mono); color: var(--term-ink); }
+.sg-twin { width: 86cqw; background: var(--term-bg); border-radius: 2.4cqw; box-shadow: 0 2cqw 4cqw -2cqw rgba(0, 0, 0, .6); overflow: hidden; font: max(8.5px, 1.95cqw)/1.75 var(--sg-mono); color: var(--term-ink); }
 .sg-twin-h { display: flex; align-items: center; gap: .9cqw; padding: 1.1cqw 1.6cqw; background: rgba(255, 255, 255, .05); }
 .sg-twin-h i { width: 1.4cqw; height: 1.4cqw; border-radius: 50%; background: rgba(255, 255, 255, .18); }
 .sg-twin-h .sg-t { margin-left: .8cqw; color: var(--term-dim); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sg-lvst { position: relative; width: 19cqw; height: 3.6cqw; }
-.sg-lvst span { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: .6cqw; padding: .35cqw 1.2cqw; border-radius: 99px; font: 800 max(8px, 1.7cqw)/1.4 var(--font); white-space: nowrap; }
+.sg-lvst span { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: .6cqw; padding: .35cqw 1.2cqw; border-radius: 99px; font: 800 max(8px, 1.7cqw)/1.4 var(--sg-font); white-space: nowrap; }
 .sg-lvst .sg-on { background: rgba(169, 182, 255, .18); color: var(--term-on); }
 .sg-lvst .sg-off { background: rgba(255, 255, 255, .1); color: var(--term-dim); }
 .sg-lvst i { width: 1cqw; height: 1cqw; border-radius: 50%; background: currentColor; }
 .sg-twin-b { padding: 1.6cqw 2.2cqw 2.2cqw; }
 .sg-tl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sg-tl.sg-u { color: #fff; } .sg-tl.sg-t { color: var(--term-on); } .sg-tl.sg-d { color: var(--term-dim); } .sg-tl.sg-ok { color: var(--term-ok); }
-.sg-tag-off { display: inline-flex; margin-left: 1cqw; padding: 0 1cqw; border-radius: 99px; background: rgba(255, 255, 255, .12); color: var(--term-dim); font: 800 max(8px, 1.6cqw)/1.7 var(--font); vertical-align: middle; }
+.sg-tag-off { display: inline-flex; margin-left: 1cqw; padding: 0 1cqw; border-radius: 99px; background: rgba(255, 255, 255, .12); color: var(--term-dim); font: 800 max(8px, 1.6cqw)/1.7 var(--sg-font); vertical-align: middle; }
 .sg-caret { display: inline-block; width: .9cqw; height: 2.2cqw; background: var(--term-ink); vertical-align: middle; animation: sg-blink 1s steps(1) infinite; }
 
 /* 5장 — 한눈에 */
@@ -177,7 +178,7 @@
 .sg-content h2 { margin: 0; font-size: clamp(21px, 4.4vw, 25px); font-weight: 800; letter-spacing: -.02em; line-height: 1.32; text-wrap: balance; }
 .sg-lead { margin: 0; color: var(--ink-sub); max-width: 42ch; text-wrap: pretty; }
 .sg-lead strong { color: var(--ink); }
-.sg-lead code, .sg-pop code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; color: var(--ink); white-space: nowrap; }
+.sg-lead code, .sg-pop code { font-family: var(--sg-mono); font-size: .9em; background: var(--surface-2); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; color: var(--ink); white-space: nowrap; }
 .sg-note { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); max-width: 46ch; }
 .sg-more { margin-top: 2px; border: 0; background: transparent; color: var(--mine-ink); font-weight: 700; font-size: 14px; cursor: pointer; padding: 4px 2px; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 4px; display: inline-flex; align-items: center; gap: 6px; }
 .sg-more:hover { text-decoration-style: solid; }
@@ -257,7 +258,7 @@
 .sg-mini-switch button .sg-ic { font-size: 13px; }
 .sg-mini-switch button[aria-selected="true"] { background: #fff; color: #14213A; }
 /* 터미널 장면 — 실제: lively run --readonly → «claude 실행 [readonly]» → Claude Code */
-.sg-mterm { position: absolute; left: 5cqw; top: 13cqw; width: 90cqw; background: var(--term-bg); border-radius: 2.6cqw; overflow: hidden; box-shadow: 0 2cqw 4cqw -2cqw rgba(0, 0, 0, .55); font: 3cqw/1.75 var(--mono); color: var(--term-ink); }
+.sg-mterm { position: absolute; left: 5cqw; top: 13cqw; width: 90cqw; background: var(--term-bg); border-radius: 2.6cqw; overflow: hidden; box-shadow: 0 2cqw 4cqw -2cqw rgba(0, 0, 0, .55); font: 3cqw/1.75 var(--sg-mono); color: var(--term-ink); }
 .sg-mterm-h { display: flex; align-items: center; gap: 1.2cqw; padding: 1.6cqw 2.2cqw; background: rgba(255, 255, 255, .06); color: var(--term-dim); font-size: 2.5cqw; }
 .sg-mterm-h i { width: 1.8cqw; height: 1.8cqw; border-radius: 50%; background: rgba(255, 255, 255, .2); }
 .sg-mterm-b { padding: 2.2cqw 3cqw 3cqw; }
@@ -298,7 +299,6 @@
 @keyframes sg-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-.8cqw); } 75% { transform: translateX(.8cqw); } }
 @keyframes sg-pickit { from { background: transparent; color: var(--muted); } }
 @keyframes sg-unpick { from { background: var(--surface); color: var(--ink); box-shadow: 0 1px 4px rgba(20, 33, 58, .2); } }
-@keyframes sg-cur { 0% { left: 86cqw; top: 46cqw; } 55% { left: var(--cx); top: var(--cy); transform: scale(1); } 65% { transform: scale(.85); } 75%, 100% { left: var(--cx); top: var(--cy); transform: scale(1); } }
 
 .sg-play .sg-p.sg-a-pop { animation: sg-popc .6s cubic-bezier(.2, .9, .3, 1.25) var(--d, 0s) both; }
 .sg-play .sg-p.sg-a-rise { animation: sg-risec .6s cubic-bezier(.2, .8, .3, 1) var(--d, 0s) both; }
@@ -319,8 +319,6 @@
 .sg-play .sg-i-shake { animation: sg-shake .4s ease var(--d, 0s) 2; }
 .sg-play .sg-i-pick { animation: sg-pickit .3s ease var(--d, 0s) both; }
 .sg-play .sg-i-unpick { animation: sg-unpick .3s ease var(--d, 0s) both; }
-.sg-play .sg-cursor { animation: sg-cur 1.6s cubic-bezier(.5, 0, .2, 1) var(--d, 0s) both; }
-.sg-cursor { left: var(--cx); top: var(--cy); }
 
 @media (prefers-reduced-motion: reduce) {
   .sg-play *, .sg-caret, .sg-badges .sg-bd, .sg-pop { animation: none !important; }
