@@ -466,7 +466,7 @@ async function knowledgeGetFlags(name: string, viewer: Viewer | null): Promise<R
   const contra = await contradictsWarning(name, viewer).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "contradicts 경고 조회 실패 — 표시 없이 진행"); return []; });
   if (contra.length) {
     out.contradicts_warning = {
-      note: "이 지식과 모순으로 이어진 지식이 있다 — 근거로 쓰기 전에 양쪽을 대조하라. 모순이 아니면 knowledge_link(unlink) 로 해제하거나, 관리기 발견이면 반려한다. recheck=true 는 연결 뒤 두 문서가 모두 고쳐져 이미 풀렸을 수 있다는 뜻이다.",
+      note: "이 지식과 모순으로 이어진 지식이 있다 — 근거로 쓰기 전에 양쪽을 대조하라. 모순이 아니면 links 의 각 링크를 그 from·to 그대로 knowledge_link(unlink, relation=contradicts) 로 해제하거나, 관리기 발견이면 반려한다. recheck=true 는 연결 뒤 두 문서가 모두 고쳐져 이미 풀렸을 수 있다는 뜻이다.",
       with: contra,
     };
   }

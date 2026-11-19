@@ -139,9 +139,21 @@ export const managersCapabilities: Capability[] = [
         if (r === "skipped") await resolveFinding(id, "accepted", actorOf(user), resolution, { onlyOpen: true, source });
         const finding = (await itemsPool.query(`SELECT * FROM org_manager_finding WHERE id=$1`, [id])).rows[0];
         if (!finding) throw new HttpError(404, "발견을 찾을 수 없습니다");
-        return { finding, applied: r === "applied" };
+        return { finding, applied: r === "applied", result: r };
       }
-      const finding = await resolveFinding(id, state, actorOf(user), resolution, { source });
+      //  모순 반려는 그 쌍의 관리기 링크를 해제한다 — 링크 해제(knowledge_link unlink)와 같은 양 끝 판정을 통과할 때만.
+      //   못 보는 지식이 낀 쌍은 발견만 반려한다(이 길이 링크 쓰기 게이트를 돌아가지 않게).
+      let allowDismiss = true;
+      if (state === "rejected") {
+        const cur = (await itemsPool.query(`SELECT kind, target_kind, target_ref, dedup_key FROM org_manager_finding WHERE id=$1`, [id])).rows[0] as
+          { kind: string; target_kind: string; target_ref: string; dedup_key: string } | undefined;
+        if (cur?.kind === "contradiction" && cur.target_kind === "knowledge" && cur.dedup_key) {
+          const viewer = ctx?.viewer ?? null;
+          allowDismiss = await Promise.all([assertKnowledgeWritable(cur.target_ref, viewer), assertKnowledgeWritable(cur.dedup_key, viewer)])
+            .then(() => true, () => false);
+        }
+      }
+      const finding = await resolveFinding(id, state, actorOf(user), resolution, { source, allowDismiss });
       if (!finding) throw new HttpError(404, "발견을 찾을 수 없습니다");
       return { finding, applied: false };
     }, {

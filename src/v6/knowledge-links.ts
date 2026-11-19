@@ -144,22 +144,27 @@ export async function listKnowledgeLinks(name: string, viewer?: Viewer): Promise
 /** contradicts 경고(P1c) — 이 지식과 모순으로 이어진 active 이웃. 해제(dismissed)된 링크는 뺀다.
  *  recheck: 링크를 건(또는 사람이 다시 건) 뒤 두 문서의 본문이 모두 바뀌었다 — 모순이 이미 풀렸을 수 있어 «다시 확인» 으로 낮춘다.
  *  이웃 이름·제목이 실리는 자리라 knowledgeVisWhere 를 탄다. */
-export interface ContradictsWarningRow { name: string; title: string | null; origin: string; linked_at: string; recheck: boolean }
+export interface ContradictsWarningRow {
+  name: string; title: string | null; linked_at: string; recheck: boolean;
+  /** 이 이웃과 이어진 contradicts 링크 — 해제는 각 링크의 from·to 그대로 knowledge_link(unlink) 로 한다(사람 링크는 건 방향만 지워진다). */
+  links: Array<{ from: string; to: string; origin: string }>;
+}
 export async function contradictsWarning(name: string, viewer?: Viewer): Promise<ContradictsWarningRow[]> {
   const params: unknown[] = [name];
   const vis = await knowledgeVisWhere(viewer, params, "o");
-  //  같은 쌍이 두 방향으로 이어져 있으면 이웃 하나로 접는다 — 재확인이 필요 없는 쪽(recheck=false)을 남긴다.
+  //  같은 쌍이 두 방향으로 이어져 있으면 이웃 하나로 접고 링크는 links 에 방향째 모은다 — 한쪽만 해제하고 다른 쪽이 남아 경고가
+  //   계속 뜨는 이유를 호출자가 알 수 있게. recheck 는 모든 링크가 재확인 대상일 때만 true(하나라도 최근에 걸렸으면 false).
   return await q(itemsPool,
-    `SELECT * FROM (
-       SELECT DISTINCT ON (o.name) o.name, o.title, l.origin, l.updated_at AS linked_at,
-              (COALESCE(me.body_updated_at, me.updated_at) > l.updated_at
-               AND COALESCE(o.body_updated_at, o.updated_at) > l.updated_at) AS recheck
-         FROM knowledge_link l
-         JOIN knowledge me ON me.name = $1
-         JOIN knowledge o ON o.name = CASE WHEN l.from_name = $1 THEN l.to_name ELSE l.from_name END
-        WHERE (l.from_name = $1 OR l.to_name = $1) AND l.relation = 'contradicts' AND l.dismissed_at IS NULL
-          AND o.lifecycle = 'active' AND ${vis}
-        ORDER BY o.name, recheck, l.updated_at DESC) w
+    `SELECT o.name, o.title, max(l.updated_at) AS linked_at,
+            bool_and(COALESCE(me.body_updated_at, me.updated_at) > l.updated_at
+                     AND COALESCE(o.body_updated_at, o.updated_at) > l.updated_at) AS recheck,
+            json_agg(json_build_object('from', l.from_name, 'to', l.to_name, 'origin', l.origin) ORDER BY l.from_name) AS links
+       FROM knowledge_link l
+       JOIN knowledge me ON me.name = $1
+       JOIN knowledge o ON o.name = CASE WHEN l.from_name = $1 THEN l.to_name ELSE l.from_name END
+      WHERE (l.from_name = $1 OR l.to_name = $1) AND l.relation = 'contradicts' AND l.dismissed_at IS NULL
+        AND o.lifecycle = 'active' AND ${vis}
+      GROUP BY o.name, o.title
       ORDER BY recheck, linked_at DESC`, params) as ContradictsWarningRow[];
 }
 // ════════ #907 본문 [[위키링크]] → 자동 엣지(origin='wikilink'). **본문이 SoT**. ════════

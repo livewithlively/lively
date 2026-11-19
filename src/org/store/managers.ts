@@ -212,7 +212,7 @@ export async function applyFindings(
  */
 export async function resolveFinding(
   id: number, state: "accepted" | "rejected" | "resolved", actor?: string, resolution?: string | null,
-  opts: { onlyOpen?: boolean; source?: string } = {},
+  opts: { onlyOpen?: boolean; source?: string; allowDismiss?: boolean } = {},
 ): Promise<FindingRow | null> {
   const client = await itemsPool.connect();
   try {
@@ -221,7 +221,9 @@ export async function resolveFinding(
       `UPDATE org_manager_finding SET state=$2, resolved_at=now(), resolved_by=$3, resolution=$4
         WHERE id=$1${opts.onlyOpen ? " AND state='open'" : ""} RETURNING *`, [id, state, actor ?? null, resolution ?? null]);
     const row = (r.rows[0] as FindingRow) ?? null;
-    if (row && state === "rejected" && row.kind === "contradiction" && row.target_kind === "knowledge" && row.dedup_key) {
+    //  allowDismiss=false — 반려한 사람이 두 지식을 다 쓸 수 없다. 발견만 반려하고 링크는 둔다(knowledge_link 해제와 같은 문턱).
+    //  반려를 나중에 accepted·resolved 로 바꿔도 해제한 링크는 되살리지 않는다 — 되살리기는 사람이 다시 링크하는 길 하나다.
+    if (row && state === "rejected" && opts.allowDismiss !== false && row.kind === "contradiction" && row.target_kind === "knowledge" && row.dedup_key) {
       await dismissManagerContradiction(client, row.target_ref, row.dedup_key, { actor: actor ?? null, source: opts.source ?? "web" });
     }
     await client.query("COMMIT");
