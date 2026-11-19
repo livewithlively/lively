@@ -133,3 +133,9 @@ export async function isAncestor(cloneDir: string, ancestor: string, descendant:
   try { await git(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], undefined, undefined, opts); return true; }
   catch { return false; }
 }
+
+// true iff `sha` names a commit object present in the clone.
+export async function commitExists(cloneDir: string, sha: string, opts: GitOpts): Promise<boolean> {
+  try { await git(["-C", cloneDir, "cat-file", "-e", `${sha}^{commit}`], undefined, undefined, opts); return true; }
+  catch { return false; }
+}

@@ -27,12 +27,15 @@
 // CHECKPOINT INVARIANT: repo.last_refreshed_sha names the commit the stored code_units reflect.
 // A refresh carrying a `base` applies base..head and advances the checkpoint ONLY when base is
 // the checkpoint at the moment the repo row is locked; otherwise it applies nothing (a scan_run
-// row records the skip) and the caller re-diffs from the checkpoint. Without this, a refresh whose range starts after a
+// row records the skip) and returns the checkpoint it found. The webhook re-diffs from it once;
+// refresh_all leaves it to its next tick. Without this, a refresh whose range starts after a
 // skipped one (webhook acked 200 while the clone was busy / its sha was not fetched yet) moved
 // the checkpoint past the skipped range and that range was never applied. The row lock makes
 // concurrent refreshes of one repo (webhook vs scheduled refresh_all) apply one after the other,
 // so the second sees the first's checkpoint. A payload without `base` is an explicit re-baseline
-// (git-pull baseline, refresh-scan) and keeps setting the checkpoint unconditionally.
+// (git-pull baseline, refresh-scan, webhook over an unusable checkpoint) and keeps setting the
+// checkpoint unconditionally. A `base` without `head` is rejected: it would apply a range without
+// moving the checkpoint, so the same range would be applied again by the next refresh.
 import { one, q, withTx } from "../db.js";
 import { httpErr, type Actor, type RefreshResult } from "./types.js";
 import { logChange } from "./changelog.js";
@@ -63,7 +66,8 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
   const p: any = typeof payload === "string" ? JSON.parse(payload) : payload;
   const rawChanges: any[] = Array.isArray(p.changes) ? p.changes : [];
   const act: Actor = actor ?? { type: "agent", id: "agent" };
-  const result = await withTx(async (client) => {
+  if (p.base != null && p.head == null) throw httpErr(400, "refresh payload with base requires head");
+  const result = await withTx<RefreshResult>(async (client) => {
     // Resolve repo inside the txn so a bad name rolls back cleanly with a 404. FOR UPDATE: see
     // CHECKPOINT INVARIANT — the checkpoint read below must stay true until this txn commits.
     const repo = await one(client, "SELECT * FROM repo WHERE name=$1 FOR UPDATE", [repoName]);
@@ -236,20 +240,21 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
       tally.skipped++; // unknown status
     }
 
-    if (contentChanged.length) {
-      // The head commit's time, not now(): a later refresh carrying an older commit (a
-      // re-baseline, a CLI replay) must not move a module's content time forward. GREATEST keeps
-      // it monotonic; the sha follows only when the time actually advances. now() is the
-      // fallback for callers without a git clone (CLI unit-level payloads).
+    // Without a head there is no commit to attribute the change to, so the content stamp is skipped.
+    if (contentChanged.length && p.head != null) {
+      // The head commit's time, not now(): a later refresh carrying an older commit (a re-baseline,
+      // a CLI replay) must not move a module's content time forward, so only rows whose stamp is
+      // not newer advance (and only those are counted). The time is capped at now(): committer
+      // dates are client-set, and one commit dated in the future would otherwise pin the stamp so
+      // no later commit could move it. now() is also the fallback when the caller has no git clone.
       const at = typeof p.head_committed_at === "string" && !Number.isNaN(Date.parse(p.head_committed_at))
         ? new Date(p.head_committed_at).toISOString() : now();
       const r = await client.query(
         `UPDATE code_unit
-            SET content_changed_sha = CASE WHEN content_changed_at IS NULL OR content_changed_at <= $3::timestamptz
-                                           THEN $4 ELSE content_changed_sha END,
-                content_changed_at  = GREATEST(COALESCE(content_changed_at, $3::timestamptz), $3::timestamptz)
-          WHERE repo_id=$1 AND path = ANY($2::text[]) AND COALESCE(state,'active')='active'`,
-        [repo_id, [...new Set(contentChanged)], at, p.head != null ? String(p.head) : null]);
+            SET content_changed_at = LEAST($3::timestamptz, now()), content_changed_sha = $4
+          WHERE repo_id=$1 AND path = ANY($2::text[]) AND COALESCE(state,'active')='active'
+            AND (content_changed_at IS NULL OR content_changed_at <= LEAST($3::timestamptz, now()))`,
+        [repo_id, [...new Set(contentChanged)], at, String(p.head)]);
       tally.content_changed = r.rowCount ?? 0;
     }
 
@@ -261,7 +266,7 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
     // and visible to the caller. Unit-granularity callers see no extra field.
     if (aggregation) tally.aggregation = aggregation;
     await client.query("UPDATE scan_run SET finished_at=$1, summary=$2 WHERE id=$3", [now(), JSON.stringify(tally), run_id]);
-    return { repo: repoName, run_id, base: p.base ?? checkpoint, head: p.head ?? null, tally } as RefreshResult;
+    return { repo: repoName, run_id, base: p.base ?? checkpoint, head: p.head ?? null, tally };
   });
   if (result.skipped) return result;
   // P4 옵션ii — is-reconcile 백스톱: 하네스 밖 변경이 refresh 로 들어온 뒤 should↔is debt 를 재평가한다

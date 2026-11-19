@@ -46,8 +46,15 @@ try {
   else if (cmd === "refresh") {
     // refresh <repo> reads a git-diff payload {base?,head?,changes[]} from stdin
     // (like ingest) → deterministic incremental structural refresh → prints tally.
-    if (!pos[0]) { console.error("usage: refresh <repo>  (payload JSON on stdin)"); process.exitCode = 1; }
-    else console.log(JSON.stringify(await refresh(pos[0], readFileSync(0, "utf8"), actor), null, 2));
+    if (!pos[0]) {
+      console.error("usage: refresh <repo>  (payload JSON on stdin)");
+      console.error("  base must be the repo's full last_refreshed_sha (head required); otherwise nothing is applied (skipped)");
+      process.exitCode = 1;
+    } else {
+      const r = await refresh(pos[0], readFileSync(0, "utf8"), actor);
+      console.log(JSON.stringify(r, null, 2));
+      if (r.skipped) { console.error(`skipped: base is not the checkpoint ${r.skipped.checkpoint}`); process.exitCode = 2; }
+    }
   }
   else if (cmd === "refresh-scan") {
     // refresh-scan <repo> <rootPath> [--rename=from:to ...] [--head=<sha>] [--stack=<json>]

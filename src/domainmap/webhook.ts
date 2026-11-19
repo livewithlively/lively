@@ -11,7 +11,7 @@ import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import { isAuthError, describeGitError, hostOf } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, commitTime, isAncestor } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, commitTime, isAncestor, commitExists } from "./git-sync.js";
 
 // sanitizeName 은 구 webhook.ts 표면(테스트·소비자) — 구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
 export { sanitizeName };
@@ -20,6 +20,11 @@ const WEBHOOK_BODY_CAP = "2mb";               // 구 2MB cap → express.raw lim
 const GIT_TIMEOUT_MS = 60_000;
 const ZERO_SHA = /^0{40}$/;                   // git "all zeros" => no parent (new branch / first push)
 const SHA_RE = /^[0-9a-f]{7,40}$/;
+// The push's `before`, or null for a new branch / first push (all zeros) or garbage.
+const usablePushBase = (v: unknown): string | null => {
+  const s = String(v ?? "");
+  return s && !ZERO_SHA.test(s) && SHA_RE.test(s) ? s : null;
+};
 
 // 웹훅 예산(60s)을 묶은 git 실행기 — 구 로컬 git() 과 동일 시그니처라 호출부 무변경.
 const git = (args: string[], cwd?: string, extraEnv?: Record<string, string>) =>
@@ -160,59 +165,73 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   const after = String(ev.after ?? "");
   if (!SHA_RE.test(after)) { res.status(400).json({ error: "invalid after sha" }); return; }
 
-  let before = String(ev.before ?? "");
-  let baseNote: string | undefined;
-  const checkpoint = typeof repo.last_refreshed_sha === "string" && SHA_RE.test(repo.last_refreshed_sha)
-    ? repo.last_refreshed_sha : null;
-  if (checkpoint) {
-    // Diff from the checkpoint, not the push's `before`: the stored units reflect the checkpoint, and
-    // any earlier push this endpoint acked without applying (clone busy, sha not fetched yet) sits
-    // between the two. refresh() refuses a base other than the checkpoint, so diffing from `before`
-    // would leave every later push skipped until the scheduled refresh_all caught up.
-    // A push at or behind the checkpoint (out-of-order delivery, redelivery) is already applied —
-    // diffing checkpoint..after would walk the units backwards.
-    if (await isAncestor(cloneDir, after, checkpoint, { timeoutMs: GIT_TIMEOUT_MS })) {
-      res.status(200).json({ ignored: "already applied (checkpoint at or past this push)", base: checkpoint, head: after }); return;
-    }
-    if (before !== checkpoint) baseNote = "diffed from last_refreshed_sha (push before differs)";
-    before = checkpoint;
-  } else if (!before || ZERO_SHA.test(before) || !SHA_RE.test(before)) {
-    // New branch / first push (all-zeros) or garbage, and no checkpoint to diff from.
-    res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return;
-  }
+  const before = usablePushBase(ev.before);
+  const opts = { timeoutMs: GIT_TIMEOUT_MS };
+  const stored = typeof repo.last_refreshed_sha === "string" && repo.last_refreshed_sha !== "" ? repo.last_refreshed_sha : null;
 
-  let diffOut: string;
-  try {
-    const r = await git(["-C", cloneDir, "diff", "--name-status", "-M50", before, after]);
-    diffOut = r.stdout || "";
-  } catch {
-    // before/after may not be in the local clone yet (force-push / stale). Don't 502
-    // (provider retry storms) — ack and let the next push / scheduled refresh reconcile.
-    res.status(200).json({ ignored: "sha not in clone yet, will resync", base: before, head: after }); return;
-  }
-
-  const changes = parseDiff(diffOut);
-
-  // Apply via the existing audited + transactional deterministic refresh.
-  // granularity:'file' — git diff speaks FILE paths but our code_units are
-  // module-level; the store aggregates these file changes onto the existing
-  // code_unit granularity (longest-prefix ownership; dir-move = file-rename cluster
-  // → module rename; new dir = candidate unit; add/modify/delete inside an existing
-  // module = structural no-op that only moves its content_changed_at) BEFORE the
-  // deterministic refresh applies them.
-  const head_committed_at = await commitTime(cloneDir, after, { timeoutMs: GIT_TIMEOUT_MS });
-  const result = await refresh(
-    repo.name,
-    { base: before, head: after, head_committed_at, changes, granularity: "file" },
-    { type: "agent", id: "webhook:" + provider },
-  );
-  if (result.skipped) {
-    // Another refresh moved the checkpoint between our read and the repo lock; the next push or
-    // refresh_all diffs from the new checkpoint.
-    res.status(200).json({ ignored: "checkpoint moved concurrently, will resync", base: before, head: after, checkpoint: result.skipped.checkpoint }); return;
-  }
+  // Diff `base..after` and refresh. With a base this is the checkpoint-guarded path; base null is a
+  // re-baseline (refresh sets the checkpoint to `after` unconditionally).
+  type Outcome = { kind: "applied"; tally: unknown; changes: number } | { kind: "skipped"; checkpoint: string } | { kind: "no-sha" };
+  const apply = async (from: string, base: string | null): Promise<Outcome> => {
+    let diffOut: string;
+    try { diffOut = (await git(["-C", cloneDir, "diff", "--name-status", "-M50", from, after])).stdout || ""; }
+    catch { return { kind: "no-sha" }; }
+    const changes = parseDiff(diffOut);
+    const head_committed_at = await commitTime(cloneDir, after, opts);
+    // granularity:'file' — git diff speaks FILE paths but our code_units are module-level; the store
+    // aggregates them onto the existing units (longest-prefix ownership; dir-move = file-rename cluster →
+    // module rename; new dir = candidate unit; add/modify/delete inside an existing module = structural
+    // no-op that only moves its content_changed_at) BEFORE the deterministic refresh applies them.
+    const r = await refresh(
+      repo.name,
+      { ...(base ? { base } : {}), head: after, head_committed_at, changes, granularity: "file" },
+      { type: "agent", id: "webhook:" + provider },
+    );
+    return r.skipped ? { kind: "skipped", checkpoint: r.skipped.checkpoint } : { kind: "applied", tally: r.tally, changes: changes.length };
+  };
   // note 가 undefined 면 JSON 직렬화에서 키 생략 — 구 응답과 동일.
-  res.status(200).json({ tally: result.tally, base: before, head: after, changes: changes.length, note: baseNote });
+  const done = (o: Outcome, base: string, note?: string): void => {
+    if (o.kind === "applied") { res.status(200).json({ tally: o.tally, base, head: after, changes: o.changes, note }); return; }
+    if (o.kind === "no-sha") {
+      // before/after may not be in the local clone yet (force-push / stale). Don't 502
+      // (provider retry storms) — ack and let the next push / scheduled refresh reconcile.
+      res.status(200).json({ ignored: "sha not in clone yet, will resync", base, head: after }); return;
+    }
+    res.status(200).json({ ignored: "checkpoint moved concurrently, will resync", base, head: after, checkpoint: o.checkpoint });
+  };
+
+  // Checkpoint the units cannot be diffed from: not a sha, or not a commit in the clone (history rewrite,
+  // a sha set by hand). refresh() refuses any other base, and the scheduled refresh_all — the only other
+  // path that re-baselines — may be disabled, so the webhook would stall for good. Re-baseline from the
+  // push's own range instead; whatever happened between the checkpoint and `before` is lost either way.
+  if (stored && (!SHA_RE.test(stored) || !(await commitExists(cloneDir, stored, opts)))) {
+    if (!before) { res.status(200).json({ ignored: "checkpoint unusable and no usable push base", head: after }); return; }
+    const why = SHA_RE.test(stored) ? "checkpoint not in clone" : "checkpoint is not a sha";
+    done(await apply(before, null), before, `${why}; re-baselined from push before`); return;
+  }
+
+  if (!stored) {
+    if (!before) { res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return; }
+    done(await apply(before, before), before); return;
+  }
+
+  // Diff from the checkpoint, not the push's `before`: the stored units reflect the checkpoint, and any
+  // earlier push this endpoint acked without applying (clone busy, sha not fetched yet) sits between the
+  // two. A push at or behind the checkpoint (out-of-order delivery, redelivery) is already applied —
+  // diffing checkpoint..after would walk the units backwards. If a concurrent refresh moves the checkpoint
+  // (two pushes in quick succession), re-diff once from the checkpoint it left; a second miss is left to
+  // the next push / refresh_all.
+  let cp = stored;
+  for (let attempt = 0; ; attempt++) {
+    if (await isAncestor(cloneDir, after, cp, opts)) {
+      res.status(200).json({ ignored: "already applied (checkpoint at or past this push)", base: cp, head: after }); return;
+    }
+    const o = await apply(cp, cp);
+    if (o.kind === "skipped" && attempt === 0) { cp = o.checkpoint; continue; }
+    const note = attempt > 0 ? "re-diffed from the checkpoint moved by a concurrent refresh"
+      : before !== cp ? "diffed from last_refreshed_sha (push before differs)" : undefined;
+    done(o, cp, note); return;
+  }
 }
 
 export function domainmapWebhookRouter(): express.Router {

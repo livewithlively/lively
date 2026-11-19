@@ -5,17 +5,24 @@
 //  실패 방향이 조용하다 — 건너뛴 범위가 반영되지 않아도 오류 없이 200 이고 모듈 표에서 행 하나가 빠질 뿐이다.
 //   C1 base 가 체크포인트면 적용·전진 · 안에서 파일만 바뀐 모듈만 content_changed_at·sha 가 오르고 updated_at 은 그대로
 //   C2 base 가 체크포인트와 다르면 아무것도 적용하지 않고 전진하지 않는다(skipped.checkpoint 로 현재 값을 돌려준다)
-//   C3 더 이른 커밋 시각으로 다시 와도 content_changed_at·sha 는 뒤로 가지 않는다(체크포인트는 전진)
+//   C3 더 이른 커밋 시각으로 다시 와도 content_changed_at·sha 는 뒤로 가지 않고 전진한 행으로 세지 않는다(체크포인트는 전진)
+//   C3b 커밋 시각이 미래여도 now() 로 막혀, 뒤따르는 정상 커밋이 sha 를 옮긴다
+//   C3c head 없는 페이로드는 내용 시각을 쓰지 않고(sha 를 NULL 로 덮지 않음), base 만 있고 head 가 없으면 거절한다
 //   C4 base 없는 페이로드(재기준)는 조건 없이 체크포인트를 세운다 · C5 체크포인트가 비어 있으면 첫 base 를 받아들인다
-//   C6 repo 행을 쥔 트랜잭션이 끝날 때까지 refresh 가 기다리고, 그 사이 바뀐 체크포인트를 보고 건너뛴다
 //   C7 같은 base 의 refresh 두 개(웹훅·refresh_all)를 동시에 돌리면 하나만 적용된다
+//   C8 레포 삭제는 refresh 와 같은 순서(repo 행 먼저)로 잠가, refresh 중에 와도 교착 없이 뒤에 끝난다
+//   C9 CLI refresh 가 건너뛰면 종료 코드가 0 이 아니다
 //   G1 웹훅이 놓친 범위가 있어도 다음 웹훅이 체크포인트부터 diff 해 메운다(모듈 내용 시각 = 커밋 시각)
 //   G2 이미 반영한 push 의 재전송·역순 도착은 체크포인트를 되돌리지 않는다
-//   G3 웹훅이 건너뛴 뒤 refresh_all(git-pull)이 체크포인트부터 diff 해 메운다
+//   G3 refresh_all(git-pull)이 체크포인트부터 diff 한다
+//   G4 겹친 push — 웹훅이 읽은 뒤 다른 refresh 가 체크포인트를 옮기면, 옮겨진 체크포인트부터 한 번 다시 diff 한다
+//   G5 force-push(이력 재작성) 뒤의 push 도 체크포인트..after 트리 diff 로 반영한다
+//   G6 체크포인트가 클론에 없는 커밋이면 push 의 before..after 로 재기준한다(웹훅이 멈추지 않는다)
+//   G7 체크포인트가 sha 가 아니어도 같은 재기준을 하고 응답 문구로 원인을 가른다
 import pg from "pg";
 import http from "node:http";
 import express from "express";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,6 +51,7 @@ const { itemsPool } = await import(`${D}/db/client.js`);
 const { refresh } = await import(`${D}/domainmap/core/refresh.js`);
 const { refreshRepoFromGit } = await import(`${D}/domainmap/git-pull.js`);
 const { domainmapWebhookRouter } = await import(`${D}/domainmap/webhook.js`);
+const { hardDeleteRepo } = await import(`${D}/domainmap/core/repos.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -107,6 +115,31 @@ try {
     chk("C3 더 이른 커밋 시각은 content_changed_at 을 되돌리지 않는다", iso(u.content_changed_at) === T1, JSON.stringify(u));
     chk("C3 sha 도 그대로", u.content_changed_sha === sha("b"));
     chk("C3 체크포인트는 전진", (await checkpointOf(A)) === sha("c"));
+    chk("C3 전진하지 않은 행은 content_changed 로 세지 않는다", r.tally?.content_changed === 0, JSON.stringify(r.tally));
+  });
+
+  await section("C3b", async () => {
+    const r1 = await refresh(A, { base: sha("c"), head: sha("5"), head_committed_at: "2099-01-01T00:00:00Z", granularity: "file",
+      changes: [{ status: "M", path: "src/u/a.ts" }] }, AGENT);
+    const u1 = await unit(aId, "src/u");
+    chk("C3b 미래 커밋 시각은 now() 로 막힌다", !r1.skipped && new Date(u1.content_changed_at).getTime() <= Date.now(), JSON.stringify(u1));
+    const r2 = await refresh(A, { base: sha("5"), head: sha("6"), head_committed_at: new Date().toISOString(), granularity: "file",
+      changes: [{ status: "M", path: "src/u/a.ts" }] }, AGENT);
+    const u2 = await unit(aId, "src/u");
+    chk("C3b 뒤따르는 정상 커밋이 sha 를 옮긴다", u2.content_changed_sha === sha("6") && r2.tally?.content_changed === 1, JSON.stringify({ u2, t: r2.tally }));
+  });
+
+  await section("C3c", async () => {
+    const before = await unit(aId, "src/u");
+    const r = await refresh(A, { changes: [{ status: "M", path: "src/u" }] }, AGENT);
+    const after = await unit(aId, "src/u");
+    chk("C3c head 없으면 내용 시각·sha 를 쓰지 않는다",
+      after.content_changed_sha === before.content_changed_sha && iso(after.content_changed_at) === iso(before.content_changed_at) && !r.tally?.content_changed,
+      JSON.stringify({ before, after }));
+    let err = null;
+    try { await refresh(A, { base: sha("6"), changes: [{ status: "A", path: "src/nohead/x.ts" }] }, AGENT); } catch (e) { err = e; }
+    chk("C3c base 만 있고 head 가 없으면 400 으로 거절", err?.status === 400 && (await unit(aId, "src/nohead")) === null, String(err?.message));
+    chk("C3c 체크포인트 그대로", (await checkpointOf(A)) === sha("6"));
   });
 
   await section("C4", async () => {
@@ -121,37 +154,54 @@ try {
     chk("C5 체크포인트가 비어 있으면 첫 base 를 받아 적용·전진", !r.skipped && (await checkpointOf(N)) === sha("2") && (await unit(nId, "src/n")) !== null, JSON.stringify(r));
   });
 
-  // ── C6: repo 행 잠금 ──
-  await section("C6", async () => {
-    const holder = await itemsPool.connect();
-    try {
-      await holder.query("BEGIN");
-      await holder.query("SELECT 1 FROM repo WHERE name=$1 FOR UPDATE", [A]);
-      let settled = false;
-      const p = refresh(A, { base: sha("d"), head: sha("e"), granularity: "file", changes: [{ status: "A", path: "src/lock/x.ts" }] }, AGENT)
-        .finally(() => { settled = true; });
-      await new Promise((r) => setTimeout(r, 400));
-      chk("C6 repo 행을 쥔 트랜잭션이 끝날 때까지 기다린다", !settled);
-      await holder.query("UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2", [sha("f"), A]);
-      await holder.query("COMMIT");
-      const r = await p;
-      chk("C6 기다리는 사이 바뀐 체크포인트를 보고 건너뛴다", r.skipped?.checkpoint === sha("f"), JSON.stringify(r));
-      chk("C6 체크포인트를 덮지 않는다", (await checkpointOf(A)) === sha("f"));
-      chk("C6 추가가 적용되지 않았다", (await unit(aId, "src/lock")) === null);
-    } finally { holder.release(); }
-  });
-
   // ── C7: 동시 refresh 두 개 ──
   await section("C7", async () => {
     const [r1, r2] = await Promise.all([
-      refresh(A, { base: sha("f"), head: sha("7"), granularity: "file", changes: [{ status: "A", path: "src/p1/x.ts" }] }, { type: "agent", id: "webhook:gitlab" }),
-      refresh(A, { base: sha("f"), head: sha("8"), granularity: "file", changes: [{ status: "A", path: "src/p2/x.ts" }] }, { type: "agent", id: "refresh_all" }),
+      refresh(A, { base: sha("d"), head: sha("7"), granularity: "file", changes: [{ status: "A", path: "src/p1/x.ts" }] }, { type: "agent", id: "webhook:gitlab" }),
+      refresh(A, { base: sha("d"), head: sha("8"), granularity: "file", changes: [{ status: "A", path: "src/p2/x.ts" }] }, { type: "agent", id: "refresh_all" }),
     ]);
     const applied = [r1, r2].filter((r) => !r.skipped);
     chk("C7 하나만 적용되고 하나는 건너뛴다", applied.length === 1, JSON.stringify([r1, r2]));
     const p1 = await unit(aId, "src/p1"), p2 = await unit(aId, "src/p2");
     chk("C7 적용된 쪽의 변경만 남는다", (p1 !== null) !== (p2 !== null), JSON.stringify({ p1, p2 }));
     chk("C7 체크포인트 = 적용된 쪽의 head", applied.length === 1 && (await checkpointOf(A)) === applied[0].head);
+  });
+
+  // ── C8: 레포 삭제의 잠금 순서 ──
+  await section("C8", async () => {
+    const X = "pgt-ckpt-del";
+    const xId = await makeRepo(X, sha("a"), ["src/u"]);
+    const holder = await itemsPool.connect();
+    try {
+      // refresh 와 같은 순서: repo 행을 잡은 뒤 code_unit 을 쓴다.
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM repo WHERE id=$1 FOR UPDATE", [xId]);
+      const del = hardDeleteRepo(X, true, AGENT).then(() => null, (e) => e);
+      let waiting = false;
+      for (let i = 0; i < 200 && !waiting; i++) {
+        const [w] = await q(`SELECT count(*)::int n FROM pg_stat_activity WHERE wait_event_type='Lock' AND pid <> pg_backend_pid()`);
+        waiting = w.n > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 50));
+      }
+      chk("C8 삭제가 잠금에서 기다린다(전제)", waiting);
+      let holderErr = null;
+      try {
+        await holder.query("UPDATE code_unit SET updated_at=now() WHERE repo_id=$1", [xId]);
+        await holder.query("COMMIT");
+      } catch (e) { holderErr = e; await holder.query("ROLLBACK").catch(() => {}); }
+      const delErr = await del;
+      chk("C8 교착 없이 refresh 쪽이 먼저 끝난다", holderErr === null, String(holderErr?.message));
+      chk("C8 삭제도 끝난다", delErr === null && (await checkpointOf(X)) === null, String(delErr?.message));
+    } finally { holder.release(); }
+  });
+
+  // ── C9: CLI 종료 코드 ──
+  await section("C9", async () => {
+    const cli = new URL(`${D}/domainmap/cli.js`).pathname;
+    const run = spawnSync(process.execPath, [cli, "refresh", A], {
+      input: JSON.stringify({ base: sha("a"), head: sha("9"), changes: [] }), encoding: "utf8", env: process.env,
+    });
+    chk("C9 건너뛴 refresh 는 종료 코드가 0 이 아니다", run.status !== 0 && /skipped/.test(run.stderr), `status=${run.status} ${run.stderr}`);
   });
 
   // ── G1~G3: 실제 git 범위(웹훅·refresh_all) ──
@@ -212,14 +262,73 @@ try {
   await section("G3", async () => {
     put("src/v/b.ts", "2\n");
     const c4 = commit("c4", "2026-04-04T00:00:00Z");
-    // 웹훅 경로가 옛 base 로 refresh 를 부른 경우(읽은 뒤 다른 refresh 가 체크포인트를 옮겼다).
-    const stale = await refresh(GR, { base: c2, head: c4, granularity: "file", changes: [{ status: "M", path: "src/v/b.ts" }] }, AGENT);
-    chk("G3 옛 base 는 건너뛴다", stale.skipped?.checkpoint === c3, JSON.stringify(stale));
     const r = await refreshRepoFromGit(GR, { type: "agent", id: "refresh_all" });
     chk("G3 refresh_all 이 체크포인트(c3)부터 diff", r.status === "ok" && r.base === c3 && r.head === c4, JSON.stringify(r));
     const v = await unit(gId, "src/v");
     chk("G3 c4 의 수정이 반영됐다", iso(v?.content_changed_at) === "2026-04-04T00:00:00.000Z" && v?.content_changed_sha === c4, JSON.stringify(v));
     chk("G3 체크포인트 = c4", (await checkpointOf(GR)) === c4);
+  });
+
+  await section("G4", async () => {
+    put("src/r/x.ts", "r\n");
+    const c5 = commit("c5", "2026-04-05T00:00:00Z");
+    put("src/u/a.ts", "3\n");
+    const c6 = commit("c6", "2026-04-06T00:00:00Z");
+    // c4→c5 를 반영하는 다른 refresh 가 repo 행을 쥔 사이에 c5→c6 push 가 온다. 웹훅은 체크포인트 c4 를 읽고
+    // c4..c6 로 refresh 에 들어가 행 잠금에서 기다린다.
+    const holder = await itemsPool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM repo WHERE name=$1 FOR UPDATE", [GR]);
+      const pending = push(c5, c6);
+      let waiting = false;
+      for (let i = 0; i < 200 && !waiting; i++) {
+        const [w] = await q(`SELECT count(*)::int n FROM pg_stat_activity
+                              WHERE wait_event_type='Lock' AND query ILIKE '%FROM repo WHERE name=%FOR UPDATE%' AND pid <> pg_backend_pid()`);
+        waiting = w.n > 0;
+        if (!waiting) await new Promise((r) => setTimeout(r, 50));
+      }
+      chk("G4 웹훅이 repo 행 잠금에서 기다린다(전제)", waiting);
+      await holder.query("UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2", [c5, GR]);
+      await holder.query("COMMIT");
+      const r = await pending;
+      chk("G4 옮겨진 체크포인트(c5)부터 다시 diff 해 적용", r.status === 200 && !r.body.ignored && r.body.base === c5, JSON.stringify(r));
+      chk("G4 체크포인트 = c6", (await checkpointOf(GR)) === c6);
+      chk("G4 c6 의 수정이 반영됐다", (await unit(gId, "src/u"))?.content_changed_sha === c6);
+      chk("G4 출발점 c4 는 쓰지 않았다(c4..c5 의 새 모듈은 다른 refresh 몫)", (await unit(gId, "src/r")) === null);
+    } finally { holder.release(); }
+  });
+
+  await section("G5", async () => {
+    const c6 = await checkpointOf(GR);
+    g(["reset", "-q", "--hard", c1]);
+    put("src/z/x.ts", "z\n");
+    const c7 = commit("c7", "2026-04-07T00:00:00Z");
+    const r = await push(c6, c7);
+    chk("G5 force-push 뒤 push 를 체크포인트부터 반영", r.status === 200 && !r.body.ignored && r.body.base === c6, JSON.stringify(r));
+    chk("G5 새 모듈 · 체크포인트 = c7", (await unit(gId, "src/z")) !== null && (await checkpointOf(GR)) === c7);
+  });
+
+  await section("G6", async () => {
+    const c7 = await checkpointOf(GR);
+    await q(`UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2`, [sha("d"), GR]);
+    put("src/y/x.ts", "y\n");
+    const c8 = commit("c8", "2026-04-08T00:00:00Z");
+    const r = await push(c7, c8);
+    chk("G6 클론에 없는 체크포인트 → push before..after 로 재기준",
+      r.status === 200 && !r.body.ignored && r.body.base === c7 && /not in clone/.test(r.body.note ?? ""), JSON.stringify(r));
+    chk("G6 새 모듈 · 체크포인트 = c8", (await unit(gId, "src/y")) !== null && (await checkpointOf(GR)) === c8);
+  });
+
+  await section("G7", async () => {
+    const c8 = await checkpointOf(GR);
+    await q(`UPDATE repo SET last_refreshed_sha='not-a-sha' WHERE name=$1`, [GR]);
+    put("src/q/x.ts", "q\n");
+    const c9 = commit("c9", "2026-04-09T00:00:00Z");
+    const r = await push(c8, c9);
+    chk("G7 sha 가 아닌 체크포인트 → 재기준 · 원인 문구가 다르다",
+      r.status === 200 && !r.body.ignored && /not a sha/.test(r.body.note ?? ""), JSON.stringify(r));
+    chk("G7 새 모듈 · 체크포인트 = c9", (await unit(gId, "src/q")) !== null && (await checkpointOf(GR)) === c9);
   });
 } catch (e) {
   fail++; console.error("FAIL 예외", e);
