@@ -67,6 +67,13 @@
 //  Q9  번호로 찾기 — 그 번호의 프로젝트가 맨 위, 그 프로젝트의 세션이 그다음 · 세션 줄에 «#번호» · 맞은 말이 없으면 첫 지시
 //  Q10 빈 칸의 «최근 검색» 은 한 줄의 칩(원준 2026-10-05 «최근 검색 기록이 차지하는 부분이 너무 많다») — 줄을 차지하지 않는다 ·
 //      처음 고른 것은 칩이 아닌 첫 줄 · 첫 줄에서 ↑ = 칩 · ←→ = 칩 사이 · ↓ = 첫 줄 · 칩에서 ↑ = 탭 줄 · Enter = 그 검색어로 다시
+// 키(#5607, 상민님 2026-11-19 «세션, 플젝, 지식 다 키로 검색 가능하게 하고 검색 결과에 해당 키를 보여 주는 게 좋을 듯»):
+//  K1  번호가 아닌 검색어에도 줄마다 키 — 프로젝트·태스크 이름 뒤 «#번호» · 세션 이름 뒤 «#맡은 태스크 번호»(서버 task_no · 셸 목록 taskNo)
+//      · 지식은 둘째 줄에 key · 친 번호가 아니면 «호명» 표시는 없다
+//  K2  세션이 단 번호(«176»)를 치면 — 번호의 주인(태스크) 다음에 그 번호를 단 세션(서버가 준 것 · 셸 목록만 아는 막 만든 세션)이 맨 위 셋에 ·
+//      이름 뒤 «#176» 이 «호명» 표시 · 둘째 줄에 같은 번호를 되풀이하지 않는다
+//  K3  미리보기 머리에 키 — 태스크 «#176» · 지식 key(목록 줄에서 잘려도 여기서는 끝까지)
+//  K4  프로젝트 번호(«170»)로 온 세션 — 이름 뒤엔 제 번호(«#176», 호명 아님) · 둘째 줄에 친 번호 «#170»
 //  W   모든 장면을 통틀어 페이지 오류 0 · 배선(가짜 서버가 실제로 불렸다)
 //
 // 왜 런타임인가: 결함이 «어느 채널을 부르나 · 어떤 줄이 어느 묶음에 어떤 순서로 서나 · 언제 무엇이 열리나 · 초점이 어디 있나»
@@ -176,6 +183,7 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/v6/projects/search") && u.searchParams.get("mode") === "count") return J({ mode: "count", total: hit ? 12 : 0 });
     //  A9 — 이름에 낱말이 든 지식 셋 + 대화로만 맞은 세션 하나(서버가 top 으로 표시)
     //  #5169 검색 제외 문서 — 사람 화면에는 표시를 달고 나온다.
+    if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("키시험")) return J({ entries: [{ name: "kisi-card-limit-policy-key-for-a-long-document-name", title: "키시험 문서", snippet: "L2: 키시험 본문 한 줄", updated_at: iso(NOW - 5 * H) }] });
     if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("재집계")) return J({ entries: [{ name: "k-roll", title: "재집계 문서", snippet: "", searchable: false, updated_at: iso(NOW - D) }, { name: "k-plain", title: "재집계 설명", snippet: "", searchable: true, updated_at: iso(NOW - 2 * D) }] });
     if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("보장")) return J({ entries: [1, 2, 3].map((i) => ({ name: "k-g" + i, title: "보장 문서 " + i, snippet: "", updated_at: iso(NOW - i * D) })) });
     if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("고장")) return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
@@ -185,6 +193,14 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/v6/projects/search") && q.replace(/^#/, "") === "4530") return J({ projects: [
       { id: 4530, level: "project", name: "통합검색 결함 점검", status_category: "started", description: "검색 점검", updated_at: iso(NOW - D) },
       { id: 4531, level: "task", parent_id: 4530, parent_name: "통합검색 결함 점검", name: "검색 결함 점검", status_category: "started", updated_at: iso(NOW - 2 * D) }] });
+    //  K1~K4 #5607 키 — 번호가 아닌 검색어 · 태스크 번호 176(그 위 프로젝트 170 이 식구로 온다) · 프로젝트 번호 170
+    if (p.endsWith("/api/ui/v6/projects/search") && q.includes("키시험")) return J({ projects: [
+      { id: 3001, level: "project", name: "키시험 프로젝트", status_category: "started", description: "키시험 본문", updated_at: iso(NOW - 2 * H) },
+      { id: 3002, level: "task", parent_id: 3001, parent_name: "키시험 프로젝트", name: "키시험 태스크", status_category: "started", updated_at: iso(NOW - 3 * H) }] });
+    if (p.endsWith("/api/ui/v6/projects/search") && ["176", "170"].includes(q.replace(/^#/, ""))) return J({ projects: [
+      ...(q.replace(/^#/, "") === "176" ? [{ id: 176, level: "task", parent_id: 170, parent_name: "정책 위키", name: "카드 한도 문의 정리", status_category: "started", updated_at: iso(NOW - 3 * D) }] : []),
+      { id: 170, level: "project", name: "정책 위키", status_category: "started", description: "카드사 정책", updated_at: iso(NOW - 4 * D) },
+      ...(q.replace(/^#/, "") === "170" ? [{ id: 176, level: "task", parent_id: 170, parent_name: "정책 위키", name: "카드 한도 문의 정리", status_category: "started", updated_at: iso(NOW - 3 * D) }] : [])] });
     if (p.endsWith("/api/ui/v6/projects/search")) { await later("proj"); return J({ projects: hit ? PROJ : [] }); }
     if (p.endsWith("/api/ui/sources")) { await later("src"); return J({ entries: hit ? [
       { id: 501, title: "슬랙 수집 원문", external_system: "slack", fields: { container_name: "general" }, occurred_at: iso(NOW - 2 * D) },
@@ -217,6 +233,13 @@ async function PAGE_MAIN() {
       if (q.includes("층시험")) return J({ results: TIERED, total: 2, weak: 3, pending: 0, capped: false, loosened: ["층시험"] });
       //  Q8 — 뜻으로만 온 세션 하나(맞은 자리·발췌 없음)
       if (q.includes("뜻시험")) return J({ results: [{ node_id: "n1", session_id: "conv-sem", name: "뜻으로 온 세션", title: "세션을 지우면 목록이 깜빡거려", at: iso(NOW - 6 * D), hits: 0, top: false, tier: "weak", missing: [], loose: [], alias: [], marks: [], nums: [], sem: 0.71, fields: [], best: null, edit: null, project: "UI 버그" }], total: 0, weak: 1, pending: 0, capped: false, loosened: [] });
+      if (q.includes("키시험")) return J({ results: [
+        { node_id: "n1", session_id: "conv-k2", name: "키시험 세션", title: "키시험 해 줘", at: iso(NOW - 4 * H), hits: 1, top: true, tier: "match", missing: [], loose: [], alias: [], marks: [], nums: [], task_no: 3003, fields: ["user"], best: { role: "user", ts: iso(NOW - 4 * H), text: "키시험 이야기" }, edit: null, project: null }],
+        total: 1, weak: 0, pending: 0, capped: false, loosened: [] });
+      //  K2 — 태스크 176 을 맡은 세션(대화에 그 숫자는 없다) · K4 — 같은 세션이 프로젝트 170 번호로도 온다(nums 는 친 번호 · task_no 는 제 번호)
+      if (["176", "170"].includes(q.replace(/^#/, ""))) return J({ results: [
+        { node_id: "n1", session_id: "conv-k1", name: "한도 문의 세션", title: "한도 복원일 정리해 줘", at: iso(TODAY), hits: 0, top: false, tier: "match", missing: [], loose: [], alias: [], marks: [], nums: [Number(q.replace(/^#/, ""))], task_no: 176, fields: ["ident"], best: null, edit: null, project: "정책 위키" }],
+        total: 1, weak: 0, pending: 0, capped: false, loosened: [] });
       //  Q9 — 번호로 온 세션 둘(대화에 그 숫자는 없다)
       if (q.replace(/^#/, "") === "4530") return J({ results: [
         { node_id: "n1", session_id: "conv-n1", name: "번호 세션 최근", title: "검색이 불편해 싹 훑어봐 줘", at: iso(TODAY), hits: 0, top: true, tier: "match", missing: [], loose: [], alias: [], marks: [], nums: [4530], fields: ["ident"], best: null, edit: null, project: "통합검색 결함 점검" },
@@ -690,6 +713,31 @@ async function PAGE_MAIN() {
       await search("4530");
       R.numShape = shape();
       R.numKeys = Object.fromEntries([...document.querySelectorAll(".v2-omni-row")].map((r) => [r.querySelector(".v2-omni-t")?.textContent, [...r.querySelectorAll(".v2-omni-key")].map((k) => k.textContent).join(",")]));
+
+      //  K1~K4 #5607 키 — 셸 목록에 세션 둘을 이 장면 동안만 더한다(다른 장면의 «내 최근 세션» 을 바꾸지 않게).
+      const keyRows = () => Object.fromEntries([...document.querySelectorAll(".v2-omni-row")].map((r) => [r.querySelector(".v2-omni-t")?.textContent, {
+        no: r.querySelector(".v2-omni-no")?.textContent || "", noExact: !!r.querySelector(".v2-omni-no.exact"),
+        noAfterTitle: r.querySelector(".v2-omni-t")?.nextElementSibling?.classList.contains("v2-omni-no") || false,
+        keys: [...r.querySelectorAll(".v2-omni-key")].map((k) => k.textContent), kk: r.querySelector(".v2-omni-key.kk")?.textContent || "",
+        sub: r.querySelector(".v2-omni-s")?.textContent || "" }]));
+      const keepSess = DATA.sessions;
+      DATA.sessions = [...keepSess,
+        { id: "box-kisi", label: "키시험 셸 세션", projectId: null, node: null, live: true, alive: true, owned: true, stateKey: "idle", stateLabel: "대기", lastSeen: NOW - 2 * H - 1000, raw: { taskNo: 3004 } },
+        { id: "box-new176", label: "막 만든 세션", projectId: 170, node: null, live: true, alive: true, owned: true, stateKey: "idle", stateLabel: "대기", lastSeen: NOW - H, raw: { taskNo: 176 } }];
+      try {
+        await search("키시험");
+        R.k1 = keyRows();
+        await hover("키시험 문서");
+        R.k1pv = $(".v2-opv-key")?.textContent || "";
+        await search("176");
+        R.k2 = { top: (shape().find((g) => g.h === "가장 맞는 결과")?.rows || []).map((r) => r.t), keys: keyRows() };
+        await hover("카드 한도 문의 정리");
+        R.k3pv = $(".v2-opv-key")?.textContent || "";
+        await search("#170");
+        R.k4 = keyRows();
+      } finally {
+        DATA.sessions = keepSess;
+      }
     }
 
     // ── G19 최근 연 것은 워크스페이스별 열쇠(wsKey) — 다른 워크스페이스에선 «@슬러그» 열쇠에만 ──
@@ -968,6 +1016,35 @@ check(R.pvCmd?.kind === "명령" && JSON.stringify(R.pvCmd.btns) === JSON.string
   const k = R.numKeys || {};
   check(k["번호 세션 최근"] === "#4530" && k["번호 세션 예전"] === "#4530" && /검색이 불편해 싹 훑어봐 줘/.test(row(R.numShape, "번호 세션 최근")?.sub || ""),
     "Q9 번호로 온 세션 줄에 «#4530» · 맞은 말이 없으면 첫 지시를 보인다", JSON.stringify({ keys: k, row: row(R.numShape, "번호 세션 최근") }));
+}
+{
+  //  K1 — 번호가 아닌 검색어에도 키가 선다
+  const k = R.k1 || {};
+  const pr = k["키시험 프로젝트"] || {}, tk = k["키시험 태스크"] || {}, se = k["키시험 세션"] || {}, sh = k["키시험 셸 세션"] || {}, kn = k["키시험 문서"] || {};
+  check(pr.no === "#3001" && tk.no === "#3002" && pr.noAfterTitle && tk.noAfterTitle,
+    "K1 프로젝트·태스크 줄 — 이름 바로 뒤에 «#번호»(번호를 치지 않아도)", JSON.stringify({ pr, tk }));
+  check(se.no === "#3003" && sh.no === "#3004" && se.noAfterTitle && sh.noAfterTitle,
+    "K1 세션 줄 — 이름 뒤에 그 세션이 맡은 태스크 번호(서버 task_no · 셸 목록 taskNo)", JSON.stringify({ se, sh }));
+  check(kn.kk === "kisi-card-limit-policy-key-for-a-long-document-name" && !kn.no,
+    "K1 지식 줄 — 둘째 줄에 key(이름 뒤 번호는 없다)", JSON.stringify(kn));
+  check([pr, tk, se, sh].every((x) => !x.noExact) && !(kn.keys || []).some((x) => /exact/.test(x)),
+    "K1 친 번호가 아니면 «호명» 표시가 없다", JSON.stringify(k));
+  //  K2 — 세션이 단 번호를 쳤다
+  const t2 = R.k2?.top || [], k2 = R.k2?.keys || {};
+  check(t2[0] === "카드 한도 문의 정리" && t2.includes("한도 문의 세션") && t2.includes("막 만든 세션") && t2.length === 3,
+    "K2 «176» — 번호의 주인(태스크)이 1위 · 그 번호를 단 세션(서버가 준 것 · 셸 목록만 아는 막 만든 세션)이 맨 위 셋에", JSON.stringify(R.k2));
+  const s2 = k2["한도 문의 세션"] || {}, n2 = k2["막 만든 세션"] || {}, t176 = k2["카드 한도 문의 정리"] || {};
+  check(s2.no === "#176" && s2.noExact && n2.no === "#176" && n2.noExact && t176.no === "#176" && t176.noExact,
+    "K2 이름 뒤 «#176» 이 «호명» 표시(태스크 · 세션 둘 다)", JSON.stringify({ s2, n2, t176 }));
+  check(!(s2.keys || []).includes("#176") && !(n2.keys || []).includes("#176"),
+    "K2 세션 줄 둘째 줄에 같은 번호를 되풀이하지 않는다", JSON.stringify({ s2, n2 }));
+  //  K3 — 미리보기 머리
+  check(R.k3pv === "#176" && R.k1pv === "kisi-card-limit-policy-key-for-a-long-document-name",
+    "K3 미리보기 머리에 키 — 태스크 «#176» · 지식 key 는 끝까지", JSON.stringify({ task: R.k3pv, know: R.k1pv }));
+  //  K4 — 프로젝트 번호로 온 세션
+  const k4 = R.k4 || {}, s4 = k4["한도 문의 세션"] || {}, n4 = k4["막 만든 세션"] || {}, p4 = k4["정책 위키"] || {};
+  check(s4.no === "#176" && !s4.noExact && (s4.keys || []).includes("#170") && n4.no === "#176" && !n4.noExact && (n4.keys || []).includes("#170") && p4.no === "#170" && p4.noExact,
+    "K4 «#170»(프로젝트 번호) — 세션 이름 뒤엔 제 번호 «#176»(호명 아님) · 둘째 줄에 친 번호 «#170» · 프로젝트는 «#170» 호명", JSON.stringify({ s4, n4, p4 }));
 }
 {
   const c = R.chip || {};

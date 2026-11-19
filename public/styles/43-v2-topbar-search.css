@@ -310,6 +310,13 @@
 .v2-omni-key { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-head);
   background: var(--gray-bg-2); border: 1px solid transparent; border-radius: 4px; padding: 0 4px; }
 .v2-omni-key.exact { border-color: var(--blue); color: var(--ink-sub); }
+/* 지식 key 는 늘 선다(#5607) — 긴 key(60자 안팎)가 둘째 줄의 맞은 글을 밀어내지 않게 폭을 묶는다. 끝까지는 미리보기 머리(.v2-opv-key)가 보인다. */
+.v2-omni-key.kk { display: inline-block; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+/* 이름 뒤의 `#번호`(#5607) — 프로젝트·태스크 번호 · 세션이 맡은 태스크 번호. 세션 머리줄(.sc-title-no)과 같은 꼴: 이름 바로 뒤 · 옅은 글.
+   이름이 길어도 번호는 잘리지 않는다(flex: none — 이름이 대신 줄어든다). 친 번호와 같으면 키와 같은 테두리로 «그 번호» 라고 말한다. */
+.v2-omni-no { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; font-weight: 500; color: var(--muted); white-space: nowrap;
+  border: 1px solid transparent; border-radius: 4px; padding: 0 3px; }
+.v2-omni-no.exact { border-color: var(--blue); color: var(--ink-sub); }
 .v2-omni-meta { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
 .v2-omni-when { flex: none; font-size: 11.5px; color: var(--muted-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /*  종류 이름은 그림이 말한다 — 눈에는 숨기고 화면 읽기 프로그램에만 읽힌다. */
@@ -347,6 +354,8 @@
 .v2-opv-kind { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 6px; padding: 2px 8px; }
 .v2-opv-kic { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-opv-tag { font-size: 11px; font-weight: 700; color: var(--muted); background: var(--bg-tint-2); border-radius: 5px; padding: 2px 6px; }
+/* 키(#5607) — 목록 줄에서 잘린 긴 지식 key 도 여기서는 끝까지(넘치면 줄을 넘긴다). */
+.v2-opv-key { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--muted-head); background: var(--gray-bg-2); border-radius: 5px; padding: 2px 6px; overflow-wrap: anywhere; }
 .v2-opv-pill { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line-net); color: var(--muted-head); }
 .v2-opv-pill.done { color: var(--ok); border-color: var(--ok-line-2); background: var(--ok-bg); }
 .v2-opv-pill.doing { color: var(--blue); border-color: var(--line-note); background: var(--bg-punch); }
