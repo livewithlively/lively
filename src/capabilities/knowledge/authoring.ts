@@ -75,8 +75,8 @@ const knowledgeSaveInput = {
     .describe("지식은 항상 recalled 고정이라 저작자가 지정할 수 없다(#335) — 보내지 않는 것이 정상이고, 보낸다면 recalled 만 허용된다. '세션마다 항상 주입'은 관리 ▸ 세션 주입 섹션 문서(org_update_section)로, WIKI 인덱스 핀은 knowledge_set_wiki 로 지정한다."),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
-  supersedes: z.string().optional()
-    .describe(`이 지식이 대체하는 기존 지식의 name. ${softCapHint(CAPS.supersedes)}`),
+  supersedes: z.string().nullable().optional()
+    .describe(`이 지식이 대체하는 기존 지식의 name(표시용 역방향 기록 — 옛 지식을 대체됨으로 만드는 것은 knowledge_set_lifecycle 의 superseded_by). 보내지 않으면 기존 값 유지, null 이면 비움. ${softCapHint(CAPS.supersedes)}`),
   type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
     .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
   category: z.string().optional().describe("분류 key 1개(단일 — category_list). 신규 필수."),
@@ -175,7 +175,7 @@ export const knowledgeSave: Capability = {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
           body_md, provenance, lifecycle,
-          supersedes: b.supersedes ? String(b.supersedes) : undefined,
+          supersedes: b.supersedes === null ? null : b.supersedes ? String(b.supersedes) : undefined,   // null = 비움(미전송 = 기존 값 유지)
           type: b.type ? String(b.type) : undefined,
           category,
           is_folder,
@@ -514,12 +514,15 @@ export const knowledgeSave: Capability = {
 const knowledgeSetLifecycleInput = {
   name: z.string().min(1).max(64),
   lifecycle: z.enum(["active", "pending", "superseded", "archived"]),
+  superseded_by: z.string().min(1).max(64).optional()
+    .describe("lifecycle='superseded' 일 때 이 지식을 대체하는 후속 지식의 name(지금 active 여야 한다). superseded 로 바꿀 때 필수 — 이미 superseded 이고 후속이 있으면 생략 시 유지, 다른 이름을 주면 교체. 다른 lifecycle 에는 보내지 않는다(그 전환이 후속을 비운다)."),
 };
 type KnowledgeSetLifecycleInput = z.infer<z.ZodObject<typeof knowledgeSetLifecycleInput>>;
 export const knowledgeSetLifecycle: Capability = {
   name: "knowledge_set_lifecycle",
   title: "지식 lifecycle",
   description: "active/pending/superseded/archived 전환. pending→active = 검토 승인(#638/#783 게이트). active→pending = 검토대기로 되돌림. 제거(반려)는 폐기 — 대신 knowledge_delete(휴지통, 복원가능). archived 는 외부 미러 원본 아카이브 전파에도 쓰인다(#551). " +
+    "superseded(새 지식으로 대체됨)는 superseded_by 에 후속 지식 name 을 함께 줘야 한다 — 후속이 없으면 400 이니 archived 로 보관한다. 외부 미러 지식은 superseded 로 바꿀 수 없다(원본이 상태를 정한다). " +
     "⚠ 승인(→active)과 '검토 대기 중 지식의 상태 변경'은 **사람 전용**(웹) — 에이전트(MCP)는 403. 자기가 쓴 지식을 스스로 승인할 수 없다. " +
     "외부 미러의 archived→active «복원» 은 사람도 403 — 원본에서 복원하면 싱크가 따라온다(#638). 미러의 pending→active 검토 승인은 정상 경로다.",
   scope: "memory",
@@ -528,9 +531,11 @@ export const knowledgeSetLifecycle: Capability = {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/lifecycle"],
       parse: (req) => {
-        const lifecycle = String(((req.body ?? {}) as Record<string, unknown>).lifecycle ?? "");
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const lifecycle = String(b.lifecycle ?? "");
         if (!["active", "pending", "superseded", "archived"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending|superseded|archived");
-        return { name: String(req.params?.name ?? ""), lifecycle };
+        if (b.superseded_by != null && (typeof b.superseded_by !== "string" || !b.superseded_by)) throw new HttpError(400, "superseded_by 는 지식 name(문자열)");
+        return { name: String(req.params?.name ?? ""), lifecycle, superseded_by: (b.superseded_by as string | undefined) ?? undefined };
       } }],
   },
   handler: async (input: KnowledgeSetLifecycleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
@@ -543,8 +548,10 @@ export const knowledgeSetLifecycle: Capability = {
       externalSystem: gate.external_system,
     });
     if (denied) throw new HttpError(403, denied);
+    //  후속도 쓰기 게이트를 탄다 — 안 보이는 지식을 후속으로 걸면 그 이름이 포인터로 새고, 존재 여부도 판정 문구로 샌다.
+    if (input.superseded_by) await assertKnowledgeWritable(input.superseded_by, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx) };
+    return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx, { supersededBy: input.superseded_by }) };
   },
 };
 

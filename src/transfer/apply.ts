@@ -437,7 +437,7 @@ export async function undoImport(batchId: number, ctx: WriteCtx): Promise<{ batc
           await upsertKnowledge({
             name: b.name, title: b.title ?? undefined, body_md: b.body_md, type: b.type ?? undefined, category: b.category ?? undefined,
             provenance: b.provenance, summary: b.summary, searchable: b.searchable, is_folder: b.is_folder, parent_name: b.parent_name,
-            sort: b.sort, supersedes: b.supersedes ?? undefined,
+            sort: b.sort, supersedes: b.supersedes,
           }, ctx);
           const cur = await snapshot(b.name);
           await setFieldsExactly(b.name, b.fields, cur?.fields ?? {}, ctx);
