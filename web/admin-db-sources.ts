@@ -3,8 +3,8 @@
 //   ① 테이블 정책 · 컬럼 마스킹(renderDbPolicyPanel) ② raw-PII 열람 권한(renderUnmaskGrantPanel)
 //   ③ 감사 대상 식별자(renderSubjectKeyPanel — 구 [DB 접근 감사] 화면에 있었지만 감사가 아니라 **설정**이라 #837 이 옮겼다).
 //  ②③은 감사 화면(admin-audit.ts)이 아니라 여기 산다 — 서버도 /org/db-source/* 의 하위 리소스로 본다.
-//  ⚠ 접속 비밀번호는 **값을 저장하지 않는다** — 환경변수 이름(auth_ref)만 저장하고, 그 이름조차
-//   allowed_db_secret_refs allowlist 안에 있어야 한다. 고객 DB 는 무수정, 집행은 전부 게이트웨이가 한다.
+//  ⚠ 접속 비밀번호는 **값을 저장하지 않는다** — 참조(auth_ref: 게이트웨이 환경변수 이름 · gcp-sm: · aws-sm:, #1764)만
+//   저장하고, 그 참조조차 allowed_db_secret_refs allowlist 안에 있어야 한다. 고객 DB 는 무수정, 집행은 전부 게이트웨이가 한다.
 import { api, busy, cardHead, el, errorNote, memberCombo, relTime, selectFilter, state, toast, uiText } from './core.js';
 import { field } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
@@ -35,7 +35,7 @@ function dbSourceEditor(detail, data) {
     : sources.find((s) => s.name === sel);
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
-    el('p', { class: 'admin-hint' }, ...uiText('db_query/db_schema 가 조회하는 외부 운영 DB 목록입니다. 읽기 전용 role(RLS 적용)로 접속하는 것을 전제로 하며, 접속 비밀번호는 값을 저장하지 않고 환경변수 이름(auth_ref)만 저장합니다. 왼쪽에서 소스를 선택하면 테이블 정책·컬럼 마스킹, 원본 열람 권한, 감사 대상 식별자 설정이 함께 열립니다. .env 로 등록한 소스는 「env」 표시가 붙으며 이 화면에서는 수정할 수 없습니다.')));
+    el('p', { class: 'admin-hint' }, ...uiText('db_query/db_schema 가 조회하는 외부 운영 DB 목록입니다. 읽기 전용 role(RLS 적용)로 접속하는 것을 전제로 하며, 접속 비밀번호는 값을 저장하지 않고 참조(auth_ref — 게이트웨이 환경변수 이름 또는 GCP · AWS 시크릿 저장소)만 저장합니다. 왼쪽에서 소스를 선택하면 테이블 정책·컬럼 마스킹, 원본 열람 권한, 감사 대상 식별자 설정이 함께 열립니다. .env 로 등록한 소스는 「env」 표시가 붙으며 이 화면에서는 수정할 수 없습니다.')));
   // 등록된 소스를 고르면 그 소스의 **설정** 3종이 따라 붙는다(라이브 스키마 오버레이, 무재시작):
   //  ① 테이블 정책·컬럼 마스킹 ② 원본 개인정보 열람 권한(unmask grant) ③ 감사 대상 식별자 컬럼(subject-key).
   //  ③은 구 [DB 접근 감사] 화면에 꽂혀 있었지만 그건 **감사가 아니라 설정**이고, 서버도 /org/db-source/subject-key(s)
@@ -57,8 +57,9 @@ function dbSourceEditor(detail, data) {
     [
       { key: 'allowed_db_hosts', label: '허용 DB host (allowed_db_hosts)', initial: rcDb.allowed_db_hosts, placeholder: 'localhost\ndb.internal.acme.com\n줄당 host 한 개',
         hint: '접속을 허용할 사설/내부 host 입니다. 목록에 없는 사설망·localhost 접속은 차단됩니다(SSRF 방어). 외부 공인 DB 는 등록하지 않아도 됩니다.' },
-      { key: 'allowed_db_secret_refs', label: '허용 비밀번호 환경변수 이름 (allowed_db_secret_refs)', initial: rcDb.allowed_db_secret_refs, placeholder: 'PROD_RDS_RO_PASSWORD\n줄당 환경변수 이름 한 개(값 금지)',
-        hint: 'auth_ref 가 참조할 수 있는 비밀번호 환경변수 이름입니다. 값이 아니라 이름만 적으며, 실제 값은 게이트웨이 프로세스 환경변수에 있어야 합니다.' },
+      { key: 'allowed_db_secret_refs', label: '허용 비밀번호 참조 (allowed_db_secret_refs)', initial: rcDb.allowed_db_secret_refs,
+        placeholder: 'PROD_RDS_RO_PASSWORD\ngcp-sm:my-project/prod-db-password\naws-sm:ap-northeast-2/prod/db\n줄당 참조 한 개(값 금지)',
+        hint: 'auth_ref 가 가리킬 수 있는 비밀번호 참조입니다. 값이 아니라 참조만 적고, 적은 그대로만 허용됩니다. 환경변수 이름이면 값이 게이트웨이 프로세스 환경변수에 있어야 합니다. gcp-sm:<프로젝트>/<시크릿>[#버전] 은 게이트웨이 VM 의 서비스 계정으로, aws-sm:<리전>/<시크릿 이름>[#버전] 은 게이트웨이의 AWS 기본 자격(EC2 인스턴스 프로파일 등)으로 읽으며 재시작 없이 반영됩니다. 이 목록에 적은 비밀은 등록한 DB 접속에 비밀번호로 쓰이므로, DB 비밀번호가 든 참조만 적고 게이트웨이 서비스 계정에는 그 시크릿만 읽을 권한을 주세요.' },
     ]);
   // 메인 카드와 안전범위 카드가 detail 직속으로 붙어 여백 0 이었다 → admin-stack(gap:14px)으로 감싼다(#req).
   //  #2556 — 새 셸 [외부 앱 연결] 아래 [데이터베이스] 화면이 이 패널을 자기 칸으로 흡수했다(머리만 접는다).
@@ -80,13 +81,15 @@ function dbSourceForm(root, s, data, detail, isNew) {
     el('option', { value: 'mysql', text: 'mysql (Aurora MySQL)' }));
   drvSel.value = s.driver === 'mysql' ? 'mysql' : 'postgres';
   const modeSel = el('select', {},
-    el('option', { value: 'password', text: 'password (env 참조)' }),
+    el('option', { value: 'password', text: 'password (환경변수 · 시크릿 저장소 참조)' }),
     el('option', { value: 'iam', text: 'iam (후속)', disabled: '' }),
     el('option', { value: 'mtls', text: 'mtls (후속)', disabled: '' }),
     el('option', { value: 'vault', text: 'vault (후속)', disabled: '' }));
   modeSel.value = s.auth_mode || 'password';
-  const refIn = el('input', { type: 'text', value: s.auth_ref || '', placeholder: '예: ANALYTICS_DB_PW (env 이름, 값 아님)' });
-  const refHint = el('p', { class: 'admin-hint', text: allowed.length ? '참조 가능한 env: ' + allowed.join(', ') : '⚠ 비밀번호 있는 DB면 allowed_db_secret_refs 에 환경변수 이름이 등록돼 있어야 합니다(운영자 설정 · 비밀번호 없는 DB면 비워도 됩니다)' });
+  const refIn = el('input', { type: 'text', value: s.auth_ref || '', placeholder: '예: ANALYTICS_DB_PW · gcp-sm:my-project/db-password · aws-sm:ap-northeast-2/prod/db (값 아님)' });
+  const refHint = el('p', { class: 'admin-hint', text: allowed.length
+    ? '허용된 참조: ' + allowed.join(', ') + ' — 시크릿 값이 {"username":…,"password":…} JSON 이면 password 를 쓰고, 접속 URL 에 사용자 이름이 없을 때만 username 을 씁니다.'
+    : '⚠ 비밀번호 있는 DB면 아래 안전범위의 allowed_db_secret_refs 에 그 참조가 먼저 등록돼 있어야 합니다(비밀번호 없는 DB면 비워도 됩니다).' });
   const rlsIn = el('input', { type: 'text', value: s.rls || '', placeholder: 'app.current_user (비우면 행수준 격리 없음)' });
   const syncDrv = () => {
     const my = drvSel.value === 'mysql';
@@ -134,7 +137,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
   } }));
   root.replaceChildren(
     field('이름', nameIn), field('드라이버 (driver)', drvSel), field('접속 URL (비밀번호 제외)', urlIn), field('인증 방식 (auth_mode)', modeSel),
-    field('비밀번호 환경변수 이름 (auth_ref)', refIn), refHint,
+    field('비밀번호 참조 (auth_ref)', refIn), refHint,
     field('RLS GUC (rls)', rlsIn), field('최대 행수 (max_rows)', maxIn), field('타임아웃 ms (timeout_ms)', toIn),
     field('테이블 기본자세 (table_default)', tdSel),
     field('설명', noteIn), el('label', { class: 'admin-check' }, enChk, ' 활성'),

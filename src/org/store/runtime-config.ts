@@ -64,7 +64,7 @@ export interface OrgRuntimeConfig {
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
   url_allowlist: string[];     // http_proxy 호출 허용 호스트(소문자, deny-all 기본)
-  allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 시크릿 env '이름' 화이트리스트(deny-all 기본)
+  allowed_db_secret_refs: string[]; // db 소스가 참조 가능한 비밀번호 참조 화이트리스트(deny-all 기본) — env 이름 · gcp-sm: · aws-sm:(#1764, 문자열 그대로 비교)
   allowed_db_hosts: string[]; // db 소스가 접속 가능한 host 화이트리스트(소문자, deny-all 기본) — 사설/localhost SSRF 면제 대상
   allowed_internal_hosts: string[]; // MCP 프록시가 접속 가능한 내부(사설/localhost) host 화이트리스트(소문자, deny-all 기본) — #746 T1
   write_tools: string[]; // work-flag 가 '기록함(writeback)'으로 인정할 lively MCP 툴 목록(비면 훅 내장 v6 기본)
