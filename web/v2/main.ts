@@ -589,6 +589,8 @@ export async function bootV2(): Promise<void> {
       //  #4088 — 좁은 폭의 [타임라인] 단추도 이 줄 오른쪽 끝으로. 종전엔 그 단추 하나를 위해 46px 짜리 바(.v2-mbar)가
       //   한 줄 더 섰다(폰에서 크롬 한 줄은 대화 세 줄이다). 넓은 폭에선 CSS 가 숨긴다(데스크톱은 .v2-tl-btn 이 맡는다).
       webTopbar.append(mobile.asideBtn);
+      //  #5615 폰 맨 윗줄 — 왼쪽 끝 워크스페이스 타일, 오른쪽 종. 자리는 CSS order 가 정한다(50-mobile.css). 폰 밖에선 둘 다 숨는다.
+      webTopbar.append(mobile.wsBtn, mobile.bellBtn);
     }
     if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
     //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
@@ -1499,6 +1501,7 @@ function applyTabChrome(tab: ShellTab): void {
   //  좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 서랍이다. 사이드바가 없는 앱이면 그 ☰ 를 걷는다(원준 2026-10-19 «아니 각자 앱 사이드바로»):
   //   ☰ 는 그 앱의 사이드바만 연다. 종전엔 구역 목록(대개 홈)이 대신 열렸다.
   mobile?.setSide(hasSide);
+  mobile?.setHome(!parseRoute(tab.route).segs[0]);   // #5615 폰 홈엔 ☰ 가 없다(그 목록은 [AI 세션] 탭이 연다)
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면

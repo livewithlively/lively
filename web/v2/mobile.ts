@@ -12,20 +12,24 @@
 //  ── 폰(≤640px, #4088 원준 2026-09-19 "슬랙 웹·모바일 뷰 참고 — 반응형이 아니라 레이아웃을 다시") ────────────
 //   태블릿까지는 위 서랍 셸이 맞는데, 폰에선 왼쪽 끝 레일(56px)이 폭의 14% 를 늘 먹고 서랍은 그 옆에 쪽문처럼 열렸다.
 //   슬랙 모바일 문법으로 바꾼다:
-//   · **아래 탭 바**(.v2-mtabs) 가 구역을 맡는다 — [홈] [AI 세션] [프로젝트] [위키] [더보기]. 레일은 없다.
+//   · **아래 탭 바**(.v2-mtabs) 가 구역을 맡는다 — [홈] [AI 세션] [프로젝트] [위키] [나](#5615 — 종전 [더보기]). 레일은 없다.
 //     ([확인할 것] 탭은 #4180 에서 뺐다 — 레일과 같은 표(railSections)를 읽으므로 저절로 빠졌고, 알림은 홈의 종이 든다.
-//      폰에선 종을 누르면 「확인할 것」 화면(#/inbox)이 열린다. [더보기] 판에도 한 줄 둔다 — 다른 구역에서도 갈 수 있게.)
+//      폰에선 종을 누르면 「확인할 것」 화면(#/inbox)이 열린다. 종은 #5615 부터 폰 맨 윗줄 오른쪽에 늘 선다 — 어느 화면에서든.)
 //   · 구역 탭을 누르면 그 구역의 **목록이 화면 한 장**으로 선다(사이드바 서랍을 전폭으로) — 슬랙의 「홈」탭이 채널 목록인 것과
 //     같다. 목록에서 하나를 고르면 본문이 전폭으로 열리고, 같은 탭을 다시 누르면 목록으로 돌아온다.
-//   · [더보기] = 슬랙의 「더보기」 — 리브·자료·맥락 관리·사용 가이드 같은 앱과 [내 프로필·환경설정] 이 아래 판(.v2-msheet)으로.
-//   · 맨 윗줄은 [☰] [검색 전폭] [타임라인] 한 줄 — 뒤로·앞으로는 브라우저 몫이라 폰에선 뺀다(CSS, 50-mobile.css).
+//   · [나] = 슬랙의 [You] — 내 카드 · 워크스페이스(바꾸기 · 설정) · 확인할 것 · 모든 앱 · 사용 가이드가 아래 판(.v2-msheet)으로.
+//   · 맨 윗줄은 [워크스페이스] [☰?] [검색] [종] [타임라인?] 한 줄(#5615) — 슬랙 모바일 홈 머리의 «워크스페이스 아이콘 + 찾기».
+//     ☰ 는 그 화면(앱)에 제 사이드바가 있을 때만, 홈에선 없다(홈의 목록은 [AI 세션] 탭과 같은 것). 뒤로·앞으로는 브라우저 몫.
 //   JS 짝은 이 파일, CSS 짝은 public/styles/50-mobile.css(≤640 블록). 문턱은 PHONE_MQ 하나다.
 import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
-import { el, personName, state, sv } from '../core.js';
+import { el, personName, profileAvatar, state, sv } from '../core.js';
 import { ICONS, icon } from './icons.js';
-import { appHref, appIcon, openLaunchpad, visibleApps } from './apps.js';
+import { appByKey, appHref, openLaunchpad } from './apps.js';
 import { openMeModal } from './me-modal.js';
-import { railLitSection, railSections, setRailSection, type RailSection } from './rail.js';
+import { notifyBell } from './notify-bell.js';
+import { onUnread, unreadCount } from './notifications.js';
+import { openWorkspaceMenu, workspaceFace, workspaceInfo } from './switcher.js';
+import { openWorkspaceSettingsNow, railLitSection, railSections, setRailSection, type RailSection } from './rail.js';
 
 export const MOBILE_MQ = '(max-width: 900px)';   // = 40-v2.css 모바일 블록의 문턱(종전 우패널 숨김 문턱과 같다 — 태블릿 세로 포함)
 export const PHONE_MQ = '(max-width: 640px)';    // = 50-mobile.css 폰 블록의 문턱 — 아래 탭 바가 서는 폭
@@ -54,6 +58,12 @@ export interface MobileChrome {
   menuBtn: HTMLElement;
   /** 우측 서랍 여닫이([타임라인]) — 브라우저 셸은 이 단추도 창 맨 윗줄 오른쪽 끝으로 옮긴다(#4088). */
   asideBtn: HTMLElement;
+  /** 폰 맨 윗줄 왼쪽 끝의 워크스페이스 타일(#5615) — 누르면 워크스페이스 메뉴(전환·설정·추가). 폰 밖에선 CSS 가 숨긴다. */
+  wsBtn: HTMLElement;
+  /** 폰 맨 윗줄 오른쪽의 종(#5615) — 「확인할 것」. 폰 밖에선 CSS 가 숨긴다(넓은 폭은 홈 머리줄의 종이 맡는다). */
+  bellBtn: HTMLElement;
+  /** 지금 화면이 홈인가 — 폰 홈에선 ☰ 를 걷는다(홈의 사이드바 = [AI 세션] 탭의 목록과 같은 것이라 같은 문이 둘이 된다). */
+  setHome(on: boolean): void;
   /** 우측 서랍이 무엇인가 — 우패널(타임라인)인가, 칸 셸의 곁칸(자료·지식·타임라인)인가. 단추의 아이콘·이름이 따라 바뀐다(#4088 후속). */
   setAsideKind(kind: 'timeline' | 'panes'): void;
   /** 우측 서랍으로 열릴 **실제 판**(칸 셸의 곁칸) — 열 때 초점을 여기로 보낸다. null 이면 우패널(.v2-aside). */
@@ -92,6 +102,20 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const pnIcon = mkIcon([ICONS.folder]); pnIcon.classList.add('v2-mbar-ic--pn');
   const asideBtn = el('button', { class: 'v2-mbar-btn v2-mbar-aside', type: 'button', 'aria-label': '타임라인 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-aside', title: '이 화면의 타임라인' },
     tlIcon, pnIcon) as HTMLButtonElement;
+  //  #5615 폰 맨 윗줄 왼쪽 끝 = 워크스페이스 타일(슬랙 모바일 홈 머리의 그것). 누르면 레일과 같은 워크스페이스 메뉴.
+  //   ⚠ 종전엔 폰에서 이 메뉴에 닿을 길이 하나도 없었다 — 워크스페이스 설정 · 전환 · 추가 · 받은 초대가 전부 레일에만 있었다.
+  const wsBtn = el('button', { class: 'v2-mbar-btn v2-mws', type: 'button', 'aria-haspopup': 'menu' }) as HTMLButtonElement;
+  const paintWs = (): void => {
+    const w = workspaceInfo();
+    wsBtn.replaceChildren(workspaceFace(w as never, 'v2-mws-face'));
+    const label = `${w.name} 워크스페이스 — 바꾸기 · 설정`;
+    wsBtn.setAttribute('aria-label', label); wsBtn.title = label;
+  };
+  paintWs();
+  wsBtn.addEventListener('click', (e: Event) => { e.stopPropagation(); closeAll(); openWorkspaceMenu(wsBtn); });
+  //  종 — 홈 머리줄의 그것과 같은 부품(notify-bell.ts). 폰에선 누르면 「확인할 것」 화면으로 간다.
+  const bellBtn = notifyBell();
+  bellBtn.classList.add('v2-mbar-bell');
   let asideTarget: HTMLElement | null = null;
   const bar = el('div', { class: 'v2-mbar' }, menuBtn, slot, asideBtn) as HTMLElement;
   const scrim = el('div', { class: 'v2-scrim', hidden: true, 'aria-hidden': 'true' }) as HTMLElement;
@@ -124,7 +148,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     const hadSheet = !!sheetSec;
     open = null; sheetOpen = false; sheetSec = null; paint();
     if (hadSheet) for (const f of sheetEndFns) { try { f(); } catch (_) { /* 다시 그리기가 깨져도 닫기는 끝난다 */ } }
-    //  [더보기] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([더보기])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
+    //  [나] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([나])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
     if (!was) { if (wasSheet && returnFocus && moreBtn) moreBtn.focus({ preventScroll: true }); return; }
     const panel = was === 'side' ? side : (asideTarget || aside);
     if (returnFocus) { (was === 'side' ? menuBtn : asideBtn).focus({ preventScroll: true }); }
@@ -140,7 +164,8 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   };
   //  사이드바가 없는 앱이면 좁은 폭의 ☰ 를 걷는다 — 걷는 것은 CSS 다(47-v2-rail.css .v2-mbar-menu.no-side, ≤900 만). 넓은 폭의 같은 단추(레일 여닫이, main.ts)는
   //   그대로 서야 해서 hidden 이 아니라 문턱 안에서만 듣는 표지로 둔다 — 회전 · 창 크기 바꾸기로 문턱을 넘나들어도 JS 없이 맞는다.
-  const paintMenu = (): void => { menuBtn.classList.toggle('no-side', !sideOn); };
+  let onHome = false;
+  const paintMenu = (): void => { menuBtn.classList.toggle('no-side', !sideOn); menuBtn.classList.toggle('on-home', onHome); };
   menuBtn.addEventListener('click', () => {   // ☰ = 지금 화면(앱)의 사이드바 — 없는 앱이면 아무것도 안 연다
     if (open === 'side') { closeAll(); return; }
     if (!sideOn) return;
@@ -162,15 +187,13 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   window.addEventListener('hashchange', () => closeAll());
 
   // ── 폰 아래 탭 바(#4088) ──────────────────────────────────────────────────────
-  //  구역 넷 + [더보기]. 레일(rail.ts)과 같은 표(railSections)를 읽으므로 구역이 늘거나 이름이 바뀌면 여기도 따라온다.
-  //  ⚠ 여기서는 구역만 다룬다 — 독에 고정한 앱·최근 앱은 폰에선 [더보기] 판이 맡는다(탭 바는 여섯을 넘기지 않는다).
+  //  구역 넷 + [나]. 레일(rail.ts)과 같은 표(railSections)를 읽으므로 구역이 늘거나 이름이 바뀌면 여기도 따라온다.
+  //  ⚠ 여기서는 구역만 다룬다 — 앱은 폰에선 홈의 「최근에 연 앱」과 [모든 앱]이 맡는다(탭 바는 다섯을 넘기지 않는다 — 390px 에서 78px/칸).
   const tabs = el('nav', { class: 'v2-mtabs', 'aria-label': '구역' }) as HTMLElement;
-  const sheet = el('div', { class: 'v2-msheet', hidden: true, role: 'dialog', 'aria-label': '더보기' }) as HTMLElement;
+  const sheet = el('div', { class: 'v2-msheet', hidden: true, role: 'dialog', 'aria-label': '나' }) as HTMLElement;
   const secBtns = new Map<RailSection, HTMLButtonElement>();
   let moreBtn: HTMLButtonElement | null = null;
   const tabIcon = (name: string): SVGElement => icon(name, 'v2-mtab-ic');
-  const moreIcon = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-mtab-ic', 'aria-hidden': 'true' },
-    sv('circle', { cx: '5', cy: '12', r: '1.4' }), sv('circle', { cx: '12', cy: '12', r: '1.4' }), sv('circle', { cx: '19', cy: '12', r: '1.4' }));
   function onSectionTap(sec: RailSection): void {
     if (!isPhone()) return;
     //  홈은 **화면**이다(목록이 아니라) — 그 화면으로 간다. 이미 그 구역이면 setRailSection 이 changed=false 라
@@ -183,22 +206,47 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     setRailSection(sec, { navigate: false });
     openOne('side');
   }
+  //  ── [나] 판(#5615, 원준 2026-11-19 «폰 화면을 처음부터 다시 — 슬랙 참고») ─────────────────────────────
+  //   종전 [더보기] 판은 앱 아홉 줄 + 프로필 한 줄을 늘어놓은 잡동사니였고, **워크스페이스로 가는 줄이 없었다** — 레일에만 있던
+  //   워크스페이스 메뉴(설정 · 전환 · 추가 · 받은 초대)가 폰에서 통째로 사라졌다(레일을 걷으며 옮겨 두지 않았다).
+  //   슬랙 모바일의 [You] 탭과 같은 자리로 다시 짠다: 맨 위 내 카드 → 워크스페이스 묶음 → 나머지 문 몇 개.
+  //   앱은 여기 늘어놓지 않는다 — 홈의 「최근에 연 앱」과 [모든 앱](런치패드)이 맡는다(같은 목록을 두 자리에 두지 않는다).
   function buildSheet(): void {
-    const skip = new Set(['terminal', 'projects2', 'knowledge']);   // 아래 탭 바에 이미 있는 구역의 앱
-    const rows: HTMLElement[] = [];
-    const row = (ic: SVGElement, label: string, attrs: Record<string, unknown>, tag: 'a' | 'button' = 'a'): HTMLElement =>
-      el(tag, { class: 'v2-msheet-row', ...(tag === 'button' ? { type: 'button' } : {}), ...attrs }, ic, el('span', { class: 'v2-msheet-t', text: label }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-msheet-go', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' }))) as HTMLElement;
-    rows.push(row(tabIcon('bell'), '확인할 것', { href: '#/inbox' }));   // #4180 — 홈 밖에서도 가는 길 하나
-    if (LIV_ENTRY_VISIBLE) rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
-    for (const a of visibleApps()) { if (skip.has(a.key)) continue; rows.push(row(appIcon(a.icon, 'v2-mtab-ic'), a.title, { href: appHref(a) })); }
-    //  외부 앱 연결은 #5568 부터 앱 표의 줄이다(위 visibleApps 가 지난 세션 · 휴지통과 함께 세운다) — 여기 따로 세우면 같은 줄이 둘이 된다.
-    rows.push(row(tabIcon('apps'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }, 'button'));
+    const chev = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-msheet-go', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' }));
+    const row = (ic: Element, label: string, attrs: Record<string, unknown>, tag: 'a' | 'button' = 'button', sub?: string, tail?: Element | null): HTMLElement =>
+      el(tag, { class: 'v2-msheet-row', ...(tag === 'button' ? { type: 'button' } : {}), ...attrs }, ic,
+        el('span', { class: 'v2-msheet-tt' }, el('span', { class: 'v2-msheet-t', text: label }), sub ? el('span', { class: 'v2-msheet-sub', text: sub }) : null),
+        tail || null, chev()) as HTMLElement;
+    const group = (title: string | null, ...rows: Array<HTMLElement | null>): HTMLElement =>
+      el('div', { class: 'v2-msheet-grp' }, title ? el('div', { class: 'v2-msheet-gt', text: title }) : null, ...rows);
     const me: any = state.me || {};
-    rows.push(row(tabIcon('gear'), (personName(me) || '나') + '(내 프로필 · 환경설정)', { onclick: () => { closeAll(); openMeModal({}); } }, 'button'));
+    const myName = personName(me) || '나';
+    const w = workspaceInfo();
+    const n = unreadCount();
+    const guide = appByKey('learn');
+    const wsRow = row(workspaceFace(w as never, 'v2-msheet-wsface'), w.name, {
+      'aria-haspopup': 'menu',
+      //  메뉴는 레일과 같은 하나(rail.openWorkspacePopover) — 폰에선 화면 아래에서 올라오는 판으로 선다(50-mobile.css .v2-wspop).
+      onclick: (e: Event) => { e.stopPropagation(); closeAll(); openWorkspaceMenu(wsRow); },
+    }, 'button', '워크스페이스 바꾸기 · 추가 · 받은 초대');
     sheet.replaceChildren(
-      el('div', { class: 'v2-msheet-h' }, el('span', { class: 'v2-msheet-ht', text: '더보기' }),
+      el('div', { class: 'v2-msheet-h' }, el('span', { class: 'v2-msheet-ht', text: '나' }),
         el('button', { class: 'v2-msheet-x', type: 'button', 'aria-label': '닫기', onclick: () => closeAll() }, icon('x', 'v2-mtab-ic'))),
-      el('div', { class: 'v2-msheet-list' }, ...rows));
+      el('div', { class: 'v2-msheet-list' },
+        //  내 카드 — 누르면 [나] 창(프로필 · 계정 · 화면 · 알림 · AI 계정 · 고급 설정 · 로그아웃).
+        el('button', { class: 'v2-msheet-me', type: 'button', onclick: () => { closeAll(); openMeModal({}); } },
+          profileAvatar(me.avatar, myName, me.userId, 'v2-msheet-ava', { char: me.avatar_char, color: me.avatar_color }),
+          el('span', { class: 'v2-msheet-tt' }, el('b', { text: myName }), el('span', { class: 'v2-msheet-sub', text: me.email || '내 프로필 · 환경설정' })),
+          chev()),
+        group('워크스페이스', wsRow,
+          row(icon('gear', 'v2-mtab-ic'), '워크스페이스 설정', { onclick: () => { closeAll(); openWorkspaceSettingsNow(); } }, 'button', '이름 · 구성원 · 기능')),
+        group(null,
+          row(icon('bell', 'v2-mtab-ic'), '확인할 것', { href: '#/inbox' }, 'a', undefined,
+            n > 0 ? el('span', { class: 'v2-msheet-bd', text: n > 99 ? '99+' : String(n) }) : null),
+          LIV_ENTRY_VISIBLE ? row(icon('liv', 'v2-mtab-ic'), '리브', { href: '#/liv' }, 'a') : null,   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
+          row(icon('apps', 'v2-mtab-ic'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }),
+          guide ? row(icon('learn', 'v2-mtab-ic'), guide.title, { href: appHref(guide) }, 'a') : null,
+          row(icon('gear', 'v2-mtab-ic'), '내 프로필 · 환경설정', { onclick: () => { closeAll(); openMeModal({}); } }))));
   }
   function toggleSheet(): void {
     if (!isPhone()) return;
@@ -218,9 +266,11 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       secBtns.set(s.key, b);
       return b;
     });
-    moreBtn = el('button', { class: 'v2-mtab v2-mtab--more', type: 'button', onclick: () => toggleSheet(), 'aria-haspopup': 'dialog' },
-      el('span', { class: 'v2-mtab-icw' }, moreIcon()),
-      el('span', { class: 'v2-mtab-t', text: '더보기' })) as HTMLButtonElement;
+    //  [나](#5615) — 슬랙 모바일의 [You]. 아이콘 자리에 내 얼굴(작은 원)이 선다 — «나» 라는 글자보다 먼저 읽힌다.
+    const me: any = state.me || {};
+    moreBtn = el('button', { class: 'v2-mtab v2-mtab--me', type: 'button', onclick: () => toggleSheet(), 'aria-haspopup': 'dialog' },
+      el('span', { class: 'v2-mtab-icw' }, profileAvatar(me.avatar, personName(me) || '나', me.userId, 'v2-mtab-ava', { char: me.avatar_char, color: me.avatar_color })),
+      el('span', { class: 'v2-mtab-t', text: '나' })) as HTMLButtonElement;
     tabs.replaceChildren(...btns, moreBtn, sheet);
     paintTabs();
   }
@@ -234,10 +284,13 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       if (k === 'home') b.removeAttribute('aria-expanded');
       else b.setAttribute('aria-expanded', String(open === 'side' && k === sec));
     }
-    if (moreBtn) { moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); }
+    if (moreBtn) { moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); moreBtn.classList.toggle('has-dot', unreadCount() > 0); }
     sheet.hidden = !sheetOpen;
   }
   buildTabs();
+  //  [나] 탭의 배지(#5615) — 안 읽은 알림이 있으면 내 얼굴에 점 하나(숫자는 종이 말한다 — 같은 숫자를 두 자리에 두지 않는다).
+  //   ⚠ 탭을 지은 뒤에 구독한다 — onUnread 는 구독하자마자 한 번 부르고, paintTabs 는 위의 secBtns · sheet 를 읽는다.
+  onUnread(() => paintTabs());
 
   // 탭 줄 입양 — 모바일이면 바 가운데, 아니면 제자리. 회전·리사이즈로 문턱을 넘나들 때마다 옮긴다(DOM 이동이라 탭 상태는 그대로).
   let strip: { el: HTMLElement; restore: () => void } | null = null;
@@ -250,7 +303,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const changeFns = new Set<() => void>();
   const onMq = (): void => { if (!mq.matches) closeAll(); placeStrip(); for (const fn of [...changeFns]) { try { fn(); } catch (_) { /* 한 구독이 넘어져도 나머지는 간다 */ } } };
   if (typeof mq.addEventListener === 'function') mq.addEventListener('change', onMq); else (mq as any).addListener(onMq);
-  //  폰 문턱을 벗어나면 더보기 판도 접는다 — 탭 바가 사라지는데 판만 떠 있으면 닫을 길이 없다.
+  //  폰 문턱을 벗어나면 [나] 판도 접는다 — 탭 바가 사라지는데 판만 떠 있으면 닫을 길이 없다.
   const onPmq = (): void => { if (!pmq.matches && sheetOpen) closeAll(); };
   if (typeof pmq.addEventListener === 'function') pmq.addEventListener('change', onPmq); else (pmq as any).addListener(onPmq);
 
@@ -285,6 +338,11 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
       //  구역 표가 바뀌었을 수 있다(navOn 토글) — 개수가 다르면 다시 짓는다.
       if (secBtns.size !== railSections().length) buildTabs(); else paintTabs();
     },
-    menuBtn, asideBtn,
+    menuBtn, asideBtn, wsBtn, bellBtn,
+    setHome(on: boolean): void {
+      onHome = on;
+      paintMenu();
+      paintWs();   // 워크스페이스 이름 · 얼굴은 설정 모달에서 바뀔 수 있다 — 화면을 옮길 때마다 다시 칠한다(싸다)
+    },
   };
 }
