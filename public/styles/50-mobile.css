@@ -10,8 +10,10 @@
    ⚠ 캐스케이드 맨 뒤(90-dark 바로 앞)에 두는 이유: 화면 파일마다 흩어진 `@media (max-width: 760/900)` 규칙을 폰 문턱에서 되잡아야 해서다.
    ══════════════════════════════════════════════════════════════════════════════ */
 
-/* 아래 탭 바·더보기 판은 폰에서만 선다 — 넓은 폭에선 DOM 에만 있고 자리를 차지하지 않는다. */
+/* 아래 탭 바·[나] 판은 폰에서만 선다 — 넓은 폭에선 DOM 에만 있고 자리를 차지하지 않는다.
+   맨 윗줄의 워크스페이스 타일·종(#5615)도 폰 것이다 — 넓은 폭은 레일(워크스페이스)과 홈 머리줄(종)이 맡는다. */
 .v2-mtabs { display: none; }
+.v2-mws, .v2-mbar-bell { display: none !important; }
 /* 창 맨 윗줄로 옮긴 [타임라인](web/v2/main.ts) — 데스크톱(>900)은 제 단추(.v2-tl-btn)가 있으니 숨긴다. */
 @media (min-width: 901px) { #v2-root.has-topbar > .v2-topbar > .v2-mbar-aside { display: none; } }
 /* 좁은 폭(≤900) 공통 — [타임라인] 은 맨 윗줄 오른쪽 끝, 둘째 바는 서지 않는다(단추가 없으니 43-v2-topbar-search 의 :has 규칙이 접는다). */
@@ -77,7 +79,47 @@
   .v2-mtab-bd { position: absolute; top: -4px; right: -8px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px;
     background: var(--warn-deep); color: var(--on-fill); font-size: 10.5px; font-weight: 800; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; }
 
-  /* ── 4. [더보기] 판 — 탭 바 위로 올라오는 목록 ──────────────────────────── */
+  /* ── 1b. 맨 윗줄 — [워크스페이스] [☰?] [검색] [종] [타임라인?] (#5615 — 슬랙 모바일 홈 머리) ─────────────
+     워크스페이스 타일이 맨 왼쪽 끝. ☰ 는 그 화면(앱)에 제 사이드바가 있을 때만 서고, 홈에선 없다(홈의 목록 = [AI 세션] 탭).
+     종은 어느 화면에서든 오른쪽에 — 홈 머리줄 안의 종은 폰에선 숨긴다(같은 단추가 두 자리에 서지 않게). */
+  #v2-root.has-topbar > .v2-topbar > .v2-mws { display: inline-flex !important; order: -2; align-self: center; width: 40px; height: 40px; margin: 0 0 0 2px; padding: 0;
+    align-items: center; justify-content: center; border-radius: 10px; -webkit-app-region: no-drag; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu { order: -1; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-menu.on-home { display: none !important; }
+  #v2-root.has-topbar > .v2-topbar > .v2-side-nav { order: 0; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-bell { display: inline-grid !important; order: 8; align-self: center; width: 40px; height: 40px; margin: 0; border-radius: 10px; }
+  #v2-root.has-topbar > .v2-topbar > .v2-mbar-bell .v2-bell-n { top: 2px; right: -1px; box-shadow: 0 0 0 2px var(--canvas); }
+  .v2-mws-face { width: 32px; height: 32px; border-radius: 9px; font-size: 14px; }
+  .v2-mws:active .v2-mws-face { opacity: .8; }
+  .v2-home-eyebrow > .v2-bell { display: none; }
+
+  /* 워크스페이스 메뉴(.v2-wspop — 레일과 같은 하나) — 폰에선 화면 아래에서 올라오는 판이다(슬랙 모바일의 워크스페이스 목록).
+     JS 가 앵커 옆에 좌표를 박아도(rail.ts place) 여기서 이긴다. 탭 바까지 덮는다 — 이 판이 떠 있는 동안 고를 것은 이 안에 있다. */
+  .v2-wspop { left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: auto !important; max-width: none;
+    max-height: min(80vh, 640px); overflow: auto; overscroll-behavior: contain; z-index: 80;
+    padding: 10px 10px calc(14px + env(safe-area-inset-bottom, 0px)); border-radius: 16px 16px 0 0; border-width: 1px 0 0;
+    box-shadow: 0 -12px 40px rgba(var(--shadow-ink), .22); }
+  .v2-wspop::before { content: ''; display: block; width: 36px; height: 4px; margin: 0 auto 8px; border-radius: 2px; background: var(--line-net-2); }
+
+  /* ── 4. [나] 판(#5615 — 종전 [더보기]) — 탭 바 위로 올라오는 판. 슬랙 모바일의 [You]. ─────────── */
+  .v2-mtab--me .v2-mtab-icw { width: 28px; height: 26px; }
+  .v2-mtab-ava { width: 24px; height: 24px; font-size: 10.5px; font-weight: 800; }
+  .v2-mtab--me.on .v2-mtab-ava { box-shadow: 0 0 0 2px var(--blue); }
+  .v2-mtab--me.on .v2-mtab-icw { background: none; }
+  .v2-mtab--me.has-dot .v2-mtab-icw::after { content: ''; position: absolute; top: 0; right: 0; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--warn-deep); box-shadow: 0 0 0 2px var(--canvas); }
+  .v2-msheet-me { display: flex; align-items: center; gap: 12px; margin: 0 0 6px; padding: 10px; border: 0; border-radius: 12px; background: var(--bg-tint);
+    color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+  .v2-msheet-me:active { background: var(--bg-tint-2); }
+  .v2-msheet-ava { width: 44px; height: 44px; flex: none; font-size: 16px; font-weight: 800; }
+  .v2-msheet-me b { font-size: 16px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-msheet-tt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .v2-msheet-sub { font-size: 12.5px; font-weight: 500; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-msheet-grp { display: flex; flex-direction: column; padding: 6px 0; border-top: 1px solid var(--line); }
+  .v2-msheet-gt { padding: 6px 10px 2px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .v2-msheet-wsface { width: 28px; height: 28px; flex: none; border-radius: 8px; font-size: 13px; }
+  .v2-msheet-bd { flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--warn-deep); color: var(--on-fill);
+    font-size: 11px; font-weight: 800; line-height: 20px; text-align: center; font-variant-numeric: tabular-nums; }
   .v2-msheet { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 43; max-height: min(72vh, 560px); overflow: auto;
     background: var(--bg); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0;
     box-shadow: 0 -12px 40px rgba(var(--shadow-ink), .18); overscroll-behavior: contain; }
@@ -108,8 +150,11 @@
   .v2-home { flex: 1 0 auto; padding: 12px 16px 16px; }
   .v2-home-launch { justify-content: flex-start; padding-top: 14px; padding-bottom: 16px; }
   .v2-home-launch .v2-h1, .v2-home-sub { font-size: 22px; }
-  .v2-dest-grid { margin-top: 14px; }
-  .v2-dest { min-height: 40px; }
+  /* 「프로젝트」·「선행」 두 칸은 폰에서 **나란히 한 줄**(#5615) — 세로로 두 줄이면 시키는 칸이 화면 가운데 아래로 밀려 첫 화면의
+     주인공(시키는 칸)보다 비워 둬도 되는 칸이 먼저 읽혔다. 칸 안 안내문은 말줄임. */
+  .v2-dest-grid { grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 14px; }
+  .v2-dest { min-height: 40px; gap: 6px; padding: 0 10px; }
+  .v2-dest-in { font-size: 13px; text-overflow: ellipsis; }
   .v2-launch, .v2-dest-grid + .v2-launch { margin-top: 8px; }
   .v2-launch-in { min-height: 50px; }
   /* 실행 줄(컴퓨터·제공자·모델·추론) — 폰에선 **가로로 미는 한 줄**. 종전엔 칩 넷이 [시키기] 옆 좁은 칸에서 한 줄씩 네 줄로
