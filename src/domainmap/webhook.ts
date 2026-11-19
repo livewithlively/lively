@@ -156,9 +156,11 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   if (!repo.git_url) { res.status(200).json({ ignored: "no git_url configured" }); return; }
 
   // Sync the local clone, then diff before..after.
-  //  Another fetch holds the clone lock → ack 200 and skip: a 5xx can make the provider disable the hook. The skipped
-  //  range is recovered by refresh_all (git-pull.ts), which diffs from repo.last_refreshed_sha — this push's `before`
-  //  is not kept anywhere, so the next push alone does not cover it.
+  //  Another fetch holds the clone lock → ack 200 and skip: a 5xx can make the provider disable the hook.
+  //  The skipped range is recovered ONLY if refresh_all (git-pull.ts) runs before the next push webhook: it diffs from
+  //  repo.last_refreshed_sha, but refresh() advances that checkpoint to the payload head regardless of base, so a
+  //  later webhook (before = this push's after) moves past the skipped range and it is lost. That window stays open
+  //  until the checkpoint guard (conditional advance of last_refreshed_sha) lands.
   let cloneDir: string;
   try { cloneDir = await ensureClone(repo.name, repo.git_url); }
   catch (e) {

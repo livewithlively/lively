@@ -106,7 +106,7 @@ export async function initActivitySchema(): Promise<void> {
   await pool.query(`ALTER TABLE activity_touch ADD COLUMN IF NOT EXISTS derived BOOLEAN NOT NULL DEFAULT false;`);
   //  상태 표 — 쓰는 것은 유도 워커뿐이다. 작업 기록 저장과 도메인맵 refresh 트랜잭션은 이 표를 건드리지 않는다
   //   (사용자의 activity_log 호출이 유도 때문에 기다리거나 교착에 말려들지 않게). 전이 규칙은 derive-touches.ts 머리말.
-  //   repo_id 에 FK 를 두지 않는다 — 레포 행이 지워져도 상태 이력은 남고, 유도는 failed 로 끝난다.
+  //   repo_id 에 FK 를 두지 않는다 — 레포 행이 지워져도 상태 이력은 남고, 유도는 no_repo 로 닫힌다.
   await pool.query(`
   CREATE TABLE IF NOT EXISTS activity_touch_derive(
     activity_id INT PRIMARY KEY REFERENCES activity(id) ON DELETE CASCADE,

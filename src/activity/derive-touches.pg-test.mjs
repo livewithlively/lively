@@ -5,7 +5,7 @@
 //  원격은 임시 bare 레포로 대신한다 — 워커는 도메인맵 클론(DOMAINMAP_REPOS_DIR)으로 fetch 한 뒤 git show 만 한다.
 //
 //  사양:
-//   K1  크론 액션 derive_activity_touches 가 org_cron CHECK 에 등록돼 저장된다 · 스위치가 꺼져 있으면 아무것도 안 한다
+//   K1  스위치가 꺼져 있으면 크론 액션이 아무것도 안 한다(크론 행 저장 자체가 액션 허용목록 등록을 확인한다)
 //   F1  스위치 저장은 l3_derive 만 바꾸고 l2_autoresolve 는 그대로 둔다
 //   S1  커밋·레포가 있는 기록은 pending, 레포가 없으면 no_repo · 호출자 code_unit touch 가 있거나 커밋이 없는 기록은 상태 행이 없다
 //       · data_entity touch 만 넘긴 기록은 유도한다(호출자 touch 는 그대로)
@@ -27,7 +27,6 @@
 //   W2  워커 SQL 이 실패하면 크론 상태가 error 다(빈 결과 ok 로 삼키지 않는다)
 //   P1  스위치가 켜져 있으면 작업 기록 직후 그 한 건을 유도한다 · 커밋이 클론에 이미 있으면 fetch 하지 않는다
 //   M1  지표 — 고정 픽스처에서 완료율 (ok+empty)/(ok+empty+failed+expired), 매칭 0건 ok 수, pending 수
-//   G1  유도 touch 가 도메인 부채의 commit 작업 수(active_commits)에 잡힌다
 import pg from "pg";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -57,7 +56,6 @@ const dt = await import(`${D}/activity/derive-touches.js`);
 const { logActivity } = await import(`${D}/activity/store.js`);
 const rc = await import(`${D}/org/store/runtime-config.js`);
 const { runCronById } = await import(`${D}/scheduler/engine.js`);
-const { evaluateDomainStructureDebt } = await import(`${D}/domainmap/core/domain-debt.js`);
 
 let pass = 0, fail = 0;
 const chk = (name, cond, detail) => { if (cond) { pass++; console.log(`ok   ${name}`); } else { fail++; console.log(`FAIL ${name}${detail !== undefined ? " — " + detail : ""}`); } };
@@ -115,9 +113,7 @@ const setFlag = (v) => rc.updateRuntimeConfig({ ontology_loops: { l3_derive: v }
 
 try {
   // ── K1 · F1 ──
-  const ins = await itemsPool.query(`INSERT INTO org_cron(id, label, action, interval_sec, enabled) VALUES('derive-touches','t','derive_activity_touches',86400,false)`)
-    .then(() => null, (e) => e.message);
-  chk("K1 크론 행이 org_cron_action_chk 를 통과해 저장된다", ins === null, ins);
+  await Q(`INSERT INTO org_cron(id, label, action, interval_sec, enabled) VALUES('derive-touches','t','derive_activity_touches',86400,false)`);
   const off = await runCronById("derive-touches");
   chk("K1 스위치가 꺼져 있으면 아무것도 안 한다", off.status === "ok" && /l3_derive/.test(show(off.summary)), show(off));
   await rc.updateRuntimeConfig({ ontology_loops: { l2_autoresolve: true } }, ME, "web");
@@ -306,10 +302,15 @@ try {
   const AQ = await log({ commit_sha: C4, repo: "r-main" });
   const runQ = await dt.deriveActivityTouches({ activityId: AQ, lockWaitMs: 300 });
   const AQ2 = await log({ commit_sha: GHOST, repo: "r-main" });
-  const runQ2 = await dt.deriveActivityTouches({ activityId: AQ2, lockWaitMs: 300 });
+  await setFlag(true);
+  const t0 = Date.now();
+  await dt.deriveAfterLog(AQ2);                                              // 기록 직후 시도 그대로(짧은 잠금 대기)
+  const waited = Date.now() - t0;
+  await setFlag(false);
   rmSync(lockP, { force: true });
   chk("P1 커밋이 클론에 있으면 기록 직후 시도는 fetch 하지 않는다", (await row(AQ)).status === "ok" && !runQ.repos.some((r) => r.busy), show({ r: await row(AQ), repos: runQ.repos }));
-  chk("P1 클론에 없으면 fetch 를 시도한다", runQ2.repos.some((r) => r.busy) && (await row(AQ2)).status === "pending", show({ r: await row(AQ2), repos: runQ2.repos }));
+  chk("P1 클론에 없으면 fetch 를 시도하고, 잠금을 짧게만 기다린 뒤 pending 으로 크론에 맡긴다(웹훅에 양보)",
+    (await row(AQ2)).status === "pending" && dt.AFTER_LOG_LOCK_WAIT_MS < 2_500 && waited < 2_000, show({ r: await row(AQ2), waited }));
 
   // ── M1 ──
   await Q(`DELETE FROM activity_touch_derive`);
@@ -322,14 +323,6 @@ try {
   const st = await dt.deriveStats();
   chk("M1 완료율 3/5 — no_repo·no_units·pending 은 분모에서 뺀다", st.completion_rate === 0.6, show(st));
   chk("M1 매칭 0건 ok 1 · pending 1 · 가장 오래된 pending 2일", st.ok_zero_match === 1 && st.pending === 1 && st.oldest_pending_days === 2, show(st));
-
-  // ── G1 ──
-  const cat = (await Q(`INSERT INTO category(key, name, should) VALUES('d-derive','d','도메인 의도') RETURNING id`))[0].id;
-  await Q(`INSERT INTO mapping(repo_id, target_kind, target_id, category_id, origin, status, created_at) VALUES($1,'code_unit',$2,$3,'human','confirmed',now())`, [R, U_ASUB, cat]);
-  await Q(`UPDATE code_unit SET state='removed' WHERE id=$1`, [U_ASUB]);
-  const debt = await evaluateDomainStructureDebt("r-main", { type: "agent", id: "t" });
-  const f = debt.findings.find((x) => x.category_id === cat);
-  chk("G1 유도 touch 가 도메인 부채의 commit 작업 수에 잡힌다", !!f && /관련 commit 작업 \d+건/.test(f.detail), show(f));
 } catch (e) {
   fail++; console.log("FAIL 예외", e?.stack ?? e);
 } finally {

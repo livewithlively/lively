@@ -7,7 +7,8 @@
 //
 //  상태 표 activity_touch_derive 에 쓰는 것은 이 워커뿐이다. 작업 기록 테이블을 정본으로 보고 차이를 맞춘다.
 //   S1 새 행   — 커밋이 있고 상태 행도 code_unit touch 도 없는 작업 기록 → repo_id 없으면 no_repo, 있으면 pending
-//               (호출자가 code_unit 을 선언했으면 그것이 우선이라 유도하지 않는다. data_entity 만 넘긴 기록은 유도한다)
+//               (기록할 때 호출자가 code_unit 을 넘겼으면 유도하지 않는다. data_entity 만 넘긴 기록은 유도한다.
+//                유도 뒤에 호출자가 넘긴 touch 는 유도분과 함께 남고 derived=false 라 S2 가 지우지 않는다)
 //   S2 재동기  — 상태 행의 commit_sha·repo_id 가 작업 기록과 다르면(상태 무관, running 포함) 두 칸을 맞추고 pending(또는 no_repo),
 //               enqueued_at=now(), 그 작업 기록의 유도 touch(derived=true)만 지운다
 //   S3 첫 모듈 — no_units 행의 레포에 active code_unit 이 생기면 pending
@@ -238,10 +239,11 @@ async function prepareRepo(repoId: number | null, lockWaitMs?: number, probeSha?
     `SELECT 1 FROM code_unit WHERE repo_id=$1 AND COALESCE(state,'active')='active' LIMIT 1`, [repoId])).rowCount;
   if (!units) return { name: repo.name, noUnits: true };
   if (!repo.git_url) return { name: repo.name, error: "no git_url" };
-  if (probeSha !== undefined && await hasCommit(repoClonePath(repo.name), probeSha)) {
-    return { name: repo.name, gitUrl: repo.git_url, cloneDir: repoClonePath(repo.name) };
-  }
   try {
+    if (probeSha !== undefined) {
+      const dir = repoClonePath(repo.name);
+      if (await hasCommit(dir, probeSha)) return { name: repo.name, gitUrl: repo.git_url, cloneDir: dir };
+    }
     return { name: repo.name, gitUrl: repo.git_url, cloneDir: await ensureClone(repo.name, repo.git_url, { timeoutMs: GIT_TIMEOUT_MS, lockWaitMs }) };
   } catch (e) {
     if (e instanceof CloneBusyError) return { name: repo.name, busy: true };
@@ -262,7 +264,7 @@ export interface DeriveRunSummary {
   reconcile: ReconcileCounts;
   claimed: number;
   results: Partial<Record<FinishResult, number>>;
-  /** 이번 실행에서 fetch 를 시도한 레포. error 는 fetch 실패, busy 는 잠금 대기 상한. */
+  /** 이번 실행에서 클론을 쓴 레포(fetch 를 건너뛴 경우 포함). error 는 fetch 실패, busy 는 잠금 대기 상한. */
   repos: { repo: string; error?: string; busy?: true }[];
 }
 
@@ -340,12 +342,16 @@ export async function deriveStats(): Promise<DeriveStats> {
   };
 }
 
+// 기록 직후 시도의 클론 잠금 대기 — 웹훅(2.5초)보다 짧게 둔다. push 직후 같은 클론을 기다리는 웹훅에 양보하고,
+//  못 얻으면 pending 으로 남겨 일일 액션에 맡긴다.
+export const AFTER_LOG_LOCK_WAIT_MS = 300;
+
 /** 기록 직후 시도 — 스위치가 꺼져 있으면 아무것도 안 한다. 실패는 로그만 남긴다(일일 액션이 메운다). */
 export async function deriveAfterLog(activityId: number): Promise<void> {
   try {
     const { getRuntimeConfig } = await import("../org/store/runtime-config.js");
     if (!(await getRuntimeConfig()).ontology_loops.l3_derive) return;
-    await deriveActivityTouches({ activityId });
+    await deriveActivityTouches({ activityId, lockWaitMs: AFTER_LOG_LOCK_WAIT_MS });
   } catch (e) {
     logger.warn({ err: (e as Error)?.message, activity: activityId }, "작업 기록 touch 유도(기록 직후) 실패 — 일일 액션이 다시 본다");
   }
