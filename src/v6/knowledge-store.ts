@@ -921,7 +921,10 @@ export async function proposeKnowledgeCategory(
      SELECT $1, c.id, 'llm', $3, $4, $5, now() FROM category c WHERE c.id=$2 AND c.state='active' FOR KEY SHARE OF c
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state, confidence=EXCLUDED.confidence, evidence=EXCLUDED.evidence, mapped_by='llm'`,
     [name, categoryId, opts.confidence ?? null, state, opts.evidence]);
-  if (!ins.rowCount) return { applied: false, state, threshold, skipped: "inactive_or_missing_category" };
+  if (!ins.rowCount) {
+    const c = await one(itemsPool, `SELECT state FROM category WHERE id=$1`, [categoryId]) as { state: string } | undefined;
+    return { applied: false, state, threshold, skipped: c ? "inactive_category" : "missing_category" };
+  }
   await auditKnowledge(name, "propose_category", null, { category_id: categoryId, state, mapped_by: "llm", confidence: opts.confidence ?? null, threshold: threshold ?? null }, ctx);
   return { applied: true, state, threshold };
 }

@@ -27,12 +27,19 @@ async function applyCollectorTargetCategory(client: pg.PoolClient, name: string,
   if (!isInsert) return;
   const key = collectorCategoryFor(boundCollector()?.outputConfig, itemPath);
   if (!key) return;
+  //  호출자(connector-mirror)는 item 단위 트랜잭션 안이다 — 실패한 문장은 트랜잭션을 abort 시켜 뒤의 감사·커밋까지 깨므로
+  //   SAVEPOINT 로 되돌려야 «비치명» 이 성립한다.
+  await client.query("SAVEPOINT collector_target_category");
   try {
     await client.query(
       `INSERT INTO knowledge_category(name, category_id, mapped_by, state)
          SELECT $1, c.id, 'rule', 'confirmed' FROM category c WHERE c.key = $2 AND c.state = 'active' FOR KEY SHARE OF c
        ON CONFLICT (name, category_id) DO NOTHING`, [name, key]);
-  } catch { /* 분류 연결 실패는 비치명 — 지식 자체는 이미 적재됐다(분류는 분류기가 나중에 붙일 수 있다) */ }
+    await client.query("RELEASE SAVEPOINT collector_target_category");
+  } catch {
+    //  분류 연결 실패는 비치명 — 지식 자체는 이미 적재됐다(분류는 분류기가 나중에 붙일 수 있다)
+    await client.query("ROLLBACK TO SAVEPOINT collector_target_category");
+  }
 }
 
 // notion(및 K류) → knowledge(observed) 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.

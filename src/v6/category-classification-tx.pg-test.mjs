@@ -165,7 +165,7 @@ try {
 
   { const dep = await mkCat("deprecated"); const k = await mkKnow();
     let res; const r = await attempt(async () => { res = await proposeKnowledgeCategory(k, dep.id, { evidence: "pg-test", confidence: 0.99, state: "confirmed" }, { actor: TAG, source: "mcp" }); });
-    chk("P1 비활성 분류로의 분류기 제안 → applied=false", !r.threw && res?.applied === false, r.threw ? why(r) : JSON.stringify(res));
+    chk("P1 비활성 분류로의 분류기 제안 → applied=false · skipped=inactive_category", !r.threw && res?.applied === false && res?.skipped === "inactive_category", r.threw ? why(r) : JSON.stringify(res));
     chk("P1 read-back. 매핑이 생기지 않았다", JSON.stringify(await mappings(k)) === "[]", JSON.stringify(await mappings(k))); }
 
   { const a = await mkCat(), dep = await mkCat("deprecated"); const k = await mkKnow(); await map(k, a.id);

@@ -226,7 +226,8 @@ export async function applyAction(action: unknown, actor: string): Promise<boole
         logger.info({ name, from, current: cur?.category_id ?? null }, "관리기 분류 보정 건너뜀 — 발견 이후 분류가 바뀌었다");
         return false;
       }
-      //  비활성 분류로는 옮기지 않는다 — 발견 이후 대상 분류가 비활성이 됐으면 낡은 조치다(linkKnowledgeCategory 와 같은 잠금).
+      //  비활성 분류로는 옮기지 않는다 — 발견 이후 대상 분류가 비활성이 됐으면 낡은 조치다. FOR KEY SHARE 는 비활성 전환의
+      //   FOR UPDATE 와 부딪쳐, 전환이 진행 중이면 기다렸다가 바뀐 state 를 본다.
       const target = (await client.query(`SELECT state FROM category WHERE id=$1 FOR KEY SHARE`, [to])).rows[0] as { state: string } | undefined;
       if (target?.state !== "active") {
         await client.query("ROLLBACK");
