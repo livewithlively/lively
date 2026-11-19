@@ -59,7 +59,7 @@ function dbSourceEditor(detail, data) {
         hint: '접속을 허용할 사설/내부 host 입니다. 목록에 없는 사설망·localhost 접속은 차단됩니다(SSRF 방어). 외부 공인 DB 는 등록하지 않아도 됩니다.' },
       { key: 'allowed_db_secret_refs', label: '허용 비밀번호 참조 (allowed_db_secret_refs)', initial: rcDb.allowed_db_secret_refs,
         placeholder: 'PROD_RDS_RO_PASSWORD\ngcp-sm:my-project/prod-db-password\naws-sm:ap-northeast-2/prod/db\n줄당 참조 한 개(값 금지)',
-        hint: 'auth_ref 가 가리킬 수 있는 비밀번호 참조입니다. 값이 아니라 참조만 적고, 적은 그대로만 허용됩니다. 환경변수 이름이면 값이 게이트웨이 프로세스 환경변수에 있어야 합니다. gcp-sm:<프로젝트>/<시크릿>[#버전] 은 게이트웨이 VM 의 서비스 계정으로, aws-sm:<리전>/<시크릿 이름>[#버전] 은 게이트웨이의 AWS 기본 자격(EC2 인스턴스 프로파일 등)으로 읽으며 재시작 없이 반영됩니다.' },
+        hint: 'auth_ref 가 가리킬 수 있는 비밀번호 참조입니다. 값이 아니라 참조만 적고, 적은 그대로만 허용됩니다. 환경변수 이름이면 값이 게이트웨이 프로세스 환경변수에 있어야 합니다. gcp-sm:<프로젝트>/<시크릿>[#버전] 은 게이트웨이 VM 의 서비스 계정으로, aws-sm:<리전>/<시크릿 이름>[#버전] 은 게이트웨이의 AWS 기본 자격(EC2 인스턴스 프로파일 등)으로 읽으며 재시작 없이 반영됩니다. 이 목록에 적은 비밀은 등록한 DB 접속에 비밀번호로 쓰이므로, DB 비밀번호가 든 참조만 적고 게이트웨이 서비스 계정에는 그 시크릿만 읽을 권한을 주세요.' },
     ]);
   // 메인 카드와 안전범위 카드가 detail 직속으로 붙어 여백 0 이었다 → admin-stack(gap:14px)으로 감싼다(#req).
   //  #2556 — 새 셸 [외부 앱 연결] 아래 [데이터베이스] 화면이 이 패널을 자기 칸으로 흡수했다(머리만 접는다).

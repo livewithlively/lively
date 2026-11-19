@@ -5,10 +5,11 @@
 // 실행: npm run build && node dist/db/secret-pool.test.js
 import assert from "node:assert/strict";
 import { mock } from "node:test";
+import pg from "pg";
 import type mysql from "mysql2/promise";
-import { connectRetryingOnAuthFailure, isPgAuthFailure } from "./pool.js";
+import { connectRetryingOnAuthFailure, isPgAuthFailure, SecretRefPgPool } from "./pool.js";
 import { SourceMysqlPool, isMysqlAuthFailure, type MysqlResolved } from "./mysql-engine.js";
-import { DbSecretError } from "./secret-store.js";
+import { DbSecretError, readDbSecret, secretVersion, __setSecretStoreDepsForTest } from "./secret-store.js";
 
 let pass = 0;
 const tests: Array<[string, () => Promise<void>]> = [];
@@ -20,32 +21,40 @@ const INFO = { source: "analytics", ref: "gcp-sm:my-project/db-pw" };
 // ── pg ──
 t("pg: 첫 시도 성공 → 다시 읽지 않는다", async () => {
   let refreshed = 0;
-  assert.equal(await connectRetryingOnAuthFailure(async () => "c1", async () => { refreshed++; }, INFO), "c1");
+  assert.equal(await connectRetryingOnAuthFailure(async () => "c1", async () => { refreshed++; return true; }, INFO), "c1");
   assert.equal(refreshed, 0);
 });
 t("pg: 인증 아닌 오류 → 그대로 내고 다시 읽지 않는다", async () => {
   let refreshed = 0;
   const boom = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
-  await assert.rejects(connectRetryingOnAuthFailure(async () => { throw boom; }, async () => { refreshed++; }, INFO), (e) => e === boom);
+  await assert.rejects(connectRetryingOnAuthFailure(async () => { throw boom; }, async () => { refreshed++; return true; }, INFO), (e) => e === boom);
   assert.equal(refreshed, 0);
 });
-t("pg: 28P01 → 다시 읽고 한 번 더 → 성공", async () => {
+t("pg: 28P01 + 값이 바뀜 → 한 번 더 → 성공", async () => {
   let refreshed = 0;
   let n = 0;
-  const v = await connectRetryingOnAuthFailure(async () => { if (n++ === 0) throw pgAuth(); return "c2"; }, async () => { refreshed++; }, INFO);
+  const v = await connectRetryingOnAuthFailure(async () => { if (n++ === 0) throw pgAuth(); return "c2"; }, async () => { refreshed++; return true; }, INFO);
   assert.equal(v, "c2");
   assert.equal(refreshed, 1);
   assert.equal(n, 2);
 });
-t("pg: 28000(없는 역할 등)도 한 번 더", async () => {
+t("pg: 28000(없는 역할 등)도 값이 바뀌면 한 번 더", async () => {
   let n = 0;
-  assert.equal(await connectRetryingOnAuthFailure(async () => { if (n++ === 0) throw pgAuth("28000"); return "c"; }, async () => undefined, INFO), "c");
+  assert.equal(await connectRetryingOnAuthFailure(async () => { if (n++ === 0) throw pgAuth("28000"); return "c"; }, async () => true, INFO), "c");
   assert.equal(n, 2);
+});
+t("pg: 28P01 + 다시 읽은 값이 그대로 → 다시 붙지 않고 «값이 그대로» + 원래 code(실패 로그인을 늘리지 않는다)", async () => {
+  let n = 0;
+  await assert.rejects(
+    connectRetryingOnAuthFailure(async () => { n++; throw pgAuth(); }, async () => false, INFO),
+    (e: Error & { code?: string }) => /값이 그대로/.test(e.message) && e.code === "28P01",
+  );
+  assert.equal(n, 1, "값이 그대로인데 다시 로그인했다");
 });
 t("pg: 두 번째도 인증 실패 → «또 실패» + 원래 code, 세 번째는 없다", async () => {
   let n = 0;
   await assert.rejects(
-    connectRetryingOnAuthFailure(async () => { n++; throw pgAuth(); }, async () => undefined, INFO),
+    connectRetryingOnAuthFailure(async () => { n++; throw pgAuth(); }, async () => true, INFO),
     (e: Error & { code?: string }) => /다시 읽어 한 번 더/.test(e.message) && /analytics/.test(e.message) && e.code === "28P01",
   );
   assert.equal(n, 2);
@@ -62,6 +71,98 @@ t("판정: pg · mysql 인증 실패 코드", async () => {
   assert.equal(isPgAuthFailure(null), false);
   assert.equal(isMysqlAuthFailure(myAuth()), true);
   assert.equal(isMysqlAuthFailure({ code: "ER_DBACCESS_DENIED_ERROR", errno: 1044 }), false); // 스키마 권한 — 비밀번호와 무관
+});
+
+// ── pg — SecretRefPgPool.connect 덮어쓰기(콜백 · 프라미스 두 꼴) ──
+//  부모(pg-pool)의 connect 를 가짜로 바꿔 «인증 실패 → 다시 읽기 → 한 번 더» 의 배선을 본다. 시크릿 저장소는 fetch 를 끼운 가짜 GCP.
+const PREF = "gcp-sm:my-project/pg-pw";
+let storeValue = "pw-1";
+let storeCalls = 0;
+const fakeStoreFetch = (async (input: string | URL | Request): Promise<Response> => {
+  const url = String(input);
+  if (url.includes("/computeMetadata/")) {
+    return new Response(JSON.stringify({ access_token: "tok", expires_in: 3600 }), { status: 200, headers: { "Metadata-Flavor": "Google", "content-type": "application/json" } });
+  }
+  storeCalls++;
+  return new Response(JSON.stringify({ payload: { data: Buffer.from(storeValue).toString("base64") } }), { status: 200, headers: { "content-type": "application/json" } });
+}) as typeof fetch;
+const stubbedPool = async (behaviors: Array<() => Promise<unknown>>, userFromSecret = false): Promise<{ pool: SecretRefPgPool; calls: () => number; restore: () => void }> => {
+  __setSecretStoreDepsForTest({ fetch: fakeStoreFetch, gcpMetadataBase: () => "http://meta.test", gcpSecretManagerBase: "http://sm.test/v1", retryDelayMs: 0 });
+  storeCalls = 0;
+  await readDbSecret(PREF); // 풀을 만들 때처럼 한 번 읽어 기억해 둔다(값 판 1)
+  let n = 0;
+  const proto = pg.Pool.prototype as unknown as { connect: unknown };
+  proto.connect = function stub(): Promise<unknown> { const b = behaviors[n] ?? behaviors[behaviors.length - 1]; n++; return b(); };
+  const pool = new SecretRefPgPool({ host: "127.0.0.1", user: "ro" }, { source: "analytics", ref: PREF, userFromSecret });
+  return { pool, calls: () => n, restore: () => { delete proto.connect; __setSecretStoreDepsForTest(null); } };
+};
+const fakeClient = (): { released: unknown[]; release: (x?: unknown) => void } => {
+  const c = { released: [] as unknown[], release: (x?: unknown) => { c.released.push(x ?? "ok"); } };
+  return c;
+};
+
+t("pg 풀(콜백 꼴 — pool.query 가 쓰는 길): 교체로 인증 실패 → 다시 읽어 한 번 더 → client · done 이 제대로 넘어온다", async () => {
+  storeValue = "pw-1";
+  const client = fakeClient();
+  const h = await stubbedPool([async () => { throw pgAuth(); }, async () => client]);
+  try {
+    storeValue = "pw-2"; // 저장소는 이미 새 값(기억은 아직 pw-1)
+    const got = await new Promise<{ err?: Error; c?: unknown; done?: (r?: unknown) => void }>((resolve) => {
+      h.pool.connect((err, c, done) => resolve({ err, c, done }));
+    });
+    assert.equal(got.err, undefined);
+    assert.equal(got.c, client);
+    got.done?.();
+    assert.deepEqual(client.released, ["ok"], "done 이 client.release 로 이어지지 않았다");
+    assert.equal(h.calls(), 2);
+    assert.equal(storeCalls, 2, "처음 읽기 + 인증 실패 뒤 다시 읽기");
+  } finally { h.restore(); }
+});
+t("pg 풀(콜백 꼴): 인증 아닌 오류 → callback(err) · done 은 함수 · 다시 읽지 않는다", async () => {
+  storeValue = "pw-1";
+  const boom = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  const h = await stubbedPool([async () => { throw boom; }]);
+  try {
+    const got = await new Promise<{ err?: Error; c?: unknown; done?: unknown }>((resolve) => {
+      h.pool.connect((err, c, done) => resolve({ err, c, done }));
+    });
+    assert.equal(got.err, boom);
+    assert.equal(got.c, undefined);
+    assert.equal(typeof got.done, "function");
+    assert.equal(storeCalls, 1, "인증 아닌 오류에 시크릿을 다시 읽었다");
+  } finally { h.restore(); }
+});
+t("pg 풀(프라미스 꼴): 다시 읽은 값이 그대로 → 로그인은 한 번뿐 · «값이 그대로»", async () => {
+  storeValue = "pw-1";
+  const h = await stubbedPool([async () => { throw pgAuth(); }]);
+  try {
+    await assert.rejects(h.pool.connect(), (e: Error & { code?: string }) => /값이 그대로/.test(e.message) && e.code === "28P01");
+    assert.equal(h.calls(), 1, "값이 그대로인데 다시 로그인했다");
+    assert.equal(storeCalls, 2);
+  } finally { h.restore(); }
+});
+t("pg 풀: 실패한 사이 다른 요청이 이미 새 값을 읽었으면 다시 읽지 않고 그 값으로 한 번 더", async () => {
+  storeValue = "pw-1";
+  const client = fakeClient();
+  const h = await stubbedPool([
+    async () => { storeValue = "pw-2"; await readDbSecret(PREF, { fresh: true }); throw pgAuth(); }, // 동시에 실패한 다른 요청이 먼저 다시 읽었다
+    async () => client,
+  ]);
+  try {
+    const before = secretVersion(PREF);
+    assert.equal(await h.pool.connect(), client);
+    assert.equal(storeCalls, 2, "이미 바뀐 값을 또 읽었다(처음 + 다른 요청의 다시 읽기 = 2)");
+    assert.equal(secretVersion(PREF), before + 1);
+  } finally { h.restore(); }
+});
+t("pg 풀: 사용자 이름이 시크릿에서 왔으면 다시 읽은 username 으로 갈아 낀다", async () => {
+  storeValue = JSON.stringify({ username: "ro_a", password: "pw-1" });
+  const h = await stubbedPool([async () => { throw pgAuth(); }, async () => fakeClient()], true);
+  try {
+    storeValue = JSON.stringify({ username: "ro_b", password: "pw-2" }); // 사용자를 번갈아 쓰는 교체
+    await h.pool.connect();
+    assert.equal(h.pool.options.user, "ro_b");
+  } finally { h.restore(); }
 });
 
 // ── mysql — 가짜 풀 ──
