@@ -118,3 +118,18 @@ export function parseDiff(out: string): any[] {
   }
   return changes;
 }
+
+// Committer time of `sha` in the clone as ISO-8601, or null if git cannot resolve it. refresh() stamps
+// code_unit.content_changed_at with it so the value is the commit's time, not the delivery time.
+export async function commitTime(cloneDir: string, sha: string, opts: GitOpts): Promise<string | null> {
+  try {
+    const out = (await git(["-C", cloneDir, "show", "-s", "--format=%cI", sha], undefined, undefined, opts)).stdout.trim();
+    return out && !Number.isNaN(Date.parse(out)) ? out : null;
+  } catch { return null; }
+}
+
+// true iff `ancestor` is reachable from `descendant` (equal counts). Any git error (unknown sha) → false.
+export async function isAncestor(cloneDir: string, ancestor: string, descendant: string, opts: GitOpts): Promise<boolean> {
+  try { await git(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], undefined, undefined, opts); return true; }
+  catch { return false; }
+}

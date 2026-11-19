@@ -8,7 +8,7 @@ import { getRepo } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import type { Actor } from "./core/types.js";
 import { hostOf, isAuthError, describeGitError } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, repoClonePath, parseDiff } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, repoClonePath, parseDiff, commitTime } from "./git-sync.js";
 
 // repoClonePath 는 구 git-pull.ts 표면(scheduler/actions/map-bootstrap.ts 가 동적 import).
 //  구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
@@ -82,6 +82,9 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
   catch { return { repo: repoName, status: "skipped", detail: "sha not in clone yet, will retry next tick", base, head }; }
 
   const changes = parseDiff(diffOut);
-  const r = await refresh(repoName, { base, head, changes, granularity: "file" }, actor);
-  return { repo: repoName, status: "ok", base, head, changes: changes.length, tally: (r as { tally?: unknown }).tally };
+  const head_committed_at = await commitTime(cloneDir, head, { timeoutMs: GIT_TIMEOUT_MS });
+  const r = await refresh(repoName, { base, head, head_committed_at, changes, granularity: "file" }, actor);
+  // A webhook refresh moved the checkpoint after we read it; the next tick diffs from there.
+  if (r.skipped) return { repo: repoName, status: "skipped", detail: "checkpoint moved concurrently, will retry next tick", base, head };
+  return { repo: repoName, status: "ok", base, head, changes: changes.length, tally: r.tally };
 }

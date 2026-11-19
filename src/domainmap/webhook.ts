@@ -11,7 +11,7 @@ import { httpErr } from "./core/types.js";
 import { findRepoByNames } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import { isAuthError, describeGitError, hostOf } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff, commitTime, isAncestor } from "./git-sync.js";
 
 // sanitizeName 은 구 webhook.ts 표면(테스트·소비자) — 구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
 export { sanitizeName };
@@ -162,15 +162,23 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
 
   let before = String(ev.before ?? "");
   let baseNote: string | undefined;
-  if (!before || ZERO_SHA.test(before) || !SHA_RE.test(before)) {
-    // New branch / first push (all-zeros) or garbage: fall back to the last
-    // refreshed sha if we have one; else skip diffing against garbage.
-    if (repo.last_refreshed_sha && SHA_RE.test(repo.last_refreshed_sha)) {
-      before = repo.last_refreshed_sha;
-      baseNote = "before was zero/invalid; fell back to last_refreshed_sha";
-    } else {
-      res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return;
+  const checkpoint = typeof repo.last_refreshed_sha === "string" && SHA_RE.test(repo.last_refreshed_sha)
+    ? repo.last_refreshed_sha : null;
+  if (checkpoint) {
+    // Diff from the checkpoint, not the push's `before`: the stored units reflect the checkpoint, and
+    // any earlier push this endpoint acked without applying (clone busy, sha not fetched yet) sits
+    // between the two. refresh() refuses a base other than the checkpoint, so diffing from `before`
+    // would leave every later push skipped until the scheduled refresh_all caught up.
+    // A push at or behind the checkpoint (out-of-order delivery, redelivery) is already applied —
+    // diffing checkpoint..after would walk the units backwards.
+    if (await isAncestor(cloneDir, after, checkpoint, { timeoutMs: GIT_TIMEOUT_MS })) {
+      res.status(200).json({ ignored: "already applied (checkpoint at or past this push)", base: checkpoint, head: after }); return;
     }
+    if (before !== checkpoint) baseNote = "diffed from last_refreshed_sha (push before differs)";
+    before = checkpoint;
+  } else if (!before || ZERO_SHA.test(before) || !SHA_RE.test(before)) {
+    // New branch / first push (all-zeros) or garbage, and no checkpoint to diff from.
+    res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return;
   }
 
   let diffOut: string;
@@ -190,12 +198,19 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   // module-level; the store aggregates these file changes onto the existing
   // code_unit granularity (longest-prefix ownership; dir-move = file-rename cluster
   // → module rename; new dir = candidate unit; add/modify/delete inside an existing
-  // module = no-op) BEFORE the deterministic refresh applies them.
+  // module = structural no-op that only moves its content_changed_at) BEFORE the
+  // deterministic refresh applies them.
+  const head_committed_at = await commitTime(cloneDir, after, { timeoutMs: GIT_TIMEOUT_MS });
   const result = await refresh(
     repo.name,
-    { base: before, head: after, changes, granularity: "file" },
+    { base: before, head: after, head_committed_at, changes, granularity: "file" },
     { type: "agent", id: "webhook:" + provider },
   );
+  if (result.skipped) {
+    // Another refresh moved the checkpoint between our read and the repo lock; the next push or
+    // refresh_all diffs from the new checkpoint.
+    res.status(200).json({ ignored: "checkpoint moved concurrently, will resync", base: before, head: after, checkpoint: result.skipped.checkpoint }); return;
+  }
   // note 가 undefined 면 JSON 직렬화에서 키 생략 — 구 응답과 동일.
   res.status(200).json({ tally: result.tally, base: before, head: after, changes: changes.length, note: baseNote });
 }
