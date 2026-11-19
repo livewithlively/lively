@@ -184,13 +184,14 @@ export async function reevaluateOpenFindings(m: ManagerRow): Promise<ReevalClose
   }
   if (m.kind === "mismatch") {
     //  dedup_key 는 탐지가 만든 «지금 분류 key -> 더 가까운 분류 key». 지금도 그 분류에 있고, 가장 가까운 다른 활성 분류가 같고,
-    //   거리차가 임계를 넘을 때만 성립한다.
+    //   거리차가 임계를 넘을 때만 성립한다. 키를 쪼개지 않고 탐지와 같은 식으로 다시 붙여 비교한다 — 분류 key 규칙이 도구 입력에서만
+    //   걸려(categories.ts KEY_RE) 다른 생성 경로의 key 에 '->' 가 없다고 보장할 수 없다.
     const rows = await q(itemsPool, `
       SELECT f.id,
              EXISTS (
                SELECT 1 FROM knowledge k
                  JOIN knowledge_category kc ON kc.name = k.name AND kc.state <> 'rejected'
-                 JOIN category c ON c.id = kc.category_id AND c.key = split_part(f.dedup_key, '->', 1)
+                 JOIN category c ON c.id = kc.category_id
                  CROSS JOIN LATERAL (
                    SELECT oc.key, (k.embedding_vector <=> oc.embedding_vector) AS dist FROM category oc
                     WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
@@ -198,7 +199,7 @@ export async function reevaluateOpenFindings(m: ManagerRow): Promise<ReevalClose
                 WHERE k.name = f.target_ref AND k.lifecycle = 'active'
                   AND k.embedding_vector IS NOT NULL AND c.embedding_vector IS NOT NULL
                   AND COALESCE(k.is_folder, false) = false AND k.name <> ('category-home-' || c.key)
-                  AND near.key = split_part(f.dedup_key, '->', 2)
+                  AND (c.key || '->' || near.key) = f.dedup_key
                   AND ((k.embedding_vector <=> c.embedding_vector) - near.dist) > $2) AS holds
         FROM org_manager_finding f
        WHERE f.manager_id = $1 AND f.state = 'open' AND f.target_kind = 'knowledge'`,

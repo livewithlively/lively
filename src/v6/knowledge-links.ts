@@ -46,15 +46,23 @@ export async function unlinkKnowledge(fromName: string, toName: string, relation
       `'${fromName}' 본문의 [[${toName}]] 에서 자동 생성된 연결이라 여기서 해제가 허용되지 않습니다 — 본문에서 [[${toName}]] 를 지우면 연결도 사라집니다(관계를 바꾸려면 knowledge_link 로 명시하세요).`);
   }
   //  관리기 링크는 지우지 않고 해제 시각만 찍는다 — 지우면 관리기가 같은 쌍을 다음 주기에 또 링크한다.
-  //   감사는 같은 트랜잭션이라 «해제됐는데 기록이 없다» 가 생기지 않는다. 되돌리기(link_knowledge 재호출)는 user 링크로 되살린다.
+  //   contradicts 는 방향을 서버가 정하고 경고에도 방향이 없으므로, 관리기 링크는 두 방향 다 찾는다(반대로 해제해 0건으로 끝나지 않게).
+  //   감사는 같은 트랜잭션이라 «해제됐는데 기록이 없다» 가 생기지 않는다. 되돌리기(link_knowledge 재호출)는 그 방향의 user 링크로 되살린다.
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
     const dismissed = await client.query(
       `UPDATE knowledge_link SET dismissed_at=COALESCE(dismissed_at, now())
-        WHERE from_name=$1 AND to_name=$2 AND relation=$3 AND origin LIKE '${MANAGER_LINK_ORIGIN_PREFIX}%'`, [fromName, toName, relation]);
-    if (!dismissed.rowCount) await client.query(`DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3`, [fromName, toName, relation]);
+        WHERE relation=$3 AND origin LIKE '${MANAGER_LINK_ORIGIN_PREFIX}%'
+          AND ((from_name=$1 AND to_name=$2) OR ($3='contradicts' AND from_name=$2 AND to_name=$1))
+        RETURNING from_name, to_name`, [fromName, toName, relation]);
+    await client.query(
+      `DELETE FROM knowledge_link WHERE from_name=$1 AND to_name=$2 AND relation=$3 AND origin NOT LIKE '${MANAGER_LINK_ORIGIN_PREFIX}%'`,
+      [fromName, toName, relation]);
     await auditKnowledge(fromName, "unlink_knowledge", { to_name: toName, relation }, null, ctx, client);
+    for (const r of dismissed.rows as Array<{ from_name: string; to_name: string }>) {
+      if (r.from_name !== fromName) await auditKnowledge(r.from_name, "unlink_knowledge", { to_name: r.to_name, relation }, null, ctx, client);
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -86,7 +94,8 @@ export async function linkManagerContradiction(
 }
 
 /** 관리기 모순 발견이 반려되면 그 쌍의 관리기 링크도 해제한다(호출자 트랜잭션 안). 사람이 건 링크(origin user)는 그대로 둔다 —
- *  반려는 관리기 판정에 대한 답이지 사람의 판단을 덮는 것이 아니다. 방향은 둘 다 본다(정규화 전에 만들어진 발견·링크). */
+ *  반려는 관리기 판정에 대한 답이지 사람의 판단을 덮는 것이 아니다. 방향은 둘 다 본다(정규화 전에 만들어진 발견·링크).
+ *  어느 관리기가 건 링크인지는 가리지 않는다 — 한 쌍의 contradicts 는 한 행(유니크)이고, 사람이 «모순 아님» 이라 답한 쌍이다. */
 export async function dismissManagerContradiction(client: PoolClient, x: string, y: string, ctx?: WriteCtx): Promise<number> {
   const r = await client.query(
     `UPDATE knowledge_link SET dismissed_at=now()
@@ -139,16 +148,19 @@ export interface ContradictsWarningRow { name: string; title: string | null; ori
 export async function contradictsWarning(name: string, viewer?: Viewer): Promise<ContradictsWarningRow[]> {
   const params: unknown[] = [name];
   const vis = await knowledgeVisWhere(viewer, params, "o");
+  //  같은 쌍이 두 방향으로 이어져 있으면 이웃 하나로 접는다 — 재확인이 필요 없는 쪽(recheck=false)을 남긴다.
   return await q(itemsPool,
-    `SELECT o.name, o.title, l.origin, l.updated_at AS linked_at,
-            (COALESCE(me.body_updated_at, me.updated_at) > l.updated_at
-             AND COALESCE(o.body_updated_at, o.updated_at) > l.updated_at) AS recheck
-       FROM knowledge_link l
-       JOIN knowledge me ON me.name = $1
-       JOIN knowledge o ON o.name = CASE WHEN l.from_name = $1 THEN l.to_name ELSE l.from_name END
-      WHERE (l.from_name = $1 OR l.to_name = $1) AND l.relation = 'contradicts' AND l.dismissed_at IS NULL
-        AND o.lifecycle = 'active' AND ${vis}
-      ORDER BY recheck, l.updated_at DESC`, params) as ContradictsWarningRow[];
+    `SELECT * FROM (
+       SELECT DISTINCT ON (o.name) o.name, o.title, l.origin, l.updated_at AS linked_at,
+              (COALESCE(me.body_updated_at, me.updated_at) > l.updated_at
+               AND COALESCE(o.body_updated_at, o.updated_at) > l.updated_at) AS recheck
+         FROM knowledge_link l
+         JOIN knowledge me ON me.name = $1
+         JOIN knowledge o ON o.name = CASE WHEN l.from_name = $1 THEN l.to_name ELSE l.from_name END
+        WHERE (l.from_name = $1 OR l.to_name = $1) AND l.relation = 'contradicts' AND l.dismissed_at IS NULL
+          AND o.lifecycle = 'active' AND ${vis}
+        ORDER BY o.name, recheck, l.updated_at DESC) w
+      ORDER BY recheck, linked_at DESC`, params) as ContradictsWarningRow[];
 }
 // ════════ #907 본문 [[위키링크]] → 자동 엣지(origin='wikilink'). **본문이 SoT**. ════════
 //  왜: [[…]] 를 본문에 적어도 엣지가 안 생겼다 — knowledge_link 를 따로 부르지 않으면 백링크·그래프뷰·recall

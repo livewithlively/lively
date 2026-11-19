@@ -1,6 +1,6 @@
 // 관리기 조치 화이트리스트(#1419 T9) — **leaf 모듈**. 의존 없음.
 //
-//  왜 따로 두나: 이 판정을 세 곳이 쓴다 — 실제 적용(run-manager.applyAction) · 목록 파생
+//  왜 따로 두나: 이 판정을 세 곳이 쓴다 — 실제 적용(run-manager.applyFinding) · 목록 파생
 //  (store/managers.listFindings 의 actionable) · 묶음 적용(store/managers.applyFindings).
 //  run-manager 에 두면 store/managers 가 run-manager 를 import 하고 run-manager 는 store/managers 를
 //  import 해 **순환**이 된다. ESM 이 견디긴 하지만 평가 순서에 따라 TDZ 로 터질 수 있는 구조라 만들지 않는다.

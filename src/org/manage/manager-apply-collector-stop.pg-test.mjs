@@ -6,13 +6,14 @@
 //
 //  사양 행:
 //   A1 분류 보정(move_category)이 지식당 분류 1행 유니크(knowledge_category_single_uq)에 걸리지 않고 적용된다 —
-//      결과 true · 행은 옮긴 분류 하나 · mapped_by='rule'
-//   A2 발견 이후 분류가 이미 바뀐 지식에는 적용하지 않는다(false · 행 그대로)
+//      결과 applied · 행은 옮긴 분류 하나 · mapped_by='rule'
+//   A2 발견 이후 분류가 이미 바뀐 지식에는 적용하지 않는다(stale · 행 그대로)
 //   D1 code_drift 후보가 mapping 으로 붙은 코드유닛을 센다(unit_count 1) · 코드유닛이 없는 도메인은 후보가 아니다
 //   C1 켜진 수집기를 끄면 그 수집기의 진행 중 실행이 canceled 로 닫힌다 · 다른 수집기의 실행은 그대로
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
-const { applyAction } = await import(`${DIST}/org/manage/run-manager.js`);
+const { applyFinding } = await import(`${DIST}/org/manage/run-manager.js`);
+const { upsertManager } = await import(`${DIST}/org/store/managers.js`);
 const { findCodeDriftCandidates } = await import(`${DIST}/org/manage/detectors.js`);
 const { upsertCollector } = await import(`${DIST}/org/store/collectors.js`);
 
@@ -32,7 +33,7 @@ const know = async (name, categoryId) => {
 const rowsOf = async (name) => (await q(`SELECT category_id, mapped_by, state FROM knowledge_category WHERE name=$1`, [name])).rows;
 
 //  정리 대상 — 중간에 예외가 나도 finally 가 지우도록 바깥에 둔다(CI 의 같은 DB 를 다른 pg-test 가 쓴다).
-const made = { runs: [], collectors: [], units: [], knowledge: [] };
+const made = { runs: [], collectors: [], units: [], knowledge: [], managers: [] };
 
 try {
   // ── A1 · A2 ──
@@ -40,16 +41,21 @@ try {
   const k1 = `${TAG}-k1`;
   await know(k1, a);
   made.knowledge.push(k1);
-  const moved = await applyAction({ op: "move_category", name: k1, from_category_id: a, to_category_id: b }, "pg-test");
+  const mgr = await upsertManager({ key: `${TAG}-mm`, kind: "mismatch" }, "pg-test", "test");
+  made.managers.push(mgr.id);
+  const finding = async (action) => Number((await q(
+    `INSERT INTO org_manager_finding(manager_id, kind, target_ref, dedup_key, summary, proposed_action)
+     VALUES($1, 'mismatch', $2, $3, 's', $4::jsonb) RETURNING id`, [mgr.id, action.name, `${action.from_category_id}->${action.to_category_id}`, JSON.stringify(action)])).rows[0].id);
+  const moved = await applyFinding(await finding({ op: "move_category", name: k1, from_category_id: a, to_category_id: b }), "pg-test");
   const r1 = await rowsOf(k1);
-  chk("A1 분류 보정이 적용된다", moved === true, `applyAction=${moved}`);
+  chk("A1 분류 보정이 적용된다", moved === "applied", `applyFinding=${moved}`);
   chk("A1 옮긴 분류 한 행만 남는다", r1.length === 1 && Number(r1[0].category_id) === b && r1[0].mapped_by === "rule",
     JSON.stringify(r1));
 
-  const stale = await applyAction({ op: "move_category", name: k1, from_category_id: a, to_category_id: c }, "pg-test");
+  const stale = await applyFinding(await finding({ op: "move_category", name: k1, from_category_id: a, to_category_id: c }), "pg-test");
   const r2 = await rowsOf(k1);
-  chk("A2 분류가 이미 바뀐 지식엔 적용하지 않는다", stale === false && r2.length === 1 && Number(r2[0].category_id) === b,
-    `applyAction=${stale} rows=${JSON.stringify(r2)}`);
+  chk("A2 분류가 이미 바뀐 지식엔 적용하지 않는다", stale === "stale" && r2.length === 1 && Number(r2[0].category_id) === b,
+    `applyFinding=${stale} rows=${JSON.stringify(r2)}`);
 
   // ── D1 ──
   const withCode = await cat("dw", "이 도메인은 이렇게 동작해야 한다");
@@ -93,6 +99,7 @@ try {
   await q(`DELETE FROM mapping WHERE target_kind='code_unit' AND target_id = ANY($1::int[])`, [made.units]).catch(leftover);
   await q(`DELETE FROM code_unit WHERE id = ANY($1::int[])`, [made.units]).catch(leftover);
   await q(`DELETE FROM knowledge WHERE name = ANY($1::text[])`, [made.knowledge]).catch(leftover);
+  await q(`DELETE FROM org_manager WHERE id = ANY($1::bigint[])`, [made.managers]).catch(leftover);
   await q(`DELETE FROM category WHERE key LIKE $1`, [`${TAG}-%`]).catch(leftover);
 }
 

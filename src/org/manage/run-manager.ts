@@ -7,7 +7,7 @@
 import { itemsPool } from "../../db/client.js";
 import type { PoolClient } from "pg";
 import {
-  getManager, upsertFindingRow, recordManagerRun, needsLlm, MANAGER_KIND_LABEL, lockOpenFinding, closeFindingIn,
+  getManager, upsertFindingRow, recordManagerRun, needsLlm, MANAGER_KIND_LABEL, lockOpenFinding, closeFindingIn, resolveFinding,
   type ManagerRow, type ApplyFindingResult,
 } from "../store/managers.js";
 import {
@@ -115,7 +115,7 @@ export async function runManager(
         const { result: r, id } = await upsertFindingRow(m.id, m.kind, f);
         if (r === "new") created++;
         else if (r === "again") repeated++;
-        // auto — 사람 확인 없이 즉시 적용. 되돌릴 수 있는 조치만 허용한다(applyAction 이 가른다). 반려된 발견엔 걸지 않는다.
+        // auto — 사람 확인 없이 즉시 적용. 되돌릴 수 있는 조치만 허용한다(isApplicableAction 이 가른다). 반려된 발견엔 걸지 않는다.
         if (m.action_level === "auto" && f.proposed_action && id && r !== "skipped") {
           if (await applyFinding(id, `manager:${m.key}`) === "applied") applied++;
         }
@@ -125,10 +125,8 @@ export async function runManager(
       if ((await getRuntimeConfig()).ontology_loops.l2_autoresolve) {
         resolved = 0;
         for (const c of await reevaluateOpenFindings(m)) {
-          const r = await itemsPool.query(
-            `UPDATE org_manager_finding SET state='resolved', resolved_at=now(), resolved_by=$2, resolution=$3
-              WHERE id=$1 AND state='open'`, [c.id, `manager:${m.key}`, c.resolution]);
-          resolved += r.rowCount ?? 0;
+          //  onlyOpen — 재판정 도중 사람이 반려한 발견을 덮지 않는다(덮으면 다음 탐지가 다시 연다).
+          if (await resolveFinding(c.id, "resolved", `manager:${m.key}`, c.resolution, { onlyOpen: true, source: "system" })) resolved++;
         }
       }
       const summary = { found: findings.length, created, repeated, applied, ...(resolved !== undefined ? { resolved } : {}) };
@@ -217,30 +215,14 @@ export async function runManager(
 }
 
 /**
- * 조치 적용 — **되돌릴 수 있는 것만**.
+ * 조치 적용 — **되돌릴 수 있는 것만**. 발견에 딸린 적용은 applyFinding(발견 잠금·전환까지 한 트랜잭션)이 이 함수를 부른다.
  *
  *  지금 적용하는 것은 분류 이동(move_category) 하나다. 지식당 분류는 한 행이라(knowledge_category_single_uq)
  *  옛 행을 rejected 로 남겨 둔 채 새 행을 넣을 수 없다 — 그렇게 하면 23505 로 롤백돼 조치가 한 번도 적용되지 않는다.
  *  linkKnowledgeCategory 와 같은 교체(다른 분류 DELETE 뒤 INSERT)를 쓰고, 되돌릴 근거는 감사 행(link_category,
  *  before=옛 분류)에 남긴다. 발견을 만든 뒤 분류가 이미 바뀌었으면(from 불일치·반려된 분류) 또는 옮길 분류가 활성이 아니면
  *  낡은 조치라 적용하지 않는다. 본문 수정·삭제 같은 비가역 조치는 자동으로 하지 않는다(isApplicableAction 화이트리스트).
- *  발견에 딸린 적용은 applyFinding 으로 한다(발견 잠금·전환까지 한 트랜잭션).
  */
-export async function applyAction(action: unknown, actor: string): Promise<boolean> {
-  if (!isApplicableAction(action)) return false;
-  const client = await itemsPool.connect();
-  try {
-    await client.query("BEGIN");
-    const r = await applyActionIn(client, action, actor);
-    await client.query(r === "applied" ? "COMMIT" : "ROLLBACK");
-    return r === "applied";
-  } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
-    logger.warn({ err: (e as Error)?.message }, "관리기 조치 적용 실패");
-    return false;
-  } finally { client.release(); }
-}
-
 /** 호출자 트랜잭션 안의 적용. applied=옮김 · stale=발견 이후 상황이 바뀌어 옮기지 않음 · skipped=기계가 적용할 조치가 아님. 오류는 던진다. */
 async function applyActionIn(client: PoolClient, action: unknown, actor: string): Promise<"applied" | "stale" | "skipped"> {
   if (!isApplicableAction(action)) return "skipped";
@@ -272,7 +254,7 @@ async function applyActionIn(client: PoolClient, action: unknown, actor: string)
  *  종전엔 적용과 accepted 전환이 따로 커밋돼, 그 사이 사람이 반려한 발견이 accepted 로 덮였다(다음 탐지가 다시 연다).
  *  applied → accepted · stale(발견 이후 분류가 바뀜) → resolved「분류 변경으로 해소」 · 열려 있지 않음·적용할 조치 없음 → skipped(그대로).
  */
-export async function applyFinding(id: number, actor: string): Promise<ApplyFindingResult> {
+export async function applyFinding(id: number, actor: string, resolution?: string | null): Promise<ApplyFindingResult> {
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
@@ -281,7 +263,7 @@ export async function applyFinding(id: number, actor: string): Promise<ApplyFind
     const r = await applyActionIn(client, f.proposed_action, actor);
     if (r === "skipped") { await client.query("ROLLBACK"); return "skipped"; }
     await closeFindingIn(client, id, r === "applied" ? "accepted" : "resolved", actor,
-      r === "applied" ? "제안된 조치 적용" : "분류 변경으로 해소");
+      r === "applied" ? (resolution || "제안된 조치 적용") : "분류 변경으로 해소");
     await client.query("COMMIT");
     return r;
   } catch (e) {

@@ -18,6 +18,14 @@
 //   C10 반대 방향 사람 링크가 있으면 관리기 링크를 만들지 않는다
 //   C11 반려와 재보고 경합 — 어느 쪽이 먼저 잠그든 발견은 rejected, 살아 있는 관리기 링크 0
 //   C12 recheck — 링크 뒤 한쪽만 고치면 false, 양쪽 다 고치면 true
+//   C13 같은 쌍이 두 방향으로 이어져 있어도 경고의 이웃은 하나
+//   C14 관리기 링크를 반대 방향으로 해제해도 해제된다(경고엔 방향이 없다)
+//   C15 반려의 링크 해제 감사는 호출 채널을 남긴다
+//   X1  보고자가 볼 수 없는 지식과의 모순은 발견만 저장하고 링크를 만들지 않는다 · 응답에 링크 여부가 없다(없는 이름과 같은 모양)
+//   B5  INSERT 가 body_updated_at 을 실으면 그 값을 둔다(가져오기·되살리기)
+//   P5  단건 승인(apply)이 적용 도중 반려되면 accepted 로 덮지 않는다 · 적용되면 사람이 쓴 처리 메모가 남는다
+//   A5  분류 key 에 '->' 가 있어도 mismatch 재판정이 성립을 바로 본다
+//   R2  발견 뒤 본문을 고친 지식은 review_hint 에서 빠진다(재판정이 없는 code_drift 포함)
 //   S1  대체된 이웃은 links.superseded 에(나가는·들어오는, 후속 포함) — outgoing·incoming 에서는 빠진다
 //   V1  안 보이는 이웃은 경고·대체 목록에서 빠지고, 안 보이는 후속은 null(특권 조회는 그대로)
 //   P1  일괄 적용 — 분류를 옮기고 accepted
@@ -140,6 +148,10 @@ try {
   chk("B4 INSERT … ON CONFLICT — 같은 본문이면 그대로, 바뀌면 오른다",
     b4.ok && b5.ok && b4.v?.getTime() === b3.v?.getTime() && b5.v?.getTime() > b4.v?.getTime(), show({ b3, b4, b5 }));
 
+  const B5 = k("b5");
+  await q(`INSERT INTO knowledge(name, title, body_md, body_updated_at) VALUES($1,'t','b', '2020-01-02T00:00:00Z')`, [B5]).catch(() => undefined);
+  const b6 = await attempt(async () => (await q(`SELECT body_updated_at AS t FROM knowledge WHERE name=$1`, [B5]))[0]?.t);
+  chk("B5 INSERT 가 실은 body_updated_at 은 그대로", b6.ok && b6.v?.toISOString?.() === "2020-01-02T00:00:00.000Z", show(b6));
   });
 
   await section("C", async () => {
@@ -222,24 +234,29 @@ try {
   const lmn = await linkRows(KM, KN);
   chk("C10 반대 방향 사람 링크가 있으면 관리기 링크를 만들지 않는다", lmn.length === 1 && lmn[0].from_name === mn.b && lmn[0].origin === "user", show(lmn));
 
-  // C11 반려와 재보고 경합 — 발견 행을 다른 연결이 쥔 동안 둘을 띄우고 놓는다
-  for (let i = 0; i < 3; i++) {
-    const [X, Y] = [k(`rx${i}`), k(`ry${i}`)];
+  // C11 반려와 재보고 경합 — 발견 행을 다른 연결이 쥔 동안 하나를 먼저 띄워 대기시키고, 다른 하나를 띄워 둘 다 대기한 뒤 놓는다.
+  //  행 잠금 대기열은 먼저 온 쪽이 먼저 받으므로 두 순서를 각각 강제할 수 있다.
+  for (const first of ["reject", "report"]) {
+    const [X, Y] = [k(`rx${first}`), k(`ry${first}`)];
     await mk(X); await mk(Y);
     await rep(MC.key, X, Y);
     const [f] = await findingRows(MC.id, X, Y);
     const hold = await otherConn();
     await hold.query("BEGIN");
     await hold.query(`SELECT id FROM org_manager_finding WHERE id=$1 FOR UPDATE`, [f.id]);
-    const a = attempt(() => mstore.resolveFinding(Number(f.id), "rejected", ME, null));
-    const b = rep(MC.key, Y, X);
-    await waitingOnLock(1);
+    const doReject = () => attempt(() => mstore.resolveFinding(Number(f.id), "rejected", ME, null));
+    const doReport = () => rep(MC.key, Y, X);
+    const p1 = first === "reject" ? doReject() : doReport();
+    const w1 = await waitingOnLock(1);
+    const p2 = first === "reject" ? doReport() : doReject();
+    const w2 = await waitingOnLock(2);
     await hold.query("COMMIT"); await hold.end();
-    const [ra, rb] = await Promise.all([a, b]);
+    const [r1x, r2x] = await Promise.all([p1, p2]);
     const fs = await findingRows(MC.id, X, Y);
     const alive = (await linkRows(X, Y)).filter((r) => r.dismissed_at === null && String(r.origin).startsWith("manager:"));
-    chk(`C11 경합 ${i + 1} — 발견 rejected · 살아 있는 관리기 링크 0`, ra.ok && rb.ok && fs.length === 1 && fs[0].state === "rejected" && alive.length === 0,
-      show({ ra: ra.ok || ra, rb: rb.ok ? rb.v : rb, fs, alive }));
+    chk(`C11 경합(${first} 먼저) — 발견 rejected · 살아 있는 관리기 링크 0`,
+      w1 && w2 && r1x.ok && r2x.ok && fs.length === 1 && fs[0].state === "rejected" && alive.length === 0,
+      show({ w1, w2, r1x: r1x.ok || r1x, r2x: r2x.ok || r2x, fs, alive }));
   }
 
   // C12 recheck
@@ -254,6 +271,32 @@ try {
   chk("C12 한쪽만 고치면 recheck=false · 양쪽 다 고치면 true",
     ge1.ok && ge2.ok && ge1.v.contradicts_warning?.with?.[0]?.recheck === false && ge2.v.contradicts_warning?.with?.[0]?.recheck === true,
     show({ ge1: ge1.ok ? ge1.v.contradicts_warning : ge1, ge2: ge2.ok ? ge2.v.contradicts_warning : ge2 }));
+
+  // C13 양방향 링크
+  const [KQ, KR] = [k("cq"), k("cr")];
+  await mk(KQ); await mk(KR);
+  await kst.linkKnowledge(KQ, KR, "contradicts", { actor: ME, source: "web" });
+  await kst.linkKnowledge(KR, KQ, "contradicts", { actor: ME, source: "web" });
+  const gq = await kget(KQ);
+  chk("C13 양방향이어도 경고의 이웃은 하나", gq.ok && gq.v.contradicts_warning?.with?.length === 1, show(gq.ok ? gq.v.contradicts_warning : gq));
+
+  // C14 반대 방향 해제
+  const [KS, KT] = [k("cs"), k("ct")];
+  await mk(KS); await mk(KT);
+  const st = await pairOf(KS, KT);
+  await rep(MC.key, KS, KT);
+  const unr = await attempt(() => linkCap.handler({ name: st.b, to: st.a, relation: "contradicts", unlink: true }, user(ME), web(ME)));
+  const lst = await linkRows(KS, KT);
+  chk("C14 반대 방향으로 해제해도 관리기 링크가 해제된다", unr.ok && lst.length === 1 && lst[0].dismissed_at !== null, show({ unr, lst }));
+
+  // C15 반려 감사의 채널
+  const [KU, KV] = [k("cu"), k("cv")];
+  await mk(KU); await mk(KV);
+  await rep(MC.key, KU, KV);
+  const [fuv] = await findingRows(MC.id, KU, KV);
+  await resolveCap.handler({ id: Number(fuv.id), state: "rejected" }, user(ME), { source: "mcp", actor: ME, viewer: ME });
+  const au = await q(`SELECT source FROM org_content_audit WHERE entity='knowledge' AND op='unlink_knowledge' AND entity_key = ANY($1::text[]) ORDER BY id DESC LIMIT 1`, [[KU, KV]]);
+  chk("C15 반려의 링크 해제 감사는 호출 채널(mcp)", au[0]?.source === "mcp", show(au));
 
   });
 
@@ -275,14 +318,22 @@ try {
   chk("S1 knowledge_get 응답의 links.superseded", gs1.ok && gs1.v.knowledge.links?.superseded?.length === 2, show(gs1.ok ? gs1.v.knowledge.links : gs1));
 
   // ── V 공개범위 — 지식 축을 켜고 members(대상 없음)로 잠근다 ──
-  const [W1, W2, S5] = [k("w1"), k("w2"), k("s5")];
-  for (const n of [W1, W2, S5]) await mk(n);
+  const [W1, W2, S5, W3] = [k("w1"), k("w2"), k("s5"), k("w3")];
+  for (const n of [W1, W2, S5, W3]) await mk(n);
   await kst.linkKnowledge(W1, W2, "contradicts", { actor: ME, source: "web" });
   await kst.linkKnowledge(S1, S5, "related", { actor: ME, source: "web" });
   await kst.setKnowledgeLifecycle(S5, "superseded", { actor: ME, source: "web" }, { supersededBy: S3 });
-  await q(`UPDATE knowledge SET visibility='members' WHERE name = ANY($1::text[])`, [[W2, S3, S5]]);
+  await q(`UPDATE knowledge SET visibility='members' WHERE name = ANY($1::text[])`, [[W2, S3, S5, W3]]);
   await setVisAxes({ knowledge: true });
   invalidateVisibilityCache();
+  const MX = await mstore.upsertManager({ key: `${TAG}-mx`, kind: "contradiction", enabled: true }, ME, "web");
+  const X1h = await attempt(() => report.handler({ manager_key: MX.key, target_ref: W1, dedup_key: W3, severity: "warn", summary: "s" }, user(OTHER), web(OTHER)));
+  const X1n = await attempt(() => report.handler({ manager_key: MX.key, target_ref: W1, dedup_key: k("없음"), severity: "warn", summary: "s" }, user(OTHER), web(OTHER)));
+  const xLinks = await q(`SELECT 1 FROM knowledge_link WHERE origin=$1`, [`manager:${MX.key}`]);
+  chk("X1 볼 수 없는 지식과의 모순은 링크를 만들지 않는다 · 발견은 저장", X1h.ok && xLinks.length === 0 && (await findingRows(MX.id, W1, W3)).length === 1,
+    show({ X1h, xLinks }));
+  chk("X1 응답은 안 보이는 이름과 없는 이름이 같은 모양(링크 여부 없음)",
+    X1h.ok && X1n.ok && show(Object.keys(X1h.v).sort()) === show(Object.keys(X1n.v).sort()) && !("linked" in X1h.v), show({ X1h, X1n }));
   const gw = await kget(W1, OTHER);
   chk("V1 안 보이는 모순 이웃은 경고에서 빠진다", gw.ok && !("contradicts_warning" in gw.v), show(gw.ok ? gw.v.contradicts_warning : gw));
   const vl = await kst.listKnowledgeLinks(S1, OTHER);
@@ -323,6 +374,22 @@ try {
   const f3 = await findingById(F3), f4 = await findingById(F4);
   chk("P3 분류가 이미 바뀌었으면 옮기지 않고 「분류 변경으로 해소」", f3.state === "resolved" && f3.resolution === "분류 변경으로 해소" && show(await catOf(P3n)) === show([cc]), show({ f3, c: await catOf(P3n) }));
   chk("P4 옮길 분류가 활성이 아니면 같다", f4.state === "resolved" && show(await catOf(P4n)) === show([ca]), show({ f4, c: await catOf(P4n) }));
+  const [P5n, P6n] = [k("p5"), k("p6")];
+  await mkIn(P5n, CA); await mkIn(P6n, CA);
+  const F5 = await insFinding(MP.id, "mismatch", P5n, `${CA}->${CB}`, "open", mv(P5n, ca, cb));
+  const hold5 = await otherConn();
+  await hold5.query("BEGIN");
+  await hold5.query(`UPDATE org_manager_finding SET state='rejected', resolved_at=now(), resolved_by='사람' WHERE id=$1`, [F5]);
+  const ap5p = attempt(() => resolveCap.handler({ id: F5, state: "accepted", apply: true }, user(ME), web(ME)));
+  await waitingOnLock(1);
+  await hold5.query("COMMIT"); await hold5.end();
+  const ap5 = await ap5p;
+  chk("P5 단건 승인이 적용 도중 반려되면 accepted 로 덮지 않는다", ap5.ok && (await findingById(F5)).state === "rejected" && show(await catOf(P5n)) === show([ca]),
+    show({ ap5, f: await findingById(F5), c: await catOf(P5n) }));
+  const F6 = await insFinding(MP.id, "mismatch", P6n, `${CA}->${CB}`, "open", mv(P6n, ca, cb));
+  const ap6 = await attempt(() => resolveCap.handler({ id: F6, state: "accepted", apply: true, resolution: "사람 메모" }, user(ME), web(ME)));
+  const f6 = await findingById(F6);
+  chk("P5 적용되면 사람이 쓴 처리 메모가 남는다", ap6.ok && ap6.v.applied === true && f6.state === "accepted" && f6.resolution === "사람 메모", show({ ap6, f6 }));
 
   // ── M · A3 mismatch — 벡터를 직접 둔다 ──
   await q(`UPDATE category SET embedding_vector=$2::vector WHERE id=$1`, [ca, vec(1, 0, 0)]);
@@ -400,6 +467,32 @@ try {
   await run(MMm);
   const mmAfter = await findingById(mmOpen?.id);
   chk("A3 분류를 옮기면 「분류 변경으로 해소」", mmOpen?.state === "open" && mmAfter?.state === "resolved" && mmAfter?.resolution === "분류 변경으로 해소", show({ mmOpen, mmAfter }));
+
+  // A5 '->' 가 든 분류 key — 탐지가 연 발견을 재판정이 그대로 둔다
+  const CARROW = `${TAG}-x->y`;
+  const carrow = Number((await q(`INSERT INTO category(key, name, embedding_vector) VALUES($1,$1,$2::vector) RETURNING id`, [CARROW, vec(1, 0, 0)]))[0].id);
+  const MA = k("ma");
+  await mk(MA);
+  await q(`DELETE FROM knowledge_category WHERE name=$1`, [MA]);
+  await q(`INSERT INTO knowledge_category(name, category_id, mapped_by, state) VALUES($1,$2,'manual','confirmed')`, [MA, carrow]);
+  await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [MA, vec(0.1, 1, 0)]);
+  const MAm = await mstore.upsertManager({ key: `${TAG}-ma`, kind: "mismatch", enabled: true, match_categories: [CARROW] }, ME, "web");
+  const runA5 = await run(MAm);
+  const fa5 = (await q(`SELECT id, state, dedup_key FROM org_manager_finding WHERE manager_id=$1 AND target_ref=$2`, [MAm.id, MA]))[0];
+  chk("A5 '->' 가 든 분류 key 의 발견이 재판정에 닫히지 않는다", runA5.ok && fa5?.state === "open" && fa5?.dedup_key === `${CARROW}->${CB}`, show({ runA5, fa5 }));
+
+  // R2 code_drift 발견 — 재판정이 없어도 본문을 고치면 힌트가 빠진다
+  const RC = k("rc");
+  await mk(RC);
+  await sleep(20);
+  const FRC = await insFinding(MO.id, "code_drift", RC, "", "open");
+  const gr2a = await kget(RC);
+  await sleep(20);
+  await mk(RC, { body_md: "코드에 맞춰 고침" });
+  const gr2b = await kget(RC);
+  chk("R2 고친 지식은 review_hint 에서 빠진다(발견은 열린 채)",
+    gr2a.ok && gr2a.v.review_hint?.[0]?.finding_id === FRC && gr2b.ok && !("review_hint" in gr2b.v) && (await findingById(FRC)).state === "open",
+    show({ a: gr2a.ok ? gr2a.v.review_hint : gr2a, b: gr2b.ok ? gr2b.v.review_hint : gr2b }));
   });
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e);

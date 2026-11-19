@@ -107,7 +107,8 @@ export async function upsertFindingRow(
  *   어느 방향이든 반려된 행이 있으면 저장도 링크도 하지 않는다(사람의 «아니다» 가 최신이다).
  */
 export async function reportContradiction(
-  m: { id: number; key: string; kind: string }, f: Finding, ctx?: { actor?: string | null; source?: string },
+  m: { id: number; key: string; kind: string }, f: Finding,
+  ctx?: { actor?: string | null; source?: string; allowLink?: boolean },
 ): Promise<{ result: "new" | "again" | "skipped"; linked: boolean }> {
   const client = await itemsPool.connect();
   try {
@@ -122,7 +123,8 @@ export async function reportContradiction(
     if (prior.some((p) => p.state === "rejected")) { await client.query("COMMIT"); return { result: "skipped", linked: false }; }
     const key = prior[0] ?? { target_ref: pair.a, dedup_key: pair.b };
     const { result } = await upsertFindingRow(m.id, m.kind, { ...f, target_ref: key.target_ref, dedup_key: key.dedup_key }, client);
-    const linked = result === "skipped" ? false
+    //  allowLink=false — 보고한 사람이 두 지식을 다 볼 수 없다. 발견은 저장하되 링크는 만들지 않는다(링크는 양 끝 이름을 남의 화면에 싣는다).
+    const linked = result === "skipped" || ctx?.allowLink === false ? false
       : await linkManagerContradiction(client, pair.a, pair.b, m.key, { actor: ctx?.actor ?? `manager:${m.key}`, source: ctx?.source ?? "mcp" });
     await client.query("COMMIT");
     return { result, linked };
@@ -144,7 +146,7 @@ export interface FindingRow {
   action_level?: string;
   /**
    * 파생(#1419 T9) — 기계가 적용할 수 있는 조치안이 붙어 있나.
-   *  판정은 applyAction 과 **같은 화이트리스트**(isApplicableAction)를 쓴다 — 서로 다르면
+   *  판정은 applyFinding 과 **같은 화이트리스트**(isApplicableAction)를 쓴다 — 서로 다르면
    *  '적용' 버튼이 있는데 눌러도 아무 일이 없는 상태가 된다(사용자는 실패했다고 인지하지 못한다).
    */
   actionable?: boolean;
@@ -172,7 +174,7 @@ export async function listFindings(opts: {
      WHERE ${w.join(" AND ")}
      ORDER BY CASE f.severity WHEN 'high' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, f.last_seen_at DESC
      LIMIT ${limP} OFFSET ${offP}`, params);
-  // 적용 가능 여부는 applyAction 과 **같은 판정**으로 파생한다(#1419 T9) — 화면이 자기 규칙을 따로 갖지 않게.
+  // 적용 가능 여부는 applyFinding 과 **같은 판정**으로 파생한다(#1419 T9) — 화면이 자기 규칙을 따로 갖지 않게.
   return (rows as FindingRow[]).map((f) => ({ ...f, actionable: isApplicableAction(f.proposed_action) }));
 }
 
@@ -210,7 +212,7 @@ export async function applyFindings(
  */
 export async function resolveFinding(
   id: number, state: "accepted" | "rejected" | "resolved", actor?: string, resolution?: string | null,
-  opts: { onlyOpen?: boolean } = {},
+  opts: { onlyOpen?: boolean; source?: string } = {},
 ): Promise<FindingRow | null> {
   const client = await itemsPool.connect();
   try {
@@ -220,7 +222,7 @@ export async function resolveFinding(
         WHERE id=$1${opts.onlyOpen ? " AND state='open'" : ""} RETURNING *`, [id, state, actor ?? null, resolution ?? null]);
     const row = (r.rows[0] as FindingRow) ?? null;
     if (row && state === "rejected" && row.kind === "contradiction" && row.target_kind === "knowledge" && row.dedup_key) {
-      await dismissManagerContradiction(client, row.target_ref, row.dedup_key, { actor: actor ?? null, source: "web" });
+      await dismissManagerContradiction(client, row.target_ref, row.dedup_key, { actor: actor ?? null, source: opts.source ?? "web" });
     }
     await client.query("COMMIT");
     return row;
@@ -249,13 +251,16 @@ export async function closeFindingIn(
 /**
  * 지식 하나에 열려 있는 «다시 읽어 보라» 발견(outdated · code_drift) — knowledge_get 응답의 review_hint.
  *  종류·id·처음 잡힌 시각만 싣는다. 요약·근거는 LLM 이 쓴 글이라 다른 지식의 이름이 들어갈 수 있고 그 공개범위를 거를 수 없다.
- *  읽은 쪽이 본문을 고치면 재판정(ontology_loops.l2_autoresolve)이 발견을 닫는다.
+ *  발견이 마지막으로 잡힌(last_seen_at) 뒤 본문이 바뀐 지식은 뺀다 — 발견은 재판정 스위치가 꺼져 있거나 재판정이 없는 종류
+ *   (code_drift)면 열린 채 남으므로, 고친 뒤에도 힌트가 매 세션 뜨지 않게. 다음 탐지가 또 잡으면 last_seen_at 이 올라 다시 뜬다.
  */
 export async function openReviewHints(name: string): Promise<Array<{ kind: string; finding_id: number; detected_at: string }>> {
   const rows = await q(itemsPool,
-    `SELECT kind, id, first_seen_at FROM org_manager_finding
-      WHERE target_kind='knowledge' AND target_ref=$1 AND state='open' AND kind IN ('outdated','code_drift')
-      ORDER BY first_seen_at LIMIT 5`, [name]);
+    `SELECT f.kind, f.id, f.first_seen_at FROM org_manager_finding f
+       JOIN knowledge k ON k.name = f.target_ref
+      WHERE f.target_kind='knowledge' AND f.target_ref=$1 AND f.state='open' AND f.kind IN ('outdated','code_drift')
+        AND COALESCE(k.body_updated_at, k.updated_at) <= f.last_seen_at
+      ORDER BY f.first_seen_at LIMIT 5`, [name]);
   return rows.map((r) => ({ kind: String(r.kind), finding_id: Number(r.id), detected_at: String(new Date(String(r.first_seen_at)).toISOString()) }));
 }
 
