@@ -5,6 +5,7 @@
 //  둘 다 아래에서 **재수출**한다 — 이 모듈이 지식 표면의 배럴이라 기존 호출부(40+)는 무수정이다.
 import { itemsPool } from "../db/client.js";
 import { q, one, withTx, type Db } from "../db/client.js";
+import { HttpError } from "../http-error.js";
 import { isJsonObject, jsonEqual, mergeFieldsPatch } from "./knowledge-fields.js";
 import { restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
@@ -451,9 +452,16 @@ export async function upsertKnowledge(
   const catKeys = Array.isArray(input.category) ? input.category : (input.category != null ? [input.category] : []);
   const catIds: number[] = [];
   for (const key of catKeys) {
-    const cat = await one(db, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
+    const cat = await one(db, `SELECT id, state FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]) as
+      { id: number; state: string } | undefined;
     if (!cat) throw new Error(`category '${key}' 없음 — category_list 로 확인하세요`);
-    catIds.push((cat as { id: number }).id);
+    //  비활성 분류는 새 지식을 받지 않는다 — 비활성 전환은 «활성 지식이 하나도 없다» 를 확인하고 하는데(assertDeprecatable),
+    //   저장이 비활성 분류를 받으면 그 약속이 뒤에서 깨진다. 이미 그 분류에 든 지식을 같은 분류로 다시 저장하는 것은 옮김이 아니라 받는다.
+    if (cat.state !== "active" && !(before && await one(db,
+      `SELECT 1 FROM knowledge_category WHERE name=$1 AND category_id=$2 AND state<>'rejected'`, [name, cat.id]))) {
+      throw new HttpError(400, `category '${key}' 는 비활성(${cat.state}) 분류라 지식을 새로 받지 않습니다 — category_list 에서 활성 분류를 골라 저장하세요.`);
+    }
+    catIds.push(cat.id);
   }
   // 신규 지식: category(단일) + type(page-type) 둘 다 필수(#290). 기존 편집은 보존(생략 허용).
   if (!before && !catIds.length) {
@@ -764,6 +772,12 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
 //   없어 두 곳이 동시에 반쪽이 된다 — 이력 화면은 분류 변경을 '분류 지정'이라고만 쓸 수 있고,
 //   Cmd+Z(#702)는 아예 이 op 을 되돌릴 수 없다(그 한계 때문에 undo 행렬에서 제외돼 있었다).
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx, db: Db = itemsPool): Promise<void> {
+  //  교체(DELETE 뒤 INSERT)와 감사를 한 트랜잭션으로 한다. 따로 커밋하면 INSERT 가 실패할 때(없는 분류 · 경합의 23505) 옛 분류만
+  //   지워진 채 남아 지식이 미분류가 된다. client 를 받았으면 호출자의 트랜잭션 안이다.
+  if (db === itemsPool) return withTx((c) => linkKnowledgeCategory(name, categoryId, state, ctx, c));
+  //  같은 지식의 교체끼리는 지식 행을 잠가 줄을 세운다 — 잠그지 않으면 나중 교체의 DELETE 가 먼저 교체의 커밋 전 행을 못 보고
+  //   INSERT 가 단일 분류 유니크(knowledge_category_single_uq)에 걸린다. FOR NO KEY UPDATE 는 매핑 FK 의 KEY SHARE 와 부딪치지 않는다.
+  await db.query(`SELECT 1 FROM knowledge WHERE name=$1 FOR NO KEY UPDATE`, [name]);
   // single_uq 로 name 당 1행이지만 ORDER BY 로 결정적으로 고른다(이행기 다중 잔존 대비 — 비결정 스냅샷은 되돌리기를 복불복으로 만든다).
   const prev = await one(db,
     `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1`,
