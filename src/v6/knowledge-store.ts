@@ -17,6 +17,8 @@ import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./
 // 공용 프리미티브(#1313 R21) — 검색·링크와 함께 쓰는 슬러그·감사·가시성 술어·아이콘 표현식.
 import { knowledgeVisWhere, slugify, auditKnowledge, K_ICON_EXPR, forgetClassifierSeen } from "./knowledge-common.js";
 import { listKnowledgeLinks, materializeWikiLinksBestEffort, type WikiLinkResult } from "./knowledge-links.js";
+import { withDerivedTx } from "./derived-visibility.js";
+import { HttpError } from "../http-error.js";
 
 // PUBLIC_VIEWER 는 Viewer 개념이라 visibility.ts 로 옮겼다(#1291) — 여기 두면 상수 하나 때문에
 //  터미널·커넥터 같은 hot 모듈이 지식 스토어 전체를 끌어온다. 기존 import 경로는 아래 재export 로 유지.
@@ -41,8 +43,9 @@ export type { KnowledgeLinkRow, WikiLinkResult } from "./knowledge-links.js";
 //  있는 키만 INSERT 하므로, 여기 없으면 삭제된 members 지식이 복원될 때 DDL 기본값(open)으로 풀린다
 //  (grant 테이블은 CASCADE 로 이미 비어 있어 되돌릴 근거도 함께 사라진다).
 // searchable(#5169 검색 제외) — 같은 이유로 여기 둔다: 복원이 «검색 제외» 를 되살려야 하고, 목록·상세가 표시를 그린다.
+// superseded_by — 같은 이유: 복원이 후속 포인터를 되살려야 한다(끊긴 포인터 정리는 restoreKnowledge).
 const K_COLS =
-  `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
+  `name, title, body_md, injection, provenance, lifecycle, supersedes, superseded_by, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
    as_of, parent_name, summary, author, source_ref, sort, is_wiki, searchable, type, is_folder, visibility, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
@@ -135,7 +138,7 @@ export async function listKnowledge(f: KnowledgeFilter = {}, viewer?: Viewer): P
   // icon/cover(#657, props_ui) — 목록 행 아이콘·갤러리 카드 커버용 얕은 노출(전체 props_ui 는 상세 전용 유지).
   // category_key/name(#783) — 목록 행에 소속 도메인 표시(검토 큐가 도메인별로 묶고, 에이전트도 목록에서 분류를 본다).
   //  단일 카테고리 정책(#290)이라 LATERAL LIMIT 1 — 행 증식 없음(DISTINCT 와도 무해).
-  return q(itemsPool,
+  return maskHiddenPointers(await q(itemsPool,
     `SELECT DISTINCT ${f.light ? K_SEL_LIGHT : K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
             cat.key AS category_key, cat.name AS category_name
      FROM knowledge k ${join}
@@ -143,7 +146,29 @@ export async function listKnowledge(f: KnowledgeFilter = {}, viewer?: Viewer): P
        SELECT cc.key, cc.name FROM knowledge_category kc2 JOIN category cc ON cc.id=kc2.category_id
         WHERE kc2.name=k.name AND kc2.state<>'rejected' ORDER BY kc2.category_id LIMIT 1
      ) cat ON true
-     ${where} AND ${vis} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params);
+     ${where} AND ${vis} ORDER BY ${order} LIMIT ${limP} OFFSET ${offP}`, params) as KnowledgeRow[], viewer);
+}
+
+// 대체·후속 포인터(supersedes·superseded_by)는 다른 지식의 이름을 담는다. 행 단위 공개범위(knowledgeVisWhere)는 칸 안의 이름을
+//  거르지 않으므로, 보는 사람에게 안 보이는 지식을 가리키면 응답에서 비운다. 없는 지식을 가리키는 이름은 그대로 둔다 — 그래서
+//  null 과 이름으로 «없음» 과 «숨음» 이 갈리지만, 이름의 존재 여부는 knowledge_save 의 이름 충돌로 이미 알 수 있어 새로 새는 것은 없다.
+//  스냅샷·복원용 K_COLS 와 스토어 반환값은 손대지 않는다 — 응답에만 거는 거름이다(쓰기 도구 응답은 knowledge/shared.ts withPointerMask).
+export async function maskHiddenPointers<T extends Record<string, unknown>>(rows: T[], viewer: Viewer | undefined): Promise<T[]> {
+  if (viewer === null) return rows;
+  const refs = [...new Set(rows.flatMap((r) => [r.supersedes, r.superseded_by]).filter((v): v is string => typeof v === "string" && v !== ""))];
+  if (!refs.length) return rows;
+  const params: unknown[] = [refs];
+  const vis = await knowledgeVisWhere(viewer, params);
+  if (vis === "TRUE") return rows;
+  const hidden = new Set((await q(itemsPool,
+    `SELECT k.name FROM knowledge k WHERE k.name = ANY($1::text[]) AND NOT (${vis})`, params)).map((r) => String(r.name)));
+  if (!hidden.size) return rows;
+  return rows.map((r) => {
+    const out: Record<string, unknown> = { ...r };
+    if (hidden.has(r.supersedes as string)) out.supersedes = null;
+    if (hidden.has(r.superseded_by as string)) out.superseded_by = null;
+    return out as T;
+  });
 }
 
 // #709 총계 — 같은 필터의 전체 건수(페이징 메타 total/has_more 용). 목록의 DISTINCT 와 일치하도록 count(DISTINCT k.name).
@@ -195,8 +220,9 @@ export async function listWikiPins(
 export async function getKnowledge(name: string, viewer?: Viewer): Promise<(KnowledgeRow & { categories: unknown[]; links?: unknown; sources?: unknown[] }) | undefined> {
   // fields 는 목록(K_COLS)엔 무겁고 상세엔 필수(#551 노션 속성 패널) — 상세 조회에서만 포함.
   //  props_ui(#592 항목 단위 속성 노출 오버라이드)도 fields 와 같은 취급(상세 전용).
-  const k = await one(itemsPool, `SELECT ${K_SEL}, k.fields, k.props_ui FROM knowledge k WHERE k.name=$1`, [name]);
-  if (!k) return undefined;
+  const row = await one(itemsPool, `SELECT ${K_SEL}, k.fields, k.props_ui FROM knowledge k WHERE k.name=$1`, [name]);
+  if (!row) return undefined;
+  const [k] = await maskHiddenPointers([row], viewer);
   const categories = await q(itemsPool,
     `SELECT kc.category_id, kc.state, c.key, c.name
      FROM knowledge_category kc JOIN category c ON c.id=kc.category_id WHERE kc.name=$1`, [name]);
@@ -271,11 +297,12 @@ export interface UpsertFacetInput {
   injection?: string; provenance?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null;
   is_folder?: boolean; parent_name?: string | null;   // #592 폴더·트리 위치 — 본문만 편집해도 유실 금지(같은 불변식)
   searchable?: boolean;   // #5169 검색 제외 — 앱이 문서를 다시 올릴 때마다 실지 않아도 «검색 제외» 가 풀리지 않게(같은 불변식)
+  supersedes?: string | null;   // summary 와 같은 3상 — 미전송=보존 · null=비움 · 값=설정
 }
 /** 병합 결과 — INSERT VALUES / ON CONFLICT DO UPDATE(is_wiki=EXCLUDED.is_wiki 등) 파라미터로 그대로 사용. */
 export interface ResolvedFacets {
   injection: string; provenance: string; summary: string | null; sort: number; isWiki: boolean; type: string | null;
-  isFolder: boolean; parentName: string | null; searchable: boolean;
+  isFolder: boolean; parentName: string | null; searchable: boolean; supersedes: string | null;
 }
 /**
  * upsert facet 병합 규칙 — "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
@@ -296,6 +323,9 @@ export function resolveUpsertFacets(input: UpsertFacetInput, before: Record<stri
     parentName: input.parent_name !== undefined ? input.parent_name : ((before?.parent_name as string | null) ?? null),
     // #5169 검색 제외 — 기본은 검색 대상(true). false 는 명시로만 생기고, 미전송 저장은 기존 값을 지킨다.
     searchable: input.searchable !== undefined ? input.searchable : ((before?.searchable as boolean | undefined) ?? true),
+    // 종전엔 미전송이 곧 비움이라 본문만 고치는 저장(edit·append·리비전 승인)이 대체 표시를 지웠다. null 을 «비움» 으로 남겨 두는
+    //  까닭: 보존만 넣으면 되돌리기·«이 버전으로 되돌리기» 가 값을 지울 길이 없어진다(undo.ts knowledgeUpsertInput 이 null 을 그대로 넘긴다).
+    supersedes: input.supersedes !== undefined ? input.supersedes : ((before?.supersedes as string | null) ?? null),
   };
 }
 
@@ -429,7 +459,7 @@ export class KnowledgeExistsError extends Error {
 }
 
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null; searchable?: boolean },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string | null; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null; searchable?: boolean },
   ctx?: WriteCtx,
   opts: UpsertKnowledgeOpts = {},
 ): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult; post?: () => Promise<WikiLinkResult | undefined> }> {
@@ -466,7 +496,7 @@ export async function upsertKnowledge(
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
   // injection/provenance/summary/sort/is_wiki/type/is_folder/parent_name: 명시 우선 → 없으면 기존(before) 보존 → 신규 기본값.
   //  편집 저장(본문만)이 WIKI 핀 is_wiki 등 미전송 facet 을 조용히 유실하지 않게 하는 불변식 — 단일 진실 resolveUpsertFacets(#345 회귀 방지, knowledge-store.test.ts).
-  const { injection, provenance, summary, sort, isWiki, type, isFolder, parentName, searchable } = resolveUpsertFacets(input, before);
+  const { injection, provenance, summary, sort, isWiki, type, isFolder, parentName, searchable, supersedes } = resolveUpsertFacets(input, before);
   // #592 폴더: 본문 없는 트리 노드라 title 이 유일한 표시명 — 신규 폴더는 title 필수(빈 body_md 완화는 capability 쪽).
   if (!before && isFolder && !input.title?.trim()) {
     throw new Error("폴더(is_folder) 생성에는 title 이 필수입니다.");
@@ -498,7 +528,7 @@ export async function upsertKnowledge(
        summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
        is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name, searchable=EXCLUDED.searchable,
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`}`,
-    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
+    [name, input.title ?? null, input.body_md, injection, provenance, supersedes, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
      // #638 $16 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
      input.lifecycle ?? "active",
      opts.visibility ?? "open",
@@ -549,12 +579,57 @@ export async function getKnowledgeGateFields(name: string): Promise<{ lifecycle?
   return (r as { lifecycle?: string; provenance?: string; external_system?: string | null } | undefined) ?? {};
 }
 
-export async function setKnowledgeLifecycle(name: string, lifecycle: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
-  if (!before) throw new Error(`지식 '${name}' 없음`);
-  const after = await one(itemsPool,
-    `UPDATE knowledge SET lifecycle=$2, updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`, [name, lifecycle]);
-  await auditKnowledge(name, "set_lifecycle", before, after, ctx);
+/**
+ * lifecycle 전환 + 후속 포인터(superseded_by).
+ *  · superseded 로 바꾸려면 후속(supersededBy)이 있어야 한다 — 없으면 400. 이미 superseded 이고 포인터가 있으면 보내지 않아도
+ *    그대로 두고, 다른 이름을 보내면 바꾼다(포인터 없이 superseded 가 된 옛 행에 나중에 붙이는 길이기도 하다).
+ *  · 후속은 지금 active 이고 자기 자신이 아니어야 한다. 그래서 체인에 고리가 생길 수 없다(고리 검사는 따로 두지 않는다).
+ *  · 그 밖의 lifecycle 로 바꾸면 포인터를 비운다 — 포인터는 superseded 일 때만 뜻이 있다.
+ *  · 미러 행(external_system)은 superseded 로 못 바꾼다 — 다음 싱크가 원본 상태로 lifecycle 을 되돌려 포인터만 남는다.
+ *  옛 지식과 후속을 이름 순(COLLATE "C" — derived-visibility.ts 의 지식 잠금과 같은 순서)으로 행 잠금한 뒤 판정한다. 잠그지 않으면 A→B 와 B→A 가 동시에 «상대가 active» 를 보고 둘 다
+ *  superseded 가 되고, 후속을 지우는 쪽(deleteKnowledge)도 판정과 쓰기 사이에 끼어든다. 잠금 모드가 FOR NO KEY UPDATE 인 까닭은
+ *  지식을 가리키는 FK 삽입(링크·분류·자료 연결)이 거는 KEY SHARE 와 부딪치지 않게다(derived-visibility.ts 와 같은 선택).
+ *  판정 오류를 여기(스토어)에서 HttpError 로 던지는 까닭: 되돌리기(undo.ts)는 이 함수를 직접 불러 핸들러 가드를 거치지 않는다.
+ */
+export async function setKnowledgeLifecycle(
+  name: string, lifecycle: string, ctx?: WriteCtx, opts: { supersededBy?: string | null } = {},
+): Promise<KnowledgeRow> {
+  const want = opts.supersededBy;
+  if (lifecycle !== "superseded" && want != null) {
+    throw new HttpError(400, "superseded_by 는 lifecycle='superseded' 로 바꿀 때만 받습니다 — 다른 상태로 바꾸면 후속 포인터는 비워집니다.");
+  }
+  const after = await withDerivedTx(async (client) => {
+    const lockNames = lifecycle === "superseded" && want && want !== name ? [name, want] : [name];
+    const rows = await q(client,
+      `SELECT ${K_SEL} FROM knowledge k WHERE k.name = ANY($1::text[]) ORDER BY k.name COLLATE "C" FOR NO KEY UPDATE`, [lockNames]) as KnowledgeRow[];
+    const before = rows.find((r) => r.name === name);
+    if (!before) throw new Error(`지식 '${name}' 없음`);
+    let pointer: string | null = null;
+    if (lifecycle === "superseded") {
+      if (before.external_system) {
+        throw new HttpError(400, "외부 미러 지식은 superseded 로 바꿀 수 없습니다 — 미러의 상태는 원본이 정하고, 다음 싱크가 되돌립니다. 원본에서 보관하세요.");
+      }
+      if (want === undefined && before.lifecycle === "superseded" && before.superseded_by) {
+        pointer = before.superseded_by as string;
+      } else if (!want) {
+        throw new HttpError(400, "superseded 로 바꾸려면 superseded_by(이 지식을 대체하는 후속 지식의 name)가 필요합니다. 후속이 없으면 archived 로 보관하세요.");
+      } else if (want === name) {
+        throw new HttpError(400, "superseded_by 에 자기 자신을 지정할 수 없습니다.");
+      } else {
+        const succ = rows.find((r) => r.name === want);
+        if (!succ) throw new HttpError(400, `후속 지식 '${want}' 이(가) 없습니다.`);
+        if (succ.lifecycle !== "active") {
+          throw new HttpError(400, `후속 지식 '${want}' 은(는) active 여야 합니다(지금 ${succ.lifecycle}). 그 지식이 대체됐다면 그 지식의 후속을 지정하세요.`);
+        }
+        pointer = want;
+      }
+    }
+    const row = await one(client,
+      `UPDATE knowledge SET lifecycle=$2, superseded_by=$3, updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`,
+      [name, lifecycle, pointer]) as KnowledgeRow;
+    await auditKnowledge(name, "set_lifecycle", before, row, ctx, client);
+    return row;
+  });
   syncKnowledgeLexSoon(name);   // #5203 보관된 문서의 조각을 곧바로 걷는다
   return after;
 }
@@ -739,23 +814,45 @@ export async function stampSessionVisibility(name: string, sessionId?: string | 
 //  = "감사로그를 휴지통 삼는 소프트삭제" — restoreKnowledge 로 복원 가능. knowledge_category/project_knowledge/
 //  activity_knowledge 는 FK ON DELETE CASCADE 라 링크가 동반 삭제된다(복원 시 링크는 돌아오지 않음 — project 와 동형).
 //  사람전용 게이트(에이전트 403)는 capability 계층(knowledge_delete)에서 선행한다(여기는 순수 데이터).
+//  대체된 지식이 후속으로 가리키는(superseded_by) 지식은 지우지 않는다(409) — 포인터는 FK 가 없어 끊긴 채 남는다.
+//   행을 잠그고 센다: superseded 전환(setKnowledgeLifecycle)도 후속 행을 같은 모드로 잠그므로 «셈 뒤 전환 커밋 → 삭제» 틈이 없다.
 export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  //  fields 도 스냅샷에 싣는다 — knowledge_set_fields 로 사람·에이전트가 쓴 값은 커넥터 재싱크로 되살아나지 않는다.
-  const before = await one(itemsPool, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1`, [name]);
-  if (!before) throw new Error(`지식 '${name}' 없음`);
-  await itemsPool.query(`DELETE FROM knowledge WHERE name=$1`, [name]);
-  await auditKnowledge(name, "delete", before, null, ctx);
-  return before;
+  return withDerivedTx(async (client) => {
+    //  fields 도 스냅샷에 싣는다 — knowledge_set_fields 로 사람·에이전트가 쓴 값은 커넥터 재싱크로 되살아나지 않는다.
+    const before = await one(client, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1 FOR NO KEY UPDATE`, [name]) as KnowledgeRow | undefined;
+    if (!before) throw new Error(`지식 '${name}' 없음`);
+    //  이름은 싣지 않고 건수만 — 이 함수는 보는 사람을 모르고, 가리키는 쪽이 잠긴 문서일 수 있다.
+    const refs = Number((await one(client,
+      `SELECT count(*)::int AS n FROM knowledge WHERE superseded_by=$1 AND lifecycle='superseded'`, [name]))?.n ?? 0);
+    if (refs > 0) {
+      throw new HttpError(409, `이 지식을 후속으로 가리키는 대체된 지식이 ${refs}건 있어 지울 수 없습니다 — 그 지식들의 후속을 다른 지식으로 바꾸거나 archived 로 보관한 뒤 지우세요.`);
+    }
+    await client.query(`DELETE FROM knowledge WHERE name=$1`, [name]);
+    await auditKnowledge(name, "delete", before, null, ctx, client);
+    return before;
+  });
 }
 
 // 복원 — 마지막 delete 의 before 스냅샷(전문)을 그대로 재적재한다. 본문/메타는 삭제 시점 그대로,
 //  복원 사실(누가/언제)은 감사 op='restore' 로 기록된다. 이미 존재하면(삭제 상태 아님) 거부.
+//  후속 포인터: 이 지식이 지워진 사이 후속이 지워졌거나 더는 active 가 아니면 포인터를 비우고 archived 로 되살린다 —
+//   그대로 되살리면 없는 후속을 가리키는 superseded 가 생긴다. 후속 행을 잠그고 보므로 그 사이 후속 삭제와 엇갈리지 않는다.
+//   포인터가 없는 옛 superseded 스냅샷(이 칸이 생기기 전 삭제분)은 그대로 되살린다 — 가리키는 대상이 없으니 끊긴 것도 없다.
 export async function restoreKnowledge(before: Record<string, unknown>, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  //  fields 는 스냅샷에 있을 때만 되살린다(restoreSnapshot 은 스냅샷에 있는 키만 쓴다 — fields 를 싣기 전의 옛 삭제분은 기본값).
-  //  jsonb 칸에 객체를 그대로 넘기면 pg 가 직렬화한다.
-  const after = await restoreSnapshot<KnowledgeRow>("knowledge", `${K_COLS}, fields`, "name", before);
+  const after = await withDerivedTx(async (client) => {
+    let snap = before;
+    const ptr = before.lifecycle === "superseded" && typeof before.superseded_by === "string" ? before.superseded_by : null;
+    if (ptr) {
+      const succ = await one(client, `SELECT lifecycle FROM knowledge WHERE name=$1 FOR NO KEY UPDATE`, [ptr]) as { lifecycle: string } | undefined;
+      if (succ?.lifecycle !== "active") snap = { ...before, superseded_by: null, lifecycle: "archived" };
+    }
+    //  fields 는 스냅샷에 있을 때만 되살린다(restoreSnapshot 은 스냅샷에 있는 키만 쓴다 — fields 를 싣기 전의 옛 삭제분은 기본값).
+    //  jsonb 칸에 객체를 그대로 넘기면 pg 가 직렬화한다.
+    const row = await restoreSnapshot<KnowledgeRow>("knowledge", `${K_COLS}, fields`, "name", snap, client);
+    await auditKnowledge(row.name, "restore", null, row, ctx, client);
+    return row;
+  });
   await forgetClassifierSeen([after.name]);   // #4194 — 링크 없이 돌아온다(위 주석) → 카테고리 붙이기 레인이 다시 봐야 한다
-  await auditKnowledge(after.name, "restore", null, after, ctx);
   return after;
 }
 

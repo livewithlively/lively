@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { needsLlm, MANAGER_KIND_LABEL, type ManagerKind } from "../store/managers.js";
-import { applyAction, repoEnqueueFailure, statusForManagerResults, type ManagerRunResult, type RepoEnqueue } from "./run-manager.js";
+import { repoEnqueueFailure, statusForManagerResults, type ManagerRunResult, type RepoEnqueue } from "./run-manager.js";
 import { contradictionCandidateSql, CONTRADICTION_NEIGHBORS, CONTRADICTION_PLANNER_OFF } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 
@@ -41,50 +41,33 @@ await t("4종 모두 사람 읽는 이름이 있다", () => {
   assert.equal(Object.keys(MANAGER_KIND_LABEL).length, 4, "종류가 늘었는데 라벨 표를 안 고쳤다");
 });
 
-// ══ M16·M17 자동 조치 거부 규칙 ══
-await t("비가역 조치는 자동 적용하지 않는다 [M16]", async () => {
+// ══ M16·M17 자동 조치 거부 규칙 — 적용(applyFinding)·목록(actionable)·일괄 적용이 모두 이 화이트리스트로 가른다 [#1419 T9] ══
+await t("비가역 조치는 자동 적용 대상이 아니다 [M16]", () => {
   // review_knowledge 는 '읽어 보라'는 표식이지 기계가 적용할 조치가 아니다.
-  assert.equal(await applyAction({ op: "review_knowledge", name: "k" }, "test"), false);
+  assert.equal(isApplicableAction({ op: "review_knowledge", name: "k" }), false);
   // 존재하지 않는 파괴적 op 도 당연히 거부(화이트리스트 방식임을 고정한다).
-  assert.equal(await applyAction({ op: "delete_knowledge", name: "k" }, "test"), false);
-  assert.equal(await applyAction({ op: "rewrite_body", name: "k", body: "..." }, "test"), false);
+  assert.equal(isApplicableAction({ op: "delete_knowledge", name: "k" }), false);
+  assert.equal(isApplicableAction({ op: "rewrite_body", name: "k", body: "..." }), false);
 });
 
-await t("op 이 없거나 이상하면 거부 [M17·경계]", async () => {
-  assert.equal(await applyAction(null, "test"), false);
-  assert.equal(await applyAction(undefined, "test"), false);
-  assert.equal(await applyAction({}, "test"), false);
-  assert.equal(await applyAction({ op: 123 }, "test"), false);
-  assert.equal(await applyAction("move_category", "test"), false); // 문자열은 조치가 아니다
+await t("op 이 없거나 이상하면 거부 [M17·경계]", () => {
+  for (const a of [null, undefined, {}, { op: 123 }, "move_category"]) {
+    assert.equal(isApplicableAction(a), false, `whitelist 가 통과시켰다: ${JSON.stringify(a)}`);
+  }
 });
 
-await t("move_category 도 필수값이 없으면 거부", async () => {
+await t("move_category 도 필수값이 없으면 거부", () => {
   // 이름이나 대상 분류가 비면 DB 를 건드리기 전에 막는다(잘못된 이동은 되돌리기가 번거롭다).
-  assert.equal(await applyAction({ op: "move_category" }, "test"), false);
-  assert.equal(await applyAction({ op: "move_category", name: "k" }, "test"), false);
-  assert.equal(await applyAction({ op: "move_category", to_category_id: 3 }, "test"), false);
-  assert.equal(await applyAction({ op: "move_category", name: "", to_category_id: 3 }, "test"), false);
-});
-
-// ══ 화이트리스트 단일 출처 — 화면·저장·적용이 같은 판정을 써야 한다 [#1419 T9] ══
-await t("isApplicableAction 과 applyAction 의 판정이 일치한다", async () => {
-  // 이 둘이 어긋나면 '적용' 버튼이 있는데 눌러도 아무 일이 없다(사용자는 실패를 인지하지 못한다).
-  //  applyAction 은 DB 를 건드리므로 **거부 케이스만** 대조한다 — 거부는 DB 접근 전에 끝난다.
   const rejected: unknown[] = [
-    null, undefined, {}, { op: 123 }, "move_category",
-    { op: "review_knowledge", name: "k" },
-    { op: "delete_knowledge", name: "k" },
     { op: "move_category" },                              // 필수값 없음
     { op: "move_category", name: "k" },                   // 대상 분류 없음
     { op: "move_category", to_category_id: 3 },           // 지식 이름 없음
+    { op: "move_category", name: "", to_category_id: 3 },
     { op: "move_category", name: "   ", to_category_id: 3 }, // 공백뿐인 이름
     { op: "move_category", name: "k", to_category_id: 0 }, // 0 은 유효 id 가 아니다
   ];
-  for (const a of rejected) {
-    assert.equal(isApplicableAction(a), false, `whitelist 가 통과시켰다: ${JSON.stringify(a)}`);
-    assert.equal(await applyAction(a, "test"), false, `applyAction 이 통과시켰다: ${JSON.stringify(a)}`);
-  }
-  // 반대로 온전한 조치안은 화이트리스트를 통과해야 한다(대조군 — 전부 false 를 반환하는 구현을 잡는다).
+  for (const a of rejected) assert.equal(isApplicableAction(a), false, `whitelist 가 통과시켰다: ${JSON.stringify(a)}`);
+  // 대조군 — 전부 false 를 반환하는 구현을 잡는다.
   assert.equal(isApplicableAction({ op: "move_category", name: "k", to_category_id: 3 }), true);
 });
 

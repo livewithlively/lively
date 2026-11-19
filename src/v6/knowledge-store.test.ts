@@ -87,6 +87,16 @@ t("#5169: before 에 searchable 칸 없음(옛 스냅샷) → 기본 true 폴백
   assert.equal(resolveUpsertFacets({}, pinned).searchable, true);
 });
 
+// ── supersedes 도 같은 불변식 — 단 summary 처럼 3상(미전송=보존 · null=비움 · 값=설정). null 을 보존으로 읽으면 되돌리기가 값을 못 지운다. ──
+t("supersedes: 본문만 다시 저장(미전송) → 기존 값 보존", () => {
+  assert.equal(resolveUpsertFacets({}, { ...pinned, supersedes: "old-doc" }).supersedes, "old-doc");
+});
+t("supersedes: null 명시 → 비움 / 값 명시 → 교체 / 신규 → null", () => {
+  assert.equal(resolveUpsertFacets({ supersedes: null }, { ...pinned, supersedes: "old-doc" }).supersedes, null);
+  assert.equal(resolveUpsertFacets({ supersedes: "other-doc" }, { ...pinned, supersedes: "old-doc" }).supersedes, "other-doc");
+  assert.equal(resolveUpsertFacets({}, null).supersedes, null);
+});
+
 // ── #592: is_folder·parent_name 도 같은 불변식 — 본문만 편집(미전송)해도 폴더 플래그·트리 위치 유실 금지. ──
 const folder = { ...pinned, is_folder: true, parent_name: "parent-doc" };
 t("#592: 본문만 편집(is_folder/parent_name 미전송) → 폴더 플래그·트리 위치 보존", () => {

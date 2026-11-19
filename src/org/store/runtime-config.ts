@@ -91,6 +91,7 @@ export interface OrgRuntimeConfig {
   workspace_kind: WorkspaceKind; // #1750 — 이 워크스페이스(=게이트웨이)의 종류. 'team'(기본 = 기존 셀프호스트) | 'personal'(개인).
   workspace_hub_url: string | null; // #1750 — 계정의 워크스페이스 목록·만들기 허브(매니지드 app.lvly.io/home). null = 없음(셀프호스트 기본).
   worker_policy: WorkerPolicy; // #1780 Stage B — 앱 worker 조직 예산(동시 수·메모리 합·CPU·수명). 각 0=무제한. DB 우선, 비면 코드 기본값.
+  ontology_loops: OntologyLoops; // 지식 연결 루프 스위치 — 키가 없거나 true 가 아니면 꺼짐.
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -154,12 +155,17 @@ const announcementSafe = (v: unknown): UiAnnouncement | null => {
     tone: a.tone === "warn" ? "warn" : "info",
   };
 };
+export interface OntologyLoops { l2_autoresolve: boolean }
+export const ontologyLoopsSafe = (v: unknown): OntologyLoops => {
+  const o = (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as Record<string, unknown>;
+  return { l2_autoresolve: o.l2_autoresolve === true };
+};
 const uiProfileSafe = (v: unknown): UiProfile => (v === "personal" ? "personal" : "full");
 const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, knowledge_chunk_search, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, knowledge_chunk_search, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, ontology_loops, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -209,6 +215,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     workspace_kind: workspaceKindSafe(row?.workspace_kind), // #1750 — 잡값/부재면 'team'(기존 박스 = 팀)
     workspace_hub_url: usageUrlSafe(row?.workspace_hub_url), // #1750 — 빈값/부재면 null(허브 없음)
     worker_policy: resolveWorkerPolicy(row?.worker_policy), // #1780 Stage B — DB 우선, 비면 코드 기본값(수·메모리 상한 / CPU·수명 0=끔)
+    ontology_loops: ontologyLoopsSafe(row?.ontology_loops),
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -249,6 +256,7 @@ export async function updateRuntimeConfig(
     workspace_kind?: WorkspaceKind;        // #1750
     workspace_hub_url?: string | null;     // #1750
     worker_policy?: WorkerPolicyPatch;     // #1780 Stage B
+    ontology_loops?: Partial<OntologyLoops>;
   },
   actor?: string,
   source?: string,
@@ -398,6 +406,12 @@ export async function updateRuntimeConfig(
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
      JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy), knowledgeChunkSearch],
   );
+  //  위 INSERT 의 자리번호 목록에 끼우지 않고 따로 쓴다 — 보낸 키만 덮고 나머지 키는 DB 값을 그대로 둔다.
+  if (patch.ontology_loops !== undefined) {
+    const set: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(patch.ontology_loops)) if (typeof v === "boolean" && k in ontologyLoopsSafe({})) set[k] = v;
+    await itemsPool.query(`UPDATE org_runtime_config SET ontology_loops = ontology_loops || $1::jsonb WHERE id = 1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`, [JSON.stringify(set)]);
+  }
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
   if (patch.session_memory_policy !== undefined) invalidateSessionMemoryPolicyCache(); // #1059 D — 저장 즉시 다음 세션 생성이 새 캡을 본다
