@@ -167,6 +167,7 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
 
   const before = usablePushBase(ev.before);
   const opts = { timeoutMs: GIT_TIMEOUT_MS };
+  const tipRef = `origin/${defaultBranch}`;
   const stored = typeof repo.last_refreshed_sha === "string" && repo.last_refreshed_sha !== "" ? repo.last_refreshed_sha : null;
 
   // Diff `base..after` and refresh. With a base this is the checkpoint-guarded path; base null is a
@@ -189,6 +190,9 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
     );
     return r.skipped ? { kind: "skipped", checkpoint: r.skipped.checkpoint } : { kind: "applied", tally: r.tally, changes: changes.length };
   };
+  const isTip = async (sha: string): Promise<boolean> => {
+    try { return (await git(["-C", cloneDir, "rev-parse", tipRef])).stdout.trim() === sha; } catch { return false; }
+  };
   // note 가 undefined 면 JSON 직렬화에서 키 생략 — 구 응답과 동일.
   const done = (o: Outcome, base: string, note?: string): void => {
     if (o.kind === "applied") { res.status(200).json({ tally: o.tally, base, head: after, changes: o.changes, note }); return; }
@@ -204,9 +208,12 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   // a sha set by hand). refresh() refuses any other base, and the scheduled refresh_all — the only other
   // path that re-baselines — may be disabled, so the webhook would stall for good. Re-baseline from the
   // push's own range instead; whatever happened between the checkpoint and `before` is lost either way.
+  // Only for a push whose `after` is the fetched branch tip: a re-baseline writes unconditionally, so a
+  // redelivered old push would otherwise move the units and the checkpoint backwards.
   if (stored && (!SHA_RE.test(stored) || !(await commitExists(cloneDir, stored, opts)))) {
-    if (!before) { res.status(200).json({ ignored: "checkpoint unusable and no usable push base", head: after }); return; }
     const why = SHA_RE.test(stored) ? "checkpoint not in clone" : "checkpoint is not a sha";
+    if (!before) { res.status(200).json({ ignored: `${why} and no usable push base`, head: after }); return; }
+    if (!(await isTip(after))) { res.status(200).json({ ignored: `${why} and push is not the branch tip, will resync`, head: after }); return; }
     done(await apply(before, null), before, `${why}; re-baselined from push before`); return;
   }
 
@@ -217,13 +224,15 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
 
   // Diff from the checkpoint, not the push's `before`: the stored units reflect the checkpoint, and any
   // earlier push this endpoint acked without applying (clone busy, sha not fetched yet) sits between the
-  // two. A push at or behind the checkpoint (out-of-order delivery, redelivery) is already applied —
-  // diffing checkpoint..after would walk the units backwards. If a concurrent refresh moves the checkpoint
+  // two. A push at or behind a checkpoint that is still on the branch (out-of-order delivery, redelivery)
+  // is already applied — diffing checkpoint..after would walk the units backwards. A checkpoint the
+  // branch no longer contains means the branch was rewound or rewritten, and checkpoint..after is
+  // exactly the change to apply (backwards included). If a concurrent refresh moves the checkpoint
   // (two pushes in quick succession), re-diff once from the checkpoint it left; a second miss is left to
   // the next push / refresh_all.
   let cp = stored;
   for (let attempt = 0; ; attempt++) {
-    if (await isAncestor(cloneDir, after, cp, opts)) {
+    if (await isAncestor(cloneDir, after, cp, opts) && await isAncestor(cloneDir, cp, tipRef, opts)) {
       res.status(200).json({ ignored: "already applied (checkpoint at or past this push)", base: cp, head: after }); return;
     }
     const o = await apply(cp, cp);

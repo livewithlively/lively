@@ -48,7 +48,7 @@ try {
     // (like ingest) → deterministic incremental structural refresh → prints tally.
     if (!pos[0]) {
       console.error("usage: refresh <repo>  (payload JSON on stdin)");
-      console.error("  base must be the repo's full last_refreshed_sha (head required); otherwise nothing is applied (skipped)");
+      console.error("  base must equal the repo's last_refreshed_sha exactly (head required); otherwise nothing is applied (skipped)");
       process.exitCode = 1;
     } else {
       const r = await refresh(pos[0], readFileSync(0, "utf8"), actor);

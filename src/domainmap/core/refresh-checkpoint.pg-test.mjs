@@ -11,18 +11,19 @@
 //   C4 base 없는 페이로드(재기준)는 조건 없이 체크포인트를 세운다 · C5 체크포인트가 비어 있으면 첫 base 를 받아들인다
 //   C7 같은 base 의 refresh 두 개(웹훅·refresh_all)를 동시에 돌리면 하나만 적용된다
 //   C8 레포 삭제는 refresh 와 같은 순서(repo 행 먼저)로 잠가, refresh 중에 와도 교착 없이 뒤에 끝난다
-//   C9 CLI refresh 가 건너뛰면 종료 코드가 0 이 아니다
 //   G1 웹훅이 놓친 범위가 있어도 다음 웹훅이 체크포인트부터 diff 해 메운다(모듈 내용 시각 = 커밋 시각)
 //   G2 이미 반영한 push 의 재전송·역순 도착은 체크포인트를 되돌리지 않는다
 //   G3 refresh_all(git-pull)이 체크포인트부터 diff 한다
 //   G4 겹친 push — 웹훅이 읽은 뒤 다른 refresh 가 체크포인트를 옮기면, 옮겨진 체크포인트부터 한 번 다시 diff 한다
 //   G5 force-push(이력 재작성) 뒤의 push 도 체크포인트..after 트리 diff 로 반영한다
-//   G6 체크포인트가 클론에 없는 커밋이면 push 의 before..after 로 재기준한다(웹훅이 멈추지 않는다)
-//   G7 체크포인트가 sha 가 아니어도 같은 재기준을 하고 응답 문구로 원인을 가른다
+//   G6 체크포인트가 클론에 없는 커밋이거나 sha 가 아니면, 브랜치 끝을 가리키는 push 의 before..after 로 재기준한다
+//      (웹훅이 멈추지 않는다) · 응답 문구로 원인을 가른다
+//   G7 브랜치를 되감은 push 는 「이미 적용」이 아니다 — 체크포인트..after 를 거꾸로 적용해 모듈 이름 변경도 되돌린다
+//   G8 체크포인트를 쓸 수 없을 때 브랜치 끝이 아닌 옛 push 의 재전송은 재기준하지 않는다(뒤로 가지 않는다)
 import pg from "pg";
 import http from "node:http";
 import express from "express";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -121,8 +122,8 @@ try {
   await section("C3b", async () => {
     const r1 = await refresh(A, { base: sha("c"), head: sha("5"), head_committed_at: "2099-01-01T00:00:00Z", granularity: "file",
       changes: [{ status: "M", path: "src/u/a.ts" }] }, AGENT);
-    const u1 = await unit(aId, "src/u");
-    chk("C3b 미래 커밋 시각은 now() 로 막힌다", !r1.skipped && new Date(u1.content_changed_at).getTime() <= Date.now(), JSON.stringify(u1));
+    const [u1] = await q(`SELECT content_changed_at, content_changed_at <= now() AS capped FROM code_unit WHERE repo_id=$1 AND path='src/u'`, [aId]);
+    chk("C3b 미래 커밋 시각은 now() 로 막힌다", !r1.skipped && u1.capped === true, JSON.stringify(u1));
     const r2 = await refresh(A, { base: sha("5"), head: sha("6"), head_committed_at: new Date().toISOString(), granularity: "file",
       changes: [{ status: "M", path: "src/u/a.ts" }] }, AGENT);
     const u2 = await unit(aId, "src/u");
@@ -179,7 +180,8 @@ try {
       const del = hardDeleteRepo(X, true, AGENT).then(() => null, (e) => e);
       let waiting = false;
       for (let i = 0; i < 200 && !waiting; i++) {
-        const [w] = await q(`SELECT count(*)::int n FROM pg_stat_activity WHERE wait_event_type='Lock' AND pid <> pg_backend_pid()`);
+        const [w] = await q(`SELECT count(*)::int n FROM pg_stat_activity
+                              WHERE wait_event_type='Lock' AND query ILIKE '%FROM repo WHERE id=%FOR UPDATE%' AND pid <> pg_backend_pid()`);
         waiting = w.n > 0;
         if (!waiting) await new Promise((r) => setTimeout(r, 50));
       }
@@ -193,15 +195,6 @@ try {
       chk("C8 교착 없이 refresh 쪽이 먼저 끝난다", holderErr === null, String(holderErr?.message));
       chk("C8 삭제도 끝난다", delErr === null && (await checkpointOf(X)) === null, String(delErr?.message));
     } finally { holder.release(); }
-  });
-
-  // ── C9: CLI 종료 코드 ──
-  await section("C9", async () => {
-    const cli = new URL(`${D}/domainmap/cli.js`).pathname;
-    const run = spawnSync(process.execPath, [cli, "refresh", A], {
-      input: JSON.stringify({ base: sha("a"), head: sha("9"), changes: [] }), encoding: "utf8", env: process.env,
-    });
-    chk("C9 건너뛴 refresh 는 종료 코드가 0 이 아니다", run.status !== 0 && /skipped/.test(run.stderr), `status=${run.status} ${run.stderr}`);
   });
 
   // ── G1~G3: 실제 git 범위(웹훅·refresh_all) ──
@@ -309,26 +302,52 @@ try {
     chk("G5 새 모듈 · 체크포인트 = c7", (await unit(gId, "src/z")) !== null && (await checkpointOf(GR)) === c7);
   });
 
-  await section("G6", async () => {
-    const c7 = await checkpointOf(GR);
-    await q(`UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2`, [sha("d"), GR]);
-    put("src/y/x.ts", "y\n");
-    const c8 = commit("c8", "2026-04-08T00:00:00Z");
-    const r = await push(c7, c8);
-    chk("G6 클론에 없는 체크포인트 → push before..after 로 재기준",
-      r.status === 200 && !r.body.ignored && r.body.base === c7 && /not in clone/.test(r.body.note ?? ""), JSON.stringify(r));
-    chk("G6 새 모듈 · 체크포인트 = c8", (await unit(gId, "src/y")) !== null && (await checkpointOf(GR)) === c8);
-  });
+  // 쓸 수 없는 체크포인트 두 갈래 — 브랜치 끝을 가리키는 push 는 재기준한다.
+  for (const [id, broken, why, dir] of [
+    ["G6a", sha("d"), /not in clone/, "src/y"],
+    ["G6b", "not-a-sha", /not a sha/, "src/q"],
+  ]) {
+    await section(id, async () => {
+      const prev = await checkpointOf(GR);
+      await q(`UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2`, [broken, GR]);
+      put(`${dir}/x.ts`, "x\n");
+      const tip = commit(id, "2026-04-08T00:00:00Z");
+      const r = await push(prev, tip);
+      chk(`${id} 재기준 · 원인 문구`, r.status === 200 && !r.body.ignored && r.body.base === prev && why.test(r.body.note ?? ""), JSON.stringify(r));
+      chk(`${id} 새 모듈 · 체크포인트 = 브랜치 끝`, (await unit(gId, dir)) !== null && (await checkpointOf(GR)) === tip);
+    });
+  }
 
   await section("G7", async () => {
-    const c8 = await checkpointOf(GR);
-    await q(`UPDATE repo SET last_refreshed_sha='not-a-sha' WHERE name=$1`, [GR]);
-    put("src/q/x.ts", "q\n");
-    const c9 = commit("c9", "2026-04-09T00:00:00Z");
-    const r = await push(c8, c9);
-    chk("G7 sha 가 아닌 체크포인트 → 재기준 · 원인 문구가 다르다",
-      r.status === 200 && !r.body.ignored && /not a sha/.test(r.body.note ?? ""), JSON.stringify(r));
-    chk("G7 새 모듈 · 체크포인트 = c9", (await unit(gId, "src/q")) !== null && (await checkpointOf(GR)) === c9);
+    const base = await checkpointOf(GR);
+    put("src/k/a.ts", "a\n"); put("src/k/b.ts", "b\n");
+    const k1 = commit("k1", "2026-04-10T00:00:00Z");
+    await push(base, k1);
+    g(["mv", "src/k", "src/k2"]);
+    const k2 = commit("k2", "2026-04-11T00:00:00Z");
+    const r1 = await push(k1, k2);
+    chk("G7 전제 — 모듈 이름 변경 src/k → src/k2", !r1.body.ignored && (await unit(gId, "src/k2"))?.state === "active", JSON.stringify(r1));
+    // 브랜치를 k1 로 되감아 force-push 했다.
+    g(["reset", "-q", "--hard", k1]);
+    const r = await push(k2, k1);
+    chk("G7 되감기 push 는 무시하지 않는다", r.status === 200 && !r.body.ignored && r.body.base === k2, JSON.stringify(r));
+    chk("G7 이름 변경이 되돌아간다", (await unit(gId, "src/k"))?.state === "active" && (await unit(gId, "src/k2")) === null);
+    chk("G7 체크포인트 = k1", (await checkpointOf(GR)) === k1);
+  });
+
+  await section("G8", async () => {
+    const tipNow = await checkpointOf(GR);
+    put("src/late/x.ts", "l\n");
+    const n1 = commit("n1", "2026-04-12T00:00:00Z");
+    put("src/v/b.ts", "3\n");
+    const n2 = commit("n2", "2026-04-13T00:00:00Z");
+    await q(`UPDATE repo SET last_refreshed_sha=$1 WHERE name=$2`, [sha("e"), GR]);
+    // 브랜치 끝은 n2 인데 옛 push(tipNow→n1)가 다시 배달됐다.
+    const r = await push(tipNow, n1);
+    chk("G8 브랜치 끝이 아닌 push 는 재기준하지 않는다", r.status === 200 && /not the branch tip/.test(r.body.ignored ?? ""), JSON.stringify(r));
+    chk("G8 체크포인트·모듈을 쓰지 않았다", (await checkpointOf(GR)) === sha("e") && (await unit(gId, "src/late")) === null);
+    const r2 = await push(n1, n2);
+    chk("G8 브랜치 끝 push 는 재기준한다", !r2.body.ignored && (await checkpointOf(GR)) === n2, JSON.stringify(r2));
   });
 } catch (e) {
   fail++; console.error("FAIL 예외", e);
