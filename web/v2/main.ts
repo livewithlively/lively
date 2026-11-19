@@ -14,6 +14,7 @@ import { resumeSetupWatch } from './setup-watch.js'; // #5167 처음 설정 뒤 
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
 import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
+import { mountPreviewStrip } from './preview-strip.js';   // #5581 미리보기 안 표시 · 워크스페이스로 돌아가기
 import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
@@ -589,8 +590,12 @@ export async function bootV2(): Promise<void> {
       //  #4088 — 좁은 폭의 [타임라인] 단추도 이 줄 오른쪽 끝으로. 종전엔 그 단추 하나를 위해 46px 짜리 바(.v2-mbar)가
       //   한 줄 더 섰다(폰에서 크롬 한 줄은 대화 세 줄이다). 넓은 폭에선 CSS 가 숨긴다(데스크톱은 .v2-tl-btn 이 맡는다).
       webTopbar.append(mobile.asideBtn);
+      //  #5615 폰 맨 윗줄 — 왼쪽 끝 워크스페이스 타일, 오른쪽 종. 자리는 CSS order 가 정한다(50-mobile.css). 폰 밖에선 둘 다 숨는다.
+      webTopbar.append(mobile.wsBtn, mobile.bellBtn);
     }
     if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
+    //  #5581 — 미리보기 안이면 «미리보기» 표시와 [워크스페이스로 돌아가기]. 브라우저는 창 맨 위 띠, 데스크톱 앱은 타이틀바 줄 안의 알약(preview-strip.ts).
+    mountPreviewStrip({ root, titlebarHost: titlebar ? titlebar.host : null, embedded: EMBEDDED, solo: SOLO });
     //  넓은 폭에서 그 ☰ 는 이제 **레일을 여닫는다**(#2016 원준 2026-08-25: "지금 사이드바는 닫을 수는 없는
     //   상태로 길이 조절 정도로 고정"). 종전엔 사이드바를 통째로 접었는데(`side-off`), 그러면 목록이 사라져
     //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
@@ -1499,6 +1504,7 @@ function applyTabChrome(tab: ShellTab): void {
   //  좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 서랍이다. 사이드바가 없는 앱이면 그 ☰ 를 걷는다(원준 2026-10-19 «아니 각자 앱 사이드바로»):
   //   ☰ 는 그 앱의 사이드바만 연다. 종전엔 구역 목록(대개 홈)이 대신 열렸다.
   mobile?.setSide(hasSide);
+  mobile?.setHome(!parseRoute(tab.route).segs[0]);   // #5615 폰 홈엔 ☰ 가 없다(그 목록은 [AI 세션] 탭이 연다)
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면

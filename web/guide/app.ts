@@ -11,7 +11,7 @@ import { DOC_AS_OF, DOC_GROUPS, DOC_LEGACY, DOC_PAGES, type DocGroup, type DocPa
 import { guideIcon } from './icon.js';
 import { renderGuideDoc, type GuideSec } from './render.js';
 import { guideSearch, type GuideHit } from './search.js';
-import { openWelcomeFilm, WELCOME_FILM } from '../v2/welcome-film.js';   // #5550 소개 영상 다시 보기(잎 모듈 — 셸을 물지 않는다)
+import { FILMS, openWelcomeFilm } from '../v2/welcome-film.js';   // #5550 영상 다시 보기(잎 모듈 — 셸을 물지 않는다)
 
 export interface GuideWhere { slug: string; anchor: string; redirect?: string }
 export interface GuideEnv { shell: boolean }
@@ -212,10 +212,11 @@ function homeArticle(): HTMLElement {
   return el('article', { class: 'gd-article gd-home' },
     el('h1', { class: 'gd-h1', text: GUIDE_TITLE }),
     el('p', { class: 'gd-lead', text: '라이블리를 처음 여는 분은 아래 세 문서를 순서대로 읽으시면 됩니다. 특정 화면의 사용법은 묶음에서 고르거나 위의 찾기 칸에 화면 이름을 적어 찾습니다.' }),
-    //  (#5550) 처음 설정 첫 장면의 소개 영상 — 여기서 다시 본다.
-    el('button', { class: 'gd-film', type: 'button', onclick: () => openWelcomeFilm() },
-      el('span', { class: 'gd-film-th' }, el('img', { src: WELCOME_FILM.poster, alt: '', loading: 'lazy' }), el('i', { class: 'gd-film-play', 'aria-hidden': 'true' })),
-      el('span', { class: 'gd-film-b' }, el('b', { text: '소개 영상 보기' }), el('span', { text: '라이블리가 무엇을 하는지 1분 남짓의 영상으로 보여 드립니다. 소리는 없습니다.' }))),
+    //  (#5550) 영상 — 처음 설정 첫 장면의 온보딩 영상(기초)과 사용 가이드(라이블리 동작원리). 여기서 다시 본다.
+    el('div', { class: 'gd-films' }, ...FILMS.map((f) =>
+      el('button', { class: 'gd-film', type: 'button', onclick: () => openWelcomeFilm(f) },
+        el('span', { class: 'gd-film-th' }, el('img', { src: f.poster, alt: '', loading: 'lazy' }), el('i', { class: 'gd-film-play', 'aria-hidden': 'true' })),
+        el('span', { class: 'gd-film-b' }, el('b', { text: f.label }), el('span', { text: f.blurb }))))),
     el('div', { class: 'gd-path' }, ...first.map((p, i) =>
       el('a', { class: 'gd-path-a', href: guideHref(p.slug) },
         el('i', { class: 'gd-no', text: String(i + 1) }),

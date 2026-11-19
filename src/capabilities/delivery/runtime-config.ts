@@ -4,6 +4,7 @@ import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
+import { parseSecretRef, SECRET_REF_FORMS, SECRET_REF_MAX } from "../../db/secret-ref.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../../org/policies/storage-policy.js";
 import type { CallLogPolicyPatch } from "../../org/policies/call-log-policy.js"; // #1082 호출 감사로그 보존기간
 import {
@@ -516,14 +517,17 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (!Array.isArray(input.allowed_internal_hosts)) throw new HttpError(400, "allowed_internal_hosts 는 배열이어야 합니다");
         patch.allowed_internal_hosts = input.allowed_internal_hosts.map((h) => str(h, "allowed_internal_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
       }
-      // db 소스 auth_ref 가 참조할 수 있는 비번 env '이름' 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
-      //  외부(비번 필요) 소스 등록이 불가능했다). allowed_auth_envs 와 동일한 env 이름 형식 검증. 값이 아니라 이름만.
+      // db 소스 auth_ref 가 참조할 수 있는 비번 참조 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
+      //  외부(비번 필요) 소스 등록이 불가능했다). 값이 아니라 참조만 — 환경변수 이름 · gcp-sm: · aws-sm:(#1764). 등록 도구와
+      //  같은 판정(secret-ref.parseSecretRef)을 써서, 여기서 받은 꼴은 auth_ref 로도 반드시 받힌다.
+      //  어느 꼴도 아닌 항목(실수로 붙여 넣은 비밀번호일 수 있다)은 오류 문장에 되싣지 않고 몇 번째인지만 말한다.
       if (input.allowed_db_secret_refs !== undefined) {
         if (!Array.isArray(input.allowed_db_secret_refs)) throw new HttpError(400, "allowed_db_secret_refs 는 배열이어야 합니다");
-        patch.allowed_db_secret_refs = input.allowed_db_secret_refs.map((e) => str(e, "allowed_db_secret_refs[]", 100).trim()).filter(Boolean);
-        for (const e of patch.allowed_db_secret_refs) {
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) throw new HttpError(400, `allowed_db_secret_refs 항목 '${e}' 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)`);
-        }
+        patch.allowed_db_secret_refs = input.allowed_db_secret_refs.map((e) => str(e, "allowed_db_secret_refs[]", SECRET_REF_MAX).trim()).filter(Boolean);
+        patch.allowed_db_secret_refs.forEach((e, i) => {
+          const pr = parseSecretRef(e);
+          if (!pr.ok) throw new HttpError(400, `allowed_db_secret_refs ${i + 1}번째 항목 — ${pr.error}`);
+        });
       }
       if (input.write_tools !== undefined) {
         if (!Array.isArray(input.write_tools)) throw new HttpError(400, "write_tools 는 배열이어야 합니다");
@@ -737,7 +741,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
       allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
       allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
-      allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
+      allowed_db_secret_refs: z.array(z.string()).optional().describe(`db 소스 auth_ref 가 참조 가능한 비번 참조 화이트리스트(값 아님) — ${SECRET_REF_FORMS}. 여기 적은 비밀은 등록한 DB 접속에 비밀번호로 쓰이니 DB 비밀번호 참조만 적는다(비밀이 나가는 경계)`),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
       pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
       session_share: z.object({
