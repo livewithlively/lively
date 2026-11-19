@@ -60,7 +60,7 @@ import { echoedInTurns, promptHead, sameSaid, unconfirmedRow } from './lib/outbo
 import { queuedSay, sayIdOf, sayOrderTs } from './lib/queued-say.js';   // #4850 — 일하는 중에 친 사람 말(끼워 넣기 줄)도 사람 말 줄처럼 그린다
 import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
-import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
+import { endedSessPhrase, endedInError, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
 import { watchShown } from './lib/shown.js';   // #5398 — 이 화면이 지금 보이나(숨은 탭 · 셸이 숨긴 세션) — 다시 보이면 따라잡는다
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
@@ -289,6 +289,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   있다(scripts/session-open-restore.test.mjs ⑦-b). 여기 적으면 그 가드가 엉뚱한 블록을 잰다.
   let goneByFrame = false;                      // 프레임이 «이 박스 없다» 고 알려 왔다(아래 onTermMsg 의 gone 신호)
   let goneCanRestore = false;                   //  그때 함께 온 «되살릴 수 있다»(서버 메타 canRestore)
+  //  #5580 후속 — 세션이 꺼질 때 **끝나지 않았던** 마지막 턴(그 턴의 끝 줄 turn_duration 이 없다). 끝난 사유가 고장으로 확인되면
+  //   그 턴 끝에 «일하던 중에 끊겼다» 를 단다(markCut). 사유는 늦게 올 수 있다 — 서버는 사라진 세션을 3분 뒤에야 lost 로 적는다.
+  let cutTurn: ChatTurn | null = null;
+  let frameEnd: EndFactsMsg | null = null;      //  액자가 서버에게 들은 끝난 사유(dropTermFrame) — 목록 행보다 먼저 올 수 있다
   //  ⚠ 자동 되돌리기는 **한 번은 다시 시도한다**. 아래 update() 의 되돌리기 줄은 «한 틱 blip 에서 스스로
   //   빠져나오는 유일한 출구»(2026-09-08)이기도 해서, 프레임이 한 번 죽었다고 영영 닫으면 관측이 회복돼도
   //   그 탭은 터미널을 잃는다. 두 번째로 같은 말을 들으면(= 정말 죽은 세션이다) 그때 자동은 멈춘다 —
@@ -1528,6 +1532,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (goneByFrame && !termFrame) return;       // 이미 걷었다(부팅 게이트와 4410 이 둘 다 알릴 수 있다)
     termGoneN += 1;                              // ⚠ **실제로 걷은 횟수**만 센다 — 한 프레임의 중복 신고로 상한을 태우지 않는다
     goneByFrame = true;
+    if (end) frameEnd = end;
+    if (running && cur) cutTurn = cur.t;         // 끝나지 않은 턴 — 고장으로 끝났으면 아래 markCut 이 마감하며 표시한다
     if (termFrame) { termFrame.remove(); termFrame = null; }
     termReady = false; termQueue = [];
     termStatusEl.textContent = ''; termStatusEl.hidden = true;
@@ -1539,6 +1545,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const phrase = endedSessPhrase(end ? sessLikeOfFacts(end) : null) || endedSessPhrase(target.raw);
     const name = phrase || '멈춰 있는 세션';
     view.setNote(canRevive() ? `${name}이에요. 아래에 말을 걸면 이어서 열려요.` : `${name}이에요. 대화 기록만 남아 있어요.`);
+    markCut();
     emitView();   // #4996 — setMode('chat') 은 액자를 걷기 전에 불렸다(위) — 걷은 지금 다시 잰다
   }
 
@@ -2545,8 +2552,25 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const busy = !!(target.raw?.working || target.raw?.agentState === 'busy');
     const looksLive = running && !dead() && (busy || (src?.kind !== 'log' && staleMs < 120_000));
     if (cur && looksLive) { view.running(cur.t); view.busy(true); }
-    else { running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false); }
+    else {
+      if (running && cur && dead()) cutTurn = cur.t;   // 꺼진 세션의 끝나지 않은 마지막 턴 — 고장으로 끝났으면 아래 markCut 이 표시한다
+      running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false);
+      markCut();
+    }
     paintTitle();
+  }
+  /**
+   * #5580 후속 — 끝나지 않은 채 세션이 꺼진 턴에 «일하던 중에 끊겼다» 를 단다. 조건 셋이 다 서야 한다:
+   *  ① 그 턴이 정말 안 끝났다(cutTurn — 끝 줄 turn_duration·stop_hook_summary 가 없다) ② 끝 줄을 믿을 수 있는 기록이다(박스 파일 —
+   *   중앙 기록은 그 줄을 안 담아 모든 턴이 안 끝난 것처럼 보인다, finishReplay 머리말) ③ 고장으로 끝났다(사람이 끝냈거나 시스템이
+   *   쉬는 세션을 끈 것은 아니다 — 사유를 모르면 단정하지 않는다). 사유가 늦게 오면(목록 행 · 액자) 그때 다시 부른다.
+   */
+  function markCut(): void {
+    if (!cutTurn || src?.kind !== 'box' || !dead()) return;
+    if (!endedInError(target.raw) && !(frameEnd && endedInError(sessLikeOfFacts(frameEnd)))) return;
+    if (cur && cur.t === cutTurn) { running = false; view.busy(false); }   // 액자가 먼저 알려 온 판 — 아직 «도는 중» 이던 턴을 여기서 마감한다
+    view.settle(cutTurn, { cut: true });
+    cutTurn = null;
   }
 
   // 위로 더 — [from-WINDOW, from) 창을 읽어 **턴 단위로 거꾸로** 앞에 끼운다(보고 있던 자리는 그대로).
@@ -3373,7 +3397,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintState();
     paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다
     paintActs();                                // #5319 [복제] · [옮기기] — 살아 있음 · 소유가 바뀌면 설 수 있는지도 바뀐다
-    if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
+    if (!wasDead && dead()) { if (running && cur) cutTurn = cur.t; running = false; if (cur) view.settle(cur.t); }
+    if (wasDead && !dead()) cutTurn = null;      // 되살아났다 — 이어서 도는 턴은 끊긴 게 아니다
+    markCut();                                   // 끝난 사유가 이번 행에 처음 실려 왔을 수 있다(lost 는 3분 뒤에 적힌다)
     //  #4783 — 목록이 **끝난 사유**까지 실어 오면(서버가 끝낸 자리에서 적은 확정 사실 — 흔들리는 관측이 아니다) 액자의 신호를
     //   기다리지 않고 걷는다. 액자는 이제 어떤 끝이든 알려 오지만(handOffToShell), 그 신호가 늦거나 빠진 판에도 조작 못 하는 터미널이 남지 않게.
     //   ⚠ 사유는 판이 설 때 지워지고 끄기 직전에만 적히므로 살아 있는 행엔 없다 — 이 줄이 도는 세션의 터미널을 걷는 일은 없다.
