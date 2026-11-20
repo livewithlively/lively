@@ -60,7 +60,8 @@ const BG_POST_TIMEOUT_MS = 120_000;             // 8MB 한 조각을 느린 회�
 const BG_RETRY_MS = [2_000, 10_000, 30_000];    // 네트워크 오류·408·429·5xx 일 때만 다시 — 그 밖의 거절(403·413 등)은 바로 접는다
 const BG_SELF_TAG = "lively-logcap-bg-";
 const BG_LOCK_TAG = "lively-logcap-lock-";
-const BG_QUIET_MS = 3_000;                      // ⑨ 끝에 닿은 뒤 잠금을 쥔 채 기다리는 시간 — 종료하는 하네스의 늦은 마지막 줄까지
+//  ⑨ 끝에 닿은 뒤 잠금을 쥔 채 기다리는 시간 — 종료하는 하네스의 늦은 마지막 줄까지. env 는 시험이 줄이는 자리(0~10초만 받는다).
+const BG_QUIET_MS = (() => { const v = Number(process.env.LIVELY_LOGCAP_BG_QUIET_MS); return process.env.LIVELY_LOGCAP_BG_QUIET_MS && Number.isFinite(v) && v >= 0 && v <= 10_000 ? v : 3_000; })();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const retryable = (status) => status === 0 || status === 408 || status === 429 || status >= 500;
 
