@@ -312,7 +312,7 @@ function defaultReapDeps(): NodeReapDeps {
     },
     markEnded: (id, e, atSec) => markSessionEnded(id, e, {}, atSec),
     revertEnded: (id, why, atSec) => revertSessionEnded(id, why, atSec),
-    revokeTokens: async (id) => (await import("../terminal/profiles.js")).revokeSessionHookToken(id),
+    revokeTokens: async (id) => (await import("../terminal/profiles.js")).retireSessionTokens(id),   // #5611 — 훅 토큰은 유예 뒤(SessionEnd 캡처가 그 토큰으로 올린다)
     now: () => Date.now(),
   };
 }
