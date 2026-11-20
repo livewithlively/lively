@@ -506,6 +506,43 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 높은 권한/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets · 시트 계정은 남의 실행을 못 봄");
 }
 
+// ── S26b #1782 자동화(슬랙 다리가 워크플로 · 봇 글을 run_as 이름으로 시작한 작업) — 구독은 공용 시트도 · 본인 구독도 거절 · API 키는 돈다 ──
+//  엣지 표 A(spec-1782): a 공용 시트 + 자동화 작업 신원 → 403 / b 같은 자리 · 자동화 아님 → 받는다(종전) / c 본인 구독 + 자동화 → 403 / d API 키 + 자동화 → 받는다
+//   / e 표시를 못 읽으면 자동화로 본다(닫힘) → 403 / f 사람(앱 화면)은 표시를 묻지 않는다 / g targets 도 같은 판정(쓸 수 없음 + 까닭)
+{
+  const NOW = "2026-11-20T00:00:00.000Z";
+  const seatOn = { default: { kind: "subscription" as const, member: "seat" }, service_seats: { seat: { admin: { by: "root", at: NOW }, member: { at: NOW } } } };
+  const jobSrv = (id: string): LivelyUser => member(id, { appId: "crm", appServer: true, appJobId: 7 });
+  const withAuto = (o: Parameters<typeof world>[0], auto: boolean | "throws") => {
+    const x = world(o);
+    let asks = 0;
+    x.d.appServerAutomation = async () => { asks++; if (auto === "throws") throw new Error("표시를 못 읽었다(가짜)"); return auto; };
+    return { ...x, asks: () => asks };
+  };
+  const a = withAuto({ settings: seatOn, key: null }, true);
+  await fails(submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, a.d), 403, /자동화/, "account_unavailable");
+  assert.equal(a.w.submitted.length, 0, "a 작업을 보내지 않는다");
+  assert.ok(a.asks() >= 1, "a 배선 — 표시를 실제로 물었다");
+  const b = withAuto({ settings: seatOn, key: null }, false);
+  const rb = await submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, b.d);
+  assert.deepEqual(rb.account, { kind: "subscription", member: "seat" }, "b 자동화가 아니면 종전대로 공용 시트");
+  const c = withAuto({ settings: { default: { kind: "subscription" as const, member: "alice" } }, key: null }, true);
+  await fails(submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, c.d), 403, /자동화/, "account_unavailable");
+  const d0 = withAuto({}, true);
+  const rd = await submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, d0.d);
+  assert.deepEqual(rd.account, { kind: "api_key" }, "d API 키는 자동화도 돈다");
+  const e = withAuto({ settings: seatOn, key: null }, "throws");
+  await fails(submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, e.d), 403, /자동화/, "account_unavailable");
+  const f = withAuto({ settings: seatOn, key: null }, true);
+  await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, f.d);
+  assert.equal(f.asks(), 0, "f 사람(앱 화면) 요청은 자동화 표시를 묻지 않는다");
+  const g = withAuto({ settings: seatOn, key: null }, true);
+  const tg = await targetsFor(jobSrv("alice"), {}, g.d, {});
+  assert.equal((tg.account as { available: boolean }).available, false, "g targets — 쓸 수 없음");
+  assert.match(String((tg.account as { reason: string }).reason), /자동화/);
+  ok("S26b 자동화(슬랙 다리 run_as) — 공용 시트 · 본인 구독 거절 · API 키 받음 · 못 읽으면 닫힘 · 사람 요청은 묻지 않음 · targets 같은 판정");
+}
+
 // ── S27 앱 서버가 보낸 본인 요청(#1639 · 엣지 표 a~q) — 물은 사람이 구독 주인 본인이면 그 구독으로 · 공용 시트와 같은 울타리 · 남 · 사람이 보지 않는 자리는 거절 ──
 {
   const mine = { default: { kind: "subscription" as const, member: "alice" } };
