@@ -78,11 +78,13 @@ export interface TokenMeta {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  /** 만료 시각(없으면 null = 만료 없음). 세션 훅 토큰은 null 로 굽고, 세션이 내려가면 expireTokenSoon 이 유예 뒤로 당긴다(#5611). */
+  expires_at: string | null;
 }
 
 export async function listTokens(): Promise<TokenMeta[]> {
   const r = await itemsPool.query(
-    `SELECT token_hash, user_id, scopes, label, member_id, created_at, last_used_at, revoked_at
+    `SELECT token_hash, user_id, scopes, label, member_id, created_at, last_used_at, revoked_at, expires_at
        FROM auth_token ORDER BY created_at DESC`,
   );
   return r.rows as TokenMeta[];
@@ -116,6 +118,25 @@ export async function revokeToken(tokenHash: string, actor?: string, source?: st
   // 0건 — '이미 회수됨'인지 '그런 토큰 없음'인지는 여기서만 갈 수 있다(UPDATE 술어가 둘을 같이 떨군다).
   const e = await exec.query(`SELECT 1 FROM auth_token WHERE token_hash=$1`, [tokenHash]);
   return (e.rowCount ?? 0) > 0 ? "already-revoked" : "not-found";
+}
+
+// 유예 뒤에 죽게 한다(#5611) — 즉시 회수(revokeToken)와 달리 만료 시각을 **now() + inSec** 로 당긴다.
+//  왜: 세션이 내려갈 때 뜨는 SessionEnd 훅(session-log-capture-end)이 그 세션의 훅 토큰으로 마지막 답을 올린다.
+//   종전처럼 kill 직후 회수하면 훅 목록 조회부터 401 이라 아무것도 안 돈다(실측 2026-11-20 매니지드 — 보관 뒤 중앙 기록 0바이트 그대로).
+//  만료 판정은 verifyDbToken 이 DB now() 로 하므로 게이트웨이가 재시작해도 이 약속은 지켜진다(타이머가 아니다).
+//  ★ 수명을 **줄이는 쪽으로만** 움직인다 — 이미 그보다 일찍 죽게 돼 있거나 회수된 토큰은 건드리지 않는다(0건 = false).
+export async function expireTokenSoon(tokenHash: string, inSec: number, actor?: string, source?: string): Promise<boolean> {
+  const sec = Number.isFinite(inSec) && inSec > 0 ? Math.floor(inSec) : 0;
+  const r = await itemsPool.query(
+    `UPDATE auth_token SET expires_at = now() + ($2::int * interval '1 second')
+      WHERE token_hash=$1 AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > now() + ($2::int * interval '1 second'))
+      RETURNING expires_at`,
+    [tokenHash, String(sec)],
+  );
+  if ((r.rowCount ?? 0) === 0) return false;
+  await audit("auth_token", tokenHash, "expire", null, { expires_at: (r.rows[0] as { expires_at: unknown }).expires_at }, actor, source);
+  return true;
 }
 
 // ── 회수 핸들(#2646) ──────────────────────────────────────────────────────────

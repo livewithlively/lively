@@ -56,7 +56,7 @@ import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBu
 import { muxGenerationsActive, killEmptyMuxServers } from "./mux-generations.js";   // #4931 — 노드 tmux 세대
 import { sessionActivityTitle, scrapePane, screenRunEffects, screenReadPlan, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase, backgroundHolds } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
-import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
+import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, retireSessionTokens } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { ensureProfileKitWired } from "./profile-kit-seed.js";   // #4135 — 프로필 dir 은 mkdir 만으론 빈 껍데기다
 import { logger } from "../log.js";
@@ -1429,7 +1429,7 @@ export async function killSession(user: LivelyUser, id: string, opts?: { admin?:
     throw err;
   }
   // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
-  await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));
+  await retireSessionTokens(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));   // #5611 — 훅 토큰은 유예 뒤
   if (opts?.preserveState) return;   // 보관(회수)은 **복원 가능**하다 — desired-state 를 남긴다
   await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
