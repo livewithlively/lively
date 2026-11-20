@@ -1,5 +1,5 @@
 // ───────────────────────────────────────────────────────────────────────────
-// org_hook 소스 (event=Stop, harness=all) — 관리탭 ▸ 커스텀 훅으로 등록. (#905 C1 슬2c 세션이력 캡처)
+// org_hook 소스 (event=Stop · SessionEnd 판 session-log-capture-end, harness=all) — 관리탭 ▸ 커스텀 훅으로 등록. (#905 C1 슬2c 세션이력 캡처)
 //  ⚠ 키트 번들 파일 아님. run-custom.mjs 가 매 턴 끝에 게이트웨이에서 fetch 해 임시 .mjs(ESM)로 실행한다.
 //  하는 일: 이 턴에 늘어난 **트랜스크립트(대화 기록)** 조각을 게이트웨이로 올린다(offset-CAS append).
 //   여태 세션 대화는 로컬에만 있었다 — 환경·멤버가 달라지면 이어볼 수도 이어받을 수도 없었다(#905 C1).
@@ -28,6 +28,14 @@
 //      대화 하나에 뒤에서 올리는 판은 하나다(임시 폴더의 잠금). 그 판이 살아 있으면 다음 턴의 훅은 올리지 않고 그 판에 맡긴다 —
 //      그 판은 잠금을 푼 **뒤에** 파일 끝을 다시 재서, 그 사이 늘어난 몫까지 잇는다. 겹쳐 올려도 서버 offset-CAS 가 중복을 흡수한다.
 //      LIVELY_LOGCAP_BG_OFF=1 이면 뒤에서 돌리지 않고 이 훅의 예산 안에서 앞에서 잇는다(뒤에 프로세스를 둘 수 없는 자리·시험용).
+//   ⑨ **세션이 내려갈 때(SessionEnd) 한 번 더 올린다**(#5611 후속). Stop 이 안 뜨는 턴 끝이 있다 — 사용 한도·API 오류로 끝난 턴
+//      (Claude Code 는 Stop 대신 StopFailure 만 띄운다)과 사람이 Esc 로 끊은 턴(아무 훅도 안 뜬다). 그 뒤 세션이 꺼지면(보관·자동 끔)
+//      그 턴은 중앙 기록에 끝내 안 들어갔다(실측 2026-11-20 맥미니: 턴마다 한도로 끝난 세션 둘 · 끊고 둔 세션 하나 — 중앙 기록 0바이트,
+//      대화창이 통째로 비었다). 같은 소스를 SessionEnd 에도 건다(시드 session-log-capture-end) — tmux 를 내려도(SIGHUP) Claude Code 는
+//      SessionEnd 훅을 띄우고 끝나기를 기다린다(2.1.329 실측: kill 0.1초 뒤 훅 시작 · 2.5초 걸린 훅도 끝까지 · 그 훅이 띄운 분리 프로세스도 끝까지).
+//      내려가는 중이라 이 훅은 네트워크를 타기 전에 ⑧ 의 뒤에서 올리는 판부터 띄우고 끝난다 — 남은 일은 그 판이 한다. 그 판은 끝에 닿은 뒤
+//      잠금을 쥔 채 잠깐(BG_QUIET_MS) 기다렸다가 파일 끝을 다시 잰다 — 하네스가 종료하며 마지막 줄을 조금 늦게 적어도 잇는다.
+//      이 판 역시 러너(run-custom) 뒤에서 돈다 — 인코그니토·«이 세션만 끔»·기록 범위 밖이면 러너가 먼저 끝내 여기까지 오지 않는다.
 // ───────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -52,6 +60,7 @@ const BG_POST_TIMEOUT_MS = 120_000;             // 8MB 한 조각을 느린 회�
 const BG_RETRY_MS = [2_000, 10_000, 30_000];    // 네트워크 오류·408·429·5xx 일 때만 다시 — 그 밖의 거절(403·413 등)은 바로 접는다
 const BG_SELF_TAG = "lively-logcap-bg-";
 const BG_LOCK_TAG = "lively-logcap-lock-";
+const BG_QUIET_MS = 3_000;                      // ⑨ 끝에 닿은 뒤 잠금을 쥔 채 기다리는 시간 — 종료하는 하네스의 늦은 마지막 줄까지
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const retryable = (status) => status === 0 || status === 408 || status === 429 || status >= 500;
 
@@ -189,6 +198,8 @@ async function runBackground() {
   process.on("exit", () => releaseLock(lock));
   while (takeLock(lock)) {
     const done = await pushToEnd(cl, t, deadline);
+    //  ⑨ 끝에 닿았으면 잠금을 쥔 채 잠깐 기다린다 — 그 사이 끝난 훅은 이 판에 맡기고, 종료하는 하네스가 늦게 적은 줄은 아래에서 잰다.
+    if (done != null && Date.now() + BG_QUIET_MS < deadline) await sleep(BG_QUIET_MS);
     releaseLock(lock);
     if (done == null) return;                                                         // 다음 턴의 훅이 서버 워터마크부터 다시 맡는다
     let size = 0; try { size = (await fsp.stat(t.transcriptPath)).size; } catch { return; }
@@ -283,6 +294,13 @@ const main = async () => {
   const wsSlug = (process.env.LVLY_TENANT_SLUG || "").trim();
   const fgLeft = () => Math.max(500, Math.min(6000, BUDGET_MS - (Date.now() - startedAt)));
   const cl = makeClient({ base, token, executionId, wsSlug, nodeId, harness });
+  const target = { base, nodeId, sessionId, transcriptPath, harness, executionId, wsSlug };
+  const lock = lockPath(nodeId, sessionId);
+
+  //  ⑨ 세션이 내려가는 중 — 네트워크를 타기 전에 뒤에서 올리는 판부터 띄우고 끝낸다(정책 확인·올리기는 그 판이 한다).
+  //   그 판이 이미 돌고 있으면 그 판이 잠금을 푼 뒤 파일 끝을 다시 잰다. 띄우지 못하면 아래 턴 끝 경로로 앞에서 올린다.
+  const ending = String(ev.hook_event_name || ev.hookEventName || "") === "SessionEnd";
+  if (ending && process.env.LIVELY_LOGCAP_BG_OFF !== "1" && (bgAlive(lock) || spawnBackground(target, token))) return;
 
   // 3) 한 번의 GET 으로 오프셋 + 캡처 정책. enabled 꺼짐·정책 밖 하네스면 여기서 끝(전송 안 함).
   const head = await cl.watermark(sessionId, fgLeft());
@@ -294,7 +312,6 @@ const main = async () => {
   // 4) 주 트랜스크립트 먼저(head 로 워터마크 이미 받음). ⑦ 마지막 답이 파일에 적힌 뒤에 읽는다 — 서브에이전트 몫 예산은 남긴다.
   await settleLastReply(transcriptPath, Number(head.bytes) || 0, ev.last_assistant_message,
     Math.min(Date.now() + SETTLE_MAX_MS, startedAt + BUDGET_MS - 2000));
-  const lock = lockPath(nodeId, sessionId);
   //  ⑧ 이 대화를 뒤에서 올리는 판이 살아 있으면 그 판에 맡긴다 — 그 판은 잠금을 푼 뒤 파일 끝을 다시 재므로 이번 턴 몫도 잇는다
   //   (마지막 답이 적힌 **뒤에** 보는 것이라, 그 판이 다시 잴 때 이 턴의 끝은 이미 파일에 있다).
   if (!bgAlive(lock)) {
@@ -302,7 +319,6 @@ const main = async () => {
     const behind = () => r.size != null && (r.bytes == null ? retryable(r.status) : r.bytes < r.size);
     if (behind()) {
       const bgOff = process.env.LIVELY_LOGCAP_BG_OFF === "1";
-      const target = { base, nodeId, sessionId, transcriptPath, harness, executionId, wsSlug };
       if (bgOff || !spawnBackground(target, token)) {
         //  뒤에서 못 돌리는 자리 — 이 훅의 예산 안에서 앞에서 잇는다(서브에이전트 몫 1초는 남긴다).
         while (r.bytes != null && behind() && Date.now() - startedAt < BUDGET_MS - 1000) {
