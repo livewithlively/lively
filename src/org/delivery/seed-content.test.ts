@@ -172,7 +172,7 @@ const INJECTIONS = new Set(["always", "recalled"]);
   assert.equal(end!.enabled, turn.enabled, "새 설치의 켜짐 여부가 턴 끝 판과 같아야 한다");
   assert.ok(end!.timeout_sec <= 9, `러너의 SessionEnd 상한(10초) 안이어야 한다 — ${end!.timeout_sec}초`);
   assert.ok(DEFAULT_HOOKS.indexOf(end!) > DEFAULT_HOOKS.indexOf(turn), "본 판이 먼저 심겨야(승격까지 끝나야) 새 판이 그 켜짐을 따른다");
-  const seedSrc = fs.readFileSync(new URL("./seed-content.ts", import.meta.url), "utf8");
+  const seedSrc = fs.readFileSync(path.join(REPO_ROOT, "src", "org", "delivery", "seed-content.ts"), "utf8");   // dist 에서 돌아도 원본을 읽는다
   assert.match(seedSrc, /SEED_ENABLED_FOLLOWS[^=]*=\s*\{[^}]*"session-log-capture-end":\s*"session-log-capture"/,
     "처음 심을 때 켜짐을 턴 끝 판에서 따라야 한다 — 운영자가 끈 조직에 내려갈 때 판만 켜진 채 심기면 대화가 올라간다");
   ok("대화 캡처 SessionEnd 판 — 같은 소스 · 같은 하네스 · 상한 안 · 처음 켜짐은 턴 끝 판을 따른다(#5611)");
