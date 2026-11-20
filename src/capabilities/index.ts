@@ -75,6 +75,7 @@ import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { nasFileCapabilities } from "./nas-files.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
 import { slackConnectCapabilities } from "./slack-connect.js";
+import { slackBridgeCapabilities } from "./slack-bridge.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { googleConnectCapabilities } from "./google-connect.js";
@@ -161,6 +162,7 @@ const all: Capability[] = [
   ...nasFileCapabilities, // NAS(FTP) 파일 도구 — 구성원 본인 FTP 자격으로만 연다(net/nas/nas-access.ts).
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
+  ...slackBridgeCapabilities, // #1782: 슬랙 다리 — org_slack_bridges(상태)/set/remove(admin) + slack_bridge_call(앱 서버 전용 REST). 소켓 모드 이벤트 → 앱 백그라운드 작업 · 금고 봇 토큰으로 답하기.
   ...notionConnectCapabilities,
   ...githubConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
   orgAppTools, orgAppToolsSetWrite, // #2243 3차: 앱 상세가 «AI가 내 계정으로 하는 일»을 읽기/쓰기 동사로 보여 주는 창구(org_tool.level=L2 가 쓰기).

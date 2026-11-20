@@ -166,6 +166,11 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobUnattended(user.appJobId);
       return false;
     },
+    //  #1782 — 사람이 시키지 않은 작업(슬랙 다리의 run_as)은 백그라운드 작업 행에만 표시가 있다(도구 부르기 신원은 사람이 부른 것이다).
+    appServerAutomation: async (user) => {
+      if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobAutomation(user.appJobId);
+      return false;
+    },
   };
   return cached;
 }

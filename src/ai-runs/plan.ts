@@ -207,12 +207,19 @@ export interface SessionTie { owner: string | null; participant: boolean; human:
  * 구독 판정의 요청자 — member = 보낸 사람(앱 서버가 실은 사람 신원이면 그 사람). unattended(#1639) = 앱 서버가 실은 그 신원이 사람이 보지 않는 자리
  *  (위탁 · 상시 세션 · 작업 AI)에서 왔다(service.callerUnattended). 앱 서버의 본인 구독 판정만 본다.
  */
-export interface RunRequester { member: string; kind: "member" | "app_server"; unattended?: boolean }
+export interface RunRequester { member: string; kind: "member" | "app_server"; unattended?: boolean; automation?: boolean }
 const MACHINE_SESSION_REFUSAL = "이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 구독은 사람이 보는 세션에서만 쓸 수 있어요. 자동화는 워크스페이스 API 키가 필요합니다";
+/**
+ * #1782 사람이 시키지 않은 작업(슬랙 다리가 워크플로 · 봇 글을 run_as 구성원 이름으로 시작한 작업과 그 안에서 시작한 작업)의 거절 — 공용 시트도 받지 않는다.
+ *  위 머리말의 ⚠(«자동화를 «만든 사람 id + 앱 서버» 꼴로 열면 이 판정을 그대로 통과한다 — 그때 자동화 주체를 가르는 표지를 두고 여기서 거절해야 한다»)가 가리킨
+ *  바로 그 꼴이다 — 표지는 작업 행의 automation(apps/app-jobs-store.appJobAutomation)이고 service 가 requester.automation 으로 넘긴다.
+ */
+export const AUTOMATION_REFUSAL = "이 실행은 사람이 시키지 않은 자동화(슬랙 다리가 워크플로 · 봇 글로 시작한 작업)에서 왔습니다 — 자동화는 구독(공용 시트 포함)을 쓸 수 없고 워크스페이스 API 키가 필요합니다";
 export function subscriptionRefusal(
   account: AiAccount, requester: RunRequester, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
 ): string | null {
   if (account.kind !== "subscription") return null;
+  if (requester.automation === true) return AUTOMATION_REFUSAL;
   if (seat && seatShared(seat.facts)) {
     if (!seat.requesterActive) return `이 앱의 실행 계정은 공용 시트(${account.member})입니다 — 공용 시트는 이 워크스페이스의 활성 구성원이 보낸 요청에만 쓸 수 있어요(${requester.member} 은(는) 구성원으로 확인되지 않습니다)`;
     if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;

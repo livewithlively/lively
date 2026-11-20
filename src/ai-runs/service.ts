@@ -172,6 +172,17 @@ export interface AiRunDeps {
    *  앞단 서명 신원이면 아니다. 앱 서버의 본인 구독 판정에만 묻는다.
    */
   appServerUnattended(user: Pick<LivelyUser, "appCallId" | "appJobId">): Promise<boolean>;
+  /**
+   * #1782 이 앱 서버 호출이 사람이 시키지 않은 작업(슬랙 다리의 run_as)에서 왔나 — 백그라운드 작업의 돌기 신원이면 그 행의 표시(apps/app-jobs-store.appJobAutomation).
+   *  참이면 구독(공용 시트 포함)을 거절한다(plan.AUTOMATION_REFUSAL). 없는 자리(시험의 옛 가짜)는 아니다로 본다.
+   */
+  appServerAutomation?(user: Pick<LivelyUser, "appCallId" | "appJobId">): Promise<boolean>;
+}
+
+/** #1782 앱 서버 호출이 자동화 작업에서 왔나 — 앱 서버 요청만 본다. 읽지 못하면 자동화로 본다(구독을 열지 않는 쪽 · 닫힘). */
+async function requesterAutomation(user: LivelyUser, who: { kind: "member" | "app_server" }, d: Pick<AiRunDeps, "appServerAutomation">): Promise<boolean> {
+  if (who.kind !== "app_server" || !d.appServerAutomation) return false;
+  return d.appServerAutomation(user).catch(() => true);
 }
 
 export const ACCOUNT_UNAVAILABLE = "account_unavailable";
@@ -426,7 +437,8 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //  #1639 앱 서버가 보낸 본인 요청 — 사람이 보지 않는 자리에서 온 신원이면 아래에서 거절된다. 공용 시트가 켜진 구독이면 이 갈래가 아니다(시트 홈 · 시트 상한 · #5081 그대로).
   const appServerOwn = !sharedSeat && isAppServerOwn({ requester: who.member, requester_kind: who.kind, account_kind: account.kind, account_member: account.kind === "subscription" ? account.member : null });
   const unattended = appServerOwn && (await d.appServerUnattended(user));
-  const refusal = subscriptionRefusal(account, { ...who, unattended }, await sessionTieOf(ctx, who, account, d), seat);
+  const automation = account.kind === "subscription" && (await requesterAutomation(user, who, d));
+  const refusal = subscriptionRefusal(account, { ...who, unattended, automation }, await sessionTieOf(ctx, who, account, d), seat);
   if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
   if (account.kind === "api_key" && !key) throw new HttpError(409, "이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   const executor = executorFor(kind, account);
@@ -906,7 +918,8 @@ export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, 
     //  #1639 앱 서버의 본인 구독 — 접수와 같은 판정(이 신원이 사람이 보지 않는 자리에서 왔으면 쓸 수 없다 · 못 읽으면 «쓸 수 없음» 쪽으로).
     const own = !shared && isAppServerOwn({ requester: who.member, requester_kind: who.kind, account_kind: a.kind, account_member: a.member });
     const unattended = own && (await d.appServerUnattended(user).catch(() => true));
-    const refusal = subscriptionRefusal(a, { ...who, unattended }, await tieOnce(a), seat);
+    const automation = await requesterAutomation(user, who, d);
+    const refusal = subscriptionRefusal(a, { ...who, unattended, automation }, await tieOnce(a), seat);
     const loggedIn = refusal ? null : await d.subscriptionLoggedIn(a.member).catch(() => null);
     return { kind: "subscription", member: a.member, shared_seat: shared, available: !refusal && loggedIn !== false, logged_in: loggedIn, reason: refusal ?? (loggedIn === false ? (shared ? "AI 연결 필요 — 공용 시트 계정이 Claude 에 로그인해야 합니다" : "AI 연결 필요 — 그 구성원이 Claude 에 로그인해야 합니다") : null), from };
   };

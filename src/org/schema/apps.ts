@@ -324,6 +324,10 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  #1639 unattended — 이 작업의 사람 신원이 사람이 보지 않는 자리(위탁 · 상시 세션 · 작업 AI)에서 왔다. 그 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended).
   //   시작할 때 정해지고 바뀌지 않는다 · 작업이 시작한 작업은 물려받는다. ⚠ 칸 묶음(LIGHT)에 넣지 않고 그 작업일 때만 적고 따로 읽는다(apps/app-jobs-store.ts 머리말 — 롤 창).
   await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false;`);
+  //  #1782 automation — 사람이 시키지 않은 작업(슬랙 다리가 워크플로 · 봇 글을 run_as 구성원 이름으로 시작한 것). 그 돌기 신원으로는 구독을 쓰지 못한다 —
+  //   공용 시트도 거절하고 워크스페이스 API 키만 쓴다(«자동화는 계속 거절» · ai-runs/plan.subscriptionRefusal). 시작할 때 정해지고 작업이 시작한 작업은 물려받는다.
+  //   unattended 와 같은 까닭으로 칸 묶음(LIGHT) 밖에 두고 그 작업일 때만 적는다(롤 창).
+  await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS automation BOOLEAN NOT NULL DEFAULT false;`);
   //  org_app_call(#5053 앱 v2-42) — 게이트웨이가 앱 서버의 라우트 하나를 **동기로** 부른 한 건(지금은 앱이 선언한 MCP 도구 · run.kind "server").
   //   흐름: dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원) → done · failed
   //   (게이트웨이가 답을 다 받았을 때 · 하우스키핑이 끝맺지 못한 줄을 닫는다). 판정은 apps/app-server-call-plan.ts · 흐름은 apps/app-server-call.ts.
