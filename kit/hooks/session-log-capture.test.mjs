@@ -85,7 +85,8 @@ async function mkTranscript(name, content) {
 const reset = () => { SERVER = {}; appends = []; requests = []; POST_DELAY_MS = 0; POST_FAIL = []; CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" }; };
 //  ⑧ 뒤에서 올리는 판의 잠금·사본은 os.tmpdir() 에 생긴다 — 시험마다 따로 둔 TMPDIR 로 가둬 남의 판과 섞이지 않게 한다.
 const bgTmp = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-slog-bg-"));
-const BG_ENV = { TMPDIR: bgTmp, TMP: bgTmp, TEMP: bgTmp };
+//  뒤의 판이 끝에 닿은 뒤 기다리는 시간(⑨, 운영 3초)은 시험에선 줄인다 — 늦게 적힌 줄 시험만 그 시간 안에 적는다.
+const BG_ENV = { TMPDIR: bgTmp, TMP: bgTmp, TEMP: bgTmp, LIVELY_LOGCAP_BG_QUIET_MS: "700" };
 const waitFor = async (cond, ms, what) => {
   const t0 = Date.now();
   while (!cond()) { if (Date.now() - t0 > ms) throw new Error(`${ms}ms 안에 안 됨 — ${what}`); await new Promise((r) => setTimeout(r, 50)); }
@@ -347,7 +348,7 @@ try {
     const tp = await mkTranscript("t20.jsonl", first + U("둘째 질문") + A("답하다 끊긴 부분"));   // 끊긴 턴 — Stop 이 안 떴다
     SERVER.s20 = { bytes: Buffer.byteLength(first), chunks: [{ at: 0, body: Buffer.from(first) }] };
     const size = fs.statSync(tp).size;
-    POST_DELAY_MS = 1500;   // 훅이 앞에서 올렸다면 이 응답을 기다리느라 늦게 끝난다
+    POST_DELAY_MS = 800;    // 훅이 앞에서 올렸다면 이 응답을 기다리느라 늦게 끝난다
     await runHook(END("s20", tp), { env: BG_ENV });
     assert.equal(appends.length, 0, "🔴 내려가는 중엔 훅이 앞에서 올리지 않고 뒤의 판에 맡긴다(하네스 종료를 붙잡지 않는다)");
     await waitFor(() => SERVER.s20?.bytes === size, 15_000, `끊긴 턴까지 — 지금 ${SERVER.s20?.bytes}/${size}`);
@@ -370,7 +371,7 @@ try {
     const tp = await mkTranscript("t22.jsonl", U("질문") + A("진행 중 문장"));
     await runHook(END("s22", tp), { env: BG_ENV });
     await waitFor(() => SERVER.s22?.bytes === fs.statSync(tp).size, 15_000, "첫 몫");
-    await new Promise((r) => setTimeout(r, 800));                // 종료하는 하네스가 마지막 줄을 늦게 적는다
+    await new Promise((r) => setTimeout(r, 250));                // 종료하는 하네스가 마지막 줄을 늦게 적는다(기다림 700ms 안)
     fs.appendFileSync(tp, A("늦게 적힌 마지막 답"));
     const size = fs.statSync(tp).size;
     await waitFor(() => SERVER.s22?.bytes === size, 15_000, `늦게 적힌 줄까지 — 지금 ${SERVER.s22?.bytes}/${size}`);
