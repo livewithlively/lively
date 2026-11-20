@@ -1,7 +1,7 @@
 // org_member — 구성원 CRUD + jsonb 부속(온보딩 보고·하네스 관측 스냅샷·머신 별명·로컬 토글 지시)
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
-import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
+import { IDENTITY_GLOBAL_DEFAULT_EXPR, TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { logger } from "../../log.js";
 import {
@@ -150,8 +150,16 @@ export async function listActiveAdminIds(): Promise<string[]> {
 export async function getMember(id: string): Promise<OrgMember | null> {
   //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
   //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
+  //  ★ 단 맥락 행이 없으면 신원 전역 자리(IDENTITY_GLOBAL_DEFAULT_EXPR)를 본다. 셀프호스트 다중 워크스페이스는 org_member 를
+  //   그 자리에 못박으므로(db/tenant-column.ts IDENTITY_GLOBAL_TABLES), 맥락식만으로는 둘째 워크스페이스 맥락에서 **모든 사람이
+  //   null** 이 된다 — 그러면 그 맥락에서 배차한 위탁은 의뢰자가 비활성으로 읽혀 setup-token 리스 없이 뜬다(node/task-scheduler.ts leaseEnvFor).
+  //   맥락 행을 먼저 고르므로 맥락 행이 있으면 맥락식과 같은 행이고, 매니지드는 RLS 가 전역 자리 행을 걸러 맥락식과 같다.
+  //   ⚠ 맥락 행 우선을 뒤집지 마라 — 정책 걸린 표에서 소유자 접속이 RLS 를 건너뛰면 남의 테넌트 행을 고르게 된다.
+  //   회귀 넷: src/org/store/get-member-tenant.pg-test.mjs.
   const r = await itemsPool.query(
-    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`, [id]);
+    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1
+        AND tenant_id IN (${TENANT_DEFAULT_EXPR}, ${IDENTITY_GLOBAL_DEFAULT_EXPR})
+      ORDER BY (tenant_id = ${TENANT_DEFAULT_EXPR}) DESC LIMIT 1`, [id]);
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
