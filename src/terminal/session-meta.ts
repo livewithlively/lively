@@ -15,8 +15,10 @@ export interface DeadSessionStateLike {
   owner: string;
   label?: string | null;
   project_id?: number | null;
-  /** 실행 폴더 — **공유 판정의 축**이다(#2116). project_id 가 아니다, 아래 deadSessionMeta 머리말 참조. */
+  /** 실행 폴더 — 초대자의 감춘 프로젝트 판정 재료(#2116 · sessionVisible). */
   dir?: string | null;
+  /** 초대받은 사람(@box_invites) — #5598 부터 소유자 · 관리자 밖의 사람이 메타를 보는 유일한 근거다. */
+  invites?: string[] | null;
   harness?: string | null;
   exited_at?: string | null;
   exit_reason?: string | null;
@@ -88,8 +90,9 @@ export type DeadSessionMetaResult =
 /**
  * 죽은(박스/노드에 없는) 세션의 메타를 만든다.
  *
- * 노출 범위는 **복원 권한과 같은 축**이다: 소유자·admin 은 전부 보고 되살릴 수 있고, 프로젝트 세션은 전원에게
- *  보이되(#452 공동 세션) 되살리는 건 소유자 몫이다(canRestore=false → 화면이 '소유자만 열기'로 안내).
+ * 노출 범위: 소유자·admin 은 메타를 보고 되살릴 수 있다. 초대받은 사람은 그 세션을 볼 수 있으면(viewerSees — sessionVisible)
+ *  메타를 보되 되살리는 건 소유자 몫이다(canRestore=false → 화면이 '소유자만 열기'로 안내). 그 밖의 사람에겐 존재조차 알리지 않는다.
+ *  (#5598 — 종전 «프로젝트 세션은 전원에게 보인다(#452)» 는 #1876 에서 폐기된 규칙이다.)
  *
  * ⭐ **'프로젝트 세션인가'는 `dir` 로 잰다 — `project_id` 가 아니다**(#2116, 2026-08-26 실측).
  *  이 함수만 `project_id > 0` 을 보고 나머지 게이트는 전부 cwd 를 봤다(`canSeeSession`·`canAttach`·
@@ -103,12 +106,14 @@ export function deadSessionMeta(
   st: DeadSessionStateLike | null | undefined,
   viewerId: string,
   isAdmin: boolean,
-  sharedByFolder: (dir: string) => boolean,
+  viewerSees: (st: DeadSessionStateLike) => boolean,
 ): DeadSessionMetaResult {
   if (!st || !st.owner) return { kind: "none" };
   const mine = st.owner === viewerId || isAdmin;
   const projectId = Number(st.project_id ?? 0) || 0;
-  if (!mine && !sharedByFolder(st.dir || "")) return { kind: "forbidden" };
+  //  ★ #5598 — 소유자 · 관리자 밖의 사람은 **그 세션을 볼 수 있을 때만**(초대받음 · 감춘 프로젝트 아님 — sessionVisible).
+  //   종전엔 «프로젝트 폴더에서 돌았다» 만으로 누구에게나 이름(대개 첫 지시를 줄인 것) · 프로젝트를 내줬다(#452 공동 세션의 잔재).
+  if (!mine && !viewerSees(st)) return { kind: "forbidden" };
   // #2231 — 이어진 세션. **접근권을 확인한 뒤에** 알린다(남의 세션의 새 id 를 흘리지 않는다).
   //  사슬 끝까지 따라가는 건 호출자 몫이다(DB 조회 — 이 모듈은 순수하게 둔다). 여기선 '이어졌다'는 사실만 말한다.
   if (st.superseded_by && st.superseded_by !== id) return { kind: "moved", to: st.superseded_by };
