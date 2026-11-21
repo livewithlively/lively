@@ -8,7 +8,7 @@
 //    "어떤 경로에서도 stdout 에 유효 JSON 객체 정확히 한 줄"이다(antigravity 와 같은 극, grok 과 반대 극).
 //  · MCP 는 preToolUse·postToolUse 에 `MCP:<툴>`(서버 없음)로 오고 서버는 beforeMCPExecution 에만 있다 — 잇기 계약.
 //  단언은 문구가 아니라 **부작용**으로: stdout JSON · 스텁 러너가 기록한 argv/stdin/env · 호출 0건의 무기록.
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -117,6 +117,22 @@ const outOf = (r) => { const ls = lines(r); try { return ls.length === 1 ? JSON.
 const isOneObject = (r) => { const ls = lines(r); try { const v = JSON.parse(ls[0]); return r.status === 0 && ls.length === 1 && !!v && typeof v === "object" && !Array.isArray(v); } catch { return false; } };
 const capOf = (name) => { try { return readFileSync(join(CAP, name + ".log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const sentOf = (name, i = 0) => { try { return JSON.parse(capOf(name)[i]?.stdin || "{}"); } catch { return {}; } };
+// 뒤로 미룬 이벤트(#5647)의 러너는 응답 뒤에 분리된 프로세스로 돈다 — 기대 건수가 찰 때까지 기다린다(최대 ms).
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const waitCap = (name, n, ms = 10000) => { const end = Date.now() + ms; while (capOf(name).length < n && Date.now() < end) sleepMs(50); return capOf(name).length; };
+const bgFiles = () => { try { return readdirSync(join(SB, ".lively", "cursor-bg")).filter((f) => f.startsWith("job.")); } catch { return []; } };
+// 느린 스텁 — 기록은 ms 뒤에(«어댑터가 러너를 기다리면» 응답이 그만큼 늦는다).
+const slowStub = (name, ms, out = "") => writeFileSync(join(HOOKS, name), `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => { stdin += c; });
+process.stdin.on("end", () => setTimeout(() => {
+  appendFileSync(${JSON.stringify(join(CAP, name + ".log"))}, JSON.stringify({ argv: process.argv.slice(2), stdin, harness: process.env.LIVELY_HARNESS || "" }) + "\\n");
+  process.stdout.write(${JSON.stringify(out)});
+  process.exit(0);
+}, ${ms}));
+`);
 const resetCaps = () => { rmSync(CAP, { recursive: true, force: true }); mkdirSync(CAP, { recursive: true }); };
 const RUNNERS = ["run-custom.mjs", "work-flag.mjs", "session-preload.mjs", "sync-harness-assets.mjs", "stop-writeback-gate.mjs"];
 const BASE = { conversation_id: "conv-1", generation_id: "gen-1", model: "m", cursor_version: "2026.10.19", workspace_roots: ["/ws"], transcript_path: "/t/conv-1.jsonl", session_id: "sess-1" };
@@ -137,6 +153,8 @@ try {
     isOneObject(r) ? ok("R2[A2] 비JSON stdin → 유효 JSON 한 줄") : bad("R2[A2] 비JSON stdin → 유효 JSON 한 줄", JSON.stringify([r.status, r.stdout]));
   }
 
+  // 위 행들이 띄운 뒤 작업(#5647 — 미룬 이벤트)이 끝난 뒤에 스텁을 심는다. 아니면 늦게 도는 자식이 스텁을 불러 다음 행을 오염시킨다.
+  sleepMs(2000);
   mkdirSync(HOOKS, { recursive: true });
   for (const f of RUNNERS) stub(f);
 
@@ -255,29 +273,109 @@ try {
     for (const f of ["session-preload.mjs", "run-custom.mjs", "work-flag.mjs"]) stub(f);
     eq("R20[A20] 컨텍스트 없음 → {}", outOf(runAdapter("sessionStart", { ...BASE })), {});
   }
-  // [A21] beforeSubmitPrompt 상한 — 1만 자 이상이면 잘라서 < 10000(넘기면 Cursor 가 통째로 버린다). [A22] 상한 이하는 그대로.
+  // [E11] 맥락 상한 — postToolUse(Cursor 가 맥락을 받는 턴 중 자리) 1만 자 이상이면 잘라서 < 10000. 경계: 9500자는 그대로.
   {
-    stub("run-custom.mjs", envelope("UserPromptSubmit", "가".repeat(12000)));
-    const o = outOf(runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" }));
-    eq("R21[A21] continue:true · 길이 < 10000", [o.continue, typeof o.additional_context === "string" && o.additional_context.length < 10000 && o.additional_context.length > 9000], [true, true]);
+    stub("run-custom.mjs", envelope("PostToolUse", "가".repeat(12000)));
+    const o = outOf(runAdapter("postToolUse", { ...BASE, tool_name: "Read", tool_input: { file_path: "/x" }, tool_output: "{}" }));
+    eq("R21[E11] postToolUse 길이 < 10000", typeof o.additional_context === "string" && o.additional_context.length < 10000 && o.additional_context.length > 9000, true);
     const exact = "나".repeat(9500);
-    stub("run-custom.mjs", envelope("UserPromptSubmit", exact));
-    eq("R22[A22] 상한 이하 원문 그대로", outOf(runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" })).additional_context, exact);
+    stub("run-custom.mjs", envelope("PostToolUse", exact));
+    eq("R22[E11] 상한 이하 원문 그대로", outOf(runAdapter("postToolUse", { ...BASE, tool_name: "Read", tool_input: { file_path: "/x" }, tool_output: "{}" })).additional_context, exact);
     stub("run-custom.mjs");
   }
-  // [A23] stop completed + 게이트 block → followup_message. [A24] aborted → 게이트 0회(org·work-flag 1회). [A25] loop_count>0.
+  // [E1][E2] beforeSubmitPrompt — 러너를 기다리지 않고 즉시 continue:true(IDE 는 additional_context 를 버리고 이 훅을 await 한다).
+  //  부작용은 뒤에서 각 1회 · 페이로드(prompt) 보존 · 맥락은 응답에 싣지 않는다.
+  {
+    resetCaps();
+    slowStub("run-custom.mjs", 3000, envelope("UserPromptSubmit", "CTX-" + "다".repeat(500)));
+    slowStub("work-flag.mjs", 3000);
+    const t0 = Date.now();
+    const r = runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "한 줄 질문" });
+    const took = Date.now() - t0;
+    eq("R40[E1] 응답 continue:true · 유효 JSON 한 줄", [isOneObject(r), outOf(r)], [true, { continue: true }]);
+    took < 2500 ? ok(`R40b[E1] 러너(3초)를 기다리지 않는다(${took}ms)`) : bad("R40b[E1] 러너를 기다리지 않는다", `${took}ms`);
+    eq("R40c[E1] 뒤에서 run-custom·work-flag 각 1회", [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1)], [1, 1]);
+    const s = sentOf("run-custom.mjs");
+    eq("R40d[E1] 러너 argv·페이로드(prompt·session)", [capOf("run-custom.mjs")[0]?.argv, s.hook_event_name, s.prompt, s.session_id, capOf("run-custom.mjs")[0]?.harness],
+      [["UserPromptSubmit", "--harness", "cursor"], "UserPromptSubmit", "한 줄 질문", "sess-1", "cursor"]);
+    eq("R40e[E9] 뒤 작업 입력파일이 남지 않는다", (sleepMs(200), bgFiles()), []);
+    stub("run-custom.mjs", envelope("UserPromptSubmit", "가".repeat(12000)));
+    eq("R41[E2] 러너가 맥락을 내도 응답엔 없다", outOf(runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" })), { continue: true });
+    waitCap("run-custom.mjs", 2); waitCap("work-flag.mjs", 2);   // 뒤 작업이 다음 행의 관측을 오염시키지 않게
+    stub("run-custom.mjs"); stub("work-flag.mjs");
+  }
+  // [E3][E4][E5] stop — 자동 후속 메시지를 만들지 않는다(IDE 는 followup_message 를 사용자 메시지로 자동 제출). 게이트 0회.
   {
     resetCaps();
     stub("stop-writeback-gate.mjs", JSON.stringify({ decision: "block", reason: "기록을 남기세요" }));
-    eq("R23[A23] completed + block → followup_message", outOf(runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 })), { followup_message: "기록을 남기세요" });
-    eq("R23b[A23] 게이트 페이로드 stop_hook_active:false", sentOf("stop-writeback-gate.mjs").stop_hook_active, false);
+    eq("R23[E3] completed + 게이트 block → {}", outOf(runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 })), {});
+    eq("R23b[E3] org·work-flag 각 1회(뒤에서)", [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1)], [1, 1]);
+    eq("R23c[E3] 게이트 0회", capOf("stop-writeback-gate.mjs").length, 0);
+    eq("R23d[E3] org Stop 페이로드 stop_hook_active:false", sentOf("run-custom.mjs").stop_hook_active, false);
     resetCaps();
-    eq("R24a[A24] aborted → {}", outOf(runAdapter("stop", { ...BASE, status: "aborted", loop_count: 0 })), {});
-    eq("R24b[A24] 게이트 0회 · org·work-flag 1회", [capOf("stop-writeback-gate.mjs").length, capOf("run-custom.mjs").length, capOf("work-flag.mjs").length], [0, 1, 1]);
+    eq("R24a[E4] aborted → {}", outOf(runAdapter("stop", { ...BASE, status: "aborted", loop_count: 0 })), {});
+    eq("R24b[E4] 게이트 0회 · org·work-flag 1회", [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1), capOf("stop-writeback-gate.mjs").length], [1, 1, 0]);
     resetCaps();
     runAdapter("stop", { ...BASE, status: "completed", loop_count: 1 });
-    eq("R25[A25] loop_count 1 → stop_hook_active:true", sentOf("stop-writeback-gate.mjs").stop_hook_active, true);
+    waitCap("run-custom.mjs", 1);
+    eq("R25[E5] loop_count 1 → org 페이로드 stop_hook_active:true", sentOf("run-custom.mjs").stop_hook_active, true);
+    waitCap("work-flag.mjs", 1);
     stub("stop-writeback-gate.mjs");
+  }
+  // [E6] 출력이 안 쓰이는 이벤트 — 즉시 {} · 러너는 뒤에서 각 1회.
+  {
+    for (const [ev, claudeEv] of [["sessionEnd", "SessionEnd"], ["subagentStop", "SubagentStop"], ["preCompact", "PreCompact"]]) {
+      resetCaps();
+      slowStub("run-custom.mjs", 3000); slowStub("work-flag.mjs", 3000);
+      const t0 = Date.now();
+      const r = runAdapter(ev, { ...BASE });
+      const took = Date.now() - t0;
+      eq(`R42[E6] ${ev} → {} · ${took < 2500 ? "즉시" : took + "ms"}`, [outOf(r), took < 2500], [{}, true]);
+      eq(`R42b[E6] ${ev} 러너 각 1회 · 이벤트 ${claudeEv}`, [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1), capOf("run-custom.mjs")[0]?.argv?.[0]], [1, 1, claudeEv]);
+    }
+    stub("run-custom.mjs"); stub("work-flag.mjs");
+  }
+  // [E12] 세션별 차례 — 짧은 턴: beforeSubmitPrompt 의 work-flag 가 느려도(2초) 바로 뒤 stop 의 보고가 먼저 도착하지 않는다.
+  //  (차례가 없으면 stop 의 «쉼» 이 먼저 기록되고 «작업 중» 이 뒤늦게 덮는다.) 다른 세션은 서로 기다리지 않는다.
+  {
+    resetCaps();
+    writeFileSync(join(HOOKS, "work-flag.mjs"), `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => { stdin += c; });
+process.stdin.on("end", () => setTimeout(() => {
+  appendFileSync(${JSON.stringify(join(CAP, "work-flag.mjs.log"))}, JSON.stringify({ argv: process.argv.slice(2), stdin, harness: "" }) + "\\n");
+  process.exit(0);
+}, /UserPromptSubmit/.test(stdin) ? 2000 : 0));
+`);
+    runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" });
+    runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 });
+    waitCap("work-flag.mjs", 2);
+    eq("R45[E12] 같은 세션 — 보고 순서 UserPromptSubmit → Stop", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).hook_event_name), ["UserPromptSubmit", "Stop"]);
+    waitCap("run-custom.mjs", 2);
+    resetCaps();
+    runAdapter("beforeSubmitPrompt", { ...BASE, session_id: "sess-A", prompt: "q" });
+    runAdapter("stop", { ...BASE, session_id: "sess-B", status: "completed", loop_count: 0 });
+    waitCap("work-flag.mjs", 2);
+    eq("R45b[E12] 다른 세션은 기다리지 않는다(B 의 Stop 이 먼저)", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).session_id), ["sess-B", "sess-A"]);
+    waitCap("run-custom.mjs", 2);
+    stub("work-flag.mjs");
+  }
+  // [E7] 뒤 작업을 못 띄워도(외부 실행 금지) 유효 JSON 한 줄 · 입력파일 누수 없음.
+  {
+    resetCaps();
+    const r = runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" }, { LIVELY_HOST_EFFECTS: "deny", LIVELY_HOST_EFFECTS_TEST_MODE: "" });
+    eq("R43[E7] spawn 금지 → continue:true 한 줄 · 입력파일 0", [isOneObject(r), outOf(r), bgFiles()], [true, { continue: true }, []]);
+    sleepMs(300);
+    eq("R43b[E7] 러너 0회", capOf("run-custom.mjs").length, 0);
+  }
+  // [E8] 뒤 작업 입력파일이 없음 → 조용히 끝남(stdout 빈 · exit 0 · 러너 0회).
+  {
+    resetCaps();
+    const r = spawnSync(process.execPath, [ADAPTER, "--deferred", "stop", join(TMP, "nope.json")], { encoding: "utf8", timeout: 10000,
+      env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: SB, TMPDIR: TMP } });
+    eq("R44[E8] 입력 없음 → exit 0 · stdout 빈 · 러너 0회", [r.status, r.stdout, capOf("run-custom.mjs").length], [0, "", 0]);
   }
   // [A26] 페이로드 폴백 — session_id ?? conversation_id · cwd ?? workspace_roots[0] ?? CURSOR_PROJECT_DIR.
   {
@@ -297,7 +395,7 @@ try {
 
   // [A31] transcript_path 는 .jsonl 만 러너에 넘긴다(기록 수집 기본 켬 — 못 읽는 형식을 올리지 않게). .txt·확장자 없음은 "".
   {
-    const sent = (tp) => { resetCaps(); runAdapter("stop", { ...BASE, status: "aborted", transcript_path: tp }); return sentOf("run-custom.mjs").transcript_path; };
+    const sent = (tp) => { resetCaps(); runAdapter("stop", { ...BASE, status: "aborted", transcript_path: tp }); waitCap("run-custom.mjs", 1); waitCap("work-flag.mjs", 1); return sentOf("run-custom.mjs").transcript_path; };
     eq("R31[A31] .jsonl 은 그대로 · .txt·확장자 없음·null 은 빈 값", [sent("/t/c.jsonl"), sent("/t/c.txt"), sent("/t/c"), sent(null)], ["/t/c.jsonl", "", "", ""]);
   }
 
