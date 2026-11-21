@@ -62,7 +62,7 @@ export function prettyModel(m: string): string {
 // 서버 카탈로그가 provider 를 안 주는 경우(옛 게이트웨이 + 새 번들이 캐시로 남은 조합)의 폴백.
 //  없는 하네스는 '그 밖의 제공자' 로 접는다 — 이름을 지어내지 않는다.
 const PROVIDER_FALLBACK: Record<string, string> = {
-  claude: 'Anthropic', codex: 'OpenAI', antigravity: 'Google Gemini', grok: 'xAI', opencode: '그 밖의 제공자', shell: 'AI 없음',
+  claude: 'Anthropic', codex: 'OpenAI', antigravity: 'Google Gemini', cursor: 'Cursor', grok: 'xAI', opencode: '그 밖의 제공자', shell: 'AI 없음',
 };
 export const providerLabel = (h: RunHarness | null | undefined): string =>
   (h && h.provider && h.provider.label) || (h ? (PROVIDER_FALLBACK[h.key] || '그 밖의 제공자') : '');

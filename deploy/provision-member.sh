@@ -114,10 +114,10 @@ install -d -m 700 -o "$OSUSER" -g "$OSUSER" "$HOME_DIR/.claude"
 # 개인 폴더(#524 ROOTS-under-isolation) — resolveRootPath 의 personal 루트 = $HOME/box (멤버 소유)
 install -d -m 700 -o "$OSUSER" -g "$OSUSER" "$HOME_DIR/box"
 
-# 멤버 키트에 배선할 하네스(#4970) — 서버에서 띄울 수 있는 넷(claude·codex·antigravity·grok) 전부. 종전엔 claude·codex 만이라,
+# 멤버 키트에 배선할 하네스(#4970) — 서버에서 띄울 수 있는 다섯(claude·codex·antigravity·grok·cursor) 전부. 종전엔 claude·codex 만이라,
 #  제미나이·그록으로 연 세션엔 라이블리 도구·스킬이 없었다(연결 스킬을 못 쓴다). 설치기는 바이너리가 없는 하네스에도 설정 파일만 쓰므로
 #  해가 없다(그 하네스를 띄우면 그때 «미설치» 안내). 바이너리는 클로드·챗GPT 가 아래 도우미, 제미나이·그록이 install-harness-clis.sh.
-MEMBER_KIT_HARNESSES="${MEMBER_KIT_HARNESSES:-claude,codex,antigravity,grok}"
+MEMBER_KIT_HARNESSES="${MEMBER_KIT_HARNESSES:-claude,codex,antigravity,grok,cursor}"
 # 멤버 claude 키트(훅 + lively MCP) — /install 번들을 멤버 토큰으로 받아 user-install + register-clients 를 **멤버로** 실행.
 #  → ~/.claude/settings.json(훅)·~/.claude.json(lively MCP=멤버 토큰). 이게 없으면 격리 멤버 claude 가 lively 미연동(#524 갭).
 #  best-effort: 실패해도 프로비저닝은 성공(OS 격리 자체는 됨). 게이트웨이가 떠 있어야(웹 provision 은 항상 그렇다) /install 다운로드 됨.

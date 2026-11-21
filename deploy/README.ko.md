@@ -332,21 +332,21 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
   프로젝트 대화 · 에이전트 작업 등. PC 의 AI 만 쓰는 사람은 비용 0.
   기존 박스는 업데이트해도 모드가 그대로다 — 켜려면 `sudo GATEWAY_USER=<게이트웨이 유저> bash deploy/linux/install-isolation.sh` 뒤 게이트웨이 재시작(구성원은 AI 에 다시 로그인).
   켜진 박스에서 끄려면 `.env` 에 `LIVELY_MEMBER_ISOLATION=off` 뒤 게이트웨이 재시작.
-  격리를 켜면 AI 넷(클로드·챗GPT·제미나이·그록)의 로그인이 모두 구성원 홈에 따로 남는다.
+  격리를 켜면 AI 다섯(클로드·챗GPT·제미나이·그록·Cursor)의 로그인이 모두 구성원 홈에 따로 남는다.
   격리가 없으면 클로드만 멤버별(위 프로필)이고 나머지는 박스 공용 계정 하나다.
-- 서버 AI 프로그램(#4970): 설치(`install.sh` 7/7)와 업데이트(`update.sh` · blue-green `deploy-release.sh`)가 넷을 갖춘다 — 없는 것만 깔고, 실패는 경고로 넘어간다(리눅스).
+- 서버 AI 프로그램(#4970): 설치(`install.sh` 7/7)와 업데이트(`update.sh` · blue-green `deploy-release.sh`)가 다섯을 갖춘다 — 없는 것만 깔고, 실패는 경고로 넘어간다(리눅스).
   하나에 `LIVELY_SERVER_AIS_TIMEOUT` 초(기본 600)까지 기다린다. 처음 받을 때는 수백 MB~1GB 안팎이다(실측 클로드 280MB · 챗GPT 424MB, 그록 165MB,
-  제미나이 따로). 바깥 사이트(claude.ai · npm · x.ai · antigravity.google)에서 실행 파일을 받으면 안 되는 박스는 `LIVELY_SERVER_AIS=off` 로 끈다.
-  게이트웨이 유저 몫으로 클로드(네이티브)·챗GPT(install-codex-user), 박스 전체(/usr/local/bin)에 제미나이·그록(install-harness-clis —
+  제미나이·Cursor 따로). 바깥 사이트(claude.ai · npm · x.ai · antigravity.google · cursor.com)에서 실행 파일을 받으면 안 되는 박스는 `LIVELY_SERVER_AIS=off` 로 끈다.
+  게이트웨이 유저 몫으로 클로드(네이티브)·챗GPT(install-codex-user), 박스 전체(/usr/local/bin)에 제미나이·그록·Cursor(install-harness-clis —
   매니지드 세션 이미지와 같은 설치). 격리 박스는 구성원마다 클로드·챗GPT 를 따로 깐다(provision-member). 처음 설정 «AI 연결» 은 이 서버에
-  깔린 AI 만 보인다. 손으로 다시 돌리려면 `sudo bash deploy/install-harness-clis.sh [agy] [grok]`. 이미 있는 것은 업데이트가 새 판으로
-  올리지 않는다 — 클로드·챗GPT 는 스스로 올리고, 제미나이·그록은 같은 스크립트를 `FORCE=1` 로 다시 돌린다. 챗GPT 를 깔 때 게이트웨이
+  깔린 AI 만 보인다. 손으로 다시 돌리려면 `sudo bash deploy/install-harness-clis.sh [agy] [grok] [cursor]`. 이미 있는 것은 업데이트가 새 판으로
+  올리지 않는다 — 클로드·챗GPT 는 스스로 올리고, 제미나이·그록·Cursor는 같은 스크립트를 `FORCE=1` 로 다시 돌린다. 챗GPT 를 깔 때 게이트웨이
   유저의 `~/.npmrc` 끝에 주석 한 줄과 `prefix=<그 홈>/.npm-global` 이 더해진다(이미 prefix 가 있으면 그대로 — 챗GPT 자동 업데이트가 그 홈에
   쓰게). 게이트웨이가 root 로 돌면 챗GPT 는 깔지 않는다(root 의 npm 전역 자리를 바꾸지 않으려고 — 필요하면 `sudo npm i -g @openai/codex`).
   요구: root · `runuser`(util-linux) · `nobody` 계정 · curl · 실행 가능한 임시 자리(`/tmp` 가 noexec 면 `TMPDIR=/var/tmp`). 설치기는 권한 없는 계정으로 돈다.
   격리 박스에서는 처음 설정을 여는 구성원마다 서버 계정(홈 + 구성원 몫 claude·codex, 수백 MB)이 생긴다 — 만들기는 인사 장면에서 시작해 인사·이름을
   보는 동안 돈다(PC 의 AI 로 하는 사람 · 인사에서 [나중에 할게요] 로 나가는 사람도).
-  격리 구성원 키트는 넷(claude·codex·antigravity·grok)을 배선한다 — **이미 계정이 있는 구성원**은 `provision-member.sh` 를 다시 돌려야 넷을 받는다(멱등).
+  격리 구성원 키트는 다섯(claude·codex·antigravity·grok·cursor)을 배선한다 — **이미 계정이 있는 구성원**은 `provision-member.sh` 를 다시 돌려야 다섯을 받는다(멱등).
 
 ## 디렉토리 구조 (Linux/Mac 패리티가 구조로 드러남 — 주요 파일만)
 

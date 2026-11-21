@@ -396,6 +396,15 @@ export const HARNESSES: Harness[] = [
     resumeArgv: (id) => (id ? ["--conversation", id] : ["--continue"]),
   },
   {
+    key: "cursor", label: "Cursor", bin: "agent", provider: { id: "cursor", label: "Cursor" },
+    autoApproveFlag: "--force",      // Cursor 2026.11.19 --help: 명시적 거부를 제외하고 명령 자동 허용
+    autoModeArgv: ["--auto-review"], // 같은 CLI 도움말: 안전한 도구는 자동 실행, 나머지는 질문
+    flags: [{ name: "--model", label: "모델", desc: "agent --list-models 에 나오는 모델 ID를 입력합니다", type: "text" }],
+    failHint: ["로그인이 필요하면 터미널에  agent login  을 입력하세요."],
+    loginSteps: ["터미널에  NO_OPEN_BROWSER=1 agent login  을 입력합니다", "표시된 주소를 브라우저에서 열고 Cursor 계정으로 로그인합니다"],
+    resumeArgv: (id) => (id ? [`--resume=${id}`] : ["--continue"]),
+  },
+  {
     // #1701 로 배선 완료(hook-file + config.toml 센티넬 + rules 주입) — 5번째 하네스.
     key: "grok", label: "Grok Build", bin: "grok", provider: { id: "xai", label: "xAI" },
     autoApproveFlag: "--always-approve",   // 실측(grok 1.0.3 --help; --yolo 는 별칭이지만 제품 표기가 always-approve)
@@ -1088,6 +1097,15 @@ const LOGIN_CLI: Record<string, { bin: string; label: string; status: string }> 
   grok: { bin: "grok", label: "Grok", status: "grok models" },
 };
 export function harnessLoginArgv(harnessKey: string): string[] | null {
+  if (harnessKey === "cursor") {
+    const script = [
+      "printf '\\nCursor 로그인을 시작합니다. 표시되는 주소를 브라우저에서 열어 주세요.\\n\\n'",
+      "NO_OPEN_BROWSER=1 agent login || true",
+      "printf '\\n다시 확인하려면  agent status  를 입력하세요.\\n'",
+      "exec \"${SHELL:-/bin/sh}\" -il",
+    ].join("\n");
+    return ["sh", "-c", script];
+  }
   const c = LOGIN_CLI[harnessKey];
   if (!c) return null;
   const line = "─".repeat(60);

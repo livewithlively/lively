@@ -333,21 +333,21 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
   [Connect] in first setup, a project chat, an agent job, and so on. No cost for people who only use AI on their PC.
   Existing boxes keep their mode on update — to turn it on, run `sudo GATEWAY_USER=<gateway user> bash deploy/linux/install-isolation.sh` and restart the gateway (members log in to their AIs again).
   To turn it off on an isolated box, set `LIVELY_MEMBER_ISOLATION=off` in `.env` and restart the gateway.
-  With isolation, logins for all four AIs (Claude, ChatGPT, Gemini, Grok) stay in each
+  With isolation, logins for all five AIs (Claude, ChatGPT, Gemini, Grok, Cursor) stay in each
   member's home; without it only Claude is per member and the rest share one box account.
-- Server AI CLIs (#4970): install (`install.sh` 7/7) and update (`update.sh` · blue-green `deploy-release.sh`) set up all four — only the missing ones, and a failure is a warning (Linux).
+- Server AI CLIs (#4970): install (`install.sh` 7/7) and update (`update.sh` · blue-green `deploy-release.sh`) set up all five — only the missing ones, and a failure is a warning (Linux).
   Each one gets `LIVELY_SERVER_AIS_TIMEOUT` seconds (default 600). The first download is a few hundred MB up to about 1GB (measured: Claude 280MB · ChatGPT 424MB; Grok 165MB;
-  Gemini on top). Boxes that must not fetch executables from outside sites (claude.ai · npm · x.ai · antigravity.google) turn it off with `LIVELY_SERVER_AIS=off`.
-  Claude (native) and ChatGPT (install-codex-user) for the gateway user; Gemini and Grok box-wide (/usr/local/bin, install-harness-clis — same install
+  Gemini and Cursor on top). Boxes that must not fetch executables from outside sites (claude.ai · npm · x.ai · antigravity.google · cursor.com) turn it off with `LIVELY_SERVER_AIS=off`.
+  Claude (native) and ChatGPT (install-codex-user) for the gateway user; Gemini, Grok and Cursor box-wide (/usr/local/bin, install-harness-clis — same install
   as the managed session image). Isolated boxes also install Claude and ChatGPT per member (provision-member). First-run «AI 연결» only lists AIs
-  installed on this server. To rerun by hand: `sudo bash deploy/install-harness-clis.sh [agy] [grok]`. Updates do not upgrade what is already there —
-  Claude and ChatGPT update themselves; for Gemini/Grok rerun the script with `FORCE=1`. Installing ChatGPT appends a comment line and
+  installed on this server. To rerun by hand: `sudo bash deploy/install-harness-clis.sh [agy] [grok] [cursor]`. Updates do not upgrade what is already there —
+  Claude and ChatGPT update themselves; for Gemini/Grok/Cursor rerun the script with `FORCE=1`. Installing ChatGPT appends a comment line and
   `prefix=<that home>/.npm-global` to the gateway user's `~/.npmrc` (an existing prefix is kept) so its self-update writes to that home. If the gateway runs
   as root, ChatGPT is not installed (so root's npm global prefix stays put — install it by hand with `sudo npm i -g @openai/codex` if needed).
   Requires root, `runuser` (util-linux), a `nobody` account, curl, and an executable temp dir (`TMPDIR=/var/tmp` if `/tmp` is noexec). The vendor installers run as the unprivileged account.
   On isolated boxes, every member who opens first-run setup gets a server account (home plus member-scoped claude and codex, a few hundred MB) — creation starts on the
   intro scene and runs while they read it and enter a name (also for members who then pick a PC AI or leave the intro with [나중에 할게요]).
-  Isolated member kits wire all four (claude, codex, antigravity, grok) — **members provisioned earlier** get the four only after rerunning `provision-member.sh` (idempotent).
+  Isolated member kits wire all five (claude, codex, antigravity, grok, cursor) — **members provisioned earlier** get the five only after rerunning `provision-member.sh` (idempotent).
 
 ## Directory layout (Linux/Mac parity shows in the structure — main files only)
 

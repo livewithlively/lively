@@ -15,7 +15,7 @@ import { HEADLESS } from "./tasks.js";
 import { memberUsableHarnesses } from "../terminal/profiles.js";   // #1631 — 자격 파일 없는 하네스(제미나이)를 잃지 않는다
 import { logger } from "../log.js";
 
-/** 헤드리스 규약을 아는 하네스 — 표 순서가 곧 동률 판정 순서다(claude, codex, antigravity, grok). */
+/** 헤드리스 규약을 아는 하네스 — 표 순서가 곧 동률 판정 순서다(claude, codex, antigravity, grok, cursor). */
 export const HEADLESS_KEYS: readonly string[] = Object.keys(HEADLESS);
 
 /** (순수 — 테스트 seam) 선택 규칙 그 자체. 프로브는 하지 않는다. */

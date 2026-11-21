@@ -40,19 +40,24 @@ export async function deliverChatOnNode(
       const r = await send({ sessionId, text, cwd: dir, osUser: null });
       return { ok: true, convId: r.threadId, steered: !!r.steered };
     }
-    const { sendClaudeChat, ensureGrokChat, sendGrokChat, ensureAntigravityChat, ensureOpencodeChat, ClaudeChatUnavailable } =
+    const { sendClaudeChat, ensureGrokChat, sendGrokChat, ensureCursorChat, sendCursorChat, ensureAntigravityChat, ensureOpencodeChat, ClaudeChatUnavailable } =
       await import("../terminal/harness-io/claude-chat-runtime.js");
     try {
       //  ⚠ 하네스마다 **여는 문이 다르다**(게이트웨이 deliver-prompt 와 같은 갈래) — 여기서 갈라야
       //   grok 의 핸드셰이크·opencode 의 서버 기동 세 단계가 실제로 돈다.
       //  ⚠ osUser 는 null 이다: 노드에서는 이미 그 사람의 계정으로 돌고 있다(격리 사다리가 없다).
+      if (key === "cursor") {
+        const e = await ensureCursorChat({ sessionId, harness: key, cwd: dir, osUser: null });
+        if (!sendCursorChat(e, text)) throw new ClaudeChatUnavailable("cursor 에 말을 걸지 못했습니다");
+        return { ok: true, convId: e.convId };
+      }
       if (key === "grok") {
         const e = await ensureGrokChat({ sessionId, harness: key, cwd: dir, osUser: null });
         if (!sendGrokChat(e, text)) throw new ClaudeChatUnavailable("grok 에 말을 걸지 못했습니다");
         return { ok: true, convId: e.convId };
       }
       if (key === "antigravity") {
-        const e = ensureAntigravityChat({ sessionId, harness: key, cwd: dir, osUser: null });
+        const e = await ensureAntigravityChat({ sessionId, harness: key, cwd: dir, osUser: null });
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("antigravity 턴을 시작하지 못했습니다");
         return { ok: true, convId: e.convId };
       }
