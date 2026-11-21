@@ -36,6 +36,8 @@ import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { EFFORT_LEVELS, RUNNER_GATEWAY_URL, isEffort, type Effort } from "../agent-jobs/runner.js";
 import { STEPS_MAX } from "../agent-jobs/plan.js";
 import { RateWindow } from "../apps/app-chat-send.js";
+import { CONSENT_REQUIRED } from "../apps/app-consent.js";
+import { describeGrantGap, type GrantGap } from "../apps/grant.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, RESUME_REASON_MAX, SYSTEM_MAX, executorFor, isAppServerOwn, isEndedRun, judgeOutput, overDailyBudget,
@@ -177,6 +179,12 @@ export interface AiRunDeps {
    *  참이면 구독(공용 시트 포함)을 거절한다(plan.AUTOMATION_REFUSAL). 없는 자리(시험의 옛 가짜)는 아니다로 본다.
    */
   appServerAutomation?(user: Pick<LivelyUser, "appCallId" | "appJobId">): Promise<boolean>;
+  /**
+   * #1644 그 사람(작업 토큰의 주인)의 이 앱 동의가 그 판의 지금 선언 전체를 덮나 — 덮지 못하면 덮지 못한 것과 동의할 곳, 덮으면(또는 판정할 수 없으면) null
+   *  (apps/app-consent-gap.launchConsentGap). 작업 컨테이너 실행만 묻는다 — 작업 AI 의 토큰은 그 사람 ∩ 그 사람의 동의라, 덮지 못하면 앱이 새로 얻은
+   *  권한 · 도구만 조용히 빠진 채 돈다(그 까닭은 작업 AI 에게만 보인다). 필수다 — 배선이 빠지면 예전 범위 동의로 작업이 돈다(빠진 배선을 컴파일이 잡게).
+   */
+  consentGap(user: LivelyUser, appId: string, member: string): Promise<{ missing: GrantGap; consent_url: string | null } | null>;
 }
 
 /** #1782 앱 서버 호출이 자동화 작업에서 왔나 — 앱 서버 요청만 본다. 읽지 못하면 자동화로 본다(구독을 열지 않는 쪽 · 닫힘). */
@@ -449,6 +457,18 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //   말없이 버리면 앱은 먹은 줄 알고 깊이를 견준다(같은 깊이의 답을 서로 다른 깊이로 잰 줄 안다). 그래서 거절한다(Messages API 의 다른 손잡이로 옮기지 않는다).
   if (effort && executor === "proxy") {
     throw new HttpError(400, "effort 는 작업 컨테이너에서 도는 실행(에이전트 작업 · 구독으로 도는 단발)에만 먹습니다 — 단발 + 워크스페이스 API 키 실행은 LLM 프록시로 한 번 묻고 끝나 하네스(claude -p --effort)가 없습니다. effort 를 빼거나 에이전트 작업(agent:true)으로 보내세요");
+  }
+  //  #1644 작업 컨테이너 실행 — 작업 AI 의 토큰은 그 사람 ∩ 그 사람의 동의다. 동의가 앱의 지금 선언을 덮지 못하면(앱이 동의한 뒤 권한을 넓혔다)
+  //   새로 얻은 권한 · 도구만 조용히 빠진 채 돌고 그 까닭은 작업 AI 에게만 보인다. 띄우기 전에 «다시 동의» 로 거절한다(앱 선언 MCP 도구와 같은 판정 — 선언 전체).
+  //   앱 화면은 이 표지로 동의 창을 띄우고(호스트 · 앱 주소 SDK), 앱 서버는 consent_url 을 사람에게 전한다. 단발 + API 키(프록시)는 라이블리 도구를 안 써 묻지 않는다.
+  if (executor === "job") {
+    const gap = await d.consentGap(user, appId, who.member);
+    if (gap) {
+      throw new HttpError(403,
+        `앱 '${appId}' 의 사용 동의가 예전 범위라(동의에 없는 것: ${describeGrantGap(gap.missing)}) AI 실행을 띄우지 않았습니다 — 다시 동의(grant)한 뒤 다시 보내세요`
+          + (gap.consent_url ? `. 동의할 곳: ${gap.consent_url}` : ""),
+        { body: { code: CONSENT_REQUIRED, missing: gap.missing, ...(gap.consent_url ? { consent_url: gap.consent_url } : {}) } });
+    }
   }
   //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
   //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 아래 두 예외 말고는 위에서 이미 거절됐다 — 한 겹 더 본다.

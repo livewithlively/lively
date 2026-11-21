@@ -171,6 +171,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobAutomation(user.appJobId);
       return false;
     },
+    //  #1644 — 작업 컨테이너 실행을 띄우기 전, 그 사람의 동의가 앱의 지금 선언 전체를 덮나(판은 부른 주소의 판 · 아니면 그 사람이 보는 판).
+    consentGap: async (user, appId, member) => (await import("../apps/app-consent-gap.js")).launchConsentGap(user, appId, member),
   };
   return cached;
 }

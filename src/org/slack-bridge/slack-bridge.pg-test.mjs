@@ -3,7 +3,7 @@
 //
 // 왜 이 계층인가: 한 번만 넘기기(열쇠 UNIQUE) · 신원 매핑(person_identity · 금고 · 이메일) · 동의 · 작업 행의 source/automation · 호출 기록 · 토큰이 어디에도
 //  안 남는다는 약속은 전부 DB 의 사실이다. 슬랙은 가짜(로컬 HTTP + 소켓 모드 ws 서버)고, 다리는 진짜 맞추기 · 진짜 소켓 · 진짜 startAppJob(가짜 Lambda)으로 돈다.
-//  엣지 표 N6 · N7 · I1~I11 · D1 · D5~D10 · K1~K6 · A-h · S1 (spec-1782).
+//  엣지 표 N6 · N7 · I1~I11 · D1 · D5~D10 · K1~K6 · A-h · S1 (spec-1782) · I12 · I13 예전 범위 동의(#1644).
 import "../../../scripts/test-apps-root.mjs";
 import pg from "pg";
 import http from "node:http";
@@ -334,6 +334,32 @@ try {
     await send(mention("U_BOB"));
     await sleep(250);
     chk("I11 같은 안내는 10분에 한 번", ephemerals().length === e0 + 2);
+  }
+
+  // ── I12 · I13 #1644 예전 범위 동의 — 동의가 앱의 지금 선언을 덮지 못하면 작업을 시작하지 않고 «다시 동의» 를 안내한다 · 다시 동의하면 시작한다 ──
+  //  이게 틀리면: 앱이 동의 뒤에 넓어졌을 때(새 도구 · scope) 슬랙에서 부른 앱 코드 · 작업 AI 가 그 사람의 예전 동의로 돌아 새 기능만 막히거나 조용히 빠진다.
+  {
+    //  앱 판을 이 코어가 읽는 매니페스트로 바꾼다(제목 · 판 칸 — 이 시험의 앱 행은 일부러 파서가 못 읽는 꼴이라 지금까지는 판정이 끼어들지 않았다).
+    //   web.server 는 작업 도구 넷을 함의하는데 앨리스의 동의(TOOLS 셋)엔 app_job_get · app_jobs · app_job_cancel 이 없다 — 동의 뒤에 앱이 넓어진 모양.
+    const original = (await q(`SELECT manifest FROM org_app WHERE id='policy'`))[0].manifest;
+    await q(`UPDATE org_app SET manifest=$1::jsonb WHERE id='policy'`, [JSON.stringify({ id: "policy", title: "정책 앱", version: "1.0.0", web: { server: {} }, permissions: { tools: TOOLS } })]);
+    try {
+      const before = (await jobs()).length;
+      const e0 = ephemerals().length;
+      await send(mention("U_ALICE", { thread_ts: "60.6" }));
+      await until(() => ephemerals().length === e0 + 1, 3000, "다시 동의 안내");
+      const eph = ephemerals().at(-1);
+      const outcome = (await q(`SELECT outcome FROM org_slack_bridge_event ORDER BY id DESC LIMIT 1`))[0]?.outcome ?? "";
+      chk("I12 예전 범위 동의 + 태그 → 작업 없음 · 그 사람에게만 «다시 동의» 안내(스레드 · 동의 링크) · 걸러진 까닭에 덮지 못한 도구",
+        eph.body.user === "U_ALICE" && eph.body.thread_ts === "60.6" && /예전 범위/.test(eph.body.text) && eph.body.text.includes("https://gw.test/ui/#/app-grant/policy?v=pub")
+          && (await jobs()).length === before && /예전 범위/.test(outcome) && /app_job_get/.test(outcome), JSON.stringify({ text: eph.body.text, outcome }));
+      await upsertGrant("policy", "alice", ["memory"], [...TOOLS, "app_job_get", "app_jobs", "app_job_cancel"]);
+      await send(mention("U_ALICE", { thread_ts: "61.6" }));
+      await until(async () => (await jobs()).length === before + 1, 3000, "다시 동의 뒤 작업");
+      chk("I13 다시 동의(선언 전체) 뒤 같은 태그가 작업을 시작한다", (await jobs()).at(-1).requester === "alice");
+    } finally {
+      await q(`UPDATE org_app SET manifest=$1::jsonb WHERE id='policy'`, [JSON.stringify(original)]);
+    }
   }
 
   // ── I9 · I10 워크플로 · 봇 글 · A-h 물려받기 ──

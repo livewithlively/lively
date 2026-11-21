@@ -16,7 +16,8 @@
 // ── 신원(이슈 «정할 것» 1) ────────────────────────────────────────────────────────────────
 //  (a) 사람이 쓴 글 · 태그 · 버튼 — 그 슬랙 사람을 구성원으로 찾아 그 사람으로 돈다: ① 구성원 신원(person_identity system=slack · 확인된 것)
 //   ② 그 사람이 [외부 앱 연결 ▸ Slack] 으로 연결한 계정(금고 slack_oauth 의 slack_user_id) ③ 슬랙 이메일(users.info — 봇에 users:read.email) = 구성원 이메일.
-//   못 찾거나 · 그 사람이 앱에 동의하지 않았으면 작업을 시작하지 않는다. 봇을 직접 부른 것(태그 · DM · 버튼)이면 그 사람에게만 보이는 안내를 스레드에 단다.
+//   못 찾거나 · 그 사람이 앱에 동의하지 않았거나 · 동의가 앱의 지금 선언을 덮지 못하면(#1644 예전 범위) 작업을 시작하지 않는다.
+//   봇을 직접 부른 것(태그 · DM · 버튼)이면 그 사람에게만 보이는 안내를 스레드에 단다.
 //  (b) 워크플로 · 봇 글 — 다리의 run_as 구성원으로 돌린다. 그 작업은 «자동화» 표시를 단다(정할 것 2 — 구독은 못 쓰고 워크스페이스 API 키만).
 import os from "node:os";
 import crypto from "node:crypto";
@@ -527,6 +528,22 @@ async function runnable(appId: string, memberId: string): Promise<{ reason: stri
         const base = (await getOrgProfile().catch(() => null))?.gateway_url?.replace(/\/+$/, "") ?? "";
         const link = base ? ` ${base}/ui/#/app-grant/${encodeURIComponent(appId)}?v=pub` : "";
         return `「${app.title || appId}」 앱을 아직 동의하지 않았어요 — 라이블리에서 앱을 한 번 열어 동의한 뒤 다시 해 주세요.${link}`;
+      },
+    };
+  }
+  //  #1644 — 동의가 앱의 지금 선언 전체를 덮나(앱 선언 MCP 도구와 같은 판정). 앱이 동의한 뒤에 권한을 넓혔으면 그 사람의 예전 동의로 도는 앱 코드 ·
+  //   작업 AI 는 새로 얻은 권한에서 막히거나 새 기능만 조용히 빠진다 — 앱 코드가 무엇을 부를지 미리 알 수 없으니 작업을 시작하지 않고 다시 동의를 안내한다.
+  //   구성원에게 없는 scope 는 세지 않는다(다시 동의해도 못 얻는다). 판은 그 사람이 보는 판(작업도 그 판으로 돈다 — startAppJob).
+  const { consentCoverage } = await import("../../apps/app-consent-gap.js");
+  const { describeGrantGap, grantGapEmpty } = await import("../../apps/grant.js");
+  const cov = await consentCoverage(appId, m.id, { installed: app });
+  if (cov && !grantGapEmpty(cov.gap)) {
+    return {
+      reason: `구성원 '${memberId}' 의 앱 동의가 예전 범위입니다(동의에 없는 것: ${describeGrantGap(cov.gap)})`,
+      notice: async () => {
+        const base = (await getOrgProfile().catch(() => null))?.gateway_url?.replace(/\/+$/, "") ?? "";
+        const link = base ? ` ${base}/ui/#/app-grant/${encodeURIComponent(appId)}?v=${cov.variant}` : "";
+        return `「${app.title || appId}」 앱의 사용 동의가 예전 범위예요(앱이 지금 쓰는 권한을 다 덮지 못해요) — 라이블리에서 다시 동의한 뒤 다시 해 주세요.${link}`;
       },
     };
   }
