@@ -363,7 +363,19 @@ try {
     const child = await svc.startAppJob({ route: "/api/child", body: {} },
       { userId: "runner", email: "", scopes: ["memory"], projects: ["*"], appId: "policy", appServer: true, appAddress: "pub", appJobId: Number(jr.id) }, {}, jobDeps);
     chk("A-h 자동화 작업 안에서 시작한 작업은 자동화를 물려받는다", (await js.appJobAutomation(Number(child.id))) === true && (await js.appJobAutomation(Number((await jobs())[0].id))) === false);
-    await setBridge({ id: "ops", bot_messages: false, run_as: null, bot_ids: [] });
+    //  run_as_human — 사람이 양식을 내는 워크플로를 bot_ids 로 고르고 켜면 run_as 작업에 자동화 · 사람이 보지 않음 표시를 달지 않는다(공용 시트를 쓸 수 있다).
+    const noIds = await errOf(setBridge({ id: "ops", bot_ids: [], run_as_human: true }));
+    chk("N10 run_as_human 은 bot_ids 없이 켜지 못한다", noIds?.status === 400 && /bot_ids/.test(noIds.message), String(noIds?.message));
+    const offWarn = (await setBridge({ id: "ops", bot_ids: ["BWF"] })).warnings;
+    chk("N10b run_as_human 꺼짐 + bot_messages → 자동화(API 키) 경고", offWarn.some((x) => /run_as_human/.test(x)), JSON.stringify(offWarn));
+    const humanSet = await setBridge({ id: "ops", run_as_human: true });
+    chk("N10c run_as_human 이 저장 · 보기에 실린다", humanSet.bridge.run_as_human === true && !humanSet.warnings.some((x) => /자동화로 표시/.test(x)), JSON.stringify(humanSet));
+    await send(message(undefined, "업무 요청 접수 2", { user: undefined, bot_id: "BWF", subtype: "bot_message" }));
+    await until(async () => (await jobs()).length === before + 3, 3000, "run_as_human 작업");
+    const jh = (await jobs()).at(-1);
+    chk("I10b run_as_human — run_as 이름 그대로 · 자동화 · 사람이 보지 않음 표시 없음 · via run_as",
+      jh.requester === "runner" && jh.automation === false && jh.unattended === false && JSON.parse(jh.body).actor.via === "run_as", JSON.stringify(jh));
+    await setBridge({ id: "ops", bot_messages: false, run_as: null, bot_ids: [], run_as_human: false });
   }
 
   // ── E12 버튼 ──

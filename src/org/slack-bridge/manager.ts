@@ -411,7 +411,9 @@ async function forwardClaimed(c: Conn, env: SocketEnvelope, v: EnvelopeVerdict, 
   }
   const member = await getMember(actor.member);
   const user: LivelyUser = { userId: actor.member, email: member?.email ?? "", scopes: member?.scopes ?? [], projects: ["*"] };
-  const automation = actor.via === "run_as";
+  //  run_as 작업은 자동화로 표시한다(AI 실행이 구독 · 공용 시트를 거절한다) — 다리가 run_as_human 을 켰으면(사람이 양식을 내는 워크플로만 고름)
+  //   사람의 질문으로 보고 표시하지 않는다. 그래도 신원은 run_as 구성원이고, 공용 시트의 «활성 구성원이 보낸 요청» 조건도 그 구성원이 채운다.
+  const automation = actor.via === "run_as" && !c.bridge.run_as_human;
   try {
     const job = await d.startJob(
       //  사람 주체(앱 토큰이 아니다)로 시작하므로 앱을 입력에 싣는다 — startAppJob 은 앱 화면 · 앱 서버가 아닌 호출에 app_id 를 요구한다.

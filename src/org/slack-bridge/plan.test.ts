@@ -144,6 +144,19 @@ test("N1 최소 새 다리 — 기본값", () => {
   assert.deepEqual(b.app_token_ref, { owner: "gateway", kind: "slack_bridge_app", scope_key: "ops" });
 });
 
+test("N1b run_as_human — 기본 꺼짐 · 켜려면 bot_ids 가 있어야 한다 · 앞 값을 이어 쓴다 · \"true\" 글도 받는다", () => {
+  assert.equal(normalizeBridgeInput(base, null, "boss").run_as_human, false);
+  throws400(() => normalizeBridgeInput({ ...base, run_as: "runner", bot_messages: true, run_as_human: true }, null, "boss"), /bot_ids/);
+  const on = normalizeBridgeInput({ ...base, run_as: "runner", bot_messages: true, bot_ids: ["BWF"], run_as_human: true }, null, "boss");
+  assert.equal(on.run_as_human, true);
+  assert.equal(normalizeBridgeInput({ ...base, bot_ids: ["BWF"], run_as_human: "true" }, null, "boss").run_as_human, true);
+  //  고칠 때 생략하면 앞 값 그대로 — 앞 값이 켜져 있는데 bot_ids 를 비우면 거절(켠 채로 모든 봇 글을 사람의 질문으로 보지 않게)
+  const prev = { ...on, status: {}, created_at: null, updated_at: null, updated_by: null };
+  assert.equal(normalizeBridgeInput({ id: "ops" }, prev, "boss").run_as_human, true);
+  throws400(() => normalizeBridgeInput({ id: "ops", bot_ids: [] }, prev, "boss"), /bot_ids/);
+  assert.equal(normalizeBridgeInput({ id: "ops", bot_ids: [], run_as_human: false }, prev, "boss").run_as_human, false);
+});
+
 test("N2 id 경계(40/41) · 앱 · 라우트(메서드 앞머리 · /_lively)", () => {
   assert.equal(normalizeBridgeInput({ ...base, id: "a".repeat(40) }, null, "boss").id, "a".repeat(40));
   throws400(() => normalizeBridgeInput({ ...base, id: "a".repeat(41) }, null, "boss"));

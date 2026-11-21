@@ -214,7 +214,7 @@ const MACHINE_SESSION_REFUSAL = "이 요청이 매인 세션을 확인할 수 �
  *  위 머리말의 ⚠(«자동화를 «만든 사람 id + 앱 서버» 꼴로 열면 이 판정을 그대로 통과한다 — 그때 자동화 주체를 가르는 표지를 두고 여기서 거절해야 한다»)가 가리킨
  *  바로 그 꼴이다 — 표지는 작업 행의 automation(apps/app-jobs-store.appJobAutomation)이고 service 가 requester.automation 으로 넘긴다.
  */
-export const AUTOMATION_REFUSAL = "이 실행은 사람이 시키지 않은 자동화(슬랙 다리가 워크플로 · 봇 글로 시작한 작업)에서 왔습니다 — 자동화는 구독(공용 시트 포함)을 쓸 수 없고 워크스페이스 API 키가 필요합니다";
+export const AUTOMATION_REFUSAL = "이 실행은 사람이 시키지 않은 자동화(슬랙 다리가 워크플로 · 봇 글로 시작한 작업)에서 왔습니다 — 자동화는 구독(공용 시트 포함)을 쓸 수 없고 워크스페이스 API 키가 필요합니다. 사람이 양식을 내고 답을 기다리는 워크플로라면 관리자가 그 다리의 run_as_human 을 켜면(bot_ids 로 그 워크플로를 고른 뒤) 사람의 질문으로 봅니다";
 export function subscriptionRefusal(
   account: AiAccount, requester: RunRequester, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
 ): string | null {

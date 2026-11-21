@@ -26,6 +26,8 @@ export interface BridgeRow {
   /** 넘길 봇 · 워크플로(bot_id B…) — 비면 bot_messages 가 켜졌을 때 모든 봇 글. */
   bot_ids: string[];
   run_as: string | null;
+  /** run_as 로 도는 글을 «사람이 낸 질문»으로 본다 — 자동화 표시를 달지 않는다(공용 시트를 쓸 수 있다). bot_ids 를 골랐을 때만 켤 수 있다. */
+  run_as_human: boolean;
   react: string | null;
   note: string | null;
   status: BridgeStatus;
@@ -94,7 +96,7 @@ export interface BridgeInput {
   id: string; app_id: string; route: string; enabled: boolean;
   app_token_ref: TokenRef; bot_token_ref: TokenRef;
   events: string[]; channels: string[]; bot_messages: boolean; bot_ids: string[];
-  run_as: string | null; react: string | null; note: string | null;
+  run_as: string | null; run_as_human: boolean; react: string | null; note: string | null;
 }
 
 const bad = (msg: string): HttpError => new HttpError(400, msg);
@@ -209,7 +211,13 @@ export function normalizeBridgeInput(input: Record<string, unknown>, prev: Bridg
   }
   const enabled = input.enabled === undefined ? (prev?.enabled ?? true) : input.enabled === true || input.enabled === "true";
   const botMessages = input.bot_messages === undefined ? (prev?.bot_messages ?? false) : input.bot_messages === true || input.bot_messages === "true";
-  return { id, app_id: appId, route, enabled, app_token_ref: appRef, bot_token_ref: botRef, events, channels, bot_messages: botMessages, bot_ids: botIds, run_as: runAs, react, note };
+  //  run_as 작업을 사람의 질문으로 보기 — 사람이 양식을 내고 답을 기다리는 워크플로만 고를 때 켠다. 넘길 봇을 고르지 않으면(채널의 모든 봇 글)
+  //   알림 · 연동 봇의 글까지 사람의 질문으로 보게 되므로 bot_ids 가 있어야 한다.
+  const runAsHuman = input.run_as_human === undefined ? (prev?.run_as_human ?? false) : input.run_as_human === true || input.run_as_human === "true";
+  if (runAsHuman && !botIds.length) {
+    throw bad("run_as_human 을 켜려면 bot_ids 로 넘길 워크플로를 고르세요 — 고르지 않으면 채널의 모든 봇 글(알림 · 연동 봇 포함)을 사람의 질문으로 보게 됩니다");
+  }
+  return { id, app_id: appId, route, enabled, app_token_ref: appRef, bot_token_ref: botRef, events, channels, bot_messages: botMessages, bot_ids: botIds, run_as: runAs, run_as_human: runAsHuman, react, note };
 }
 
 /** 같은 금고 칸인가 — 한 슬랙 앱(앱 수준 토큰)에 다리 둘이 붙으면 슬랙이 이벤트를 둘 중 한 연결에만 줘 서로 반씩 잃는다. */

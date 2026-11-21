@@ -3,7 +3,7 @@
 import { itemsPool } from "../../db/client.js";
 import type { BridgeInput, BridgeRow, BridgeStatus, TokenRef } from "./plan.js";
 
-const COLS = `id, app_id, route, enabled, app_token_ref, bot_token_ref, events, channels, bot_messages, bot_ids, run_as, react, note, status, created_at, updated_at, updated_by`;
+const COLS = `id, app_id, route, enabled, app_token_ref, bot_token_ref, events, channels, bot_messages, bot_ids, run_as, run_as_human, react, note, status, created_at, updated_at, updated_by`;
 
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : typeof v === "string" ? v : null);
 const refOf = (v: unknown): TokenRef => {
@@ -17,7 +17,7 @@ function norm(r: Record<string, unknown>): BridgeRow {
     events: Array.isArray(r.events) ? (r.events as unknown[]).map(String) : [],
     channels: Array.isArray(r.channels) ? (r.channels as unknown[]).map(String) : [],
     bot_messages: r.bot_messages === true, bot_ids: Array.isArray(r.bot_ids) ? (r.bot_ids as unknown[]).map(String) : [],
-    run_as: (r.run_as as string | null) ?? null, react: (r.react as string | null) ?? null,
+    run_as: (r.run_as as string | null) ?? null, run_as_human: r.run_as_human === true, react: (r.react as string | null) ?? null,
     note: (r.note as string | null) ?? null, status: (r.status && typeof r.status === "object" ? r.status : {}) as BridgeStatus,
     created_at: iso(r.created_at), updated_at: iso(r.updated_at), updated_by: (r.updated_by as string | null) ?? null,
   };
@@ -37,15 +37,15 @@ export async function getBridge(id: string): Promise<BridgeRow | null> {
 /** 저장 — 있으면 고치고(상태는 그대로) 없으면 만든다. */
 export async function upsertBridge(b: BridgeInput, actor: string): Promise<BridgeRow> {
   const r = await itemsPool.query(
-    `INSERT INTO org_slack_bridge(id, app_id, route, enabled, app_token_ref, bot_token_ref, events, channels, bot_messages, bot_ids, run_as, react, note, updated_at, updated_by)
-     VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::text[],$8::text[],$9,$10::text[],$11,$12,$13,now(),$14)
+    `INSERT INTO org_slack_bridge(id, app_id, route, enabled, app_token_ref, bot_token_ref, events, channels, bot_messages, bot_ids, run_as, run_as_human, react, note, updated_at, updated_by)
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::text[],$8::text[],$9,$10::text[],$11,$12,$13,$14,now(),$15)
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        app_id=EXCLUDED.app_id, route=EXCLUDED.route, enabled=EXCLUDED.enabled, app_token_ref=EXCLUDED.app_token_ref, bot_token_ref=EXCLUDED.bot_token_ref,
-       events=EXCLUDED.events, channels=EXCLUDED.channels, bot_messages=EXCLUDED.bot_messages, bot_ids=EXCLUDED.bot_ids, run_as=EXCLUDED.run_as, react=EXCLUDED.react,
-       note=EXCLUDED.note, updated_at=now(), updated_by=EXCLUDED.updated_by
+       events=EXCLUDED.events, channels=EXCLUDED.channels, bot_messages=EXCLUDED.bot_messages, bot_ids=EXCLUDED.bot_ids, run_as=EXCLUDED.run_as,
+       run_as_human=EXCLUDED.run_as_human, react=EXCLUDED.react, note=EXCLUDED.note, updated_at=now(), updated_by=EXCLUDED.updated_by
      RETURNING ${COLS}`,
     [b.id, b.app_id, b.route, b.enabled, JSON.stringify(b.app_token_ref), JSON.stringify(b.bot_token_ref), b.events, b.channels, b.bot_messages,
-      b.bot_ids, b.run_as, b.react, b.note, actor]);
+      b.bot_ids, b.run_as, b.run_as_human, b.react, b.note, actor]);
   return norm(r.rows[0] as Record<string, unknown>);
 }
 

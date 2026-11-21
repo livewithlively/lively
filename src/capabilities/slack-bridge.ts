@@ -27,7 +27,7 @@ function viewOf(r: BridgeRow): Record<string, unknown> {
   return {
     id: r.id, app_id: r.app_id, route: r.route, enabled: r.enabled,
     app_token_ref: r.app_token_ref, bot_token_ref: r.bot_token_ref,
-    events: r.events, channels: r.channels, bot_messages: r.bot_messages, bot_ids: r.bot_ids, run_as: r.run_as, react: r.react, note: r.note,
+    events: r.events, channels: r.channels, bot_messages: r.bot_messages, bot_ids: r.bot_ids, run_as: r.run_as, run_as_human: r.run_as_human, react: r.react, note: r.note,
     status: (live ?? r.status ?? {}) as BridgeStatus, status_from: live ? "this_gateway" : "last_saved",
     created_at: r.created_at, updated_at: r.updated_at, updated_by: r.updated_by,
   };
@@ -59,7 +59,8 @@ const bridgeSetInput = {
   channels: z.array(z.string().max(32)).max(100).optional().describe("넘길 채널 id 목록(C… · G… · D…). 비우면 봇이 들어간 모든 채널. 고르면 앱의 답(slack_bridge_call)도 그 채널과 DM 으로만 나간다"),
   bot_messages: z.boolean().optional().describe("워크플로 · 봇이 쓴 글도 넘기나(기본 false). 켜면 run_as 가 필요하다 — 그 글은 run_as 구성원 이름으로 돈다. 이 봇 자신의 글은 늘 거른다"),
   bot_ids: z.array(z.string().max(32)).max(20).optional().describe("넘길 봇 · 워크플로의 bot_id 목록(B…). 비우면 bot_messages 가 켜졌을 때 채널의 모든 봇 글을 넘긴다 — 정한 워크플로 글만 받으려면 적는다"),
-  run_as: z.string().max(64).nullable().optional().describe("사람이 쓰지 않은 글(워크플로 · 봇)을 돌릴 구성원 id. 그 작업은 자동화로 표시돼 AI 실행에 구독(공용 시트 포함)을 못 쓰고 워크스페이스 API 키만 쓴다. null 이면 지운다"),
+  run_as: z.string().max(64).nullable().optional().describe("사람이 쓰지 않은 글(워크플로 · 봇)을 돌릴 구성원 id. 그 작업은 자동화로 표시돼 AI 실행에 구독(공용 시트 포함)을 못 쓰고 워크스페이스 API 키만 쓴다(run_as_human 을 켜면 사람의 질문으로 본다). null 이면 지운다"),
+  run_as_human: z.boolean().optional().describe("run_as 로 도는 글을 사람이 낸 질문으로 본다(기본 false) — 사람이 양식을 내고 답을 기다리는 워크플로(예: 업무 요청 양식)일 때 켠다. 켜면 그 작업에 자동화 표시를 달지 않아 run_as 구성원의 요청으로 공용 시트(구독)를 쓸 수 있다. 채널의 아무 봇 글(알림 등)이 구독을 쓰지 않게 bot_ids 로 워크플로를 골랐을 때만 켤 수 있다"),
   react: z.string().max(64).nullable().optional().describe("작업을 시작한 글에 다는 받음 표시(슬랙 이모지 이름 — 예 eyes). 봇에 reactions:write 가 필요하다. null 이면 안 단다"),
   note: z.string().max(500).nullable().optional().describe("메모"),
 };
@@ -142,10 +143,12 @@ const orgSlackBridgeSet: Capability = {
       const high = (m.scopes ?? []).filter((x) => !["items", "context", "memory"].includes(x));
       if (high.length) warnings.push(`run_as 구성원 '${b.run_as}' 에 높은 권한(${high.join(" · ")})이 있습니다 — 봇 · 워크플로 글 하나가 그 사람 이름으로 돕니다. 기본 권한(items · context · memory)만 가진 전용 구성원을 쓰세요`);
       if (b.bot_messages && !b.bot_ids.length) warnings.push("bot_ids 를 비워 두면 채널의 모든 봇 · 워크플로 글이 run_as 이름으로 돕니다 — 받을 워크플로의 bot_id 를 적으세요");
+      if (!b.run_as_human && b.bot_messages) warnings.push("run_as 작업은 자동화로 표시돼 AI 실행에 구독(공용 시트 포함)을 못 쓰고 워크스페이스 API 키만 씁니다 — 사람이 양식을 내고 답을 기다리는 워크플로만 bot_ids 로 골랐다면 run_as_human 을 켜면 사람의 질문으로 봅니다");
       if (!(await getActiveGrant(b.app_id, m.id))) warnings.push(`run_as 구성원 '${b.run_as}' 이 앱 '${b.app_id}' 에 동의하지 않았습니다 — 그 사람이 앱을 한 번 열어 동의해야 워크플로 · 봇 글의 작업이 시작됩니다`);
     } else if (b.bot_messages) {
       warnings.push("bot_messages 를 켰지만 run_as 가 없습니다 — 워크플로 · 봇 글은 돌릴 사람이 없어 넘기지 않습니다");
     }
+    if (b.run_as_human && (!b.run_as || !b.bot_messages)) warnings.push("run_as_human 은 bot_messages 를 켜고 run_as 를 정했을 때만 쓰입니다 — 지금은 넘길 워크플로 글이 없습니다");
     if (b.enabled) {
       await checkToken(b.app_token_ref, "app_token_ref", "app");
       await checkToken(b.bot_token_ref, "bot_token_ref", "bot");
