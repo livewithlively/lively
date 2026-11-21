@@ -300,7 +300,9 @@ export const HARNESS = {
     //  (부트스트랩이 Node 를 확보하므로 — #355). 그래서 윈도우만 형태가 다르다. 무결성 검증은 양쪽 다 없다.
     install: {
       docs: "https://opencode.ai/docs/",
-      posix: { cmd: "curl -fsSL https://opencode.ai/install | bash", shell: "sh", binDir: (HOME) => j(HOME, ".opencode", "bin"), wiresPath: true, integrity: null },
+      // wiresPath:false — 설치기는 **이미 있는** 셸 시작 파일(.zshrc·.zshenv)에만 PATH 를 적는다. 새 macOS 계정엔
+      //  .zshrc 가 없어 PATH 가 안 잡힌다(2026-11-22 격리 홈 실측: «No config file found for zsh»). 우리가 wireLocalBinPath 로 잇는다.
+      posix: { cmd: "curl -fsSL https://opencode.ai/install | bash", shell: "sh", binDir: (HOME) => j(HOME, ".opencode", "bin"), wiresPath: false, integrity: null },
       win: { cmd: "npm install -g opencode-ai", shell: "powershell", requires: "npm", binDir: null, wiresPath: true, integrity: null },
     },
     // ⚠ `~/.opencode/` 가 아니다 — XDG 규약. 실측(번들 소스): `XDG_CONFIG_HOME || homedir()/.config` + 앱이름,
@@ -370,7 +372,9 @@ export const HARNESS = {
     //  ⚠ 공식 문서가 말하는 `--skip-path`·`--skip-aliases` 는 **실제 스크립트에 없다**(-d/--dir·-h 뿐, 실측).
     install: {
       docs: "https://antigravity.google/docs/cli/install/",
-      posix: { cmd: "curl -fsSL https://antigravity.google/cli/install.sh | bash", shell: "sh", binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: true, integrity: "sha512" },
+      // wiresPath:false — `agy install` 은 **이미 있는** .zshrc 에만 PATH 를 적는다. 새 macOS 계정엔 없어 안내만 찍고
+      //  끝난다(2026-11-22 격리 홈 실측: «not present in your active PATH… manually add it»). 우리가 wireLocalBinPath 로 잇는다.
+      posix: { cmd: "curl -fsSL https://antigravity.google/cli/install.sh | bash", shell: "sh", binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: false, integrity: "sha512" },
       win: { cmd: "irm https://antigravity.google/cli/install.ps1 | iex", shell: "powershell", binDir: (HOME, env = process.env) => j(env.LOCALAPPDATA || j(HOME, "AppData", "Local"), "agy", "bin"), wiresPath: true, integrity: "sha512" },
     },
     // `~/.gemini` — env 경로 오버라이드 **없음**(agy 1.1.13 실측: $HOME 만 본다. XDG 무관 — opencode 와 다르다).

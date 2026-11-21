@@ -16,13 +16,16 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
+import { randomBytes, createHash } from "node:crypto";
 import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview, bootstrapManualHint } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
-import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
+import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, INTERNAL_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL, harnessList } from "./ipc-contract.mjs";
+import { deviceStart, devicePoll, deviceLabel, fetchProfile, normGateway } from "./device-login.mjs";
+import { detectHarnesses, HARNESS_LABEL } from "./harness-detect.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, createOpenLedger, surfacePopupTitle, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
@@ -74,7 +77,17 @@ let state = {                       // 트레이·렌더러가 함께 보는 스
   nodeRegistered: false, nodeDaemon: false, nodeRunning: false, busy: false,
 };
 let progress = null;
-const pendingPrompts = new Map();   // prompt id → resolve (렌더러의 답을 기다린다)
+const pendingPrompts = new Map();
+// ── 새 시작 흐름(#5650) ── 로그인 버튼은 로그인만, 설치는 «이 컴퓨터 설정» 에서 고른 것만.
+//  login 은 **메모리에만** 있다(토큰 포함) — 사람이 [설정하고 시작] 을 누르기 전엔 이 PC 에 아무것도 쓰지 않는다.
+//  ⚠ login.token 은 렌더러로 보내지 않는다(setupPayload 가 걸러 낸다).
+let login = null;                   // { cloud, gateway, token, email, name, workspace }
+let loginAbort = null;              // 기다리는 승인 폴 루프의 AbortController
+let loginUrl = null;                // 승인 주소 — [브라우저 다시 열기] 가 이걸 연다(렌더러가 URL 을 넘기지 않는다)
+let workRoot = join(homedir(), "workspace");   // 작업 폴더 — 네이티브 선택창으로만 바뀐다
+let lastSetup = null;               // 마지막 [설정하고 시작] 의 선택 — 실패한 항목 다시 시도에 쓴다
+let setupView = { screen: null };   // 렌더러가 그릴 새 흐름 화면(setupPayload 로 보낸다)
+const WEB_ONLY_FILE = join(LIVELY_DIR, "desktop-web-only");   // [건너뛰기] 로 웹 화면만 쓰기로 한 표시   // prompt id → resolve (렌더러의 답을 기다린다)
 
 // ── 상태 ────────────────────────────────────────────────────────────────────
 // 파일 존재는 **싸고 즉시** 알 수 있는 축이라 먼저 채운다(창을 여는 판단이 여기 달렸다).
@@ -103,6 +116,8 @@ async function refreshState({ deep = false } = {}) {
   next.tokenRejected = !!(rejectedToken && readTrim(join(LIVELY_DIR, "token")) === rejectedToken);
   next.webError = webError;
   next.kitInstalled = existsSync(join(LIVELY_DIR, "kit-version"));
+  // [건너뛰기] 로 웹 화면만 쓰기로 했나(#5650) — 로그인은 돼 있고 설치는 안 한 상태. 설치가 끝나면 표시를 지운다.
+  next.webOnly = !!(next.loggedIn && next.gatewayUrl && existsSync(WEB_ONLY_FILE));
   next.nodeRegistered = existsSync(join(LIVELY_DIR, "node-agent.env"));
   next.appAutoLaunch = appAutoLaunchEnabled();
   // 버전 — 제보·지원에서 가장 먼저 묻는 값인데 화면 어디에도 없었다. 두 축을 따로 보여준다:
@@ -155,6 +170,8 @@ async function refreshNodeStatus(cli) {
   if (verdict !== "failed") {
     patchState({ cliOutdated: verdict === "too-old", cliBroken: verdict === "unusable" ? (r.error || "CLI 를 실행하지 못했습니다.") : null });
   }
+  // 이 CLI 가 새 시작 흐름의 작업을 아나(#5650) — 모르는 구 CLI 면 applySetup 이 종전 명령으로 내려간다.
+  if (r.ok && r.result) patchState({ cliCaps: Array.isArray(r.result.caps) ? r.result.caps.map(String) : [] });
   const n = r.result?.node;
   if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
   // nodeConnected: 게이트웨이가 보는 연결 여부(true/false/null=모름). running 과 다른 축 — 프로세스가 돌아도 안 붙어 있을 수 있다.
@@ -540,7 +557,7 @@ function showWindow() {
   //  안 그러면 창이 보이지 않는 곳에 떠서 사용자에겐 "앱이 안 열린다" 로 보인다.
   const b = loadBounds();
   win = new BrowserWindow({
-    ...b, ...frameOptions(process.platform, osTheme()), minWidth: 560, minHeight: 420, title: "라이블리", show: false,
+    ...b, ...frameOptions(process.platform, osTheme()), minWidth: 860, minHeight: 600, title: "라이블리", show: false,
     backgroundColor: osThemeBg(),   // #1683 — 첫 그림 전 흰 번쩍임 방지(마법사는 OS 설정을 따른다)
     autoHideMenuBar: true,   // frameless 에서 메뉴 막대가 남으면 그게 곧 '이상한 바' 다 — Alt 로는 나온다
     webPreferences: {
@@ -901,11 +918,11 @@ async function pollPersonFeed(gw, headers, gen) {
 //   시작 카드의 «회사에 직접 설치했어요 — 주소 입력» 갈래가 화면에서 사라져 셀프호스팅 사용자가 로그인할 길이 없어졌다.
 //   시작 카드의 [라이블리 클라우드로 로그인]은 설치 흐름(setup-cloud → onboardCloud)이다(#5650) — 두 갈래를 나란히 둔다.
 function showMain() {
-  if (state.ready) return showApp().ok ? appWin : showWindow();
+  if (state.ready || state.webOnly) return showApp().ok ? appWin : showWindow();
   return showWindow();
 }
 function showApp() {
-  if (!state.ready && selectedGatewayUrl !== cloudUrl()) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
+  if (!state.ready && !state.webOnly && selectedGatewayUrl !== cloudUrl()) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
   const displayGateway = selectedGatewayUrl || state.gatewayUrl;
   const url = selectedGatewayUrl === cloudUrl() ? `${cloudUrl()}${state.accountLoggedIn ? "/home" : "/login"}` : webUiUrl(displayGateway);
   if (!url) return { ok: false, error: "게이트웨이 주소가 없습니다." };
@@ -1417,15 +1434,16 @@ async function offerWorkspaceRebind(navUrl) {
   if (response === 0) await start("setup-cloud", {});
 }
 
-async function start(kind, opts) {
+async function start(kind, opts, { internal = false, env = {}, onStep = null } = {}) {
   if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
-  if (!RUN_KINDS.includes(kind)) return { ok: false, error: `알 수 없는 작업: ${kind}` };
+  // 내부 작업(#5650 applySetup)은 렌더러의 RUN 으로는 못 온다 — IPC.RUN 핸들러는 internal 을 넘기지 않는다.
+  if (!RUN_KINDS.includes(kind) && !(internal && INTERNAL_KINDS.includes(kind))) return { ok: false, error: `알 수 없는 작업: ${kind}` };
   const cli = state.cliPath || locateCli(existsSync);
   if (!cli) return { ok: false, error: cliMissingHelp(state.gatewayUrl) };
   let args;
   try { args = argvFor(kind, opts); } catch (e) { return { ok: false, error: e.message }; }
 
-  lastRun = { kind, opts: opts || {} };   // '다시 시도' 가 쓸 값 — 렌더러가 argv 를 다시 만들지 않게 메인이 기억한다
+  if (!internal) lastRun = { kind, opts: opts || {} };   // '다시 시도' 가 쓸 값 — 렌더러가 argv 를 다시 만들지 않게 메인이 기억한다
   state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
   // ★ 비운 것을 **화면에도 알린다** — 렌더러가 «새 실행» 을 알아야 지난 실행에서 답한 질문 id 기억을 비운다.
   //  안 보내면 그 기억이 창이 살아 있는 내내 남아, 같은 id 로 오는 다음 실행의 질문 카드를 숨긴다(renderer answeredPrompts).
@@ -1434,9 +1452,9 @@ async function start(kind, opts) {
   pushWebUpdate();   // '작업 중' 은 웹의 [다시 시작하여 반영하기] 도 잠근다 — 눌러 놓고 거절당하지 않게(#1838)
   const r = await runCli({
     cli, launch: launchSpecFor(cli, args),
-    env: { ...process.env },
+    env: { ...process.env, ...env },
     onHandle: (h) => { if (running) running.handle = h; },
-    onEvent: (e) => { progress = reduceProgress(progress, e); send(IPC.PROGRESS, progress); },
+    onEvent: (e) => { progress = reduceProgress(progress, e); send(IPC.PROGRESS, progress); if (onStep && e?.t === "step") onStep(e); },
     onStderr: (line) => send(IPC.LOG, { stream: "stderr", line }),
     // 프롬프트는 **사람에게** 넘긴다. 창이 없으면 띄운다 — 답할 사람이 없으면 CLI 가 매달린다.
     onPrompt: (p) => askUser(p),
@@ -1445,7 +1463,7 @@ async function start(kind, opts) {
   scheduleAutoApply();   // 작업 중엔 미뤄 둔 업데이트 적용을 다시 판정한다
   // 재로그인(setup·login)이 성공했으면 '거부된 토큰' 판정을 푼다 — CLI 는 기존 토큰이 **먹히면** 재발급 없이
   //  "이미 로그인됨"으로 끝내므로(파일 불변), 파일 비교만으로는 오판이 영영 안 풀린다(#1541 원준님 맥 루프).
-  if (r.ok && (kind === "setup" || kind === "login")) rejectedToken = null;
+  if (r.ok && (kind === "setup" || kind === "login" || kind === "login-token")) rejectedToken = null;
   state = { ...state, busy: false };
   await refreshState({ deep: true });          // 방금 바꾼 상태를 **실측으로** 되읽는다(추측으로 그리지 않는다)
   renderTray(); send(IPC.STATE, state);
@@ -1591,8 +1609,223 @@ function askUser(p) {
   return new Promise((resolve) => { pendingPrompts.set(p.id, resolve); });
 }
 
+// ── 새 시작 흐름(#5650) ─────────────────────────────────────────────────────
+//  ① 로그인(앱이 직접, 아무것도 안 깐다) → ② «이 컴퓨터 설정»(고른 것만) → ③ 설정 중 → ④ 완료 / 일부 실패.
+//  종전 흐름(onboard·onboardCloud — CLI 가 로그인과 설치를 한꺼번에)은 브라우저 로그인을 모르는 구 게이트웨이와
+//  «고쳐야 할 때»(구 CLI·토큰 거부) 화면이 계속 쓴다.
+const tildePath = (p) => { const h = homedir(); return p && p.startsWith(h) ? "~" + p.slice(h.length) : p; };
+const hostOf = (u) => { try { return new URL(u).host; } catch { return u || ""; } };
+function detectNow() { return detectHarnesses({ exists: existsSync, env: process.env, home: homedir() }); }
+
+/** 렌더러로 보낼 화면 상태 — **토큰은 절대 싣지 않는다.** */
+function setupPayload() {
+  return {
+    ...setupView,
+    account: login ? { email: login.email, name: login.name, workspace: login.workspace, gateway: login.gateway } : null,
+    found: detectNow(),
+    workRoot: tildePath(workRoot),
+    platform: process.platform,
+  };
+}
+function setView(patch) {
+  setupView = { ...setupView, ...patch };
+  send(IPC.SETUP, setupPayload());
+}
+function markRow(id, status, extra) {
+  const rows = (setupView.rows || []).map((r) => (r.id === id ? { ...r, status, ...(extra || {}) } : r));
+  setView({ rows });
+}
+
+async function loginStart({ mode, url } = {}) {
+  if (running || loginAbort) return { ok: false, error: "이미 진행 중인 작업이 있습니다." };
+  const cloud = mode !== "gateway";
+  let base;
+  if (cloud) {
+    try { base = cloudUrl(); } catch (e) { return { ok: false, error: e.message }; }
+  } else {
+    const advice = gatewayAdvice(url);
+    if (advice.error) return { ok: false, error: advice.error };
+    try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }
+    base = advice.url;
+  }
+  const s0 = await deviceStart({ base, label: deviceLabel(hostname()), fetchImpl: fetch, randomBytes, createHash });
+  if (!s0.ok) {
+    // 브라우저 로그인을 모르는 구 게이트웨이 — 종전 흐름(CLI 가 로그인과 설치를 한꺼번에)으로 간다.
+    if (s0.unsupported && !cloud) { setView({ screen: null }); return onboard(base); }
+    return { ok: false, error: s0.error };
+  }
+  loginUrl = s0.start.verification_uri_complete || s0.start.verification_uri || null;
+  setView({ screen: "wait", code: s0.start.user_code || "", cloud, error: null });
+  showWindow();
+  if (loginUrl) shell.openExternal(loginUrl);
+  const ctl = new AbortController();
+  loginAbort = ctl;
+  const r = await devicePoll({ base, start: s0.start, verifier: s0.verifier, fetchImpl: fetch,
+    // 취소하면 기다리던 간격을 끊고 바로 돌아온다(안 끊으면 [취소] 뒤 몇 초 동안 화면이 그대로다).
+    sleep: (ms) => new Promise((res) => { const tm = setTimeout(res, ms); ctl.signal.addEventListener("abort", () => { clearTimeout(tm); res(); }, { once: true }); }),
+    signal: ctl.signal });
+  loginAbort = null; loginUrl = null;
+  const back = cloud ? "start" : "server";
+  if (!r.ok) { setView({ screen: back, error: r.cancelled ? null : r.error }); return { ok: false, error: r.error }; }
+  const gw = normGateway(cloud ? r.gateway : base);
+  if (!gw) { setView({ screen: back, error: "로그인은 됐지만 워크스페이스 주소를 받지 못했습니다. 다시 시도하세요." }); return { ok: false }; }
+  const prof = await fetchProfile({ gateway: gw, token: r.token, fetchImpl: fetch });
+  if (!prof.ok && prof.rejected) { setView({ screen: back, error: prof.error }); return { ok: false, error: prof.error }; }
+  login = { cloud, gateway: gw, token: r.token, email: prof.email || null, name: prof.name || null, workspace: r.workspace || hostOf(gw) };
+  setView({ screen: "setup", error: null, rows: null });
+  showWindow();
+  return { ok: true };
+}
+
+/** 고른 것을 설치한다. 각 항목의 결과를 줄마다 보여 주고, 한 항목이 실패해도 나머지는 계속한다(명령어 설치 실패만 멈춘다). */
+async function applySetup(sel = {}) {
+  if (!login) return { ok: false, error: "먼저 로그인하세요." };
+  if (running) return { ok: false, error: "이미 진행 중인 작업이 있습니다." };
+  let list;
+  try { list = harnessList(sel.harnesses); } catch (e) { return { ok: false, error: e.message }; }
+  if (!list.length) return { ok: false, error: "연결할 AI 도구를 하나 이상 고르세요." };
+  const want = { harnesses: list, workRoot: !!sel.workRoot, node: !!sel.node };
+  lastSetup = want;
+  const before = detectNow();
+  const label = (h) => HARNESS_LABEL[h] || h;
+  const rows = [
+    { id: "cli", label: "라이블리 명령어 설치", status: "wait" },
+    ...list.filter((h) => !before.includes(h)).map((h) => ({ id: `install:${h}`, label: `${label(h)} 설치`, status: "wait", harness: h })),
+    { id: "connect", label: `AI 도구 연결 · ${list.map(label).join(", ")}`, status: "wait" },
+    ...(want.workRoot ? [{ id: "workroot", label: `작업 폴더 등록 · ${tildePath(workRoot)}`, status: "wait" }] : []),
+    ...(want.node ? [{ id: "node", label: "웹에서 이 컴퓨터 쓰기 켜기", status: "wait" }] : []),
+  ];
+  setView({ screen: "running", rows, error: null, startedAt: Date.now() });
+  const finish = () => {
+    const failed = (setupView.rows || []).filter((r) => r.status === "fail");
+    if (!failed.length) { try { rmSync(WEB_ONLY_FILE, { force: true }); } catch { /* 없음 */ } }
+    setView({ screen: failed.length ? "partial" : "done", installed: list.filter((h) => detectNow().includes(h)).map(label) });
+    void refreshState({ deep: true });
+    showWindow();
+    return { ok: !failed.length };
+  };
+
+  // ① 명령어 — 클라우드는 클라우드에서, 회사 서버는 그 서버에서 받는다(ensureCli 머리말).
+  markRow("cli", "run");
+  let c;
+  try { c = await ensureCli({ url: login.cloud ? cloudUrl() : login.gateway, cloud: login.cloud }); } catch (e) { c = { ok: false, error: e.message }; }
+  if (!c.ok) { markRow("cli", "fail", { reason: c.error }); return finish(); }
+  // 로그인 정보를 이 PC 에 저장한다 — 토큰은 argv 가 아니라 env 로(ipc-contract login-token 주석).
+  const lr = await start("login-token", { gateway: login.gateway }, { internal: true, env: { LIVELY_TOKEN: login.token } });
+  if (!lr.ok) { markRow("cli", "fail", { reason: lr.error || "로그인 정보를 저장하지 못했습니다." }); return finish(); }
+  markRow("cli", "done");
+
+  // ② AI 도구 설치·연결 — 여러 개를 한 번에(새 CLI). 구 CLI 면 첫 도구만 종전 명령으로.
+  markRow("connect", "run");
+  const multi = (state.cliCaps || []).includes("install-multi");
+  const onStep = (e) => {
+    const m = /^harness-install:(.+)$/.exec(String(e.id || ""));
+    if (!m) return;
+    const st = e.status === "start" ? "run" : e.status === "done" ? "done" : e.status === "fail" ? "fail" : null;
+    if (st) markRow(`install:${m[1]}`, st, st === "fail" ? { reason: e.reason || e.extra?.reason || null, docs: e.docs || e.extra?.docs || null } : undefined);
+  };
+  const ir = multi
+    ? await start("install-multi", { harnesses: list }, { internal: true, onStep })
+    : await start("install", { harness: list[0] });
+  const after = detectNow();
+  for (const r of setupView.rows || []) {
+    if (!r.id.startsWith("install:") || r.status === "fail") continue;
+    if (!after.includes(r.harness)) markRow(r.id, "fail", { reason: r.reason || "설치를 마쳤지만 실행 파일을 찾지 못했습니다." });
+    else markRow(r.id, "done");
+  }
+  if (ir.ok) markRow("connect", "done");
+  else markRow("connect", "fail", { reason: ir.error || "AI 도구를 연결하지 못했습니다." });
+
+  // ③ 작업 폴더
+  if (want.workRoot) {
+    markRow("workroot", "run");
+    try { mkdirSync(workRoot, { recursive: true }); } catch { /* CLI 가 사유를 말한다 */ }
+    const wr = (state.cliCaps || []).includes("work-root-add")
+      ? await start("work-root-add", { path: workRoot }, { internal: true })
+      : { ok: false, error: "이 라이블리 명령어 버전은 작업 폴더 등록을 지원하지 않습니다." };
+    markRow("workroot", wr.ok ? "done" : "fail", wr.ok ? undefined : { reason: wr.error || "작업 폴더를 등록하지 못했습니다." });
+  }
+
+  // ④ 웹에서 이 컴퓨터 쓰기(노드)
+  if (want.node) {
+    markRow("node", "run");
+    if (!nextAfterSetup(state)) markRow("node", "done");
+    else {
+      const nr = await start("node-start", {});
+      markRow("node", nr.ok ? "done" : "fail", nr.ok ? undefined : { reason: nr.error || "켜지 못했습니다." });
+    }
+  }
+  return finish();
+}
+
+/** 실패한 항목만 다시 — 고른 것 중 실패한 도구·폴더·노드만 다시 돈다(나머지는 그대로 둔다). */
+async function retrySetup() {
+  if (!lastSetup) return { ok: false, error: "다시 시도할 설정이 없습니다." };
+  const rows = setupView.rows || [];
+  const failed = new Set(rows.filter((r) => r.status === "fail").map((r) => r.id));
+  if (failed.has("cli") || failed.has("connect")) return applySetup(lastSetup);
+  const tools = rows.filter((r) => failed.has(r.id) && r.harness).map((r) => r.harness);
+  return applySetup({
+    harnesses: tools.length ? tools : lastSetup.harnesses,
+    workRoot: failed.has("workroot"),
+    node: failed.has("node"),
+  });
+}
+
+/** [건너뛰기] — 설치 없이 웹 화면만. 로그인 정보는 이 PC 에 저장한다(웹 창이 그 토큰으로 열린다). */
+function skipSetup() {
+  if (!login) return { ok: false, error: "먼저 로그인하세요." };
+  try {
+    mkdirSync(LIVELY_DIR, { recursive: true });
+    writeFileSync(join(LIVELY_DIR, "token"), login.token + "\n", { mode: 0o600 });
+    writeFileSync(join(LIVELY_DIR, "gateway-url"), login.gateway + "\n");
+    writeFileSync(WEB_ONLY_FILE, new Date().toISOString() + "\n");
+  } catch (e) { return { ok: false, error: `로그인 정보를 저장하지 못했습니다. (${e.message})` }; }
+  rejectedToken = null;
+  setView({ screen: null });
+  return refreshState().then(() => {
+    const r = showApp();
+    if (r.ok && win && !win.isDestroyed()) win.hide();
+    return r;
+  });
+}
+
+/** 웹 화면만 쓰던 사람이 설정 창을 다시 열면 — 저장된 로그인으로 «이 컴퓨터 설정» 을 다시 보여 준다. */
+function resumeFromWebOnly() {
+  if (login || !state.webOnly || state.ready) return;
+  const tok = readTrim(join(LIVELY_DIR, "token")), gw = readTrim(join(LIVELY_DIR, "gateway-url"));
+  if (!tok || !gw) return;
+  login = { cloud: false, gateway: normGateway(gw), token: tok, email: null, name: null, workspace: hostOf(gw) };
+  setupView = { screen: "setup" };
+  void fetchProfile({ gateway: login.gateway, token: tok, fetchImpl: fetch }).then((p) => {
+    if (p.ok && login) { login = { ...login, email: p.email, name: p.name }; send(IPC.SETUP, setupPayload()); }
+  });
+}
+
+async function pickFolder() {
+  const r = await dialog.showOpenDialog(win && !win.isDestroyed() ? win : undefined, {
+    title: "작업 폴더 고르기", defaultPath: workRoot, properties: ["openDirectory", "createDirectory"],
+  });
+  if (!r.canceled && r.filePaths?.[0]) workRoot = r.filePaths[0];
+  send(IPC.SETUP, setupPayload());
+  return { ok: true, workRoot: tildePath(workRoot) };
+}
+
 // ── IPC ─────────────────────────────────────────────────────────────────────
-ipcMain.handle(IPC.GET_STATE, async () => ({ state: await refreshState(), progress }));
+ipcMain.handle(IPC.GET_STATE, async () => { const st = await refreshState(); resumeFromWebOnly(); return { state: st, progress, setup: setupPayload() }; });
+ipcMain.handle(IPC.LOGIN_START, (_e, a) => loginStart(a || {}));
+ipcMain.handle(IPC.LOGIN_CANCEL, () => { loginAbort?.abort(); return { ok: true }; });
+ipcMain.handle(IPC.LOGIN_REOPEN, () => { if (loginUrl) shell.openExternal(loginUrl); return { ok: !!loginUrl }; });
+ipcMain.handle(IPC.LOGIN_RESET, () => {
+  if (running) return { ok: false, error: "설정이 진행 중입니다." };
+  loginAbort?.abort(); login = null; lastSetup = null;
+  setView({ screen: "start", error: null, rows: null });
+  return { ok: true };
+});
+ipcMain.handle(IPC.REDETECT, () => { send(IPC.SETUP, setupPayload()); return { ok: true }; });
+ipcMain.handle(IPC.PICK_FOLDER, () => pickFolder());
+ipcMain.handle(IPC.APPLY_SETUP, (_e, sel) => (sel && sel.retry ? retrySetup() : applySetup(sel || {})));
+ipcMain.handle(IPC.SKIP_SETUP, () => skipSetup());
 ipcMain.handle(IPC.RUN, async (_e, { kind, opts }) => {
   // 클라우드 설치(#2044·#3968)는 **온보딩과 같은 흐름**이다: (없으면) CLI 부트스트랩 → setup → 노드까지.
   //  주소 경로(onboard)가 그렇게 하는데 이쪽만 안 하면, 같은 앱에서 어떻게 시작했느냐로 결과가 갈린다.

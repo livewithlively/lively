@@ -8,12 +8,15 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync, existsSync as existsSyncReal, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, bootstrapManualHint, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
-import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
+import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL, INTERNAL_KINDS, harnessList, workRootPath } from "./ipc-contract.mjs";
+import { s256, deviceLabel, deviceStart, devicePoll, normGateway, fetchProfile } from "./device-login.mjs";
+import { detectHarnesses, HARNESS_ORDER, HARNESS_BIN, HARNESS_LABEL } from "./harness-detect.mjs";
+import { createHash, randomBytes } from "node:crypto";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -1170,7 +1173,7 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
   assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
-  assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
+  assert.match(js, /zombie \? "다시 켜기"/, '좀비면 버튼이 다시 켜기여야 한다');
 });
 
 t('U14 업데이트 적용 재시작 후 창 복원 — 창에서 눌렀을 때만 마커, 시작 때 마커 소비 후 창 (#1541 실측: 트레이에만 떠 손으로 열었다)', () => {
@@ -1216,7 +1219,7 @@ t('D6b ★ 새 실행이 시작되면 답한 질문 기억을 비운다 — 안 
   //  카드가 안 떠 CLI 가 답을 기다리며 멈췄다. 그때 CLI 는 실행마다 confirm-1 부터 붙였고, 렌더러는 답한 id 를
   //  창이 살아 있는 내내 기억했다. 그 기억은 한 실행 안의 경쟁(D6)만 막으면 된다.
   const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
-  const startSeg = main.slice(main.indexOf('async function start(kind, opts)'), main.indexOf('await runCli({', main.indexOf('async function start(kind, opts)')));
+  const startSeg = main.slice(main.indexOf('async function start(kind, opts'), main.indexOf('await runCli({', main.indexOf('async function start(kind, opts')));
   assert.ok(/progress = null;\s*send\(IPC\.PROGRESS, progress\)/.test(startSeg), '메인이 새 실행의 시작(빈 진행 상태)을 렌더러에 안 알린다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   const rp = js.slice(js.indexOf('function renderProgress(p)'), js.indexOf('function renderPrompt(p)'));
@@ -1398,23 +1401,23 @@ t("W1 저장값 없음 → 기본 크기 · 좌표는 **주지 않는다**(0,0 �
 });
 
 t("W2 저장값이 그 디스플레이 안 → 그대로 복원", () => {
-  assert.deepEqual(normalizeBounds({ x: 100, y: 80, width: 800, height: 600 }, [D1]),
-    { width: 800, height: 600, x: 100, y: 80 });
+  assert.deepEqual(normalizeBounds({ x: 100, y: 80, width: 900, height: 640 }, [D1]),
+    { width: 900, height: 640, x: 100, y: 80 });
 });
 
 t("W3 ★ 화면 밖 좌표(뺀 모니터 자리) → 크기만 살리고 위치는 버린다", () => {
-  const b = normalizeBounds({ x: 2000, y: 200, width: 800, height: 600 }, [D1]);
-  assert.deepEqual(b, { width: 800, height: 600 });
+  const b = normalizeBounds({ x: 2000, y: 200, width: 900, height: 640 }, [D1]);
+  assert.deepEqual(b, { width: 900, height: 640 });
 });
 
 t("W4 경계에 걸쳐 있어도 충분히 보이면 유지 — 완전 포함을 요구하면 멀쩡한 배치를 매번 되돌린다", () => {
-  const b = normalizeBounds({ x: 1440 - 300, y: 0, width: 800, height: 600 }, [D1]);
+  const b = normalizeBounds({ x: 1440 - 300, y: 0, width: 900, height: 640 }, [D1]);
   assert.equal(b.x, 1140);
 });
 
 t("W5 살짝만 걸치면(잡을 수 없다) 버린다", () => {
   const x = 1440 - (MIN_VISIBLE.width - 10);
-  assert.ok(!("x" in normalizeBounds({ x, y: 0, width: 800, height: 600 }, [D1])), "잡을 수 없는 배치를 유지했다");
+  assert.ok(!("x" in normalizeBounds({ x, y: 0, width: 900, height: 640 }, [D1])), "잡을 수 없는 배치를 유지했다");
 });
 
 t("W6 최소 크기 밑으로는 못 내려간다", () => {
@@ -1423,13 +1426,13 @@ t("W6 최소 크기 밑으로는 못 내려간다", () => {
 });
 
 t("W7 디스플레이보다 큰 창은 작업영역으로 제한", () => {
-  const small = { x: 0, y: 0, width: 800, height: 600 };
+  const small = { x: 0, y: 0, width: 1024, height: 700 };
   const b = normalizeBounds({ x: 0, y: 0, width: 5000, height: 4000 }, [small]);
-  assert.equal(b.width, 800); assert.equal(b.height, 600);
+  assert.equal(b.width, 1024); assert.equal(b.height, 700);
 });
 
 t("W8 디스플레이를 모르면(빈 목록) 좌표를 믿지 않는다", () => {
-  assert.deepEqual(normalizeBounds({ x: 100, y: 100, width: 800, height: 600 }, []), { width: 800, height: 600 });
+  assert.deepEqual(normalizeBounds({ x: 100, y: 100, width: 900, height: 640 }, []), { width: 900, height: 640 });
 });
 
 t("W9 값이 망가져도(NaN·문자열·빈 객체) throw 없이 기본으로 접힌다", () => {
@@ -2298,7 +2301,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(w, /rejectedToken = tok;/, "거부된 토큰을 기억하지 않는다");
     assert.ok(w.indexOf("res.status !== 401") < w.indexOf("rejectedToken = tok;"), "재검증 확인보다 먼저 거부를 기록한다");
     // 회복: 재로그인(setup·login) 성공 시 해제 — CLI 는 토큰이 먹히면 재발급 없이 끝나(파일 불변) 파일 비교만으론 안 풀린다
-    assert.match(main, /if \(r\.ok && \(kind === "setup" \|\| kind === "login"\)\) rejectedToken = null;/, "재로그인 성공이 오판 플래그를 안 푼다(만료 화면 무한 루프)");
+    assert.match(main, /if \(r\.ok && \(kind === "setup" \|\| kind === "login"( \|\| kind === "login-token")?\)\) rejectedToken = null;/, "재로그인 성공이 오판 플래그를 안 푼다(만료 화면 무한 루프)");
     assert.match(main, /next\.tokenRejected = !!\(rejectedToken && readTrim\(join\(LIVELY_DIR, "token"\)\) === rejectedToken\)/, "파일 토큰과 비교하지 않는다(재로그인해도 안 풀린다)");
     // 트레이·마법사 문구
     assert.match(statusLabel({ ...okState, tokenRejected: true }), /다시 로그인/);
@@ -2343,7 +2346,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   t("H8 웹 창 배선 — 준비됐을 때만·/ui/·전용 preload·격리·주소/토큰 바뀌면 다시 싣기·실패는 마법사 카드로·닫아도 트레이", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const a = main.slice(main.indexOf("function showApp"), main.indexOf("function loadAppBounds"));
-    assert.match(a, /if \(!state\.ready && selectedGatewayUrl !== cloudUrl\(\)\) return \{ ok: false/, "계정 로그인 화면 이외의 미준비 웹 창을 연다");
+    assert.match(a, /if \(!state\.ready && !state\.webOnly && selectedGatewayUrl !== cloudUrl\(\)\) return \{ ok: false/, "계정 로그인 화면·웹 화면만 쓰기(#5650 건너뛰기) 이외의 미준비 웹 창을 연다");
     assert.match(a, /webUiUrl\(displayGateway\)/, "선택한 워크스페이스 주소를 webUiUrl 로 안 만든다");
     assert.match(a, /preload: WEB_PRELOAD/, "웹 창이 마법사 preload 를 쓴다(원격 페이지에 CLI 통로가 열린다)");
     assert.match(a, /contextIsolation: true, nodeIntegration: false, sandbox: true/, "웹 창 격리가 빠졌다");
@@ -3195,15 +3198,17 @@ t("CL3 클라우드 설치는 화이트리스트·재시도 목록에 있다(버
   assert.ok(RETRYABLE_KINDS.includes("setup-cloud"), "실패해도 '다시 시도' 가 안 붙는다 — 안전한 작업이다");
 });
 
-t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 땐 주소칸만", () => {
+t("CL4 ★ 화면은 배타다 — 처음이면 시작(클라우드 우선·회사 서버), 고칠 땐 주소칸만(#5650)", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
-  assert.match(app, /show\(\$\("start-card"\), !ready && !s\?\.busy && !needsFix\)/, "시작 카드 조건이 없다");
-  assert.match(app, /show\(\$\("gw-card"\), !ready && !s\?\.busy && !!needsFix\)/, "고치기 카드 조건이 없다");
+  // 화면 이름은 한 함수(currentScreen)가 정하고, render 가 그 하나만 보인다.
+  assert.match(app, /function currentScreen\(\)/, "화면을 한 자리에서 고르지 않는다");
+  assert.match(app, /show\(\$\("scr-" \+ id\), scr === id\)/, "여러 화면이 동시에 보일 수 있다");
+  assert.match(app, /show\(\$\("gw-card"\), !ready && !s\.busy && !!needsFix\)/, "고치기 카드 조건이 없다");
   const html = readFileSync(fileURLToPath(new URL("../renderer/index.html", import.meta.url)), "utf8");
-  assert.match(html, /id="cloud-go"/, "클라우드 버튼이 없다");
-  assert.match(html, /id="selfhost-wrap"/, "셀프호스팅 주소 입력 자리가 없다");
+  assert.match(html, /id="go-cloud"/, "클라우드 버튼이 없다");
   // 셀프호스팅 경로가 사라지면 안 된다 — 그쪽엔 클라우드가 없다.
-  assert.match(html, /id="gw"[^>]*>/, "시작 카드의 주소칸이 없다");
+  assert.match(html, /id="go-server"/, "회사 서버 입구가 없다");
+  assert.match(html, /id="gw"[^>]*>/, "회사 서버 주소칸이 없다");
 });
 
 // ── #5520 — 준비 전 첫 화면이 클라우드 로그인으로 직행해 셀프호스팅 입구(주소 입력)가 사라졌던 것 ──────────
@@ -3215,7 +3220,7 @@ t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 버튼은 �
   assert.ok(smAt >= 0, "showMain 이 없다");
   const sm = main.slice(smAt, main.indexOf("\n}\n", smAt));
   assert.ok(!/selectedGatewayUrl\s*=/.test(sm), "준비 전 showMain 이 클라우드 로그인으로 직행한다 — 셀프호스팅 입구가 사라진다");
-  assert.match(sm, /if \(state\.ready\) return showApp\(\)\.ok \? appWin : showWindow\(\);\s*return showWindow\(\);/, "준비 전에 마법사를 안 연다");
+  assert.match(sm, /if \(state\.ready \|\| state\.webOnly\) return showApp\(\)\.ok \? appWin : showWindow\(\);\s*return showWindow\(\);/, "준비 전에 마법사를 안 연다");
   // [3·6] 클라우드 버튼 → 설치 흐름(#5650). 앱 안 계정 로그인(웹 화면만)으로 가면 이 PC 에 아무것도 안 깔린다.
   assert.ok(main.indexOf("function openAccountLogin()") < 0, "클라우드 버튼이 다시 웹 화면 로그인만 하는 길이 남아 있다");
   assert.ok(!/IPC\.ACCOUNT_LOGIN/.test(main), "계정 로그인만 하는 IPC 가 남아 있다");
@@ -3226,23 +3231,35 @@ t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 버튼은 �
   assert.match(ob, /if \(selectedGatewayUrl === cloudUrl\(\) && !state\.accountLoggedIn\) selectedGatewayUrl = null;/, "셀프호스팅 설치 뒤에도 클라우드 로그인 화면이 열린다");
 });
 
-t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다 [E6·E7]", () => {
+t("CL5 ★ 배선 — 로그인 버튼은 로그인만, 설치는 «이 컴퓨터 설정» 의 [설정하고 시작] 에서만(#5650)", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
-  // ★ 시작 카드의 클라우드 버튼 = 설치 흐름(setup-cloud). 0.1.414~0.1.423 은 웹 화면 로그인만 해서 PC 에 아무것도 안 깔렸다(#5650).
-  const cgAt = app.indexOf('$("cloud-go").addEventListener'); const cg = app.slice(cgAt, app.indexOf('\n});', cgAt));
-  assert.match(cg, /window\.lively\.run\("setup-cloud"\)/, "클라우드 버튼이 설치 흐름을 안 부른다");
-  assert.ok(!/accountLogin/.test(cg), "클라우드 버튼이 웹 화면 로그인만 한다 — PC 에 CLI·키트·노드가 안 깔린다");
+  // ★ 0.1.414~0.1.423 은 로그인 버튼이 웹 화면 로그인만 해서 PC 에 아무것도 안 깔렸다. 이제 로그인 → 설정 화면 → 고른 것 설치.
+  const cg = app.slice(app.indexOf('$("go-cloud").addEventListener'), app.indexOf("\n", app.indexOf('$("go-cloud").addEventListener')));
+  assert.match(cg, /window\.lively\.loginStart\("cloud"\)/, "클라우드 버튼이 로그인을 안 부른다");
+  assert.ok(!/accountLogin|run\(/.test(cg), "클라우드 버튼이 로그인 말고 다른 일을 한다");
+  assert.match(app, /window\.lively\.applySetup\(\{ harnesses:/, "[설정하고 시작] 이 고른 도구를 안 넘긴다");
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-  // IPC 는 클라우드 경로를 **따로** 몰아야 한다 — 그냥 start() 로 보내면 CLI 가드에 걸린다(CL6).
+  const ap = main.slice(main.indexOf("async function applySetup("), main.indexOf("async function retrySetup("));
+  // 순서: 명령어 확보 → 로그인 저장(토큰은 env) → 도구 설치·연결 → 작업 폴더 → 노드
+  const at = (k) => { const i = ap.indexOf(k); assert.ok(i >= 0, `applySetup 에 ${k} 가 없다`); return i; };
+  assert.ok(at("ensureCli(") < at('start("login-token"'), "명령어보다 로그인 저장을 먼저 한다");
+  assert.ok(at('start("login-token"') < at('start("install-multi"'), "로그인 전에 설치한다");
+  assert.ok(at('start("install-multi"') < at('start("work-root-add"'), "작업 폴더 순서가 틀렸다");
+  assert.ok(at('start("work-root-add"') < at('start("node-start"'), "노드를 먼저 세운다");
+  assert.match(ap, /env: \{ LIVELY_TOKEN: login\.token \}/, "토큰을 env 로 넘기지 않는다");
+  assert.ok(!/argv.*login\.token|login\.token.*argv/.test(ap), "토큰이 argv 로 샌다");
+  assert.match(ap, /if \(!c\.ok\) \{ markRow\("cli", "fail"/, "명령어 확보 실패에서 멈추지 않는다");
+  // 렌더러로 가는 화면 상태엔 토큰이 없다
+  const sp = main.slice(main.indexOf("function setupPayload()"), main.indexOf("function setView("));
+  assert.ok(!/token/.test(sp), "화면 상태에 토큰을 싣는다");
+  // 구 게이트웨이(브라우저 로그인 미지원)는 종전 흐름으로 — 셀프호스팅 무회귀
+  const ls = main.slice(main.indexOf("async function loginStart("), main.indexOf("async function applySetup("));
+  assert.match(ls, /if \(s0\.unsupported && !cloud\) \{.*return onboard\(base\);/, "구 게이트웨이를 종전 흐름으로 안 보낸다");
+  // 종전 클라우드 흐름(onboardCloud)은 «고쳐야 할 때» 와 트레이가 계속 쓴다 — 노드까지 서야 한다.
   const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));
   const seg = h.slice(0, h.indexOf("ipcMain.handle(IPC.CANCEL"));
-  assert.ok(seg.includes('"setup-cloud"'), "메인이 클라우드 경로를 따로 몰지 않는다");
-  // 흐름의 정본은 onboardCloud 다 — 끝이 주소 경로(onboard)와 같아야 한다.
+  assert.ok(seg.includes('"setup-cloud"') && seg.includes("onboardCloud"), "메인이 클라우드 경로를 따로 몰지 않는다");
   const fn = cloudFlow(main);
-  assert.ok(seg.includes("onboardCloud"), "IPC 가 그 흐름을 안 탄다");
-  assert.ok(fn.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
-  // ⚠ 가드의 **존재**를 먼저 단언한다. 위치만 비교하면 가드를 통째로 지웠을 때 indexOf 가 -1 이라
-  //  "-1 < n" 으로 통과한다 — 실측(mutation Pb): 없는 가드를 있다고 읽었다.
   const guardAt = fn.indexOf("if (!r.ok) return r;");
   assert.ok(guardAt >= 0, "설치 실패 가드가 없다 — 실패한 설치 위에 노드를 올린다");
   assert.ok(guardAt < fn.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
@@ -3343,6 +3360,102 @@ t("CL11 ★ CLI 를 못 찾았을 때의 안내가 **주소를 모르는 사람*
   assert.match(help, /회사에 직접 설치/, "자가호스팅 안내가 사라졌다");
   // E12 무회귀 — 주소를 알면 종전대로 그 플랫폼의 한 줄을 준다(GW8 과 같은 축).
   assert.match(cliMissingHelp("https://acme.app.lvly.io", "win32"), /irm https:\/\/acme\.app\.lvly\.io\/cli\.ps1 \| iex/);
+});
+
+// ── SU. 새 시작 흐름 (#5650) — 로그인은 로그인만, 설치는 고른 것만 ─────────────────────
+const jres = (status, body) => ({ status, ok: status >= 200 && status < 300, text: async () => (typeof body === "string" ? body : JSON.stringify(body)), json: async () => body });
+
+await ta("SU1 디바이스 시작 — 지원 서버면 코드, 구 서버(404·501·500·비-JSON·device_code 없음)면 unsupported", async () => {
+  let sent = null;
+  const ok = await deviceStart({ base: "https://g", label: "lively-desktop@mac", randomBytes, createHash,
+    fetchImpl: async (u, o) => { sent = { u, body: JSON.parse(o.body) }; return jres(200, { device_code: "d", user_code: "ABCD-EFGH", verification_uri: "https://g/activate", interval: 5, expires_in: 900 }); } });
+  assert.equal(ok.ok, true); assert.equal(sent.u, "https://g/cli/device/start");
+  assert.equal(sent.body.code_challenge, s256(ok.verifier, createHash), "PKCE S256 가 verifier 와 안 맞는다");
+  assert.ok(!JSON.stringify(sent.body).includes(ok.verifier), "verifier 원문을 시작 요청에 싣는다");
+  for (const [st, body] of [[404, "nf"], [501, {}], [500, {}], [200, "<html>"], [200, { user_code: "x" }]]) {
+    const r = await deviceStart({ base: "https://g", label: "x", randomBytes, createHash, fetchImpl: async () => jres(st, body) });
+    assert.equal(r.ok, false); assert.equal(r.unsupported, true, `${st} ${JSON.stringify(body)}`);
+  }
+  const net = await deviceStart({ base: "https://g", label: "x", randomBytes, createHash, fetchImpl: async () => { throw new Error("ENOTFOUND"); } });
+  assert.equal(net.ok, false); assert.ok(!net.unsupported, "연결 실패를 구 서버로 오판하면 엉뚱한 종전 흐름으로 간다");
+});
+
+await ta("SU2 승인 대기 — 202 계속·429 늦추기·전송 오류 계속·200 토큰, 403 거부·410/401 만료·취소", async () => {
+  const seq = (list) => { let i = 0; return async () => { const x = list[Math.min(i++, list.length - 1)]; if (x instanceof Error) throw x; return jres(x[0], x[1]); }; };
+  const slept = [];
+  const base = { base: "https://g", start: { device_code: "d", interval: 2, expires_in: 900 }, verifier: "v", sleep: async (ms) => { slept.push(ms); } };
+  const ok = await devicePoll({ ...base, fetchImpl: seq([[202, {}], new Error("reset"), [429, { interval: 3 }], [200, { token: "T", gateway_url: "https://ws.app.lvly.io", workspace: "acme" }]]) });
+  assert.deepEqual(ok, { ok: true, token: "T", gateway: "https://ws.app.lvly.io", workspace: "acme" });
+  assert.equal(slept[3], 8000, "429 뒤에 간격을 늘리지 않는다");
+  assert.match((await devicePoll({ ...base, fetchImpl: seq([[403, {}]]) })).error, /거부/);
+  assert.match((await devicePoll({ ...base, fetchImpl: seq([[410, {}]]) })).error, /만료/);
+  assert.match((await devicePoll({ ...base, fetchImpl: seq([[401, {}]]) })).error, /만료/);
+  const ctl = new AbortController(); ctl.abort();
+  assert.equal((await devicePoll({ ...base, signal: ctl.signal, fetchImpl: seq([[202, {}]]) })).cancelled, true);
+  let t0 = 0; const exp = await devicePoll({ ...base, now: () => (t0 += 600000), fetchImpl: seq([[202, {}]]) });
+  assert.match(exp.error, /만료/, "기한이 지나도 끝나지 않는다");
+});
+
+await ta("SU3 프로필·주소·기기 이름", async () => {
+  let auth = null;
+  const p = await fetchProfile({ gateway: "https://g", token: "T", fetchImpl: async (u, o) => { auth = o.headers.authorization; return jres(200, { email: "a@b.c", display_name: "A" }); } });
+  assert.deepEqual(p, { ok: true, email: "a@b.c", name: "A" }); assert.equal(auth, "Bearer T");
+  assert.equal((await fetchProfile({ gateway: "https://g", token: "T", fetchImpl: async () => jres(401, {}) })).rejected, true);
+  assert.equal(normGateway("https://x.io/ui/"), "https://x.io"); assert.equal(normGateway("https://x.io///"), "https://x.io");
+  assert.match(deviceLabel("내-맥북.local"), /^lively-desktop@[\w .@-]*$/, "서버가 거르는 글자를 기기 이름에 싣는다");
+  assert.equal(deviceLabel(""), "lively-desktop@PC");
+});
+
+t("SU4 AI 도구 찾기 — PATH·공급사 설치 자리·Cursor 홈 폴더, 화면 순서 그대로", () => {
+  // 경로는 이 OS 의 join·구분자로 만든다(harness-detect 가 node:path 를 그대로 쓴다 — 윈도우 CI 에서 «/» 표기는 안 맞는다).
+  const home = join(sep, "h"), opt = join(sep, "opt", "bin"), usr = join(sep, "usr", "bin");
+  const have = (set) => (p) => set.has(p);
+  assert.deepEqual(detectHarnesses({ exists: have(new Set()), env: { PATH: usr }, home, platform: "darwin" }), []);
+  const r = detectHarnesses({ exists: have(new Set([join(opt, "codex"), join(home, ".local", "bin", "agy"), join(home, ".opencode", "bin", "opencode"), join(home, ".grok", "bin", "grok"), join(home, ".local", "bin", "claude"), join(home, ".cursor")])), env: { PATH: [usr, opt].join(delimiter) }, home, platform: "darwin" });
+  assert.deepEqual(r, ["claude", "codex", "antigravity", "cursor", "grok", "opencode"]);
+  assert.deepEqual(HARNESS_ORDER, ["claude", "codex", "antigravity", "cursor", "grok", "opencode"], "사람이 정한 순서가 바뀌었다");
+  for (const id of HARNESS_ORDER) assert.ok(HARNESS_LABEL[id], `${id} 이름이 없다`);
+});
+
+await ta("SU5 ★ 실행 파일 이름은 레지스트리와 한 벌 — 어긋나면 «설치 안 됨» 으로 보이고 이미 있는 도구를 또 깐다", async () => {
+  const reg = await import("../../kit/hooks/harness-registry.mjs");
+  assert.deepEqual([...HARNESS_ORDER].sort(), [...reg.HARNESS_IDS].sort(), "화면의 도구 목록과 레지스트리 목록이 다르다");
+  for (const id of HARNESS_ORDER) {
+    const h = reg.harness(id);
+    assert.ok(h, `레지스트리에 ${id} 가 없다`);
+    assert.equal(HARNESS_BIN[id], h.bin, `${id} 실행 파일 이름이 다르다`);
+    assert.ok(h.install?.posix?.cmd, `${id} 는 설치 방법이 없다 — 화면에서 고를 수 있으면 안 된다`);
+  }
+});
+
+t("SU6 ★ 내부 작업은 렌더러가 못 부른다 · 도구 목록은 허용 목록만 · 작업 폴더는 절대경로만", () => {
+  for (const k of INTERNAL_KINDS) assert.ok(!RUN_KINDS.includes(k), `${k} 를 렌더러가 직접 부를 수 있다(토큰 env·임의 도구 설치)`);
+  assert.deepEqual(argvFor("install-multi", { harnesses: ["codex", "claude", "codex"] }), ["install", "--harness", "codex,claude", "--only", "--yes"]);
+  assert.throws(() => argvFor("install-multi", { harnesses: [] }), /하나 이상/);
+  for (const bad of [["codex;rm -rf /"], ["--token"], ["vim"]]) assert.throws(() => harnessList(bad), undefined, JSON.stringify(bad));
+  assert.deepEqual(harnessList("codex"), [], "배열이 아닌 값은 빈 목록(→ 설치 거절)이어야 한다");
+  assert.deepEqual(argvFor("login-token", { gateway: "https://acme.app.lvly.io" }).slice(-1), ["--use-env-token"]);
+  assert.ok(!argvFor("login-token", { gateway: "https://acme.app.lvly.io" }).some((a) => /token=|^T$/.test(a)), "토큰이 argv 에 실린다");
+  assert.equal(workRootPath("/Users/a/workspace"), "/Users/a/workspace");
+  assert.equal(workRootPath("C:\\Users\\a\\workspace"), "C:\\Users\\a\\workspace");
+  for (const bad of ["workspace", "~/workspace", "/a\nb", '/a"b', "/" + "x".repeat(1100), ""]) assert.throws(() => workRootPath(bad), undefined, JSON.stringify(bad));
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  assert.match(main, /if \(!RUN_KINDS\.includes\(kind\) && !\(internal && INTERNAL_KINDS\.includes\(kind\)\)\) return \{ ok: false/, "start() 가 내부 작업을 외부 요청에서 막지 않는다");
+});
+
+t("SU7 배선 — 새 채널이 메인·preload·렌더러에 다 있다", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const pre = readFileSync(fileURLToPath(new URL("../preload/preload.cjs", import.meta.url)), "utf8");
+  for (const k of ["LOGIN_START", "LOGIN_CANCEL", "LOGIN_REOPEN", "LOGIN_RESET", "REDETECT", "PICK_FOLDER", "APPLY_SETUP", "SKIP_SETUP"]) {
+    assert.match(main, new RegExp(`ipcMain\\.handle\\(IPC\\.${k},`), `메인에 ${k} 핸들러가 없다`);
+    assert.ok(pre.includes(`"${IPC[k]}"`), `preload 에 ${k} 채널이 없다`);
+  }
+  assert.ok(pre.includes(`"${IPC.SETUP}"`), "preload 가 설정 화면 상태를 안 받는다");
+  const html = readFileSync(fileURLToPath(new URL("../renderer/index.html", import.meta.url)), "utf8");
+  for (const id of HARNESS_ORDER) assert.ok(existsSyncReal(fileURLToPath(new URL(`../renderer/logos/${id}.svg`, import.meta.url))), `${id} 로고가 없다`);
+  for (const id of ["scr-start", "scr-server", "scr-wait", "scr-setup", "scr-running", "scr-done", "scr-partial", "scr-home"]) assert.match(html, new RegExp(`id="${id}"`), `${id} 화면이 없다`);
+  // 로고 SVG 에 스크립트가 없다(img 로 싣지만 파일 자체도 깨끗해야 한다)
+  for (const id of HARNESS_ORDER) assert.ok(!/<script|on\w+=/i.test(readFileSync(fileURLToPath(new URL(`../renderer/logos/${id}.svg`, import.meta.url)), "utf8")), `${id} 로고에 스크립트`);
 });
 
 console.log(`\n${pass} passed`);

@@ -25,7 +25,7 @@ import {
   readdirSync, statSync, realpathSync, openSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   execFileSync as nodeExecFileSync,
   spawn as nodeSpawn,
@@ -429,12 +429,12 @@ const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
 // dropEnv: 상속 env 에서 **키를 지운다**(빈 문자열로 덮지 않는다). 빈 문자열은 '설정됨' 으로 읽히는 도구가 많아
 //  (실측 #1541: electron-builder 가 빈 CSC_LINK 를 인증서 경로로 보고 죽었다) 지우는 것과 결과가 다르다.
 //  여기 쓰임: claude 를 **기본 위치**($HOME/.claude.json)로 돌리려면 CLAUDE_CONFIG_DIR 가 없어야 한다.
-function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout, cwd } = {}) {
+function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout, cwd, stdio } = {}) {
   const merged = { ...process.env, ...(env || {}) };
   for (const k of dropEnv || []) delete merged[k];
   const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
   const r = spawnSync(c, a, {
-    stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
+    stdio: stdio || (quiet ? ["ignore", "pipe", "pipe"] : "inherit"),   // stdio = 호출부가 정한 배치(공급사 설치기 — runInstaller)
     env: merged,
     encoding: "utf8",
     shell: WIN,
@@ -1161,12 +1161,15 @@ const vendorRule = (label) => say(dim("  " + "─".repeat(3) + " " + label + " "
 //   여기선 우리가 띄운 별도 프로세스라 공급사 스크립트의 exit 이 우리를 넘어오지 않는다. 되돌리지 말 것.
 function runInstaller(plan) {
   const env = plan.env || undefined;
+  //  이벤트 모드(앱)에선 stdout 이 NDJSON 채널이고 stdin 이 답 채널이다 — 공급사 설치기의 출력은 stderr 로 돌리고,
+  //   stdin 은 주지 않는다(설치기가 앱에게 갈 답 줄을 먹거나 거기서 입력을 기다리면 설치가 멈춘다). 터미널에선 종전대로 inherit.
+  const stdio = EV ? ["ignore", 2, 2] : undefined;
   if (plan.shell === "powershell") {
     // pwsh(7+) 가 있으면 그걸, 없으면 Windows 기본 powershell.exe. -NoProfile 은 남의 프로필을 안 태우기 위해서다.
     const exe = has("pwsh") ? "pwsh" : "powershell";
-    return run(exe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", plan.cmd], { allowFail: true, env });
+    return run(exe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", plan.cmd], { allowFail: true, env, stdio });
   }
-  return run("sh", ["-c", plan.cmd], { allowFail: true, env });
+  return run("sh", ["-c", plan.cmd], { allowFail: true, env, stdio });
 }
 
 // 설치 직후 **부작용으로** 판정한다 — 종료코드가 아니라 "그 이름으로 실제 버전이 나오나".
@@ -1215,6 +1218,46 @@ async function onboardingHarness() {
 export function installTarget(want, harnesses = []) {
   const t = String(want || "").trim().toLowerCase() || (harnesses.length ? "" : "claude");
   return !t || harnesses.includes(t) ? "" : t;
+}
+
+// ── 여러 하네스를 한 번에(#5650) — 데스크톱 앱이 `lively install --harness claude,codex,cursor --only --yes --json-events` 로 부른다.
+//  이 CLI 가 아는 id. 번들 표(harness-registry.mjs HARNESS_IDS)를 읽으면 그쪽이 이긴다(새 하네스는 번들이 먼저 안다) — 이건 표를 못 읽을 때의 폴백.
+const KNOWN_HARNESS_IDS = ["claude", "codex", "opencode", "antigravity", "grok", "cursor"];
+// 앱이 «이 CLI 가 이 계약을 아나» 를 `lively status --json` 의 caps 로 판정한다(구 CLI 는 칸이 없다 → 종전 한 개씩 경로).
+const CLI_CAPS = ["install-multi", "work-root-add", "login-env-token"];
+
+/** (순수) `--harness` 값(쉼표 목록) → 아는 id · 모르는 id. 순서 유지 · 중복 제거 · 소문자. 모르는 것을 claude 로 접지 않는다. */
+export function parseHarnessList(want, known = KNOWN_HARNESS_IDS) {
+  const ids = [], unknown = [];
+  for (const raw of String(want || "").split(",")) {
+    const id = raw.trim().toLowerCase();
+    if (!id) continue;
+    const bucket = known.includes(id) ? ids : unknown;
+    if (!bucket.includes(id)) bucket.push(id);
+  }
+  return { ids, unknown };
+}
+
+/**
+ * (순수) 무엇을 깔지 — 고른 것 중 이 컴퓨터에 없는 것(고른 순서). 아무것도 안 골랐으면 installTarget 의 종전 규약
+ *  (하나도 없을 때만 claude). 하나만 고르면 installTarget 과 같은 답이다 — 모르는 id 만 다르다: 종전엔 표 조회에서
+ *  «모르는 하네스» 로 떨어졌고, 여기선 unknown 으로 먼저 걸러 같은 경고를 낸다(어느 쪽도 claude 를 깔지 않는다).
+ */
+export function planHarnessInstalls(want, detected = [], { known = KNOWN_HARNESS_IDS } = {}) {
+  const { ids, unknown } = parseHarnessList(want, known);
+  const listed = ids.length + unknown.length > 0;
+  return {
+    ids, unknown,
+    present: ids.filter((id) => detected.includes(id)),
+    toInstall: listed ? ids.filter((id) => !detected.includes(id)) : [installTarget("", detected)].filter(Boolean),
+  };
+}
+
+/** (순수) 배선할 하네스 — `--only` 면 고른 것(`--harness`)과 지금 있는 것의 교집합, 아니면 있는 것 전부(종전).
+ *  `--harness` 없이 `--only` 만 주면 거를 기준이 없으니 거르지 않는다. 빈 결과면 호출부가 «하네스 없이 진행» 폴백을 탄다. */
+export function wireTargets(present = [], want = "", only = false) {
+  const picked = String(want || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return only && picked.length ? present.filter((h) => picked.includes(h)) : [...present];
 }
 
 /** (순수) 설치 끝 안내의 «무엇을 켜면» — 배선한 하네스를 사람이 켜는 이름으로. 종전엔 claude(+codex)로 고정이라
@@ -1284,75 +1327,127 @@ export function wslHint(gw, distros) {
   };
 }
 
-async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
+// 진행 신호 — 이벤트 모드(앱)에서만 나간다. 하네스 설치 단계는 도구마다 id 가 `harness-install:<id>` 다(#5650).
+const evStep = (id, label, status, extra) => { if (EV) EV.step(id, label, status, extra); };
+
+/**
+ * 고른 하네스들을 **하나씩 차례로** 깐다(#5650). 반환 = { installed: [id], failed: [{ id, reason, docs? }] }.
+ *  하나가 실패해도 다음 도구로 간다 — 앱은 도구마다의 step(start → done|fail)을 읽고, 설치 전체의 성패는 키트 설치가 정한다.
+ *  fail 의 extra 엔 사람이 읽을 짧은 이유(reason)와, 있으면 직접 설치 안내 주소(docs)를 싣는다.
+ *  yes = `--yes` — 동의 카드는 그대로 보여 주되 «지금 설치할까요?» 를 묻지 않는다(앱의 --json-events 에선 그 질문이 도구마다 확인 창이 된다).
+ *  present(이미 있음)는 done{present:true}, unknown(모르는 id)은 fail 로 알린다 — 앱이 고른 도구마다 상태를 그리게.
+ *  부작용 자리(ask·exec·probe·hasBin·step)는 주입할 수 있다 — 테스트가 공급사 설치기를 돌리지 않고 분기를 잰다.
+ */
+export async function installHarnesses({ toInstall = [], present = [], unknown = [] } = {}, {
+  reg = null, yes = false, ask = askYesNo, exec = runInstaller, probe = probeHarness, hasBin = has, step = evStep,
+} = {}) {
+  const installed = [], failed = [];
+  const labelOf = (id) => { try { return reg?.installPlanFor?.(id, { homeDir: HOME, env: process.env })?.label || id; } catch { return id; } };
+  const failOne = (id, label, reason, extra = {}) => {
+    failed.push({ id, reason, ...extra });
+    step(`harness-install:${id}`, `${label} 설치`, "fail", { harness: id, reason, ...extra });
+  };
+  for (const id of present) step(`harness-install:${id}`, `${labelOf(id)} 설치`, "done", { harness: id, present: true });
+  for (const id of unknown) {
+    warn(`모르는 하네스: ${id}  ${dim("(" + ((reg?.HARNESS_IDS) || KNOWN_HARNESS_IDS).join(" · ") + " 중 하나)")}`);
+    failOne(id, id, "모르는 하네스라 건너뛰었습니다.");
+  }
+
+  for (const id of toInstall) {
+    if (!reg) {
+      warn(`하네스 설치 표를 읽지 못해 ${id} 를 자동으로 설치하지 못했습니다. 직접 설치하세요.`);
+      step(`harness-install:${id}`, `${id} 설치`, "start", { harness: id });
+      failOne(id, id, "설치 표를 읽지 못했습니다. 직접 설치하세요.");
+      continue;
+    }
+    let plan = null;
+    try { plan = reg.installPlanFor(id, { homeDir: HOME, env: process.env }); } catch { plan = null; }
+    if (!plan) {
+      // 오타를 조용히 삼키지 않는다 — 표 조회는 모르는 id 를 claude 로 폴백하는데, 설치에서 그러면
+      //  «엉뚱한 소프트웨어를 깔았다» 가 된다(installPlanFor 가 여기만 null 을 돌려주는 이유).
+      warn(`모르는 하네스: ${id}  ${dim("(" + (reg.HARNESS_IDS || []).join(" · ") + " 중 하나)")}`);
+      step(`harness-install:${id}`, `${id} 설치`, "start", { harness: id });
+      failOne(id, id, "모르는 하네스라 건너뛰었습니다.");
+      continue;
+    }
+    const sid = `harness-install:${plan.id || id}`, slabel = `${plan.label} 설치`;
+    const docs = plan.docs ? { docs: plan.docs } : {};
+    step(sid, slabel, "start", { harness: id });
+
+    // 이 OS 에 공급사 무인 경로가 없거나 선행 도구가 없으면 — 침묵이 아니라 **안내**로 떨어진다.
+    const blocked = !plan.cmd ? `${plan.label} 는 이 OS 용 무인 설치 경로를 공급사가 제공하지 않습니다.`
+      : (plan.requires && !hasBin(plan.requires)) ? `${plan.label} 설치엔 ${plan.requires} 가 필요한데 찾지 못했습니다.`
+        : "";
+    if (blocked) {
+      warn(blocked);
+      if (plan.docs) info(`설치 안내: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
+      failOne(id, plan.label, blocked, docs);
+      continue;
+    }
+
+    // ── 동의 화면 ── (--yes 여도 카드는 보여 준다: 무엇을 어디서 받아 어디에 놓는지는 터미널 기록에 남아야 한다)
+    say("");
+    say("  " + dim("╭─ ") + bold(`${plan.label} 가 이 컴퓨터에 없습니다`));
+    say("  " + dim("│"));
+    cardRow("받는 곳", plan.cmd);
+    if (plan.binDir) cardRow("놓일 자리", tilde(plan.binDir) + sep + plan.bin);
+    cardRow("무결성", plan.integrity
+      ? `공급사 설치기가 ${plan.integrity.toUpperCase()} 체크섬을 검증합니다`
+      : yellow("공급사 설치기가 무결성 검증을 하지 않습니다"));
+    cardRow("되돌리기", `${bold("lively uninstall")} 은 이걸 지우지 않습니다 ${dim("— 설치 후엔 당신의 프로그램입니다")}`);
+    say("  " + dim("│"));
+    say("  " + dim("╰─ ") + dim(yes ? `--yes 로 묻지 않고 설치합니다. 직접 설치 안내: ${plan.docs || "공급사 안내"}`
+      : `직접 깔고 싶으면 아니오를 누르세요 — ${plan.docs || "공급사 안내"}`));
+    say("");
+    if (!yes && !await ask(`  ${bold(plan.label)} 를 지금 설치할까요?`, true)) {
+      // 조사를 붙이지 않는다 — 하네스 id 마다 받침이 달라(claude/grok) 「로/으로」가 갈린다.
+      info(`건너뜁니다 — 나중에 다시: ${bold("lively install --harness " + plan.id)}`);
+      failOne(id, plan.label, "설치를 건너뛰었습니다.", { declined: true, ...docs });
+      continue;
+    }
+
+    // ── 실행 ── 설치기가 던져도(spawn 실패 등) 다음 도구로 간다 — 판정은 아래 probe 가 한다.
+    say("");
+    vendorRule(`${plan.label} 설치기`);
+    let r = { code: -1 };
+    try { r = exec(plan) || r; } catch (e) { warn(`${plan.label} 설치기를 실행하지 못했습니다: ${e?.message || e}`); }
+    vendorRule("");
+    say("");
+
+    // 이 프로세스에서 바로 보이게(아래 재감지) + 새 터미널에서도 잡히게(rc 영속화 — 설치기가 안 심는 경우만).
+    if (plan.binDir) process.env.PATH = `${plan.binDir}${delimiter}${process.env.PATH || ""}`;
+    if (!plan.wiresPath && plan.binDir) wireLocalBinPath(plan.binDir);
+
+    const ver = probe(plan.bin);
+    if (!ver) {
+      // 설치기가 0 으로 끝나도 여기 오면 실패다 — «반쪽 설치» 를 성공이라고 말하지 않는다.
+      const why = `${plan.label} 설치기를 실행했지만 ${plan.bin} 실행 파일을 찾지 못했습니다${r.code ? ` (설치기 exit ${r.code})` : ""}.`;
+      fail(why);
+      if (plan.docs) info(`직접 설치: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
+      failOne(id, plan.label, why, docs);
+      continue;
+    }
+    ok(`${plan.label} 설치 완료  ${dim(ver)}`);
+    installed.push(plan.id || id);
+    step(sid, slabel, "done", { harness: id, version: ver });
+  }
+  return { installed, failed };
+}
+
+async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null, yes = false }) {
   //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
   //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
+  //  명시는 쉼표 목록일 수 있다(#5650 — 앱이 고른 도구 여럿을 한 번에). 하나만 주면 종전과 같은 답(planHarnessInstalls 머리말).
   const pick = String(want || "").trim().toLowerCase() || await onboardingHarness();
-  const target = installTarget(pick, harnesses);
-  if (!target) return harnesses;
-
   const reg = await loadHarnessRegistry(bundleRoot);
-  if (!reg) { warn(`하네스 설치 표를 못 읽었습니다 — ${target} 은 직접 설치해 주세요.`); return harnesses; }
-
-  const plan = reg.installPlanFor(target, { homeDir: HOME, env: process.env });
-  if (!plan) {
-    // 오타를 조용히 삼키지 않는다 — 표 조회는 모르는 id 를 claude 로 폴백하는데, 설치에서 그러면
-    //  «엉뚱한 소프트웨어를 깔았다» 가 된다(installPlanFor 가 여기만 null 을 돌려주는 이유).
-    warn(`모르는 하네스: ${target}  ${dim("(" + (reg.HARNESS_IDS || []).join(" · ") + " 중 하나)")}`);
-    return harnesses;
-  }
-
-  // 이 OS 에 공급사 무인 경로가 없거나 선행 도구가 없으면 — 침묵이 아니라 **안내**로 떨어진다.
-  const blocked = !plan.cmd ? `${plan.label} 는 이 OS 용 무인 설치 경로를 공급사가 제공하지 않습니다.`
-    : (plan.requires && !has(plan.requires)) ? `${plan.label} 설치엔 ${plan.requires} 가 필요한데 찾지 못했습니다.`
-      : "";
-  if (blocked) {
-    warn(blocked);
-    if (plan.docs) info(`설치 안내: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
-    return harnesses;
-  }
-
-  // ── 동의 화면 ──
-  say("");
-  say("  " + dim("╭─ ") + bold(`${plan.label} 가 이 컴퓨터에 없습니다`));
-  say("  " + dim("│"));
-  cardRow("받는 곳", plan.cmd);
-  if (plan.binDir) cardRow("놓일 자리", tilde(plan.binDir) + sep + plan.bin);
-  cardRow("무결성", plan.integrity
-    ? `공급사 설치기가 ${plan.integrity.toUpperCase()} 체크섬을 검증합니다`
-    : yellow("공급사 설치기가 무결성 검증을 하지 않습니다"));
-  cardRow("되돌리기", `${bold("lively uninstall")} 은 이걸 지우지 않습니다 ${dim("— 설치 후엔 당신의 프로그램입니다")}`);
-  say("  " + dim("│"));
-  say("  " + dim("╰─ ") + dim(`직접 깔고 싶으면 아니오를 누르세요 — ${plan.docs || "공급사 안내"}`));
-  say("");
-  if (!await askYesNo(`  ${bold(plan.label)} 를 지금 설치할까요?`, true)) {
-    // 조사를 붙이지 않는다 — 하네스 id 마다 받침이 달라(claude/grok) 「로/으로」가 갈린다.
-    info(`건너뜁니다 — 나중에 다시: ${bold("lively install --harness " + plan.id)}`);
-    return harnesses;
-  }
-
-  // ── 실행 ──
-  say("");
-  vendorRule(`${plan.label} 설치기`);
-  const r = runInstaller(plan);
-  vendorRule("");
-  say("");
-
-  // 이 프로세스에서 바로 보이게(아래 재감지) + 새 터미널에서도 잡히게(rc 영속화 — 설치기가 안 심는 경우만).
-  if (plan.binDir) process.env.PATH = `${plan.binDir}${delimiter}${process.env.PATH || ""}`;
-  if (!plan.wiresPath && plan.binDir) wireLocalBinPath(plan.binDir);
-
-  const ver = probeHarness(plan.bin);
-  if (!ver) {
-    // 설치기가 0 으로 끝나도 여기 오면 실패다 — «반쪽 설치» 를 성공이라고 말하지 않는다.
-    fail(`${plan.label} 를 설치했지만 ${bold(plan.bin)} 을 찾지 못했습니다${r.code ? ` (설치기 exit ${r.code})` : ""}.`);
-    if (plan.docs) info(`직접 설치: ${plan.docs}  ${dim("→ 설치 후 `lively install` 재실행")}`);
-    return harnesses;
-  }
-  ok(`${plan.label} 설치 완료  ${dim(ver)}`);
+  const known = Array.isArray(reg?.HARNESS_IDS) && reg.HARNESS_IDS.length ? reg.HARNESS_IDS : KNOWN_HARNESS_IDS;
+  const plan = planHarnessInstalls(pick, harnesses, { known });
+  if (!plan.toInstall.length && !plan.present.length && !plan.unknown.length) return harnesses;
+  const r = await installHarnesses(plan, { reg, yes });
+  if (!r.installed.length) return harnesses;
   //  ⚠ detectHarnesses() 로 **갈아치우지** 않고 합친다 — 그러면 방금 augmentHarnessesFromBundle 이
   //   번들 표에서 알아낸 하네스(이 CLI 는 모르는 것)가 지워져 그 배선만 조용히 빠진다(#1689 의 그 결함).
-  return [...new Set([...harnesses, ...detectHarnesses(), plan.id])];
+  return [...new Set([...harnesses, ...detectHarnesses(), ...r.installed])];
 }
 
 // ── 8. 설치/업데이트의 단일 코드 경로 ───────────────────────────────────────
@@ -1389,7 +1484,7 @@ export async function preloadHarnessAssets(harnesses, { timeoutMs = 15000 } = {}
 }
 
 //  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
-async function syncKit({ label, offerHarness, want = "" }) {
+async function syncKit({ label, offerHarness, want = "", yes = false, only = false }) {
   if (!gateway()) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
   if (!token()) die("로그인이 필요합니다 — 먼저 `lively login` 을 실행하세요.");
 
@@ -1410,7 +1505,14 @@ async function syncKit({ label, offerHarness, want = "" }) {
 
     // 하네스 자동 설치(#2255) — **번들을 받은 뒤**에 한다. 설치 계약이 번들의 표에 있기 때문이고,
     //  그래야 구버전 CLI 로도 이번 번들이 새로 지원하는 하네스를 깔 수 있다(위 augment 와 같은 이유).
-    if (offerHarness) harnesses = await offerHarnessInstall({ want, harnesses, bundleRoot: root });
+    if (offerHarness) harnesses = await offerHarnessInstall({ want, harnesses, bundleRoot: root, yes });
+    //  --only(#5650): 고른 것만 배선한다 — 이 컴퓨터에 다른 AI 가 있어도 건드리지 않는다. 비면 아래 «하네스 없이 진행» 폴백.
+    if (only) {
+      const kept = wireTargets(harnesses, want, true);
+      const dropped = harnesses.filter((h) => !kept.includes(h));
+      if (dropped.length) say(dim(`  (--only: ${dropped.join(", ")} 는 이번에 연결하지 않습니다)`));
+      harnesses = kept;
+    }
     if (!harnesses.length) {
       warn("하네스 없이 진행합니다 — 맥락·훅은 설치되지만 켤 AI 가 없습니다.");
       info("AI 를 설치한 뒤 `lively install` 을 다시 실행하면 배선이 완료됩니다.");
@@ -1745,7 +1847,11 @@ function hostLabel() {
 //   "✓ 인증됐습니다"를 찍었다(= 재로그인으로 권한을 바꾸는 게 구조적으로 불가능했다).
 //   판별자로 **파일 존재**를 함께 보는 이유: 그 rc 수화는 파일이 있어야만 일어나므로 '파일 있음+사람'이
 //   정확히 #916 의 조건이고, TTY 만으로 가르면 pty 를 붙인 프로비저닝 컨테이너(docker run -t)를 깬다.
-const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInteractive }) => {
+//    --use-env-token              → env 그대로(비면 "" — 호출부가 죽는다). 데스크톱 앱 전용(#5650): 이벤트 모드에선 PROMPTER 때문에
+//                                   interactive() 가 참이라, 파일이 있으면 env 를 무시하고 브라우저 흐름을 **한 번 더** 열었다.
+//                                   앱은 방금 받은 토큰을 env 로 넘기고 이 플래그로 «이걸 써라» 를 명시한다(토큰을 argv 에 싣지 않는다).
+const loginEscapeToken = ({ flagToken = "", envToken = "", fileToken = "", isInteractive, useEnvToken = false }) => {
+  if (useEnvToken) return String(envToken || "").trim();
   if (flagToken) return String(flagToken).trim();
   if (!fileToken || !isInteractive) return String(envToken || "").trim();
   return "";
@@ -1892,9 +1998,14 @@ async function cmdLogin(opts) {
   if (!gw) die("게이트웨이 주소가 없습니다 — `lively login --gateway https://<주소>` 로 지정하세요.");
   const isInteractive = interactive();
 
+  //  --use-env-token(#5650) — 토큰은 env 로만 받는다. argv 의 토큰과 섞이면 어느 쪽을 쓴 건지 앱도 사람도 모른다 → 거절.
+  if (opts.useEnvToken) {
+    if (opts.token) die("--use-env-token 과 --token 은 함께 쓸 수 없습니다. 토큰은 LIVELY_TOKEN 환경변수로만 넘기세요.", 2);
+    if (!String(process.env.LIVELY_TOKEN || "").trim()) die("--use-env-token 을 줬지만 LIVELY_TOKEN 환경변수가 비어 있습니다. 토큰을 LIVELY_TOKEN 에 담아 다시 실행하세요.", 2);
+  }
   // ① 탈출구(CI·프로비저닝) — 판정은 loginEscapeToken 의 분기표 참조.
   const escape = loginEscapeToken({
-    flagToken: opts.token, envToken: process.env.LIVELY_TOKEN, fileToken: readLively("token"), isInteractive,
+    flagToken: opts.token, envToken: process.env.LIVELY_TOKEN, fileToken: readLively("token"), isInteractive, useEnvToken: !!opts.useEnvToken,
   });
   if (escape) { const me = await validateAndStore(gw, escape); await afterLogin(gw, escape); return me; }
 
@@ -2002,9 +2113,13 @@ async function cmdWorkspace(rest) {
 //  LIVELY_INSTALL_HARNESS 는 **부트스트랩 한 줄**이 값을 실어 보내는 통로다(`curl … | LIVELY_INSTALL_HARNESS=grok sh`).
 //   기존 LIVELY_HARNESS 를 재사용하지 않는 이유: 그건 「지금 도는 하네스가 누구냐」(resolveHarness)라 뜻이 다르고,
 //   설치기 자식들이 그걸 자기 신원으로 읽는다 — 두 뜻을 한 이름에 얹으면 조용히 엉킨다.
+//  #5650 — 쉼표 목록(`--harness claude,codex,cursor`)이면 없는 것을 차례로 깐다. `--yes` 는 도구마다의 설치 질문을 건너뛰고,
+//   `--only` 는 고른 것만 배선한다(데스크톱 앱이 `--harness … --only --yes --json-events` 로 부른다). 도구 하나의 설치 실패는
+//   설치 전체를 실패시키지 않는다 — 앱은 `harness-install:<id>` step 으로 도구마다 결과를 읽는다.
 const cmdInstall = (o = {}) => syncKit({
   label: "라이블리 설치", offerHarness: true,
   want: o.harness || process.env.LIVELY_INSTALL_HARNESS || "",
+  yes: !!o.yes, only: !!o.only,
 });
 
 async function cmdUpdate(opts) {
@@ -2054,6 +2169,7 @@ async function gatherStatus() {
   const st = {
     recordScope: await recordScopeState(),   // 파일만 읽는다 — 네트워크가 죽어도 값이 나온다(아래 이른 return 앞이어야 한다)
     cli: CLI_VERSION,
+    caps: CLI_CAPS,   // 이 CLI 가 아는 계약(#5650) — 앱이 보고 경로를 고른다. 구 CLI 엔 이 칸이 없다
     gateway: { url: gw || null, reachable: false, error: null },
     account: { authenticated: false, id: null, name: null },
     kit: { local: readLively("kit-version") || null, remote: null, current: false, autoUpdate: null },
@@ -3036,9 +3152,28 @@ function listScope(rs) {
   say(dim(`  목록 바꾸기: lively work-root add|remove [경로] · 웹 «내 스킬 · 훅 ▸ 내 컴퓨터별 연결» · 방식은 ${SCOPE_ADMIN_PLACE}`));
 }
 
+/**
+ * work-root add 의 폴더 준비(#5650) — 있으면 그대로, 없으면 **바로 위 폴더가 있을 때만** 한 단계 만든다.
+ *  데스크톱 앱은 사람이 고른(또는 새로 이름 붙인) 작업 폴더를 넘긴다. 위 폴더까지 없으면 오타일 가능성이 커서 만들지 않는다
+ *  (여러 단계를 몰래 만들면 엉뚱한 자리에 폴더 나무가 생긴다). 반환 { ok, created, error }. error 는 사람이 읽을 한 줄(합니다체).
+ */
+export function prepareWorkRootDir(target) {
+  try {
+    if (existsSync(target)) return statSync(target).isDirectory() ? { ok: true, created: false } : { ok: false, created: false, error: `폴더가 아니라 파일입니다: ${target}` };
+    const parent = dirname(target);
+    if (!existsSync(parent) || !statSync(parent).isDirectory()) return { ok: false, created: false, error: `폴더가 없고, 만들 위 폴더도 없습니다: ${target}` };
+    mkdirSync(target);
+    return { ok: true, created: true };
+  } catch (e) {
+    return { ok: false, created: false, error: `폴더를 만들지 못했습니다: ${target} (${e?.code || e?.message || e})` };
+  }
+}
+
 // `lively work-root [list | add [경로] | remove [경로]]` — 이 폴더에서 라이블리 켜기·끄기(방식에 맞춰 목록을 바꾼다). 경로를 빼면 지금 세션 폴더다.
 //  `/lively-connect`(클로드)·`$lively-connect`(코덱스 스킬)가 부르는 것이 `add`, `/lively-disconnect`·`$lively-disconnect` 가 부르는 것이 `remove` 다.
-async function cmdWorkRoot(rest) {
+async function cmdWorkRoot(rawRest) {
+  //  전역 플래그(--json-events 등)는 경로가 아니다 — 안 거르면 `work-root add --json-events` 가 «--json-events» 라는 폴더를 등록하려 든다.
+  const rest = rawRest.filter((a) => a !== "--json-events");
   const rs = await loadRecordScope();
   const sub = rest[0] || "list";
   if (sub === "list") return listScope(rs);
@@ -3051,22 +3186,33 @@ async function cmdWorkRoot(rest) {
   const change = (c) => rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), ...c });
   //  조직 줄은 서버가 원래 글자(예: ~/company)로 견준다 — 이 컴퓨터에서 편 경로가 아니라 그 줄 그대로 보낸다.
   const orgLine = (list) => (list || []).find((x) => key(x) === key(target));
-  if ((s?.scope || rs.DEFAULT_SCOPE) === "anywhere") return workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLine });
+  //  add 는 묻지 않는다(앱이 --json-events 로 부른다). 없는 폴더는 바로 위 폴더가 있을 때만 만든다(prepareWorkRootDir).
+  //  결과는 이벤트 모드에서 result 로도 싣는다 — 앱이 사람용 문구를 긁지 않고 무엇을 했는지 읽게.
+  let created = false;
+  if (sub === "add") {
+    const prep = prepareWorkRootDir(target);
+    if (!prep.ok) die(prep.error, 2);
+    created = prep.created;
+    if (created) say(dim(`  폴더를 만들었습니다: ${target}`));
+  }
+  const report = (outcome, synced = true) => { if (EV) EV.result({ action: sub, path: target, created, outcome, synced }); };
+  if ((s?.scope || rs.DEFAULT_SCOPE) === "anywhere") return workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLine, report });
 
   const synced = s?.work_roots || [];
   const off = (s?.off_roots || []).map(key);
   const legacy = rs.legacyRoots(LIVELY).filter((r) => !off.includes(key(r)));
   if (sub === "add") {
-    if (!existsSync(target) || !statSync(target).isDirectory()) die(`폴더가 없습니다: ${target}`, 2);
     if (whole) die(`${target} 를 통째로 등록하면 그 아래 모든 폴더에서 라이블리가 켜집니다. 그게 필요하면 조직 관리자에게 «어디서나» 방식을 요청하세요 — ${SCOPE_ADMIN_PLACE}.`, 2);
     if (synced.some((r) => key(r) === key(target)) || legacy.some((r) => key(r) === key(target))) {
       say(green(`이미 작업 폴더입니다: ${target}`));
+      report("already");
       return;
     }
     const offOrg = (s?.off_roots || []).find((x) => key(x) === key(target));   // 이 컴퓨터에서 끈 조직 줄이면 그 줄을 다시 켠다
     const r = await change({ add: [offOrg || target] });
     say(green(offOrg ? `✓ 조직 작업 폴더를 이 컴퓨터에서 다시 켰습니다: ${bold(offOrg)}` : `✓ 작업 폴더로 등록했습니다: ${bold(target)}`));
     say(dim("  이 폴더와 그 아래에서 연 AI 는 라이블리에 연결됩니다. 지금 열려 있는 세션은 다음 메시지부터 연결됩니다.") + syncNote(r.synced));
+    report(offOrg ? "reenabled" : "added", r.synced);
     return;
   }
   // remove — 목록에 그 경로 그대로 있어야 지운다. 위 폴더 등록·프로젝트 표식으로 켜진 거라면 무엇 때문인지 알려 준다.
@@ -3095,7 +3241,7 @@ async function cmdWorkRoot(rest) {
 }
 
 // «어디서나» 방식 — add = 제외 목록에서 빼기(켜기) · remove = 제외 목록에 넣기(끄기).
-async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLine }) {
+async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLine, report = () => {} }) {
   const ex = s?.exclude_roots || [];
   const inEx = ex.find((r) => key(r) === key(target));
   if (sub === "add") {
@@ -3104,14 +3250,17 @@ async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLin
       const r = await change({ exclude_remove: [inEx] });
       say(green(isOrg ? `✓ 조직 제외 폴더를 이 컴퓨터에서 껐습니다(이제 켜집니다): ${bold(inEx)}` : `✓ 제외 목록에서 뺐습니다: ${bold(inEx)}`));
       say(dim("  이 폴더와 그 아래에서 연 AI 는 라이블리에 연결됩니다. 지금 열려 있는 세션은 다음 메시지부터 연결됩니다.") + syncNote(r.synced));
+      report("unexcluded", r.synced);
       return;
     }
     const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: target, lively: LIVELY });
     if (d.reason === "excluded") {
       say(yellow(`이 폴더는 제외 폴더 ${bold(d.root)} 아래라서 꺼져 있습니다 — 켜려면 그 폴더를 제외 목록에서 빼야 합니다(그 아래 전부가 켜집니다): lively work-root add "${d.root}"`));
+      report("under-excluded");
       return;
     }
     say(green(`이미 켜져 있습니다: ${target}`) + dim("\n  (이 컴퓨터는 «어디서나» 방식이라 제외 목록에 없는 폴더는 모두 켜집니다.)"));
+    report("already");
     return;
   }
   // remove — 이 폴더를 제외 목록에 넣는다.
@@ -3661,7 +3810,7 @@ ${bold("사용법")}
   lively <명령> [옵션]
 
 ${bold("시작하기")}
-  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>  --harness <name>")}
+  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>  --harness <name[,name…]>  --only  --yes")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
@@ -3669,8 +3818,10 @@ ${bold("시작하기")}
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
-      --harness <name>   ${dim("내가 쓸 AI — 이 컴퓨터에 없으면 동의를 받고 깔아 줍니다")}
+      --harness <name>   ${dim("내가 쓸 AI. 이 컴퓨터에 없으면 동의를 받고 깔아 줍니다. 쉼표로 여러 개를 줄 수 있습니다(예: claude,codex,cursor)")}
                          ${dim("claude · codex · opencode · antigravity · grok · cursor  (생략하면: 하나도 없을 때만 claude 를 제안)")}
+      --only             ${dim("--harness 로 고른 AI 만 연결합니다(생략하면 이 컴퓨터에서 찾은 AI 를 모두 연결)")}
+      --yes, -y          ${dim("AI 설치 동의를 묻지 않고 바로 설치합니다(설치 안내 카드는 그대로 보여 줍니다)")}
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
   uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|cursor|all")}
@@ -3718,6 +3869,7 @@ ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
   --cloud [url]          라이블리 클라우드로 로그인 — 주소를 몰라도 된다 ${dim("(기본 app.lvly.io)")}
   --token <토큰>         비대화형 로그인 (스크립트 · 프로비저닝용)
+  --use-env-token        login 이 LIVELY_TOKEN 환경변수의 토큰을 그대로 씁니다 ${dim("(데스크톱 앱용 · 토큰은 인자로 받지 않습니다)")}
   --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
                          ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
   -v, --version          버전
@@ -3819,6 +3971,8 @@ function parse(argv) {
     else if (t === "--dry-run") o.dryRun = true;
     else if (t === "--purge") o.purge = true;
     else if (t === "--yes" || t === "-y") o.yes = true;
+    else if (t === "--only") o.only = true;   // install: --harness 로 고른 것만 배선(#5650)
+    else if (t === "--use-env-token") o.useEnvToken = true;   // login: LIVELY_TOKEN env 를 무조건 쓴다(#5650 — 앱 전용)
     else if (t === "-v" || t === "--version") o.version = true;
     else if (t === "-h" || t === "--help") o.help = true;
     else o._.push(t);
@@ -4032,5 +4186,6 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
+export { CLI_CAPS, KNOWN_HARNESS_IDS };
 export { parse, helpRequest, commandHelp, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, hasExplicitMode, modeEnv, defaultMode, syncDefaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용

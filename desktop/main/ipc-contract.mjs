@@ -23,6 +23,24 @@ export const IPC = {
   //  문자열들을 돌려줄 뿐 아무것도 실행하지 않는다. 렌더러가 정규화 규칙을 따로 적으면 정본이 둘이 되고,
   //  그 순간 "미리보기엔 되는데 [연결]은 안 되는" 상태가 생긴다 — 판단은 메인에만 둔다.
   GATEWAY_ADVICE: "lively:gateway-advice",
+  // ── 새 시작 흐름(#5650) — 로그인 버튼은 로그인만, 설치는 «이 컴퓨터 설정» 에서 고른 것만 ──
+  //  LOGIN_START   { mode:"cloud"|"gateway", url? } — 앱이 디바이스 코드 로그인을 직접 한다(device-login.mjs). 아무것도 안 깐다.
+  //  LOGIN_CANCEL  기다리던 로그인을 멈춘다
+  //  LOGIN_REOPEN  승인 주소를 브라우저로 다시 연다(주소는 메인이 기억한다 — 렌더러가 URL 을 넘기지 않는다)
+  //  LOGIN_RESET   «다른 계정으로 로그인» — 메모리의 로그인을 버리고 처음 화면으로
+  //  REDETECT      AI 도구를 다시 찾는다(«다시 찾기»)
+  //  PICK_FOLDER   작업 폴더 고르기 — **경로는 메인이 네이티브 창으로 받는다**(렌더러가 경로를 정하지 않는다)
+  //  APPLY_SETUP   { harnesses:[id], workRoot:boolean, node:boolean } — 고른 것을 설치한다. 폴더는 메인이 들고 있는 값
+  //  SKIP_SETUP    설치 없이 웹 화면만 쓴다
+  LOGIN_START: "lively:login-start",
+  LOGIN_CANCEL: "lively:login-cancel",
+  LOGIN_REOPEN: "lively:login-reopen",
+  LOGIN_RESET: "lively:login-reset",
+  REDETECT: "lively:redetect",
+  PICK_FOLDER: "lively:pick-folder",
+  APPLY_SETUP: "lively:apply-setup",
+  SKIP_SETUP: "lively:skip-setup",
+  SETUP: "lively:setup",               // 메인 → 렌더러: 새 시작 흐름의 화면 상태(setupView)
 
   // 메인 → 렌더러 (send, 단방향)
   STATE: "lively:state",               // 상태 스냅샷 갱신
@@ -69,6 +87,9 @@ export const RUN_KINDS = ["setup", "login", "logout", "install", "update", "node
 
 /** 다시 시도해도 **안전한** 작업인가 — 재시도 버튼은 이 목록에만 붙는다.
  *  로그아웃·정지처럼 상태를 되돌리는 것은 실패해도 자동 재시도를 권하지 않는다(사람이 다시 판단해야 한다). */
+/** 메인만 부르는 작업(#5650 applySetup) — 렌더러의 RUN 화이트리스트(RUN_KINDS)와 **섞지 않는다**. */
+export const INTERNAL_KINDS = ["login-token", "install-multi", "work-root-add"];
+
 export const RETRYABLE_KINDS = ["setup", "login", "install", "update", "node-start", "status", "doctor", "setup-cloud"];
 
 /**
@@ -109,6 +130,26 @@ function harnessArgs(o) {
   return ["--harness", h];
 }
 
+/** 여러 하네스(#5650) — 허용목록만, 순서·중복 정리. 하나라도 모르는 값이면 거절한다(조용히 빼면 사람이 고른 게 사라진다). */
+export function harnessList(v) {
+  const arr = Array.isArray(v) ? v : [];
+  const out = [];
+  for (const x of arr) {
+    const h = String(x || "").trim().toLowerCase();
+    if (!HARNESS_IDS.includes(h)) throw new Error(`알 수 없는 AI: ${x}`);
+    if (!out.includes(h)) out.push(h);
+  }
+  return out;
+}
+
+/** 작업 폴더 경로 — 메인이 네이티브 선택창에서 받은 값이지만 argv 로 나가므로 형태를 한 번 더 강제한다. */
+export function workRootPath(p) {
+  const s = String(p || "");
+  const abs = /^\//.test(s) || /^[A-Za-z]:[\\/]/.test(s);
+  if (!abs || s.length > 1024 || /[\u0000-\u001f"]/.test(s)) throw new Error("작업 폴더 경로가 올바르지 않습니다.");
+  return s;
+}
+
 /**
  * 라이블리 클라우드 주소 (#2044 · #3968) — **`setup --cloud` 를 붙이는 곳과 CLI 를 받아오는 곳이 같은 값을 봐야 한다.**
  *
@@ -146,6 +187,15 @@ export function argvFor(kind, opts) {
     // 로그아웃은 게이트웨이 인자를 받지 않는다 — 지금 로그인된 곳에서 나가는 것이지 '어디서' 를 고르는 게 아니다.
     case "logout": return ["logout"];
     case "install": return ["install", ...harnessArgs(o)];
+    // ── 새 시작 흐름(#5650)의 내부 작업 — **렌더러의 RUN 으로는 못 부른다**(RUN_KINDS 에 없다). 메인 applySetup 만 쓴다.
+    //  토큰은 argv 가 아니라 env(LIVELY_TOKEN)로 넘긴다 — argv 는 같은 PC 의 다른 사용자에게 `ps` 로 보인다.
+    case "login-token": { const gw = gateway(o); if (!gw) throw new Error("게이트웨이 주소가 없습니다."); return ["login", "--gateway", gw, "--use-env-token"]; }
+    case "install-multi": {
+      const list = harnessList(o.harnesses);
+      if (!list.length) throw new Error("연결할 AI 도구를 하나 이상 고르세요.");
+      return ["install", "--harness", list.join(","), "--only", "--yes"];
+    }
+    case "work-root-add": return ["work-root", "add", workRootPath(o.path)];
     // 키트 갱신 — **앱 자신의 자동 업데이트와 다른 축**이다(그건 electron-updater 가 앱 바이너리를 바꾼다).
     case "update": return ["update"];
     case "node-start": return ["node", "--daemon"];

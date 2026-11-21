@@ -2,180 +2,253 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <!-- CSP: 인라인 스크립트 금지·외부 로드 금지. 렌더러가 원격 코드를 실행할 길을 아예 없앤다. -->
+  <!-- CSP: 인라인 스크립트 금지·외부 로드 금지. 렌더러가 원격 코드를 실행할 길을 아예 없앤다. 로고는 같은 폴더의 SVG 파일이다. -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';" />
   <title>라이블리</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <div class="dot" id="dot"></div>
-    <div>
-      <h1 id="status">확인 중…</h1>
-      <p class="sub" id="sub"></p>
+<!-- #5650 가로 두 칸: 왼쪽 = 단계·계정, 오른쪽 = 지금 할 일 한 가지.
+     로그인 버튼은 로그인만 한다(앱이 직접 — device-login.mjs). 설치는 «이 컴퓨터 설정» 에서 고른 것만(main.mjs applySetup). -->
+<div class="shell">
+  <aside class="side">
+    <div class="drag"></div>
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#16C79A"></rect><circle cx="14" cy="14" r="6.6" fill="none" stroke="#FFFFFF" stroke-width="3.5"></circle></svg>
+      <span>라이블리</span>
     </div>
-  </header>
-
-  <main>
-    <!-- 워크스페이스 주소 — 아직 모를 때만.
-         ⚠ 문구가 '회사 게이트웨이'였을 때 매니지드 사용자는 넣을 값을 몰랐다(#2044): 그들에겐 '관리자'가 없고
-         아는 주소는 로그인 페이지(app.lvly.io)뿐인데 거기엔 게이트웨이가 없다. 두 경로를 나란히 적는다. -->
-    <!-- 시작 — 두 갈래(#2044).
-         ★ 매니지드 셀프서브 사용자는 게이트웨이 주소를 **알 길이 없다**(관리자가 없고, 아는 주소는
-         로그인 페이지뿐인데 거긴 게이트웨이가 아니다). 그래서 기본은 '클라우드로 로그인'이고,
-         주소 입력은 그게 실제로 필요한 쪽(회사에 직접 설치)으로 내린다. -->
-    <section id="start-card" class="card hidden">
-      <h2>라이블리 시작하기</h2>
-      <p class="hint">라이블리 클라우드를 쓰시면 로그인만 하면 됩니다 — 주소를 찾을 필요 없습니다.</p>
-      <div class="row">
-        <button id="cloud-go" class="primary">라이블리 클라우드로 로그인</button>
+    <ol class="vsteps" id="vsteps">
+      <li data-step="1"><i>1</i><span>로그인</span></li>
+      <li data-step="2"><i>2</i><span>이 컴퓨터 설정</span></li>
+      <li data-step="3"><i>3</i><span>완료</span></li>
+    </ol>
+    <div class="sidefoot">
+      <div class="acct hidden" id="acct">
+        <div class="av" id="acct-av"></div>
+        <div class="acct-t"><div class="em" id="acct-email"></div><div class="wsn" id="acct-ws"></div></div>
       </div>
-      <p class="err" id="start-err"></p>
-      <details id="selfhost-wrap">
-        <summary class="hint">회사에 직접 설치했어요 — 주소 입력</summary>
-        <p class="hint" id="gw-hint">관리자에게 받은 게이트웨이 주소를 넣으세요.</p>
-        <div class="row">
-          <input id="gw" type="text" placeholder="예: lively.우리회사.com" spellcheck="false" autocapitalize="off" autocorrect="off" />
-          <button id="gw-go" class="primary">연결</button>
+      <button class="linkbtn hidden" id="notme">다른 계정으로 로그인</button>
+      <div class="ver"><span id="ver"></span></div>
+      <div class="upd"><span id="upd-note"></span>
+        <button id="apply-update" class="linkbtn hidden">지금 다시 시작해서 적용</button>
+        <button id="check-update" class="linkbtn">업데이트 확인</button></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="drag-main"></div>
+
+    <!-- 1 시작 -->
+    <section class="screen hidden" id="scr-start">
+      <div class="mhead"><h1>라이블리 시작하기</h1><p class="p">로그인하면 이 컴퓨터의 AI 도구를 회사 워크스페이스에 연결할 수 있습니다.</p></div>
+      <div class="mbody">
+        <div class="choices">
+          <button class="choice pri" id="go-cloud">
+            <span class="cic"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 9.1 4.5 4.5 0 0 0 7 18z" fill="none" stroke="#2D6BF0" stroke-width="1.8" stroke-linejoin="round"/></svg></span>
+            <span class="ct"><b>라이블리 계정으로 로그인</b><span>라이블리 클라우드를 쓰는 경우 선택합니다. 브라우저에서 로그인합니다.</span></span><em>›</em>
+          </button>
+          <button class="choice" id="go-server">
+            <span class="cic"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="1.5" fill="none" stroke="#2D6BF0" stroke-width="1.8"/><rect x="4" y="14" width="16" height="6" rx="1.5" fill="none" stroke="#2D6BF0" stroke-width="1.8"/><circle cx="8" cy="7" r="1" fill="#2D6BF0"/><circle cx="8" cy="17" r="1" fill="#2D6BF0"/></svg></span>
+            <span class="ct"><b>회사 서버 주소로 연결</b><span>회사에 라이블리를 직접 설치한 경우 선택합니다. 관리자에게 받은 주소가 필요합니다.</span></span><em>›</em>
+          </button>
         </div>
-        <!-- 앱이 무엇을 실행하는지 숨기지 않는다 — 설치는 원격 코드 실행이다. -->
-        <p class="hint mono" id="gw-preview"></p>
+        <p class="err" id="start-err"></p>
+      </div>
+    </section>
+
+    <!-- 1b 회사 서버 주소 -->
+    <section class="screen hidden" id="scr-server">
+      <div class="mhead"><h1>회사 서버 주소로 연결</h1><p class="p">관리자에게 받은 라이블리 주소를 입력하세요.</p></div>
+      <div class="mbody">
+        <label class="lbl" for="gw">라이블리 주소</label>
+        <input id="gw" class="input" type="text" placeholder="예: lively.우리회사.com" spellcheck="false" autocapitalize="off" autocorrect="off" />
+        <p class="hint">https:// 는 생략해도 됩니다.</p>
         <p class="err" id="gw-err"></p>
-      </details>
-    </section>
-
-    <!-- 고쳐야 할 때(구 CLI·재로그인) — 주소를 이미 알고 있으므로 주소칸만 따로 보여준다. -->
-    <section id="gw-card" class="card hidden">
-      <h2 id="gw-title">워크스페이스 주소</h2>
-      <p class="hint" id="gw-fix-hint"></p>
-      <div class="row">
-        <input id="gw-fix" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" />
-        <button id="gw-fix-go" class="primary">연결</button>
       </div>
-      <p class="hint mono" id="gw-fix-preview"></p>
-      <p class="err" id="gw-fix-err"></p>
-    </section>
-
-    <!-- 완료 -->
-    <section id="done-card" class="card hidden">
-      <h2>설치가 끝났습니다</h2>
-      <!-- 쓰는 AI 를 이름으로 못박지 않는다 — 설치는 이 PC 에 있는 하네스(커서만 있는 PC 면 커서)에 잇는다(kit/cli detectHarnesses).
-           종전 «claude 를 켜면» 은 커서만 쓰는 사람에게 «claude 를 따로 깔아야 하나» 를 묻게 했다(2026-10-23 윈도우 실기기). -->
-      <p class="hint">쓰는 폴더의 터미널에서 <code>lively work-root add</code> 를 한 번 실행하면, 그 폴더에서 켠 AI(Claude Code·커서 등)에 회사 맥락이 따라옵니다.
-        이미 켜 둔 창이 있으면 껐다 켜세요(훅은 세션 시작에 스냅샷됩니다).</p>
-      <!-- 예전 로컬 AI 환경 이관 (#1879) — 앱이 사람 대신 해 주는 것 중 **유일하게 빠져 있던 다음 걸음**이다.
-           왜 여기인가: 웹 온보딩(#/welcome 의 «내 컴퓨터에 잇기»)이 미리 말해 봐야, 앱을 나중에 설치하는
-           사람은 그때쯤 잊는다. 사람이 방금 설치를 끝내고 **앱 앞에 앉아 있는** 이 순간이 그 말을 할 자리다.
-           ⚠ 앱이 대신 실행해 주지는 않는다 — `lively onboarding` 은 `spawnSync("claude", …, {stdio:"inherit"})`
-           라 진짜 TTY 가 필요한데(kit/cli/lively.mjs cmdOnboarding), 앱의 구동기(cli-runner)는 이벤트를 읽으려
-           stdio 를 파이프로 잡는다. 네이티브 터미널을 띄우는 경로는 mac/win/linux 가 각각 다르고 검증된 선례가
-           레포에 없어, 없는 자신감으로 만들지 않는다. 대신 **한 마디**만 준다 — 이 카드를 보는 사람은 방금
-           claude 를 깔았으니 켜는 법은 이미 안다.
-           문구를 '예전에 …쓰셨다면' 으로 여는 이유: 옮길 게 없는 사람에겐 이 걸음이 아예 필요 없다(그 사람에게
-           할 일을 만들지 않는다). -->
-      <p class="hint">예전에 클로드·코덱스를 쓰셨다면 <b>딱 한 번만</b> — 켜서 이렇게 말해 보세요.
-        옛 작업 메모·직접 만든 기능·연결해 둔 서비스를 찾아 무엇을 회사와 나눌지 같이 정합니다.
-        <b>원본은 지우지도 고치지도 않습니다.</b></p>
-      <p class="say" id="onboard-say" title="눌러서 복사">온보딩 도와줘</p>
-      <p class="hint" id="onboard-copied" hidden>복사했어요.</p>
-      <div class="row"><button id="done-open" class="primary">라이블리 열기</button><button id="done-web" class="ghost">브라우저에서 열기</button></div>
-    </section>
-
-    <!-- 라이블리 화면(웹 UI 창) — 갖춰진 뒤에만. 앱 안에 웹 UI 를 그대로 싣는다(web-shell.mjs). 못 실었으면 사유와 다시 시도. -->
-    <section id="app-card" class="card hidden">
-      <h2>라이블리 화면</h2>
-      <p class="hint" id="app-note">웹과 같은 화면을 이 앱 안에서 씁니다 — 세션·프로젝트·WIKI 전부.</p>
-      <div class="row">
-        <button id="app-open" class="primary">라이블리 열기</button>
-        <button id="app-web" class="ghost">브라우저에서 열기</button>
+      <div class="mfoot">
+        <button class="btn gh" id="server-back">‹ 처음으로</button><span class="grow"></span>
+        <button class="btn pri" id="gw-go">다음</button>
       </div>
     </section>
 
-    <!-- 진행 -->
-    <section id="progress-card" class="card hidden">
-      <h2 id="progress-title">진행 중</h2>
-      <div class="bar"><div id="bar-fill"></div></div>
-      <ul id="steps"></ul>
-      <div class="row">
-        <button id="cancel" class="ghost">취소</button>
-        <!-- 실패했을 때만 — 무엇을 다시 할지는 메인이 기억한다(렌더러가 정하지 않는다). -->
-        <button id="retry" class="primary hidden">다시 시도</button>
+    <!-- 2 승인 대기 -->
+    <section class="screen hidden" id="scr-wait">
+      <div class="mhead"><h1>브라우저에서 로그인하세요</h1><p class="p">브라우저가 열렸습니다. 아래 코드가 브라우저 화면의 코드와 같은지 확인한 뒤 승인하세요.</p></div>
+      <div class="mbody center">
+        <div class="codechip"><div class="k">연결 코드</div><div class="c" id="wait-code"></div></div>
+        <div class="waiting"><span class="spin"></span>승인을 기다리는 중입니다</div>
+        <p class="hint">15분 안에 승인하지 않으면 코드가 만료됩니다.</p>
+      </div>
+      <div class="mfoot">
+        <span class="grow"></span>
+        <button class="btn sec" id="wait-cancel">취소</button>
+        <button class="btn pri" id="wait-reopen">브라우저 다시 열기</button>
       </div>
     </section>
 
-    <!-- 사람 확인 -->
-    <section id="prompt-card" class="card hidden">
-      <h2 id="prompt-label"></h2>
-      <div id="prompt-device" class="hidden">
-        <p class="hint">브라우저에서 아래 코드를 확인하고 승인하세요.</p>
-        <p class="code" id="device-code"></p>
-        <a href="#" id="device-link" class="link"></a>
+    <!-- 4 이 컴퓨터 설정 -->
+    <section class="screen hidden" id="scr-setup">
+      <div class="mhead"><h1>이 컴퓨터 설정</h1><p class="p">선택한 항목을 이 컴퓨터에 설치합니다.</p></div>
+      <div class="mbody scroll">
+        <div class="cardx">
+          <div class="t">AI 도구 연결</div>
+          <div class="d"><span id="tools-desc"></span> <button class="linkbtn" id="redetect">다시 찾기</button></div>
+          <div class="tools6" id="tools"></div>
+        </div>
+        <div class="rows">
+          <label class="rw fixed">
+            <input type="checkbox" checked disabled />
+            <span class="rt"><span class="t">라이블리 명령어 <span class="opt">필수</span></span><span class="d">터미널에서 <code>lively</code> 명령을 쓸 수 있게 합니다. ~/.lively 에 설치됩니다.</span></span>
+          </label>
+          <label class="rw">
+            <input type="checkbox" id="opt-workroot" checked />
+            <span class="rt"><span class="t">작업 폴더</span><span class="d">이 폴더 아래에서 실행한 AI 도구에만 라이블리가 연결됩니다.</span></span>
+            <span class="rc"><span class="fpath" id="wr-path"></span><button class="btn sec sm" id="wr-pick" type="button">바꾸기</button></span>
+          </label>
+          <label class="rw">
+            <input type="checkbox" id="opt-node" checked />
+            <span class="rt"><span class="t">웹에서 이 컴퓨터 쓰기</span><span class="d">웹에서 이 컴퓨터로 AI 세션을 열 수 있습니다. 컴퓨터를 켜면 자동으로 연결됩니다.</span>
+              <span class="d warnline hidden" id="node-note">설치하면 macOS 가 «백그라운드 항목이 추가됨» 알림을 띄웁니다.</span></span>
+          </label>
+        </div>
       </div>
-      <div id="prompt-confirm" class="row hidden">
-        <button id="prompt-yes" class="primary">예</button>
-        <button id="prompt-no" class="ghost">아니오</button>
-      </div>
-    </section>
-
-    <!-- 노드 -->
-    <section id="node-card" class="card hidden">
-      <h2>이 PC 를 노드로</h2>
-      <p class="hint">웹에서 이 PC 의 터미널을 열고, 무거운 작업을 여기로 위탁할 수 있습니다.
-        노드는 앱을 꺼도 계속 실행됩니다(PC 를 켜면 자동 시작).</p>
-      <p class="hint" id="node-state"></p>
-      <!-- #1849 — 노드가 잠자기로 끊길 때 원인·조치(서버가 만든 문구). 평소엔 숨는다. -->
-      <p class="hint warn hidden" id="node-sleep"></p>
-      <div class="row">
-        <button id="node-start" class="primary">노드 시작</button>
-        <button id="node-stop" class="ghost">노드 정지</button>
-      </div>
-      <label class="check"><input type="checkbox" id="app-autolaunch" /> 이 앱도 로그인할 때 시작
-        <span class="hint">(노드는 앱과 무관하게 계속 실행됩니다)</span></label>
-    </section>
-
-    <!-- Windows: 다른 자리에 남은 옛 설치본(win-stale-install.mjs) — 옛 바로가기가 옛 버전을 연다. 사람이 누를 때만 정리(UAC 1회). -->
-    <section id="stale-card" class="card hidden">
-      <h2>이전 버전이 남아 있습니다</h2>
-      <p class="hint" id="stale-note"></p>
-      <div class="row">
-        <button id="stale-clean" class="primary">이전 버전 정리</button>
+      <div class="mfoot">
+        <button class="btn gh" id="setup-skip">건너뛰기</button>
+        <span class="grow"></span>
+        <span class="err inline" id="setup-err"></span>
+        <button class="btn pri" id="setup-go">설정하고 시작</button>
       </div>
     </section>
 
-    <!-- 점검·계정 — 설치가 끝난 뒤에만 의미가 있다 -->
-    <section id="tools-card" class="card hidden">
-      <h2>점검과 계정</h2>
-      <div class="row">
-        <button id="doctor" class="ghost">진단 실행</button>
-        <button id="kit-update" class="ghost">키트 업데이트</button>
-        <button id="logout" class="ghost danger">로그아웃</button>
+    <!-- 5 설정 중 -->
+    <section class="screen hidden" id="scr-running">
+      <div class="mhead"><h1>이 컴퓨터를 설정하는 중입니다</h1><p class="p">1분 정도 걸립니다. 창을 닫아도 설정은 계속 진행됩니다.</p></div>
+      <div class="mbody scroll">
+        <div class="prog"><i id="run-bar"></i></div>
+        <div class="stlist" id="run-rows"></div>
+        <pre class="runlog hidden" id="run-log"></pre>
       </div>
-      <p class="hint" id="tools-hint">진단은 설치 상태를 점검하고, 키트 업데이트는 CLI·훅을 최신으로 맞춥니다.</p>
+      <div class="mfoot">
+        <button class="btn gh" id="run-detail">자세히 보기</button><span class="grow"></span>
+        <button class="btn sec" id="run-cancel">취소</button>
+      </div>
     </section>
 
-    <details id="log-wrap">
-      <summary>자세히</summary>
-      <!-- 두 축이 다르다: '이번 작업'(CLI 가 지금 뱉는 것) vs '노드 로그'(파일에 쌓인 것). 섞으면 원인을 못 가린다. -->
-      <div class="row tabs">
-        <button id="tab-run" class="tab on">이번 작업</button>
-        <button id="tab-file" class="tab">노드 로그</button>
-        <button id="log-reload" class="ghost hidden">새로고침</button>
+    <!-- 6 완료 -->
+    <section class="screen hidden" id="scr-done">
+      <div class="mbody scroll">
+        <div class="donehead">
+          <span class="bigcheck"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <h1>설정을 마쳤습니다</h1>
+        </div>
+        <div class="chips" id="done-chips"></div>
+        <div class="carry">
+          <div class="carry-h">전에 쓰던 AI 설정 가져오기</div>
+          <div class="carry-d">AI 도구를 쓰면서 만들어 둔 것이 있다면 회사 동료와 함께 쓸 수 있습니다. 예를 들어 AI 에게 늘 주던 지시, 직접 만든 명령, AI 가 저장해 둔 작업 메모입니다. 위에서 연결한 AI 도구 중 아무거나 열고 아래 문장을 입력하세요. 찾은 것을 하나씩 보여 주고 회사에 올릴지 묻습니다. 원래 파일은 바꾸지 않습니다.</div>
+          <div class="sayrow"><button class="say" id="onboard-say" title="눌러서 복사">온보딩 도와줘</button><span class="hint" id="onboard-copied">누르면 복사됩니다</span></div>
+          <div class="carry-n">처음 쓰는 분은 할 일이 없습니다.</div>
+        </div>
       </div>
-      <pre id="log"></pre>
-      <pre id="filelog" class="hidden"></pre>
-      <p class="hint" id="filelog-note"></p>
-    </details>
+      <div class="mfoot"><span class="grow"></span><button class="btn pri" id="done-open">라이블리 열기</button></div>
+    </section>
+
+    <!-- 7 일부 실패 -->
+    <section class="screen hidden" id="scr-partial">
+      <div class="mhead"><h1>일부 항목을 설정하지 못했습니다</h1><p class="p">완료된 항목은 그대로 두고, 실패한 항목만 다시 시도할 수 있습니다.</p></div>
+      <div class="mbody scroll"><div class="stlist" id="partial-rows"></div></div>
+      <div class="mfoot">
+        <button class="btn gh" id="partial-skip">실패한 항목 건너뛰고 완료</button><span class="grow"></span>
+        <button class="btn pri" id="partial-retry">실패한 항목 다시 시도</button>
+      </div>
+    </section>
+
+    <!-- 평상시(설치 끝) · 고쳐야 할 때(구 CLI·토큰 거부) -->
+    <section class="screen hidden" id="scr-home">
+      <div class="mhead"><h1 id="status">확인 중</h1><p class="p" id="sub"></p></div>
+      <div class="mbody scroll homecards">
+        <!-- 고쳐야 할 때 — 주소를 이미 알고 있으므로 주소칸만 -->
+        <div id="gw-card" class="card hidden">
+          <h2 id="gw-title">워크스페이스 주소</h2>
+          <p class="hint" id="gw-fix-hint"></p>
+          <div class="row">
+            <input id="gw-fix" class="input" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" />
+            <button id="gw-fix-go" class="btn pri">연결</button>
+          </div>
+          <p class="hint mono" id="gw-fix-preview"></p>
+          <p class="err" id="gw-fix-err"></p>
+        </div>
+
+        <div id="app-card" class="card hidden">
+          <h2>라이블리 화면</h2>
+          <p class="hint" id="app-note">웹과 같은 화면을 이 앱 안에서 씁니다.</p>
+          <div class="row"><button id="app-open" class="btn pri">라이블리 열기</button><button id="app-web" class="btn sec">브라우저에서 열기</button></div>
+        </div>
+
+        <!-- 종전 흐름(구 게이트웨이·노드·진단)의 진행 -->
+        <div id="progress-card" class="card hidden">
+          <h2 id="progress-title">진행 중</h2>
+          <div class="prog"><i id="bar-fill"></i></div>
+          <ul id="steps"></ul>
+          <div class="row"><button id="cancel" class="btn sec">취소</button><button id="retry" class="btn pri hidden">다시 시도</button></div>
+        </div>
+
+        <div id="node-card" class="card hidden">
+          <h2>웹에서 이 컴퓨터 쓰기</h2>
+          <p class="hint">웹에서 이 컴퓨터로 AI 세션을 열 수 있습니다. 앱을 꺼도 계속 실행되고, 컴퓨터를 켜면 자동으로 시작됩니다.</p>
+          <p class="hint" id="node-state"></p>
+          <p class="hint warn hidden" id="node-sleep"></p>
+          <div class="row"><button id="node-start" class="btn pri">켜기</button><button id="node-stop" class="btn sec">끄기</button></div>
+          <label class="check"><input type="checkbox" id="app-autolaunch" /> 컴퓨터에 로그인할 때 이 앱도 시작</label>
+        </div>
+
+        <div id="stale-card" class="card hidden">
+          <h2>이전 버전이 남아 있습니다</h2>
+          <p class="hint" id="stale-note"></p>
+          <div class="row"><button id="stale-clean" class="btn pri">이전 버전 정리</button></div>
+        </div>
+
+        <div id="tools-card" class="card hidden">
+          <h2>점검과 계정</h2>
+          <div class="row">
+            <button id="doctor" class="btn sec">진단 실행</button>
+            <button id="kit-update" class="btn sec">키트 업데이트</button>
+            <button id="logout" class="btn sec danger">로그아웃</button>
+          </div>
+        </div>
+
+        <details id="log-wrap">
+          <summary>자세히</summary>
+          <div class="row tabs">
+            <button id="tab-run" class="tab on">이번 작업</button>
+            <button id="tab-file" class="tab">노드 로그</button>
+            <button id="log-reload" class="btn sec sm hidden">새로고침</button>
+          </div>
+          <pre id="log"></pre>
+          <pre id="filelog" class="hidden"></pre>
+          <p class="hint" id="filelog-note"></p>
+        </details>
+      </div>
+    </section>
   </main>
+</div>
 
-  <footer>
-    <span id="ver" class="hint"></span>
-    <span class="grow"></span>
-    <span id="upd-note" class="hint"></span>
-    <button id="apply-update" class="hidden">지금 다시 시작해서 적용</button>
-    <button id="check-update" class="link-btn">업데이트 확인</button>
-  </footer>
+<!-- 사람 확인(종전 흐름의 CLI 질문) — 어느 화면 위에서든 뜬다 -->
+<div id="prompt-card" class="modal hidden">
+  <div class="mcard">
+    <h2 id="prompt-label"></h2>
+    <div id="prompt-device" class="hidden">
+      <p class="hint">브라우저에서 아래 코드를 확인하고 승인하세요.</p>
+      <p class="code" id="device-code"></p>
+      <button class="linkbtn" id="device-link"></button>
+    </div>
+    <div id="prompt-confirm" class="row hidden">
+      <button id="prompt-no" class="btn sec">아니오</button>
+      <button id="prompt-yes" class="btn pri">예</button>
+    </div>
+  </div>
+</div>
 
-  <script src="app.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
