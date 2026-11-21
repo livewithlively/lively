@@ -19,7 +19,7 @@ const F = await import(mod);
 let pass = 0, fail = 0;
 const check = (ok, what, extra) => { if (ok) pass++; else { fail++; console.log("FAIL ", what, extra == null ? "" : JSON.stringify(extra)); } };
 
-const ALL = ["claude", "codex", "opencode", "antigravity", "grok", "shell"];
+const ALL = ["claude", "codex", "opencode", "antigravity", "cursor", "grok", "shell"];
 const pick = (o) => F.pickStudioAi({ catalog: ALL, runnable: null, yes: [], no: [], ...o });
 
 // 고르기(순수 규칙) — 엣지 표(행마다 하나). yes/no 를 직접 준다.
@@ -27,10 +27,11 @@ const rows = [
   ["P1 claude 만 로그인 → claude(종전과 같다)", { yes: ["claude"], no: ["codex", "grok"] }, "claude"],
   ["P2 codex 만 로그인 → codex", { yes: ["codex"], no: ["claude", "grok"] }, "codex"],
   ["P3 grok 만 로그인 → grok", { yes: ["grok"], no: ["claude", "codex"] }, "grok"],
+  ["P3b Cursor 만 로그인 → Cursor", { yes: ["cursor"], no: ["claude", "codex", "antigravity", "grok"] }, "cursor"],
   ["P4 둘 다 로그인 → claude 먼저", { yes: ["codex", "claude"] }, "claude"],
   ["P5 codex · grok 로그인 → 표 순서(codex)", { yes: ["grok", "codex"], no: ["claude"] }, "codex"],
   ["P7 아무것도 모름 → claude(종전 기본)", {}, "claude"],
-  ["P8 전부 «안 됨» → claude(거기서 로그인 안내)", { no: ["claude", "codex", "antigravity", "grok"] }, "claude"],
+  ["P8 전부 «안 됨» → claude(거기서 로그인 안내)", { no: ["claude", "codex", "antigravity", "cursor", "grok"] }, "claude"],
   ["P10 컴퓨터에 codex 만 깔림 → codex(로그인 몰라도)", { runnable: ["codex", "shell"] }, "codex"],
   ["P11 컴퓨터에 claude · codex · 중앙 로그인 힌트 codex → codex", { runnable: ["claude", "codex"], yes: ["codex"] }, "codex"],
   ["P12 로그인된 AI 를 그 컴퓨터가 못 띄움 → 띄울 수 있는 것 중 claude", { runnable: ["claude", "codex"], yes: ["grok"] }, "claude"],
@@ -80,6 +81,8 @@ const ag = F.studioAiFlags("antigravity", ["gemini-3.8-flash-high", "gemini-3.8-
 check(ag["--model"] === "gemini-3.8-flash-high" && ag["--effort"] === "high", "F3 antigravity = gemini-3.8-flash-high · high", ag);
 const gk = F.studioAiFlags("grok", ["grok-4.6"], () => ["low", "medium", "high", "xhigh"]);
 check(gk["--model"] === "grok-4.6" && gk["--effort"] === "high", "F4 grok = grok-4.6 · high", gk);
+const cr = F.studioAiFlags("cursor", [], () => []);
+check(JSON.stringify(cr) === "{}", "F4b Cursor 모델·강도는 계정 기본값으로 연다 — 검증 안 된 ID를 넘기지 않는다", cr);
 // 카탈로그가 받지 않는 값은 그 축만 뺀다
 const noModel = F.studioAiFlags("codex", ["gpt-5.5"], () => ["low", "medium", "high"]);
 check(!("--model" in noModel) && noModel["--effort"] === "high", "F5 모델이 카탈로그에 없으면 모델만 뺀다", noModel);
@@ -100,7 +103,9 @@ if (existsSync(catJs)) {
     const h = HARNESSES.find((x) => x.key === r.key);
     const models = h?.flags.find((f) => f.name === "--model")?.choices ?? [];
     const efforts = h?.effortsByModel?.[r.model] ?? h?.flags.find((f) => f.name === "--effort")?.choices ?? [];
-    check(!!h && models.includes(r.model) && efforts.includes(r.effort), `T1 ${r.key} — ${r.model} · ${r.effort} 가 카탈로그에 있다`, { models, efforts });
+    if (r.key === "cursor") check(!!h && h.flags.some((f) => f.name === "--model" && f.type === "text") && !r.model && !r.effort,
+      "T1 cursor — 모델 목록을 모르면 계정 기본값으로 연다", { models, efforts });
+    else check(!!h && models.includes(r.model) && efforts.includes(r.effort), `T1 ${r.key} — ${r.model} · ${r.effort} 가 카탈로그에 있다`, { models, efforts });
   }
 } else console.log("studio-ai: 서버 빌드 없음(dist/terminal/catalog.js) — 카탈로그 대조 건너뜀");
 

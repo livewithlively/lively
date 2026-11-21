@@ -55,6 +55,7 @@ import { shutdownGatewayWorkers } from "./apps/worker-service.js";
 import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
 import { freezeExecTopology } from "./exec-topology.js";   // #2599 T2 — 실행 토폴로지를 부팅 때 한 번 확정
 import { hostCredentialPresent } from "./browser/routes.js";   // #5470 — 브라우저 답 앞단과 routes.ts 가 같은 판정을 쓴다
+import { askSessionForToken, handleAuthedAsk } from "./terminal/harness-io/ask-bridge.js";
 
 // ★ 실행 토폴로지 확정(#2599 T2) — 「이 세션이 어디서 도나」를 여기서 **한 번** 정하고, 그 뒤 어느 코드도
 //  env 를 직접 읽지 않는다. ⚠ 자리는 여기여야 한다: 위 `boot/tenancy-env.js` 가 부팅 중에
@@ -138,6 +139,17 @@ console.log(`[boot] ${installTenantBinding()}`);
 }
 
 const app = express();
+
+// 세션 컨테이너의 안티그래비티 훅이 승인 답을 받는 입구. 런타임 버스는 DB·테넌트 문맥을
+// 쓰지 않는다. 컨테이너 루프백 경로에는 테넌트 서명 헤더가 없으므로 테넌트 미들웨어 앞에 둔다.
+// 본문을 읽기 전에 토큰을 검사하고, 본문의 session 은 토큰이 가리키는 세션으로 덮어쓴다.
+app.post("/api/agent/ask",
+  (req, res, next) => { if (askSessionForToken(String(req.headers["x-lively-ask"] || ""))) next(); else res.status(403).json({ ok: false }); },
+  express.json({ limit: "256kb" }),
+  async (req, res) => {
+    const out = await handleAuthedAsk(String(req.headers["x-lively-ask"] || ""), req.body);
+    res.status(out.status).json(out.body);
+  });
 
 // ★★ 테넌트 컨텍스트를 **가장 바깥**에서 연다(#1437 v1 5단계). 라우터마다 붙이면 새로 만든 라우터가
 //  빠지고, 빠뜨림이 곧 유출인 구조는 사람 규율로 못 지킨다. 웹훅(아래)보다도 앞이다 — 그 경로도

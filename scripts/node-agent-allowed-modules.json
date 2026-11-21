@@ -101,6 +101,7 @@
   "dist/terminal/harness-io/codex.js",
   "dist/terminal/harness-io/cursor.js",
   "dist/terminal/harness-io/grok-stream.js",
+  "dist/terminal/harness-io/cursor-stream.js",
   "dist/terminal/harness-io/grok.js",
   "dist/terminal/harness-io/locate.js",
   "dist/terminal/harness-io/opencode-serve.js",

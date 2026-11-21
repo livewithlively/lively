@@ -18,6 +18,7 @@
 import { claudeStreamEvent } from "./claude-stream.js";
 import { codexAppServerEvent } from "./codex-stream.js";
 import { grokAcpEvent } from "./grok-stream.js";
+import { cursorAcpEvent, cursorAcpResponse } from "./cursor-stream.js";
 import { antigravityEvent } from "./antigravity-stream.js";
 import { opencodeEvent } from "./opencode-stream.js";
 import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
@@ -243,13 +244,17 @@ const opencodeChat: ChatAdapter = {
 
 const cursorChat: ChatAdapter = {
   key: "cursor", label: "Cursor",
-  //  #4927 범위는 멤버 PC 의 Cursor IDE·CLI 배선(키트)이다 — 이 판은 Cursor 세션을 띄우지 않는다(웹 세션 카탈로그에 없다).
-  //   그래서 대화 런타임의 모든 축이 null 이다. 대화 기록 읽기는 harness-io/cursor.ts(parse)가 따로 쥔다.
-  transport: null,
+  // Cursor 공식 ACP: agent acp, initialize → authenticate → session/new|load.
+  transport: "jsonrpc-stdio",
   argv: null,
-  translate: null,
+  translate: cursorAcpEvent,
   encode: null,
-  note: "서버 호스팅 Cursor 세션은 후속 단계(#4927 범위 밖) — cursor-agent 의 비대화 출력(--print --output-format stream-json)은 로그인 계정이 있어야 재볼 수 있어 미실측이다.",
+  respond: ({ ask, value }) => cursorAcpResponse(ask, value),
+  interrupt: ({ convId }) => convId
+    ? JSON.stringify({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: convId } }) + "\n"
+    : null,
+  runsVia: "cursor-acp",
+  note: "Cursor 공식 ACP 문서의 initialize→authenticate→session/new|load→session/prompt 및 승인·질문·계획 응답 경로. 로그인 계정 끝단 검증 필요.",
 };
 
 export const CHAT_ADAPTERS: readonly ChatAdapter[] = [claudeChat, codexChat, grokChat, antigravityChat, opencodeChat, cursorChat];
