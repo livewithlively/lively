@@ -30,6 +30,7 @@ import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens
 import { caretShape, ccWheelRows, isWheelNotch, newCcWheel, newWheelTickAcc, parseTermPrefs, TERM_PREFS_KEY, termFace, termWheelTicks, type TermPrefs } from './lib/term-prefs.js';
 import { routeKey, type FocusSpot } from './lib/chat-keys.js';   // #4797 터미널처럼 — 이 화면이 보이면 글쇠가 입력칸으로
 import { isDark } from './theme.js';
+import { PANE_LINK_EVENT, uiPaneLink } from './lib/ui-link.js';   // #5583 자료 링크는 곁칸에서(셸 탭을 하나 더 열지 않게)
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -657,6 +658,19 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   const desktop = style === 'desktop';
   const tui = style === 'tui';
   const list = el('div', { class: 'livc-list' });
+  //  #5583 자료 링크(우리 화면의 #/f · #/k/ — AI 가 file_url 로 준 꼴)는 새 탭이 아니라 곁칸에서(원준 2026-11-22). 종전엔 셸 해시가 바뀌어
+  //   셸 탭이 하나 늘며 그리로 넘어갔다. 곁칸(v2/panes.ts onPaneLink)이 받으면 handled 를 켜고, **그때만** 기본 이동을 막는다 — 곁칸이 없는
+  //   화면이면 종전대로. ⌘/Ctrl/Shift/Alt+클릭은 사람이 고른 열기(새 탭 · 셸 새 탭)라 건드리지 않는다.
+  list.addEventListener('click', (e: MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!a || !list.contains(a)) return;
+    const link = uiPaneLink(a.getAttribute('href') || '', location.href);
+    if (!link) return;
+    const detail = { link, handled: false };
+    a.dispatchEvent(new CustomEvent(PANE_LINK_EVENT, { bubbles: true, detail }));
+    if (detail.handled) e.preventDefault();
+  });
   //  tui — Claude Code 의 입력줄엔 자리표시 글이 없다(`❯ ` 뒤가 빈 줄). 무엇을 하는 칸인지는 aria-label 로만 남긴다.
   const placeholderOf = (s: string): string => (tui ? '' : s);
   const input = el('textarea', { class: 'livc-input', rows: '1', placeholder: placeholderOf(opts.placeholder), 'aria-label': opts.placeholder }) as HTMLTextAreaElement;

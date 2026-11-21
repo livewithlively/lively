@@ -17,6 +17,7 @@ import {                                  // #4406 Claude Code 입력칸 선택 
 } from './app-select.js';
 import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
 import { UploadBook, fmtBytes, upPercent, upStatusText } from './upload-queue.js';   // #5361 올리기 진행 표시 — 같은 파일·이름 예약(순수 판정)
+import { uiPaneLink } from './ui-link.js';   // #5583 우리 화면의 자료 링크(#/f · #/k/)는 새 탭이 아니라 곁칸에서(정본 web/lib/ui-link.ts 의 사본)
 import type { UpJob } from './upload-queue.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
@@ -423,6 +424,13 @@ export function openLinkFromTerminal(uri: string): void {
     try { p = decodeURIComponent(new URL(uri).pathname); } catch (_) { /* 깨진 주소 */ }
     if (p && pathLinkTarget(p)) { openPathFromTerminal(p); return; }
   }
+  //  #5583 우리 화면의 **자료** 링크(원준 2026-11-22 «자료를 링크로 줄 때 새 탭에서 열려서 세션이랑 한 번에 보기 힘듦 — 경로로 주는 것
+  //   눌렀을 때처럼 곁칸에서»). 프로젝트 자료 파일(#/f?root=shared&path=project/<번호>/…)은 경로와 **같은 길**([자료] + 뷰어 탭),
+  //   그 밖의 자료 보기·지식(#/k/)은 곁칸 웹 칸에. 아래 linkOpenTarget 의 «우리 화면 링크 = 새 탭»(#4083)보다 먼저 선다 —
+  //   그 규칙은 프로젝트·세션처럼 «옮겨 갈 화면» 의 것으로 남는다.
+  const pane = uiPaneLink(uri, location.href);
+  if (pane && pane.kind === 'file' && pathLinkTarget(pane.path)) { openPathFromTerminal(pane.path); return; }
+  if (pane) { postToPane(pane.url); return; }
   try {
     const u = new URL(uri, location.href);
     const where = linkTargetHere(uri);
@@ -452,10 +460,13 @@ const pathOpening = new Set<string>();
 export function openPathFromTerminal(p: string): void {
   const t = pathLinkTarget(p);
   if (!t || pathOpening.has(p)) return;
+  //  #5583 — 셸이 못 여는 프로젝트 자료(이 곁칸의 프로젝트가 아님)는 새 탭이 아니라 **곁칸 웹 칸**에 자료 보기(#/f)를 싣는다.
+  //   ⚠ openLinkFromTerminal 로 돌려보내면 안 된다 — 그 #/f 링크가 다시 여기로 와서(uiPaneLink → file) 끝없이 돈다.
+  //   셸이 없으면(단독 화면) postToPane 이 곧바로 새 탭으로 연다.
   const fallback = (): void => {
     if (t.kind === 'project') {
       const ui = location.origin + location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
-      openLinkFromTerminal(ui + '#/f?root=shared&path=' + encodeURIComponent('project/' + t.id + '/' + t.rel));
+      postToPane(ui + '#/f?root=shared&path=' + encodeURIComponent('project/' + t.id + '/' + t.rel));
     } else toast('세션 화면에서 열 수 있어요 — 이 경로는 세션 폴더 기준이에요.');
   };
   if (window.parent === window) { fallback(); return; }
@@ -5329,7 +5340,9 @@ function wireTermCtxMenu(host: HTMLElement): void {
     //  'pane' 은 셸의 [웹] 탭으로 간다. 그 탭은 곁칸(자리바꿈으로 왼쪽에 설 수 있다) · 가운데 · 아래 칸 어디에도 있을 수 있고
     //   이 번들(셸 밖 iframe)은 그 자리를 모른다. 그래서 자리를 말하지 않고 탭 이름으로 적는다(#4233).
     //  파일 경로(#4562)는 셸의 [뷰어] 탭으로 간다 — 웹 칸과 같은 이유로 자리 대신 탭 이름.
-    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isKnowledgeLink(url) ? 'pane' : isPathLink(url) ? 'file' : linkTargetHere(url)];
+    //  #5583 우리 화면의 자료 링크는 열기(openLinkFromTerminal)와 같은 판정 — 프로젝트 자료 파일은 뷰어 탭, 그 밖의 자료·지식은 웹 탭.
+    const paneOf = url ? uiPaneLink(url, location.href) : null;
+    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isKnowledgeLink(url) ? 'pane' : isPathLink(url) ? 'file' : paneOf ? (paneOf.kind === 'file' && pathLinkTarget(paneOf.path) ? 'file' : 'pane') : linkTargetHere(url)];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {
