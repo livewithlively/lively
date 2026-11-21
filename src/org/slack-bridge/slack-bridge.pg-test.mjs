@@ -349,7 +349,8 @@ try {
       await send(mention("U_ALICE", { thread_ts: "60.6" }));
       await until(() => ephemerals().length === e0 + 1, 3000, "다시 동의 안내");
       const eph = ephemerals().at(-1);
-      const outcome = (await q(`SELECT outcome FROM org_slack_bridge_event ORDER BY id DESC LIMIT 1`))[0]?.outcome ?? "";
+      //  한 이벤트에 열쇠 행이 여럿일 수 있다(event_id · envelope_id — 같은 글 열쇠) — 맨 마지막 행이 아니라 걸러진 까닭이 적힌 행을 본다.
+      const outcome = (await q(`SELECT outcome FROM org_slack_bridge_event WHERE bridge_id='ops' AND outcome LIKE 'filtered:%' ORDER BY id DESC LIMIT 1`))[0]?.outcome ?? "";
       chk("I12 예전 범위 동의 + 태그 → 작업 없음 · 그 사람에게만 «다시 동의» 안내(스레드 · 동의 링크) · 걸러진 까닭에 덮지 못한 도구",
         eph.body.user === "U_ALICE" && eph.body.thread_ts === "60.6" && /예전 범위/.test(eph.body.text) && eph.body.text.includes("https://gw.test/ui/#/app-grant/policy?v=pub")
           && (await jobs()).length === before && /예전 범위/.test(outcome) && /app_job_get/.test(outcome), JSON.stringify({ text: eph.body.text, outcome }));
