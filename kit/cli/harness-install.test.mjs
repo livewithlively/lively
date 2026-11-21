@@ -124,11 +124,13 @@ const CLI = code(readFileSync(join(HERE, "lively.mjs"), "utf8"));
 
 test("E18 설치기가 0 으로 끝나도 bin 이 없으면 실패로 말한다", () => {
   assert.ok(/function probeHarness\(bin\)/.test(CLI), "부작용 확인 함수가 없다");
-  assert.ok(/const ver = probeHarness\(plan\.bin\);\s*if \(!ver\) \{/.test(CLI),
+  //  #5650 — 설치 루프는 probe 를 주입받는다(테스트가 공급사 설치기를 안 돌리게). 기본값이 probeHarness 여야 한다.
+  assert.ok(/probe = probeHarness/.test(CLI), "설치 루프의 기본 판정이 probeHarness 가 아니다");
+  assert.ok(/const ver = probe\(plan\.bin\);\s*if \(!ver\) \{/.test(CLI),
     "종료코드만 보고 '설치 완료' 라고 말하면 반쪽 설치를 성공이라 부르게 된다");
 });
 test("E19 표를 못 읽는 구 번들에서도 죽지 않고 안내로 떨어진다", () => {
-  assert.ok(/if \(!reg\) \{ warn\(/.test(CLI), "레지스트리 부재를 안 다룬다");
+  assert.ok(/if \(!reg\) \{\s*warn\(/.test(CLI), "레지스트리 부재를 안 다룬다");
   assert.ok(/typeof m\?\.installPlanFor === "function"/.test(CLI),
     "구 번들엔 install 축이 없다 — 존재만 보고 채택하면 그 자리에서 TypeError 다");
 });
@@ -144,4 +146,129 @@ test("E21 설치 끝 안내는 배선한 하네스를 켜는 이름으로 말한
   assert.deepEqual(launchNames(["claude", "codex", "antigravity"]), ["claude", "codex", "agy"]);
   assert.deepEqual(launchNames([]), ["claude"], "종전 규약 — 아무것도 없으면 claude");
   assert.deepEqual(launchNames(["newharness"]), ["newharness"], "모르는 id 는 그대로(지우지 않는다)");
+});
+
+// ── D. 여러 하네스를 한 번에 (#5650) — 데스크톱 앱이 `lively install --harness a,b,c --only --yes --json-events` 로 부른다 ──
+//  지키는 사실: 쉼표 목록을 받는다 · 모르는 id 는 경고하고 건너뛴다(claude 로 접지 않는다) · 하나만 주면 종전과 같다 ·
+//   --only 는 고른 것만 배선한다 · --yes 는 묻지 않는다 · 하나가 실패해도 다음 도구를 계속 깐다(이유는 fail step 에).
+const M = await import(pathToFileURL(join(HERE, "lively.mjs")));
+const KNOWN = ["claude", "codex", "opencode", "antigravity", "grok", "cursor"];
+
+test("M1 쉼표 목록을 순서대로 · 중복 없이 · 소문자로 정규화한다", () => {
+  assert.deepEqual(M.parseHarnessList(" Claude, codex,,cursor ,CODEX", KNOWN), { ids: ["claude", "codex", "cursor"], unknown: [] });
+});
+test("M2 모르는 id 는 따로 모은다(claude 로 접지 않는다)", () => {
+  assert.deepEqual(M.parseHarnessList("claude,claud,cursor", KNOWN), { ids: ["claude", "cursor"], unknown: ["claud"] });
+});
+test("M3 설치할 것 = 고른 것 중 이 컴퓨터에 없는 것(고른 순서 그대로)", () => {
+  const p = M.planHarnessInstalls("cursor,claude,codex", ["codex"], { known: KNOWN });
+  assert.deepEqual(p.toInstall, ["cursor", "claude"]);
+  assert.deepEqual(p.present, ["codex"]);
+  assert.deepEqual(p.unknown, []);
+});
+test("M4 하나만 주면 installTarget 과 같은 답(종전 동작 보존)", () => {
+  for (const [w, d] of [["", []], ["", ["codex"]], ["claude", []], ["claude", ["claude"]], ["claude", ["codex"]], ["grok", []], ["  CURSOR ", ["claude"]]]) {
+    assert.deepEqual(M.planHarnessInstalls(w, d, { known: KNOWN }).toInstall, [installTarget(w, d)].filter(Boolean), JSON.stringify([w, d]));
+  }
+});
+test("M5 모르는 것만 주면 아무것도 깔지 않는다(종전 규약의 claude 로도 떨어지지 않는다)", () => {
+  const p = M.planHarnessInstalls("claud", [], { known: KNOWN });
+  assert.deepEqual(p.toInstall, []);
+  assert.deepEqual(p.unknown, ["claud"]);
+});
+test("M6 --only: 고른 것만 배선한다(설치 뒤 있는 것과의 교집합)", () => {
+  assert.deepEqual(M.wireTargets(["claude", "codex", "grok"], "claude,cursor", true), ["claude"]);
+});
+test("M7 --only 가 없으면 있는 것 전부를 배선한다(종전)", () => {
+  assert.deepEqual(M.wireTargets(["claude", "codex", "grok"], "claude,cursor", false), ["claude", "codex", "grok"]);
+});
+test("M8 --only 인데 --harness 를 안 줬으면 거르지 않는다", () => {
+  assert.deepEqual(M.wireTargets(["claude", "codex"], "", true), ["claude", "codex"]);
+});
+test("M9 --only 교집합이 비면 빈 목록(호출부가 «하네스 없이 진행» 폴백을 탄다)", () => {
+  assert.deepEqual(M.wireTargets(["codex"], "cursor", true), []);
+});
+
+// 설치 실행 — 공급사 설치기는 절대 돌리지 않는다(exec·probe·ask·hasBin 을 전부 주입).
+const fakeReg = {
+  installPlanFor: (id) => id === "nope" ? null : ({
+    id, label: id.toUpperCase(), bin: `${id}-bin`, wiresPath: true, binDir: null, integrity: null,
+    cmd: id === "blocked" ? null : `echo ${id}`, requires: id === "npmtool" ? "npm" : null, docs: `https://docs.example/${id}`,
+  }),
+};
+const harnessDeps = (over = {}) => {
+  const steps = [], asks = [], execs = [];
+  const deps = {
+    reg: fakeReg, yes: false,
+    ask: async (label) => { asks.push(label); return true; },
+    exec: (plan) => { execs.push(plan.id); return { code: 0 }; },
+    probe: (bin) => `${bin} 1.0`,
+    hasBin: () => true,
+    step: (id, label, status, extra) => steps.push({ id, label, status, ...(extra || {}) }),
+    ...over,
+  };
+  return { deps, steps, asks, execs };
+};
+
+test("M10 --yes 면 하나도 묻지 않고 전부 깐다", async () => {
+  const { deps, asks, execs, steps } = harnessDeps({ yes: true });
+  const r = await M.installHarnesses({ toInstall: ["claude", "cursor"] }, deps);
+  assert.equal(asks.length, 0, "--yes 인데 물었다 — 앱(--json-events)에선 확인 카드가 도구마다 뜬다");
+  assert.deepEqual(execs, ["claude", "cursor"]);
+  assert.deepEqual(r.installed, ["claude", "cursor"]);
+  assert.deepEqual(steps.map((s) => `${s.id}:${s.status}`),
+    ["harness-install:claude:start", "harness-install:claude:done", "harness-install:cursor:start", "harness-install:cursor:done"]);
+  assert.equal(steps[0].label, "CLAUDE 설치");
+});
+test("M11 --yes 가 없으면 도구마다 묻고, 아니오는 건너뛰고 다음으로 간다", async () => {
+  const { deps, asks, execs, steps } = harnessDeps({ ask: async (l) => { asks.push(l); return asks.length > 1; } });
+  const r = await M.installHarnesses({ toInstall: ["claude", "cursor"] }, deps);
+  assert.equal(asks.length, 2);
+  assert.deepEqual(execs, ["cursor"]);
+  assert.deepEqual(r.installed, ["cursor"]);
+  const f = steps.find((s) => s.id === "harness-install:claude" && s.status === "fail");
+  assert.ok(f && f.reason && f.declined === true, JSON.stringify(steps));
+});
+test("M12 하나가 실패해도 다음 도구를 계속 깔고, 실패마다 이유를 fail step 에 싣는다", async () => {
+  const { deps, execs, steps } = harnessDeps({
+    yes: true,
+    hasBin: (b) => b !== "npm",
+    probe: (bin) => ["ghost-bin", "boom-bin"].includes(bin) ? null : `${bin} 1.0`,   // ghost: 설치기는 돌았는데 실행 파일이 없다 · boom: 설치기가 못 떴다
+    exec: (plan) => { if (plan.id === "boom") throw new Error("spawn EACCES"); execs.push(plan.id); return { code: 0 }; },
+  });
+  const r = await M.installHarnesses({ toInstall: ["blocked", "npmtool", "ghost", "boom", "nope", "claude"] }, deps);
+  assert.deepEqual(r.installed, ["claude"], "실패 하나가 나머지를 멈추면 안 된다");
+  assert.deepEqual(r.failed.map((x) => x.id), ["blocked", "npmtool", "ghost", "boom", "nope"]);
+  for (const id of ["blocked", "npmtool", "ghost", "boom", "nope"]) {
+    const f = steps.find((s) => s.id === `harness-install:${id}` && s.status === "fail");
+    assert.ok(f && typeof f.reason === "string" && f.reason, `${id}: fail step 에 이유가 없다 ${JSON.stringify(steps)}`);
+    assert.ok(!f.reason.includes("—"), `${id}: 새 문구에 em-dash`);
+  }
+  assert.equal(steps.find((s) => s.id === "harness-install:blocked" && s.status === "fail").docs, "https://docs.example/blocked");
+  assert.ok(steps.some((s) => s.id === "harness-install:claude" && s.status === "done"));
+});
+test("M13 이미 있는 것은 done(present) · 모르는 것은 fail 로 알린다(앱이 고른 도구마다 상태를 그린다)", async () => {
+  const { deps, steps, execs } = harnessDeps({ yes: true });
+  await M.installHarnesses({ toInstall: [], present: ["codex"], unknown: ["claud"] }, deps);
+  assert.deepEqual(execs, []);
+  assert.ok(steps.some((s) => s.id === "harness-install:codex" && s.status === "done" && s.present === true), JSON.stringify(steps));
+  assert.ok(steps.some((s) => s.id === "harness-install:claud" && s.status === "fail" && s.reason), JSON.stringify(steps));
+});
+test("M14 표를 못 읽으면(구 번들) 도구마다 fail 로 떨어지고 죽지 않는다", async () => {
+  const { deps, steps } = harnessDeps({ yes: true, reg: null });
+  const r = await M.installHarnesses({ toInstall: ["claude", "cursor"] }, deps);
+  assert.deepEqual(r.installed, []);
+  assert.equal(steps.filter((s) => s.status === "fail").length, 2);
+});
+test("M15 --only · --yes 를 파서가 받는다(install 에 모르는 옵션으로 거절되지 않게)", () => {
+  const o = M.parse(["install", "--harness", "claude,codex,cursor", "--only", "--yes", "--json-events"]);
+  assert.equal(o.harness, "claude,codex,cursor");
+  assert.equal(o.only, true);
+  assert.equal(o.yes, true);
+  assert.deepEqual(o._, ["install"]);
+});
+test("M16 status --json 이 지원 능력(caps)을 싣는다 — 구 CLI 는 이 칸이 없다", () => {
+  assert.ok(Array.isArray(M.CLI_CAPS));
+  assert.ok(M.CLI_CAPS.includes("install-multi") && M.CLI_CAPS.includes("work-root-add"));
+  assert.ok(/caps: CLI_CAPS/.test(CLI), "gatherStatus 가 caps 를 싣지 않는다");
 });
