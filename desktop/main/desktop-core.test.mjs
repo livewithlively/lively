@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync, existsSync as existsSyncReal, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, bootstrapManualHint, runBootstrap } from "./bootstrap.mjs";
@@ -3407,10 +3407,11 @@ await ta("SU3 프로필·주소·기기 이름", async () => {
 });
 
 t("SU4 AI 도구 찾기 — PATH·공급사 설치 자리·Cursor 홈 폴더, 화면 순서 그대로", () => {
-  const home = "/h";
+  // 경로는 이 OS 의 join·구분자로 만든다(harness-detect 가 node:path 를 그대로 쓴다 — 윈도우 CI 에서 «/» 표기는 안 맞는다).
+  const home = join(sep, "h"), opt = join(sep, "opt", "bin"), usr = join(sep, "usr", "bin");
   const have = (set) => (p) => set.has(p);
-  assert.deepEqual(detectHarnesses({ exists: have(new Set()), env: { PATH: "/usr/bin" }, home, platform: "darwin" }), []);
-  const r = detectHarnesses({ exists: have(new Set(["/opt/bin/codex", "/h/.local/bin/agy", "/h/.opencode/bin/opencode", "/h/.grok/bin/grok", "/h/.local/bin/claude", "/h/.cursor"])), env: { PATH: "/usr/bin:/opt/bin" }, home, platform: "darwin" });
+  assert.deepEqual(detectHarnesses({ exists: have(new Set()), env: { PATH: usr }, home, platform: "darwin" }), []);
+  const r = detectHarnesses({ exists: have(new Set([join(opt, "codex"), join(home, ".local", "bin", "agy"), join(home, ".opencode", "bin", "opencode"), join(home, ".grok", "bin", "grok"), join(home, ".local", "bin", "claude"), join(home, ".cursor")])), env: { PATH: [usr, opt].join(delimiter) }, home, platform: "darwin" });
   assert.deepEqual(r, ["claude", "codex", "antigravity", "cursor", "grok", "opencode"]);
   assert.deepEqual(HARNESS_ORDER, ["claude", "codex", "antigravity", "cursor", "grok", "opencode"], "사람이 정한 순서가 바뀌었다");
   for (const id of HARNESS_ORDER) assert.ok(HARNESS_LABEL[id], `${id} 이름이 없다`);

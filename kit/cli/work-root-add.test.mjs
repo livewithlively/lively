@@ -13,7 +13,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
@@ -33,7 +33,9 @@ function sandbox() {
 const runCli = (sb, args) => {
   const env = { ...process.env, ...sandboxEnv({ home: sb.home, tmp: sb.tmp }), LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox",
     LIVELY_HOME: sb.home, CLAUDE_PROJECT_DIR: sb.root, LIVELY_SESSION_DIR: "", LIVELY_HARNESS: "", LIVELY_WORK_ROOTS: "",
-    LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "" };
+    LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
+    // 닫힌 PATH — 실제 claude·codex 를 가린다(cli-spawn-harness-sandbox 관례). node 자리만 둔다.
+    PATH: dirname(process.execPath) };
   //  stdin 을 닫아 둔다 — 프롬프트가 하나라도 나가면 이벤트 모드는 EOF 를 실패로 본다(fail-closed). 그러니 통과 = 묻지 않았다.
   const r = spawnSync(process.execPath, [CLI, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20000 });
   const events = String(r.stdout || "").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
