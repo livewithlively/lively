@@ -2098,7 +2098,9 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(appReady({ ...okState, cliOutdated: true }), false, "구 CLI 인데 준비됐다고 한다");
     assert.equal(appReady({ ...okState, cliBroken: "spawn EINVAL" }), false, "못 띄우는 CLI 인데 준비됐다고 한다");
     assert.equal(appReady({ ...okState, tokenRejected: true }), false, "게이트웨이가 토큰을 거부했는데 준비됐다고 한다");
-    assert.equal(appReady({ accountLoggedIn: true }), true, "계정 로그인만으로 앱의 웹 화면을 열 수 있어야 한다");
+    // #5650 — 계정 쿠키만 있고 이 PC 에 아무것도 안 깔렸으면 준비가 아니다(마법사가 떠야 설치할 길이 있다).
+    assert.equal(appReady({ accountLoggedIn: true }), false, "계정 로그인만으로 준비됐다고 한다 — 이 PC 에 CLI·키트가 없는데 마법사가 안 뜬다");
+    assert.equal(appReady({ ...okState, accountLoggedIn: true }), true, "로컬이 갖춰졌는데 계정 로그인 때문에 준비가 아니라고 한다");
     assert.equal(appReady(null), false); assert.equal(appReady({}), false);
     // ★ 세 곳(메인·트레이·렌더러)이 각자 식을 적지 않는다 — 트레이는 appReady 를 import 하고, 렌더러는 state.ready 를 받는다
     const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
@@ -3206,7 +3208,7 @@ t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 
 
 // ── #5520 — 준비 전 첫 화면이 클라우드 로그인으로 직행해 셀프호스팅 입구(주소 입력)가 사라졌던 것 ──────────
 // 실측(2026-11-11): #5430 뒤 앱을 처음 켜면 곧장 app.lvly.io/login 이 떴다 — «회사에 직접 설치했어요» 를 누를 화면이 없다.
-t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 계정 로그인은 버튼으로, 셀프호스팅 주소 입력은 그대로", () => {
+t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 버튼은 설치 흐름(#5650), 셀프호스팅 주소 입력은 그대로", () => {
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
   // [1·2] 준비 전 = 마법사, 준비됨 = 웹 창. 클라우드 선택을 여기서 하지 않는다.
   const smAt = main.indexOf("function showMain()");
@@ -3214,15 +3216,10 @@ t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 계정 로�
   const sm = main.slice(smAt, main.indexOf("\n}\n", smAt));
   assert.ok(!/selectedGatewayUrl\s*=/.test(sm), "준비 전 showMain 이 클라우드 로그인으로 직행한다 — 셀프호스팅 입구가 사라진다");
   assert.match(sm, /if \(state\.ready\) return showApp\(\)\.ok \? appWin : showWindow\(\);\s*return showWindow\(\);/, "준비 전에 마법사를 안 연다");
-  // [3·6] 클라우드 버튼 → 계정 로그인 화면. env 형식 오류는 throw 대신 오류로 돌려준다.
-  const alAt = main.indexOf("function openAccountLogin()");
-  assert.ok(alAt >= 0, "클라우드 버튼이 부를 openAccountLogin 이 없다");
-  const al = main.slice(alAt, main.indexOf("\n}\n", alAt));
-  assert.match(al, /try \{ cloud = cloudUrl\(\); \} catch \(e\) \{ return \{ ok: false, error: e\.message \}; \}/, "cloudUrl 형식 오류가 IPC 를 throw 로 깬다");
-  assert.ok(al.indexOf("selectedGatewayUrl = cloud;") >= 0 && al.indexOf("selectedGatewayUrl = cloud;") < al.indexOf("showApp()"),
-    "계정 로그인 화면을 고르기 전에 앱 창을 연다(준비 전이면 showApp 이 거절한다)");
-  assert.match(main, /ipcMain\.handle\(IPC\.ACCOUNT_LOGIN, \(\) => openAccountLogin\(\)\)/, "계정 로그인 IPC 배선이 없다");
-  assert.equal(IPC.ACCOUNT_LOGIN, "lively:account-login");
+  // [3·6] 클라우드 버튼 → 설치 흐름(#5650). 앱 안 계정 로그인(웹 화면만)으로 가면 이 PC 에 아무것도 안 깔린다.
+  assert.ok(main.indexOf("function openAccountLogin()") < 0, "클라우드 버튼이 다시 웹 화면 로그인만 하는 길이 남아 있다");
+  assert.ok(!/IPC\.ACCOUNT_LOGIN/.test(main), "계정 로그인만 하는 IPC 가 남아 있다");
+  assert.equal(IPC.ACCOUNT_LOGIN, undefined);
   // [4·5] 셀프호스팅 갈래 — 계정 미로그인일 때만 앞서 눌러 본 클라우드 선택을 지운다.
   const obAt = main.indexOf("async function onboard(url)");
   const ob = main.slice(obAt, main.indexOf("const c = await ensureCli", obAt));
@@ -3231,8 +3228,10 @@ t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 계정 로�
 
 t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다 [E6·E7]", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
-  // 시작 카드의 클라우드 버튼은 #5430 부터 앱 안 계정 로그인이다(CL12). setup-cloud 흐름은 워크스페이스 재바인딩이 쓴다.
-  assert.match(app, /\$\("cloud-go"\)[\s\S]{0,200}window\.lively\.accountLogin\(\)/, "버튼이 아무것도 안 부른다");
+  // ★ 시작 카드의 클라우드 버튼 = 설치 흐름(setup-cloud). 0.1.414~0.1.423 은 웹 화면 로그인만 해서 PC 에 아무것도 안 깔렸다(#5650).
+  const cgAt = app.indexOf('$("cloud-go").addEventListener'); const cg = app.slice(cgAt, app.indexOf('\n});', cgAt));
+  assert.match(cg, /window\.lively\.run\("setup-cloud"\)/, "클라우드 버튼이 설치 흐름을 안 부른다");
+  assert.ok(!/accountLogin/.test(cg), "클라우드 버튼이 웹 화면 로그인만 한다 — PC 에 CLI·키트·노드가 안 깔린다");
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
   // IPC 는 클라우드 경로를 **따로** 몰아야 한다 — 그냥 start() 로 보내면 CLI 가드에 걸린다(CL6).
   const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));
