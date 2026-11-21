@@ -10,6 +10,9 @@
 //     mcp/app-declared-tools(앱 선언 MCP 도구) · org/slack-bridge/manager(슬랙 다리) · ai-runs/service(작업 컨테이너 AI 실행).
 //  동의 창은 늘 선언 전체로 동의하므로(web/v2/app-session ensureAppGrant) 한 번 다시 동의하면 풀린다 — 구성원에게 없는 scope 는 다시 동의해도
 //   못 얻으니 묻지 않는다(grant.ts scopeNeedsRegrant). 다시 동의(me_app_grant)는 그 사람이 보는 판의 선언으로 동의를 다시 쓴다.
+//  ⚠ API 로 일부만 동의한 사람(me_app_grant 에 scopes · tools 를 준 경우)도 «선언을 덮지 못함» 이다 — 시작하는 자리(앱 선언 MCP 도구 · AI 실행 ·
+//   슬랙 다리)는 그 사람에게도 다시 동의(선언 전체)를 요구한다. 앱 코드 · 작업 AI 가 무엇을 부를지 미리 알 수 없어 일부 동의로는 어디서 막힐지 모른다.
+//  판정은 안내를 위한 것이고 권한의 경계가 아니다 — 경계는 종전대로 토큰 · 앱 도구 게이트(그 사람 ∩ 동의)다. 그래서 판정을 읽지 못하면 종전 동작으로 돌아간다.
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import { isScope } from "../auth/scopes.js";

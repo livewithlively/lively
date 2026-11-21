@@ -23,6 +23,7 @@ import { logToolCall } from "../org/policies/tool-log.js";
 import { logger } from "../log.js";
 import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
+import { isScope } from "../auth/scopes.js";
 import { runWithAppReadScope, assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 앱 맥락 범위
 
 /** 세션 id 꼴(box-<slug>-<8hex> 등) — 형식만. 권한은 소비처(ai-runs 구독 tie)가 본다. */
@@ -99,13 +100,14 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
   // #4225 — 동의가 **옛 범위**다: 앱이 갱신돼 새로 선언한 도구인데 예전 동의엔 없다(빌트인 「안녕 앱」 0.2 가 store_* 를 얻은 경우).
   //  종전엔 아래 requireAppTool 의 «앱 권한 밖» 403 으로 끝나 화면이 막다른 길이었다. «동의» 로 말하면 호스트가 그 자리에서
   //  동의 창을 띄우고(web/v2/app-ui.ts — /동의|grant/) 새 범위로 다시 동의한 뒤 한 번 재시도한다. 선언 밖 도구는 종전 그대로 막힌다.
-  //  선언은 동의 창이 주는 것과 같은 정규화(grant.ts grantableOf — 함의 도구 포함). 이 코어가 못 읽는 매니페스트면 원문 칸으로(종전과 같다).
-  const rawPerms = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown; scopes?: unknown } } | null)?.permissions;
+  //  선언은 동의 창이 주는 것과 같은 정규화(grant.ts grantableOf — 함의 도구 포함). 이 코어가 못 읽는 매니페스트면 도구는 원문 칸으로(종전과 같다) ·
+  //   scope 는 비운다 — 다시 동의(me_app_grant)도 같은 파서로 막혀, scope 로 «다시 동의» 를 내면 풀리지 않는 안내가 된다(#1644 격리 리뷰).
+  const rawPerms = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown } } | null)?.permissions;
   const declared = grantableOf(app.manifest) ?? {
-    scopes: (Array.isArray(rawPerms?.scopes) ? rawPerms.scopes : []).map(String),
+    scopes: [],
     tools: [...(Array.isArray(rawPerms?.tools) ? rawPerms.tools : []), ...(Array.isArray(rawPerms?.ext_tools) ? rawPerms.ext_tools : [])].map(String),
   };
-  const memberScopes = member.scopes ?? [];
+  const memberScopes = (member.scopes ?? []).filter(isScope);
   if (needsRegrant(grant.tools, declared.tools, name)) {
     throw new HttpError(403, regrantMessage(appId, regrantToolPhrase(name)), { body: { code: CONSENT_REQUIRED, missing: grantGap(grant, declared, memberScopes) } });
   }

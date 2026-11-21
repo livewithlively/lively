@@ -10,6 +10,7 @@
 //  R1 앱 화면 다리 · scope 만 새로 → consent_required · R2 도구만 새로 → consent_required(#4225) · R3 구성원에게 없는 scope → 종전 Forbidden · R4 다시 동의 뒤 통과
 //  T1 다시 동의 뒤 새 앱 토큰(작업 AI 의 토큰과 같은 발급)은 scope 가 넓어진다 · A 시작 전 판정(launchConsentGap) 실 DB · 동의 자리 꼴
 //  X 주소의 판(공개)과 그 사람이 다시 동의하는 판(초안)이 다르면 다시 동의로 못 얻는 것은 «다시 동의» 로 말하지 않는다(끝없이 도는 안내를 막는다)
+//  P9 이 코어가 못 읽는 매니페스트 — 다시 동의도 막히니 scope 로 «다시 동의» 를 내지 않는다(격리 리뷰)
 //  G 배선 — 시험 서명 키 · 앱 서버 토큰 · 진짜 문을 탔다
 import "../../scripts/test-apps-root.mjs";   // 앱 폴더 자리를 임시 폴더로 — 앱을 깔고 지우는 시험이 실제 ~/apps 를 건드리지 않게
 import pg from "pg";
@@ -193,6 +194,16 @@ try {
   const bad = [];
   for (const [u, js, want, label] of cases) if ((await calledFromAppScreen(u, js)) !== want) bad.push(label);
   chk("A2 동의 자리 꼴 — 앞단 서명 신원 · 화면이 시작한 작업만 앱 주소로 돌아가는 꼴, 그 밖(도구 부르기 · 작업 AI · MCP · 슬랙 · 작업 안의 작업)은 from=mcp", bad.length === 0, J(bad));
+
+  // ── P9 이 코어가 못 읽는 매니페스트(제목 · 판 칸 없음) — scope 로 «다시 동의» 를 내지 않는다(다시 동의도 같은 파서로 막혀 풀리지 않는다) ──
+  await itemsPool.query(`INSERT INTO org_app(id, title, version, manifest, source, content_hash, status, enabled, current_version_no)
+     VALUES('broken','깨진 앱','0.1.0',$1::jsonb,'{"kind":"inline"}'::jsonb,'hb','active',true,1)`,
+    [J({ id: "broken", permissions: { scopes: ["memory", "context"], tools: ["category_list"] } })]);
+  await itemsPool.query(`INSERT INTO org_app_grant(app_id, member_id, scopes, tools) VALUES('broken','alice','["memory"]'::jsonb,'["category_list"]'::jsonb)`);
+  const regrantBroken = await errOf(grant("alice", "broken"));
+  const p9 = await errOf(runAppTool(P("alice"), "broken", "category_list", {}, { source: "app-ui" }));
+  chk("P9 못 읽는 매니페스트 — 다시 동의는 막히고(파서) 앱 화면 다리는 종전 Forbidden(동의 표지 없음 — 풀리지 않는 «다시 동의» 를 내지 않는다)",
+    regrantBroken?.status === 400 && !!p9 && /Forbidden: .*'context'/.test(p9.message) && p9?.body?.code === undefined, J({ g: regrantBroken?.message, m: p9?.message, b: p9?.body }));
 
   // ── X 주소의 판 ≠ 다시 동의하는 판 — 공개 앱(공개 판: 도구 둘)에 다나의 초안(도구 하나 — project_list_v6 를 뺐다)이 걸렸다 ──
   await install(manifest("wiki2", { scopes: ["memory"], tools: ["store_tables", "project_list_v6"] }));
