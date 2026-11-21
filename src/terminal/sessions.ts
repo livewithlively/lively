@@ -49,7 +49,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, AUTO_MODE_FLAG, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, AUTO_MODE_FLAG, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessStateEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, localServerAbsentVerdict, tmuxViaRelay, isNoTmuxServer, tmuxCliEnv, TMUX_LOCAL_TIMEOUT_MS } from "./tmux-exec.js";
@@ -890,6 +890,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  #2545 (3단계) — 이 세션이 **자기 세션 컨테이너 안 tmux** 로 뜨나. 격리(osUser)이고, ensure 훅과 슬러그 목록이 이 테넌트를
   //   가리킬 때만이다. 기존 세션은 안 바뀐다(태어날 때 정해진다) — 옛 경로는 아래 else(wrapAsMember) 그대로다.
   const inside = !!osUser && tmuxInSessionContainer(slug);
+  //  #5648 — 세션 컨테이너 안 codex 는 SQLite 를 공유 홈이 아닌 컨테이너 안에 둔다(공유 9p 위 WAL 손상 → 이어 열기 실패). 근거는 catalog.ts.
+  args.push(...harnessStateEnvArgs(harness.key, { inSessionContainer: inside }));
   //  #4684 — 붙은 앱 폴더 능력(게이트웨이 전용 — 노드에는 없어 아무것도 안 한다). 새 id 복원이면 옛 세션의 붙은 앱을 이 id 로 넘긴다
   //   (앱 칸·store_* 가 이 기록을 본다 — 컨테이너 안 tmux 든 아니든 같다). 검증을 다 지난 **뒤**, 만들기 직전이다 — 검증에서 막힌
   //   복원(잠긴 폴더 등)이 한 번도 안 뜬 id 에 붙은 앱을 남기지 않게. 만들기가 실패하면 되돌린다(dropCarried). 실패해도 세션은 뜬다.
