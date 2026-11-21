@@ -91,7 +91,6 @@ const BUDGET_MS = {
   beforeMCPExecution: T.runner,
   postToolUse: T.runner + T.workFlag,
   stop: T.runner + T.workFlag,          // 게이트 없음(#5647) — 뒤 작업 상한
-
   sessionEnd: T.runnerEnd + T.workFlag,
   subagentStop: T.runner + T.workFlag,
   preCompact: T.runner + T.workFlag,
@@ -265,26 +264,61 @@ function deferredWork(event, input) {
   }
 }
 
-// 입력은 임시파일로 넘긴다(프롬프트가 길 수 있어 argv·env 로는 못 싣고, 부모가 곧 끝나므로 파이프 쓰기를 기다릴 수도 없다).
+// 입력은 파일로 넘긴다(프롬프트가 길 수 있어 argv·env 로는 못 싣고, 부모가 곧 끝나므로 파이프 쓰기를 기다릴 수도 없다).
+//  자리는 공유 tmp 가 아니라 ~/.lively/cursor-bg — 프롬프트 원문이 담기므로 남이 미리 만든 디렉터리에 쓰지 않게(리눅스 공유 /tmp).
 //  자식이 읽자마자 지운다. 못 띄우면 파일을 지우고 조용히 넘어간다 — 응답(유효 JSON 한 줄)은 이것과 무관하다.
-const bgFile = () => join(FLAG_DIR, `cursor-bg.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.json`);
+//  ⚠ Windows 실기기 미측정 — Cursor 가 훅을 kill-on-close Job Object 로 감싸면 자식이 함께 죽는다(그땐 부수효과만 빠지고 세션은 그대로).
+const BG_DIR = join(LIVELY, "cursor-bg");
+const BG_STALE_MS = 3600_000;
+const bgFile = () => join(BG_DIR, `job.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.json`);
+function sweepBg() {
+  const now = Date.now();
+  try {
+    for (const f of readdirSync(BG_DIR)) {
+      try { if (now - statSync(join(BG_DIR, f)).mtimeMs > BG_STALE_MS) unlinkSync(join(BG_DIR, f)); } catch { /* 경합 */ }
+    }
+  } catch { /* */ }
+}
 function spawnDeferred(event, input) {
   let f = "";
   try {
-    mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
+    mkdirSync(BG_DIR, { recursive: true, mode: 0o700 });
+    sweepBg();
     f = bgFile();
-    writeFileSync(f, JSON.stringify({ input, sessionDir: SESSION_DIR }), { mode: 0o600 });
+    writeFileSync(f, JSON.stringify({ input, sessionDir: SESSION_DIR }), { mode: 0o600, flag: "wx" });
     const c = spawn(NODE, [SELF, "--deferred", event, f], { detached: true, stdio: "ignore", windowsHide: true, env: process.env });
     c.on("error", () => { try { unlinkSync(f); } catch { /* */ } });
     c.unref();
   } catch { if (f) { try { unlinkSync(f); } catch { /* */ } } }
+}
+
+// 세션별 차례 — 뒤 작업끼리 겹치면 «작업 중»(beforeSubmitPrompt)이 짧은 턴의 «쉼»(stop)보다 늦게 도착하고, 연달은 턴의 조직
+//  훅이 겹쳐 돈다(종전엔 Cursor 가 훅을 차례로 기다려 저절로 직렬이었다 — 격리 리뷰). 세션마다 자물쇠 파일 하나로 줄 세운다.
+//  먼저 띄운 이벤트가 먼저 잡는다(띄운 시각이 수 초 앞선다). 자물쇠 주인이 죽어 남은 것은 상한(한 작업의 최대 시간 + 여유) 뒤에 걷는다.
+//  기다림에도 같은 상한을 둔다 — 넘으면 차례를 포기하고 돈다(부수효과를 잃는 것보다 순서가 한 번 흔들리는 쪽이 낫다).
+const LOCK_MAX_MS = T.runner + T.workFlag + 5000;
+const sleepSync = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* */ } };
+function acquireTurn(sid) {
+  const lock = join(BG_DIR, `lock.${safeId(sid || "nosession")}`);
+  const end = Date.now() + LOCK_MAX_MS;
+  for (;;) {
+    try { writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 }); return lock; }
+    catch {
+      try { if (Date.now() - statSync(lock).mtimeMs > LOCK_MAX_MS) { unlinkSync(lock); continue; } } catch { continue; }   // 사라졌으면 곧바로 다시
+      if (Date.now() > end) return "";
+      sleepSync(100);
+    }
+  }
 }
 function runDeferred(event, file) {
   let job = null;
   try { job = JSON.parse(readFileSync(file, "utf8")); } catch { return; }
   finally { try { unlinkSync(file); } catch { /* */ } }
   SESSION_DIR = String(job?.sessionDir || "");
-  try { deferredWork(event, asObj(job?.input) || {}); } catch { /* 뒤 작업 실패는 세션과 무관 */ }
+  const input = asObj(job?.input) || {};
+  const lock = acquireTurn(sessionIdOf(input));
+  try { deferredWork(event, input); } catch { /* 뒤 작업 실패는 세션과 무관 */ }
+  finally { if (lock) { try { unlinkSync(lock); } catch { /* */ } } }
 }
 
 // 이벤트별 처리 → Cursor 에 낼 출력 객체(stdout 쓰기는 main 이 한 번만).

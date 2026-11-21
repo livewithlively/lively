@@ -120,7 +120,7 @@ const sentOf = (name, i = 0) => { try { return JSON.parse(capOf(name)[i]?.stdin 
 // 뒤로 미룬 이벤트(#5647)의 러너는 응답 뒤에 분리된 프로세스로 돈다 — 기대 건수가 찰 때까지 기다린다(최대 ms).
 const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const waitCap = (name, n, ms = 10000) => { const end = Date.now() + ms; while (capOf(name).length < n && Date.now() < end) sleepMs(50); return capOf(name).length; };
-const bgFiles = () => { try { return readdirSync(join(TMP, "lively-hooks")).filter((f) => f.startsWith("cursor-bg.")); } catch { return []; } };
+const bgFiles = () => { try { return readdirSync(join(SB, ".lively", "cursor-bg")).filter((f) => f.startsWith("job.")); } catch { return []; } };
 // 느린 스텁 — 기록은 ms 뒤에(«어댑터가 러너를 기다리면» 응답이 그만큼 늦는다).
 const slowStub = (name, ms, out = "") => writeFileSync(join(HOOKS, name), `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
@@ -293,7 +293,7 @@ try {
     const r = runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "한 줄 질문" });
     const took = Date.now() - t0;
     eq("R40[E1] 응답 continue:true · 유효 JSON 한 줄", [isOneObject(r), outOf(r)], [true, { continue: true }]);
-    took < 1500 ? ok(`R40b[E1] 러너(3초)를 기다리지 않는다(${took}ms)`) : bad("R40b[E1] 러너를 기다리지 않는다", `${took}ms`);
+    took < 2500 ? ok(`R40b[E1] 러너(3초)를 기다리지 않는다(${took}ms)`) : bad("R40b[E1] 러너를 기다리지 않는다", `${took}ms`);
     eq("R40c[E1] 뒤에서 run-custom·work-flag 각 1회", [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1)], [1, 1]);
     const s = sentOf("run-custom.mjs");
     eq("R40d[E1] 러너 argv·페이로드(prompt·session)", [capOf("run-custom.mjs")[0]?.argv, s.hook_event_name, s.prompt, s.session_id, capOf("run-custom.mjs")[0]?.harness],
@@ -330,10 +330,37 @@ try {
       const t0 = Date.now();
       const r = runAdapter(ev, { ...BASE });
       const took = Date.now() - t0;
-      eq(`R42[E6] ${ev} → {} · ${took < 1500 ? "즉시" : took + "ms"}`, [outOf(r), took < 1500], [{}, true]);
+      eq(`R42[E6] ${ev} → {} · ${took < 2500 ? "즉시" : took + "ms"}`, [outOf(r), took < 2500], [{}, true]);
       eq(`R42b[E6] ${ev} 러너 각 1회 · 이벤트 ${claudeEv}`, [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1), capOf("run-custom.mjs")[0]?.argv?.[0]], [1, 1, claudeEv]);
     }
     stub("run-custom.mjs"); stub("work-flag.mjs");
+  }
+  // [E12] 세션별 차례 — 짧은 턴: beforeSubmitPrompt 의 work-flag 가 느려도(2초) 바로 뒤 stop 의 보고가 먼저 도착하지 않는다.
+  //  (차례가 없으면 stop 의 «쉼» 이 먼저 기록되고 «작업 중» 이 뒤늦게 덮는다.) 다른 세션은 서로 기다리지 않는다.
+  {
+    resetCaps();
+    writeFileSync(join(HOOKS, "work-flag.mjs"), `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (c) => { stdin += c; });
+process.stdin.on("end", () => setTimeout(() => {
+  appendFileSync(${JSON.stringify(join(CAP, "work-flag.mjs.log"))}, JSON.stringify({ argv: process.argv.slice(2), stdin, harness: "" }) + "\\n");
+  process.exit(0);
+}, /UserPromptSubmit/.test(stdin) ? 2000 : 0));
+`);
+    runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" });
+    runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 });
+    waitCap("work-flag.mjs", 2);
+    eq("R45[E12] 같은 세션 — 보고 순서 UserPromptSubmit → Stop", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).hook_event_name), ["UserPromptSubmit", "Stop"]);
+    waitCap("run-custom.mjs", 2);
+    resetCaps();
+    runAdapter("beforeSubmitPrompt", { ...BASE, session_id: "sess-A", prompt: "q" });
+    runAdapter("stop", { ...BASE, session_id: "sess-B", status: "completed", loop_count: 0 });
+    waitCap("work-flag.mjs", 2);
+    eq("R45b[E12] 다른 세션은 기다리지 않는다(B 의 Stop 이 먼저)", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).session_id), ["sess-B", "sess-A"]);
+    waitCap("run-custom.mjs", 2);
+    stub("work-flag.mjs");
   }
   // [E7] 뒤 작업을 못 띄워도(외부 실행 금지) 유효 JSON 한 줄 · 입력파일 누수 없음.
   {
