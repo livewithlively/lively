@@ -187,11 +187,13 @@ $("gw-fix-go").addEventListener("click", async () => {
   const r = await window.lively.setGateway($("gw-fix").value.trim());
   if (!r?.ok && r?.error) { $("gw-fix-err").textContent = r.error; log("✗ " + r.error); }
 });
-// ★ 클라우드 로그인(#2044·#5430) — 주소를 묻지 않는다. 앱 창에 라이블리 계정 로그인 화면을 싣는다.
-//  셀프호스팅 갈래(아래 gw-go)와 같은 카드에 나란히 있다(#5520 — 클라우드로 직행하면 주소 입력 입구가 사라졌다).
+// ★ 클라우드 로그인(#2044) — 주소를 묻지 않는다. 브라우저 승인 한 번으로 워크스페이스·자격이 오고,
+//  같은 흐름이 이 PC 에 CLI·키트(하네스 배선)·노드까지 깐다(onboardCloud).
+//  ⚠ 이 버튼을 앱 안 계정 로그인(웹 화면만)으로 바꾸면 클라우드 사용자의 PC 에 아무것도 안 깔린다 —
+//   0.1.414~0.1.423 실측(#5650). 앱 안 워크스페이스 전환(#5430)은 이 버튼이 아니라 전환 경로가 맡는다.
 $("cloud-go").addEventListener("click", async () => {
   $("start-err").textContent = "";
-  const r = await window.lively.accountLogin();
+  const r = await window.lively.run("setup-cloud");
   if (r?.error) { $("start-err").textContent = r.error; log("✗ " + r.error); }
 });
 $("gw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gw-go").click(); });

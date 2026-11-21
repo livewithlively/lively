@@ -899,19 +899,10 @@ async function pollPersonFeed(gw, headers, gen) {
 /** 사람이 '창 열기' 를 눌렀을 때 — 갖춰졌으면 라이블리 화면, 아니면 마법사(할 일이 있다). */
 //  ★ 준비 전이면 **마법사의 시작 카드**다(#5520). #5430 이 여기서 곧장 클라우드 계정 로그인 화면을 띄웠더니
 //   시작 카드의 «회사에 직접 설치했어요 — 주소 입력» 갈래가 화면에서 사라져 셀프호스팅 사용자가 로그인할 길이 없어졌다.
-//   클라우드 계정 로그인은 시작 카드의 [라이블리 클라우드로 로그인](openAccountLogin)이 연다 — 두 갈래를 나란히 둔다.
+//   시작 카드의 [라이블리 클라우드로 로그인]은 설치 흐름(setup-cloud → onboardCloud)이다(#5650) — 두 갈래를 나란히 둔다.
 function showMain() {
   if (state.ready) return showApp().ok ? appWin : showWindow();
   return showWindow();
-}
-/** 시작 카드의 클라우드 갈래 — 앱 창에 계정 로그인 화면(cloud /login)을 싣는다. 로그인 뒤 흐름은 #5430 그대로. */
-function openAccountLogin() {
-  let cloud;
-  try { cloud = cloudUrl(); } catch (e) { return { ok: false, error: e.message }; }   // 개발용 덮어쓰기(env)의 형식 오류
-  selectedGatewayUrl = cloud;
-  const r = showApp();
-  if (r.ok && win && !win.isDestroyed()) win.hide();   // 창 두 개를 겹쳐 두지 않는다(마법사는 트레이에서 다시 열린다)
-  return r;
 }
 function showApp() {
   if (!state.ready && selectedGatewayUrl !== cloudUrl()) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
@@ -1642,7 +1633,6 @@ ipcMain.handle(IPC.CHECK_UPDATE, async () => { await checkUpdates(); return { ok
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
 ipcMain.handle(IPC.OPEN_APP, () => showApp());
-ipcMain.handle(IPC.ACCOUNT_LOGIN, () => openAccountLogin());
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // ── 웹 UI 창 채널(IPC_WEB) — 원격 페이지 쪽 다리. 보내는 프레임이 **게이트웨이 출처**일 때만 답한다(다른 사이트가 이 창에
 //  실렸다면 토큰도, 로그아웃도 주지 않는다). preload/web.cjs 도 출처를 한 번 더 본다(양쪽 방어).
