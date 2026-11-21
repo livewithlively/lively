@@ -38,6 +38,8 @@ import type express from "express";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionGone } from "./terminal-sessions.js";
+import { sessionVisible } from "./write-cap.js";
+import { hiddenProjects } from "../v6/visibility.js";
 import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession, nodeSessionMapFor } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession, nodeSessionHarness } from "../node/registry.js";
@@ -57,7 +59,12 @@ import { readNodeTranscript } from "./node-chat-transcript.js";
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
-// 세션에 붙을 수 있나(라이브) 또는 죽었어도 그 기록을 볼 수 있나(restorable 규칙). 못 보면 throw.
+// 세션에 붙을 수 있나(라이브) 또는 죽었어도 그 기록을 볼 수 있나. 못 보면 throw.
+//  ★ #5598(2026-11-22) — 대화는 **세션을 볼 수 있는 사람만** 읽는다(#1876: 주인 · 초대받은 사람, 관리자 예외 없음).
+//   종전엔 «주인 · 관리자 · 프로젝트에 묶인 세션(project_id>0)» 이면 통과했다 — #1876 이전(#452 공동 세션) 규칙이 이 한 곳에 남아,
+//   세션 화면은 막히는데 이 주소로는 초대받지 않은 구성원이 프로젝트 세션의 대화 전체를, 관리자는 모든 세션의 대화를 읽었다
+//   (세션 id 는 태스크 상세의 sessions 에 그대로 나온다). 그 프로젝트가 나에게 감춰져 있어도 통과했다.
+//   죽은 세션도 같은 자(sessionVisible — 목록 · 입장과 한 벌)로 잰다. 관리자는 메타(이름 · 상태)와 멈추기 · 회수만 한다.
 async function gateRead(id: string, req: express.Request, allowRemoteNode = false): Promise<string | null> {
   const u = userOf(req); const uid = idOf(u);
   if (!uid) throw new HttpError(403, "사용자 신원이 없습니다");
@@ -76,9 +83,19 @@ async function gateRead(id: string, req: express.Request, allowRemoteNode = fals
   }
   if (await canAttach(id, uid)) return null;
   const st = await getSessionState(id);
-  const mine = !!st && (st.owner === uid || !!u.scopes?.includes("admin"));
-  if (st && (mine || (st.project_id ?? 0) > 0)) return null;
+  if (st && await deadSessionReadable(st, uid)) return null;
   throw new HttpError(403, "세션에 접근할 수 없습니다");
+}
+
+/** (#5598) 끝난 세션의 대화를 이 사람이 읽어도 되나 — 목록 · 입장과 같은 술어. 감춘 프로젝트 판정을 못 하면 초대자에겐 닫는다(sessionVisible 머리말). */
+export async function deadSessionReadable(
+  st: { owner?: string | null; invites?: string[] | null; dir?: string | null; project_id?: number | null },
+  uid: string,
+): Promise<boolean> {
+  if (!uid) return false;
+  if (st.owner === uid) return true;
+  const hidden = await hiddenProjects(uid).catch(() => undefined);
+  return sessionVisible({ owner: st.owner, invites: st.invites, dir: st.dir, projectId: st.project_id }, uid, hidden);
 }
 
 // #2116 — 지금 이 세션을 보고 있는 사람(얼굴 줄). **열람 도장(/seen)의 응답에 얹어** 돌려준다:

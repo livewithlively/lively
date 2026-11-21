@@ -18,11 +18,11 @@ const okBody = (r: DeadSessionMetaResult): DeadSessionMeta => {
   return r.body;
 };
 const ID = "box-yoon-1a2b3c4d";
-// #2116 — 실제 게이트가 쓰는 술어(isProjectSessionDir)와 **같은 뜻**의 흉내: 공유루트의 project/ 아래인가.
-//  여기서 규약을 흉내 내는 이유는 이 모듈이 fs 를 몰라야 하기 때문이다(판정은 호출자가 주입한다).
+// #5598 — 실제 게이트가 쓰는 술어(sessionVisible)와 **같은 뜻**의 흉내: 이 뷰어(yoon)가 초대받았나.
+//  (감춘 프로젝트 판정은 sessionVisible 자신의 시험이 지킨다 — 이 모듈은 판정을 주입받기만 한다.)
 const SHARED = "/srv/workspace/project/1719";                 // 프로젝트 폴더 세션
 const PERSONAL = "/srv/box/jang/sessions/box-jang-8ee2bf2d";  // 개인 세션 홈(#2116 의 그 세션)
-const shared = (dir: string): boolean => dir.startsWith("/srv/workspace/project/");
+const shared = (s: DeadSessionStateLike): boolean => s.owner === "yoon" || (s.invites || []).includes("yoon");
 
 test("①⑦ 내 세션 — 되살릴 수 있다고 말한다(개인·프로젝트 둘 다)", () => {
   const solo = okBody(deadSessionMeta(ID, st(), "yoon", false, shared));
@@ -36,13 +36,17 @@ test("①⑦ 내 세션 — 되살릴 수 있다고 말한다(개인·프로젝�
   assert.equal(inProj.projectId, 1719);
 });
 
-test("②⑤ 남의 프로젝트 세션 — 보이되 복원은 소유자 몫(#452 공동 세션)", () => {
-  const b = okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1719, dir: SHARED }), "yoon", false, shared));
+test("★②⑤ 남의 프로젝트 세션 — 초대받지 않았으면 존재조차 알리지 않는다(#5598 · #1876 — #452 공동 세션 폐기)", () => {
+  assert.equal(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1719, dir: SHARED }), "yoon", false, shared).kind, "forbidden",
+    "🔴 프로젝트 폴더에서 돌았다는 것만으로 이름(첫 지시) · 프로젝트를 내주면 안 된다");
+});
+
+test("②⑤ 초대받은 남의 프로젝트 세션 — 보이되 복원은 소유자 몫", () => {
+  const b = okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1719, dir: SHARED, invites: ["yoon"] }), "yoon", false, shared));
   assert.equal(b.restorable, true);
   assert.equal(b.canRestore, false, "남의 세션은 복원 불가로 알려야 화면이 '소유자만 열기'로 안내한다");
   assert.equal(b.projectId, 1719);
-  // ⚠ 경계는 이제 project_id 가 아니라 **dir** 이다(#2116) — project_id 는 응답에 실릴 뿐 판정에 안 쓴다.
-  assert.equal(okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1, dir: SHARED }), "yoon", false, shared)).canRestore, false);
+  assert.equal(okBody(deadSessionMeta("box-jang-1a2b3c4d", st({ owner: "jang", project_id: 1, dir: SHARED, invites: ["yoon"] }), "yoon", false, shared)).canRestore, false);
 });
 
 test("③④ 남의 개인 세션 — 존재조차 알리지 않는다(403)", () => {
@@ -181,8 +185,9 @@ test("★#2231 이어진 세션 — 'moved' 로 새 id 를 알린다(되살릴 �
   assert.equal(r.to, NEW);
   // 남의 개인 세션이면 이어진 곳도 알리지 않는다 — 접근 판정이 먼저다.
   assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: PERSONAL, superseded_by: NEW }), "yoon", false, shared).kind, "forbidden");
-  // 남의 **프로젝트** 세션은 종전대로 보이고(#452), 이어진 곳도 함께 보인다.
-  assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, superseded_by: NEW }), "yoon", false, shared).kind, "moved");
+  // 초대받은 남의 프로젝트 세션은 보이고 이어진 곳도 함께 보인다 · 초대받지 않았으면(#5598) 이어진 곳도 알리지 않는다.
+  assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, invites: ["yoon"], superseded_by: NEW }), "yoon", false, shared).kind, "moved");
+  assert.equal(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, superseded_by: NEW }), "yoon", false, shared).kind, "forbidden");
   // 자기 자신을 가리키는 값은 이정표가 아니다(무한고리) — 종전 판정으로 돌아간다.
   assert.equal(okBody(deadSessionMeta(ID, st({ superseded_by: ID }), "yoon", false, shared)).restorable, true);
 });
@@ -233,8 +238,8 @@ test("#4783 죽은 세션 메타가 끝난 사유(endNote — 화면 모양)와 
   assert.equal(b.stopWhy, "done");
   const c = okBody(deadSessionMeta(ID, st({ end_note: { v: 1, at: 9, why: "harness_crash", code: 137 } }), "yoon", false, shared));
   assert.deepEqual(c.endNote, { why: "harness_crash", at: 9, code: 137 });
-  //  남의 프로젝트 세션(보이되 복원은 못 함)에도 같은 사실을 싣는다 — 사유는 사적인 글이 아니다.
-  const other = okBody(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, end_note: { v: 1, at: 9, why: "reclaim" } }), "yoon", false, shared));
+  //  초대받은 남의 프로젝트 세션(보이되 복원은 못 함)에도 같은 사실을 싣는다 — 사유는 사적인 글이 아니다.
+  const other = okBody(deadSessionMeta(ID, st({ owner: "jang", dir: SHARED, invites: ["yoon"], end_note: { v: 1, at: 9, why: "reclaim" } }), "yoon", false, shared));
   assert.equal(other.canRestore, false);
   assert.deepEqual(other.endNote, { why: "reclaim", at: 9 });
 });

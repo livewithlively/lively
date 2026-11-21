@@ -53,8 +53,14 @@ import { type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
+import { sessionVisible } from "./write-cap.js";   // #5598 — 끝난 세션 메타도 목록 · 입장과 같은 자
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
-const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
+// #5598 — 끝난 세션 메타를 소유자 · 관리자 밖의 사람에게 낼지: 목록 · 입장과 같은 자(sessionVisible).
+//  종전 sharedByFolder(«프로젝트 폴더에서 돌았나») 는 초대 없이도 누구에게나 냈다(#452 공동 세션 잔재).
+const viewerSeesFor = async (uid: string): Promise<(st: DeadSessionStateLike) => boolean> => {
+  const hidden = await hiddenProjects(uid).catch(() => undefined);
+  return (st) => sessionVisible({ owner: st.owner, invites: st.invites, dir: st.dir, projectId: st.project_id }, uid, hidden);
+};
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere, listCentralSessions, remoteNodeOfSession } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
@@ -86,7 +92,7 @@ import { cleanLastPrompt } from "./last-prompt.js";
 import { modeFromHeaders, captureMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토는 친 말을 저장하지 않는다
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
-import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
+import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta, type DeadSessionStateLike } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
@@ -977,7 +983,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         return !!alive;
       });
       if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge, ...termFields(alive.harness) }); return; }
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, await viewerSeesFor(uid));
       // #2231 — 이미 이어진 id 다. 되살리라고 하지 말고 **이어진 세션을 알려 준다**(화면이 그리로 옮긴다).
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to, node: nodeBadge }); return; }
       if (dead.kind !== "ok") throw new HttpError(404, SESSION_NOT_FOUND);
@@ -1010,7 +1016,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   (#3688 실측). 자동 경로의 접기는 그대로 두고, 이 자리에서만 «못 봤다» 를 사람에게 말한다.
     const goneVerdict = await sessionGoneVerdict(id);
     if (goneVerdict === null) {
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, await viewerSeesFor(uid));
       //  ⚠ restorable 을 내지 않는다 — 확답이 없으니 «되살릴 수 있어요» 를 약속하지 않는다(unknownStateMeta 머리말).
       //   화면은 stateUnknown 을 보고 «상태를 확인할 수 없어요» + [강제로 되살리기](force=1)를 그린다.
       if (dead.kind === "ok") { res.json(unknownStateMeta(dead.body)); return; }
@@ -1018,7 +1024,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (dead.kind === "forbidden") throw new HttpError(404, SESSION_NOT_FOUND);
       //  kind:"none" — desired-state 가 없어 되살릴 근거 자체가 없다. 종전 흐름(아래)으로 흘려보낸다.
     } else if (goneVerdict === true) {
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, await viewerSeesFor(uid));
       if (dead.kind === "ok") { res.json(dead.body); return; }
       // #2231 — 이 id 는 이미 새 세션으로 이어졌다. '중단된 세션'이라고 말하면 화면이 복원을 약속했다가 404 를 받는다.
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to }); return; }
