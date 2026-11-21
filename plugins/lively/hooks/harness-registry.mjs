@@ -57,8 +57,11 @@ export function isForeignGrokInvocation(argv = process.argv.slice(2), env = proc
 //    것이라 비켜서지 않는다(격리 리뷰: 종전엔 Cursor 훅이 띄운 codex 의 러너까지 꺼졌다). 우리 어댑터가 인자 없이 띄우는 러너
 //    (stop-writeback-gate)는 env LIVELY_HARNESS=cursor 로 온다. ⚠ env 만 보고 «선언됨» 으로 치지 않는다 — 부모에게서 물려받은
 //    LIVELY_HARNESS=claude 가 있으면 사본이 그대로 통과한다.
+//   ⚠ CURSOR_PROJECT_DIR 는 **있기만 하면** 된다 — IDE 는 폴더 없이 연 창에서 빈 값("")을 준다(2.6.13 번들 실측: 작업 폴더가
+//    없으면 ""). 종전엔 빈 값을 «없음» 으로 읽어 그 창에서 compat 사본이 통째로 돌았다 — claude 형 기록 게이트의 block 이
+//    Cursor 의 followup_message(자동 후속 메시지)로 바뀌어 붙고, 조직 훅이 이벤트마다 두 번 돌았다(#5647).
 export function isForeignCursorInvocation(argv = process.argv.slice(2), env = process.env) {
-  if (!env.CURSOR_VERSION || !env.CURSOR_PROJECT_DIR || env.CLAUDECODE) return false;
+  if (!env.CURSOR_VERSION || env.CURSOR_PROJECT_DIR === undefined || env.CLAUDECODE) return false;
   if (Array.isArray(argv) && argv.includes("--harness")) return false;
   return String(env.LIVELY_HARNESS || "").toLowerCase().trim() !== "cursor";
 }

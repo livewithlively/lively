@@ -32,10 +32,11 @@
 
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from "node:fs";
-import { spawnSync as nodeSpawnSync } from "node:child_process";
+import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from "node:child_process";
 
-const spawnSync = (command, args, options) => {
+const hostEffectGate = (command) => {
   const sandboxNode = process.env.LIVELY_HOST_EFFECTS_TEST_MODE === "sandbox"
     && /(?:^|[\\/])node(?:\.exe)?$/i.test(String(command));
   if (process.env.LIVELY_HOST_EFFECTS === "deny" && !sandboxNode) {
@@ -43,8 +44,10 @@ const spawnSync = (command, args, options) => {
     e.code = "LIVELY_HOST_EFFECT_DENIED";
     throw e;
   }
-  return nodeSpawnSync(command, args, options);
 };
+const spawnSync = (command, args, options) => { hostEffectGate(command); return nodeSpawnSync(command, args, options); };
+const spawn = (command, args, options) => { hostEffectGate(command); return nodeSpawn(command, args, options); };
+const SELF = fileURLToPath(import.meta.url);
 
 const HARNESS = "cursor";
 const EVENT = process.argv[2] || "";
@@ -80,14 +83,15 @@ const argsOf = (ti) => asObj(ti) || asObj(typeof ti === "string" ? tryJson(ti) :
 //  이벤트별 합(BUDGET_MS) + stdin 이 hooks.json timeout(user-install CURSOR_HOOK_EVENTS)보다 작아야 Cursor 가 우리를 죽이기
 //  전에 유효 출력으로 끝난다 — cursor-adapter 시험(P5)이 `node cursor-adapter.mjs --budget` 으로 읽어 그 표와 대조한다.
 // T.runner = harness-registry cursor.runnerCapMs — 러너가 이보다 앞서 끝내도록 예산을 잡는다(#5034). 바꾸면 함께 바꾼다.
-const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, gate: 10000, workFlag: 5000, stdin: 2000 };
+const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, workFlag: 5000, stdin: 2000 };
 const BUDGET_MS = {
   sessionStart: T.preload + T.sync + T.runner + T.workFlag,
   beforeSubmitPrompt: T.runner + T.workFlag,
   preToolUse: T.runner,
   beforeMCPExecution: T.runner,
   postToolUse: T.runner + T.workFlag,
-  stop: T.gate + T.runner + T.workFlag,
+  stop: T.runner + T.workFlag,          // 게이트 없음(#5647) — 뒤 작업 상한
+
   sessionEnd: T.runnerEnd + T.workFlag,
   subagentStop: T.runner + T.workFlag,
   preCompact: T.runner + T.workFlag,
@@ -129,7 +133,7 @@ function readStdin(ms = T.stdin) {
 
 // claude 형 러너 페이로드. session_id 는 Cursor 가 주는 session_id(없으면 conversation_id — 번들이 그렇게 채운다),
 //  cwd 는 페이로드 cwd → 워크스페이스 첫 경로 → CURSOR_PROJECT_DIR 순(사용자 훅의 실제 cwd 는 ~/.cursor 라 세션 작업
-//  위치가 아니다 — stop-writeback-gate 의 work-root 판정이 이 값을 쓴다). transcript_path 는 파일이 있을 때만 온다(없으면 null).
+//  위치가 아니다 — 조직 훅의 작업 폴더 판정이 이 값을 쓴다). transcript_path 는 파일이 있을 때만 온다(없으면 null).
 //  ⚠ transcript_path 는 **.jsonl 만** 넘긴다 — 우리가 읽는 형식(harness-io/cursor.ts)은 CLI 가 쓰는 JSONL 뿐이다(번들 실측). 번들의
 //   경로 후보엔 .txt(옛 판)도 있고 IDE 의 형식은 미실측이라, 그런 파일을 기록 수집(기본 켬 — #4927 2026-10-22)이 올리면 서버가
 //   못 읽는 원본만 쌓이고 화면이 빈다. 서버의 보고 경로 판정(locate reportedPathOk)도 .jsonl 만 받는다.
@@ -222,8 +226,71 @@ function toolOf(input) {
   return { tool_name: TOOL_MAP[raw] || raw, tool_input: argsOf(input?.tool_input), cursor_tool_name: raw };
 }
 
+// ── 뒤로 미루는 이벤트(#5647) ─────────────────────────────────────────────
+// Cursor 가 우리 출력을 **쓰지 않는** 이벤트는 먼저 답하고 일은 뒤에서 한다. 사람의 턴이 우리 훅을 기다리기 때문이다.
+//  · beforeSubmitPrompt — IDE(2.6.13 번들 실측)는 응답의 continue·user_message 만 보고 additional_context 는 버린다. 그런데
+//    모델 호출 전에 이 훅을 await 한다 → 조직 훅(프로젝트 붙이기·당겨오기·밀어올리기 …) 시간이 고스란히 «턴마다 지연» 이 됐다
+//    (원준 맥북 실측 4.4~7.5초/턴 — 위시스트 VOC «턴마다 10초»). 맥락은 sessionStart 가 싣는다(IDE 가 받는 자리).
+//  · stop — 응답에서 쓰이는 것은 followup_message 뿐인데, IDE 는 그것을 **사용자 메시지로 자동 제출**한다
+//    (isAutoFollowupFromStopHook — VOC «자동 후속 메시지»). Cursor 에선 기록 게이트(stop-writeback-gate)를 돌리지 않고 늘 {} 로 답한다.
+//  · sessionEnd·subagentStop·preCompact — 출력이 없는 부수효과 전용.
+//  뒤 작업은 분리된 프로세스(detached)라 Cursor 가 훅을 끝내도 산다. 시간 상한은 종전과 같은 러너 타임박스(BUDGET_MS)다.
+//  상태 보고 순서: work-flag 를 먼저 — «작업 중» 이 조직 훅 몇 초 뒤로 밀리면 짧은 턴의 stop(쉼)보다 늦게 도착할 수 있다.
+const DEFERRED = new Set(["beforeSubmitPrompt", "stop", "sessionEnd", "subagentStop", "preCompact"]);
+
+function deferredWork(event, input) {
+  if (event === "beforeSubmitPrompt") {
+    const extra = { prompt: String(input?.prompt || "") };
+    workFlag("UserPromptSubmit", input, extra);
+    runner("UserPromptSubmit", input, extra);
+    return;
+  }
+  if (event === "stop") {
+    // 루프가드 신호는 조직 Stop 훅에 그대로 준다(후속 턴이면 loop_count>0 — 다른 출처의 후속일 수 있다).
+    const extra = { stop_hook_active: Number(input?.loop_count) > 0 };
+    workFlag("Stop", input, extra);
+    runner("Stop", input, extra);
+    return;
+  }
+  if (event === "sessionEnd") {
+    const extra = { reason: String(input?.reason || input?.final_status || "") };
+    workFlag("SessionEnd", input, extra);
+    runner("SessionEnd", input, extra, T.runnerEnd);
+    return;
+  }
+  if (event === "subagentStop" || event === "preCompact") {
+    const ev = event === "subagentStop" ? "SubagentStop" : "PreCompact";
+    workFlag(ev, input, {});
+    runner(ev, input, {});
+  }
+}
+
+// 입력은 임시파일로 넘긴다(프롬프트가 길 수 있어 argv·env 로는 못 싣고, 부모가 곧 끝나므로 파이프 쓰기를 기다릴 수도 없다).
+//  자식이 읽자마자 지운다. 못 띄우면 파일을 지우고 조용히 넘어간다 — 응답(유효 JSON 한 줄)은 이것과 무관하다.
+const bgFile = () => join(FLAG_DIR, `cursor-bg.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.json`);
+function spawnDeferred(event, input) {
+  let f = "";
+  try {
+    mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
+    f = bgFile();
+    writeFileSync(f, JSON.stringify({ input, sessionDir: SESSION_DIR }), { mode: 0o600 });
+    const c = spawn(NODE, [SELF, "--deferred", event, f], { detached: true, stdio: "ignore", windowsHide: true, env: process.env });
+    c.on("error", () => { try { unlinkSync(f); } catch { /* */ } });
+    c.unref();
+  } catch { if (f) { try { unlinkSync(f); } catch { /* */ } } }
+}
+function runDeferred(event, file) {
+  let job = null;
+  try { job = JSON.parse(readFileSync(file, "utf8")); } catch { return; }
+  finally { try { unlinkSync(file); } catch { /* */ } }
+  SESSION_DIR = String(job?.sessionDir || "");
+  try { deferredWork(event, asObj(job?.input) || {}); } catch { /* 뒤 작업 실패는 세션과 무관 */ }
+}
+
 // 이벤트별 처리 → Cursor 에 낼 출력 객체(stdout 쓰기는 main 이 한 번만).
 function handle(input) {
+  if (DEFERRED.has(EVENT)) { spawnDeferred(EVENT, input); return fallbackFor(EVENT); }
+
   if (EVENT === "sessionStart") {
     // 맥락 주입의 정본 자리 — 첫 턴이 이 훅을 기다리고(실측) additional_context 에 클라이언트 상한이 없다.
     //  session-preload(조직 맥락·라이브 현황 + 런타임설정 갱신·자가 업데이트 트리거) · 자산 sync · 조직 SessionStart 훅 ·
@@ -236,14 +303,6 @@ function handle(input) {
     ctx.push(contextOf(workFlag("SessionStart", input, extra)));
     const text = joinCtx(ctx);
     return text ? { additional_context: text } : {};
-  }
-
-  if (EVENT === "beforeSubmitPrompt") {
-    // 턴 시작 — 조직 UserPromptSubmit 훅(관련 지식 소환·프로젝트 AGENTS.md 주입 등)의 컨텍스트를 싣고, work-flag 가
-    //  «작업 중»·방금 친 말을 보고한다. 막지는 않는다(continue:true — org 훅에 프롬프트 차단 계약이 없다).
-    const extra = { prompt: String(input?.prompt || "") };
-    const text = joinCtx([contextOf(runner("UserPromptSubmit", input, extra)), contextOf(workFlag("UserPromptSubmit", input, extra))]);
-    return text ? { continue: true, additional_context: capCtx(text) } : { continue: true };
   }
 
   if (EVENT === "preToolUse") {
@@ -286,37 +345,6 @@ function handle(input) {
     return text ? { additional_context: capCtx(text) } : {};
   }
 
-  if (EVENT === "stop") {
-    // 턴 종료. 상태 보고(쉼)·조직 Stop 훅은 상태와 무관하게, 기록 게이트는 **정상 완료(completed)** 일 때만 —
-    //  중단·오류로 끝난 턴에 «기록하라» 를 덧붙이면 사람이 멈춘 것을 다시 굴린다(claude StopFailure 에 게이트를 안 거는 것과 같다).
-    //  게이트의 {"decision":"block","reason"} 은 Cursor 의 followup_message 로 옮긴다(자동 후속 메시지 — 기록 넛지가 실제로 선다).
-    //  루프가드: 게이트가 <sid>.blocked 로 세션당 1회를 보장하고, 후속 턴이면(loop_count>0) stop_hook_active 로 알린다.
-    const status = String(input?.status || "");
-    const extra = { stop_hook_active: Number(input?.loop_count) > 0 };
-    const gate = status === "completed" ? runScript("stop-writeback-gate.mjs", [], payload("Stop", input, extra), T.gate) : "";
-    runner("Stop", input, extra);
-    workFlag("Stop", input, extra);
-    for (const l of String(gate || "").split(/\r?\n/)) {
-      const g = asObj(tryJson(l.trim()));
-      if (g && g.decision === "block" && String(g.reason || "").trim()) return { followup_message: String(g.reason) };
-    }
-    return {};
-  }
-
-  if (EVENT === "sessionEnd") {
-    const extra = { reason: String(input?.reason || input?.final_status || "") };
-    runner("SessionEnd", input, extra, T.runnerEnd);
-    workFlag("SessionEnd", input, extra);
-    return {};
-  }
-
-  if (EVENT === "subagentStop" || EVENT === "preCompact") {
-    const ev = EVENT === "subagentStop" ? "SubagentStop" : "PreCompact";
-    runner(ev, input, {});
-    workFlag(ev, input, {});
-    return {};
-  }
-
   // 모르는 이벤트(hooks.json 이 더 넓게 배선된 경우) — 아무것도 막지 않는 빈 객체.
   return {};
 }
@@ -349,4 +377,6 @@ async function main() {
 
 // `--budget` 은 Cursor 이벤트가 아니다 — 시험이 시간 예산 표를 읽는 입구(위 «시간 상한»).
 if (EVENT === "--budget") process.stdout.write(JSON.stringify({ stdinMs: T.stdin, events: BUDGET_MS }) + "\n");
+// `--deferred <이벤트> <입력파일>` — spawnDeferred 가 띄운 뒤 작업(위 «뒤로 미루는 이벤트»). stdout 은 아무도 안 읽는다.
+else if (EVENT === "--deferred") runDeferred(process.argv[3] || "", process.argv[4] || "");
 else main().catch(() => emitAndExit(fallbackFor(EVENT)));   // 최후 방어 — main 이 죽어도 유효 JSON 한 줄(권한 단계 차단 방지)
