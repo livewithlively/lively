@@ -16,7 +16,8 @@
 // ── 신원(이슈 «정할 것» 1) ────────────────────────────────────────────────────────────────
 //  (a) 사람이 쓴 글 · 태그 · 버튼 — 그 슬랙 사람을 구성원으로 찾아 그 사람으로 돈다: ① 구성원 신원(person_identity system=slack · 확인된 것)
 //   ② 그 사람이 [외부 앱 연결 ▸ Slack] 으로 연결한 계정(금고 slack_oauth 의 slack_user_id) ③ 슬랙 이메일(users.info — 봇에 users:read.email) = 구성원 이메일.
-//   못 찾거나 · 그 사람이 앱에 동의하지 않았으면 작업을 시작하지 않는다. 봇을 직접 부른 것(태그 · DM · 버튼)이면 그 사람에게만 보이는 안내를 스레드에 단다.
+//   못 찾거나 · 그 사람이 앱에 동의하지 않았거나 · 동의가 앱의 지금 선언을 덮지 못하면(#1644 예전 범위) 작업을 시작하지 않는다.
+//   봇을 직접 부른 것(태그 · DM · 버튼)이면 그 사람에게만 보이는 안내를 스레드에 단다.
 //  (b) 워크플로 · 봇 글 — 다리의 run_as 구성원으로 돌린다. 그 작업은 «자동화» 표시를 단다(정할 것 2 — 구독은 못 쓰고 워크스페이스 API 키만).
 import os from "node:os";
 import crypto from "node:crypto";
@@ -28,7 +29,6 @@ import type { LivelyUser } from "../../context.js";
 import { currentTenant, withTenant, type TenantContext } from "../tenant-context.js";
 import { getMember } from "../store/members.js";
 import { getApp, getActiveGrant } from "../store/apps.js";
-import { getOrgProfile } from "../store/profile.js";
 import { workspaceAccessAllowed } from "../tenancy/gate.js";
 import { canSeeApp } from "../../apps/visibility.js";
 import { getMemberSecret } from "../credentials/member-secret-store.js";
@@ -523,14 +523,34 @@ async function runnable(appId: string, memberId: string): Promise<{ reason: stri
   if (!(await getActiveGrant(appId, m.id))) {
     return {
       reason: `구성원 '${memberId}' 이 앱에 동의하지 않았습니다`,
-      notice: async () => {
-        const base = (await getOrgProfile().catch(() => null))?.gateway_url?.replace(/\/+$/, "") ?? "";
-        const link = base ? ` ${base}/ui/#/app-grant/${encodeURIComponent(appId)}?v=pub` : "";
-        return `「${app.title || appId}」 앱을 아직 동의하지 않았어요 — 라이블리에서 앱을 한 번 열어 동의한 뒤 다시 해 주세요.${link}`;
-      },
+      notice: async () => `「${app.title || appId}」 앱을 아직 동의하지 않았어요 — 라이블리에서 앱을 한 번 열어 동의한 뒤 다시 해 주세요.${await grantLink(appId, "pub")}`,
+    };
+  }
+  //  #1644 — 동의가 앱의 지금 선언 전체를 덮나(앱 선언 MCP 도구와 같은 판정). 앱이 동의한 뒤에 권한을 넓혔으면 그 사람의 예전 동의로 도는 앱 코드 ·
+  //   작업 AI 는 새로 얻은 권한에서 막히거나 새 기능만 조용히 빠진다 — 앱 코드가 무엇을 부를지 미리 알 수 없으니 작업을 시작하지 않고 다시 동의를 안내한다.
+  //   구성원에게 없는 scope 는 세지 않는다(다시 동의해도 못 얻는다). 판은 그 사람이 보는 판(작업도 그 판으로 돈다 — startAppJob).
+  //   판정을 읽지 못하면 종전대로 시작한다 — 안내를 위한 판정이고 권한의 경계는 작업의 토큰(그 사람 ∩ 동의)이 그대로 지킨다.
+  const { consentCoverage } = await import("../../apps/app-consent-gap.js");
+  const { describeGrantGap, grantGapEmpty } = await import("../../apps/grant.js");
+  const cov = await consentCoverage(appId, m.id, { installed: app }).catch((e: unknown) => {
+    logger.warn({ app: appId, member: m.id, err: shortError(e) }, "[slack-bridge] 동의 덮음 판정을 읽지 못했다 — 종전대로 시작한다(#1644)");
+    return null;
+  });
+  if (cov && !grantGapEmpty(cov.gap)) {
+    return {
+      reason: `구성원 '${memberId}' 의 앱 동의가 예전 범위입니다(동의에 없는 것: ${describeGrantGap(cov.gap)})`,
+      notice: async () => `「${app.title || appId}」 앱의 사용 동의가 예전 범위예요(앱이 지금 쓰는 권한을 다 덮지 못해요) — 라이블리에서 다시 동의한 뒤 다시 해 주세요.${await grantLink(appId, cov.variant)}`,
     };
   }
   return null;
+}
+
+/** 안내에 붙일 동의 자리 링크(앞에 빈칸 하나) — 공개 주소(org 프로필 gateway_url > PUBLIC_URL)를 모르면 빈 글. 동의 뒤 화면이 그 앱 주소로 돌아간다(from 없음). */
+async function grantLink(appId: string, variant: "pub" | "draft"): Promise<string> {
+  const { gatewayUrl } = await import("../../gateway-url.js");
+  const { appConsentUrl } = await import("../../apps/app-mcp-decl.js");
+  const url = appConsentUrl(await gatewayUrl().catch(() => null), appId, variant, null);
+  return url ? ` ${url}` : "";
 }
 
 // ── 슬랙에 남기기(안내 · 반응) ─────────────────────────────────────────────────────────────

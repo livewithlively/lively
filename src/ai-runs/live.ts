@@ -171,6 +171,12 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobAutomation(user.appJobId);
       return false;
     },
+    //  #1644 — 작업 컨테이너 실행을 띄우기 전, 그 사람의 동의가 앱의 지금 선언 전체를 덮나(판은 부른 주소의 판 · 아니면 그 사람이 보는 판).
+    //   판정을 읽지 못하면 종전대로 접수한다(null) — 안내를 위한 판정이고, 권한의 경계는 작업 토큰(그 사람 ∩ 동의)이 그대로 지킨다.
+    consentGap: async (user, appId, member) => (await import("../apps/app-consent-gap.js")).launchConsentGap(user, appId, member).catch((e: unknown) => {
+      logger.warn({ app: appId, member, err: (e as Error)?.message ?? String(e) }, "[ai-run] 동의 덮음 판정을 읽지 못했다 — 종전대로 접수한다(#1644)");
+      return null;
+    }),
   };
   return cached;
 }
