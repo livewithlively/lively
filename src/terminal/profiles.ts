@@ -360,6 +360,9 @@ const HARNESS_CRED: Record<string, string> = {
 //  /api/ui/me/welcome 이 폴링하는 자리라 파일 표만 쓰고, 프로브는 사람이 «로그인했어요» 를 누른 그 순간에만 돈다.
 const HARNESS_PROBE: Record<string, string[]> = {
   antigravity: ["models"],
+  // Cursor 2026.11.19: `agent status` 는 로그아웃 상태에도 exit 0 이다.
+  // JSON 의 isAuthenticated 가 true 인 경우에만 성공으로 판정한다.
+  cursor: ["status", "--format", "json", "|", "grep", "-Eq", "'\"isAuthenticated\"[[:space:]]*:[[:space:]]*true'"],
 };
 const PROBE_TIMEOUT_MS = 25_000;   // 네트워크 왕복(실측 4.3초)의 여유배 — 넘으면 '미로그인'이 아니라 **모름**이다
 

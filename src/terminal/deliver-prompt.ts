@@ -293,7 +293,12 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
       //  ⚠ opencode 는 **비동기 준비**가 필요한 유일한 하네스다(서버 기동 → 세션 생성 → SSE).
       //   그래서 문이 따로다 — 여기서 갈라야 그 세 단계가 실제로 돈다.
       let r: { convId: string };
-      if (harnessKey === "grok") {
+      if (harnessKey === "cursor") {
+        const { ensureCursorChat, sendCursorChat } = await import("./harness-io/claude-chat-runtime.js");
+        const e = await ensureCursorChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null, model: localState?.flags?.["--model"] });
+        if (!sendCursorChat(e, text)) throw new ClaudeChatUnavailable("cursor 에 말을 걸지 못했습니다");
+        r = { convId: e.convId };
+      } else if (harnessKey === "grok") {
         //  ACP — 핸드셰이크(initialize→session/new)가 먼저다. 세션 id 없이 보내면 -32602 가 돌아온다.
         const { ensureGrokChat, sendGrokChat } = await import("./harness-io/claude-chat-runtime.js");
         const e = await ensureGrokChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null });
@@ -302,7 +307,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
       } else if (harnessKey === "antigravity") {
         //  턴마다 프로세스 — 파이프가 계속 사는 게 아니라 이 호출이 한 턴을 돌린다.
         const { ensureAntigravityChat } = await import("./harness-io/claude-chat-runtime.js");
-        const e = ensureAntigravityChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null });
+        const e = await ensureAntigravityChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null });
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("antigravity 턴을 시작하지 못했습니다");
         r = { convId: e.convId };
       } else if (harnessKey === "opencode") {

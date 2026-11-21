@@ -30,7 +30,7 @@ export const sessIcon = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', clas
 export const whenMs = (ms: number): string => (ms ? relTime(new Date(ms).toISOString()) : '');
 const dot = (k: string): HTMLElement => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 
-const HARNESS_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', opencode: 'OpenCode', antigravity: 'Antigravity', shell: '셸' };
+const HARNESS_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', cursor: 'Cursor', grok: 'Grok', opencode: 'OpenCode', antigravity: 'Antigravity', shell: '셸' };
 export const harnessName = (s: Sess): string => {
   const h = String((s.raw && s.raw.harness) || '').toLowerCase();
   return HARNESS_NAME[h] || (h ? h[0].toUpperCase() + h.slice(1) : '');
