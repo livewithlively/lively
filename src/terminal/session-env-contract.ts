@@ -245,6 +245,15 @@ export const SESSION_ENV_GROUPS: readonly SessionEnvGroup[] = [
       "⚠ 하네스 테마 표(catalog.ts HARNESS_THEME)에 env 방식 하네스를 더하면 여기 함께 더한다(시험이 강제).",
   },
   {
+    title: "세션 컨테이너 전용 — 하네스 상태 DB 자리",
+    names: ["CODEX_SQLITE_HOME"],
+    keep: "never",
+    why:
+      "#5648 — 매니지드 세션 컨테이너 안에서만 싣는다(catalog.ts harnessStateEnvArgs · sessions.ts inside). 그 경로는 sudo 를 " +
+      "안 탄다. 셀프호스트 격리(sudo → box-spawn)에는 애초에 싣지 않는다 — 멤버 홈이 로컬 파일시스템이라 SQLite 잠금이 서고, " +
+      "codex 의 SQLite(기억·목표 포함)를 홈에 두는 종전 동작이 맞다.",
+  },
+  {
     title: "비격리 전용 — 보존 금지",
     names: ["CLAUDE_CONFIG_DIR", "LIVELY_TOKEN", "LIVELY_MCP_TOKEN"],
     keep: "never",

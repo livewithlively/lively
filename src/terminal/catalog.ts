@@ -1313,3 +1313,23 @@ export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform
   if (!t || !h?.env) return [];
   return h.env(t).flatMap((kv) => ["-e", kv]);
 }
+
+// ── 하네스 상태 DB 자리 (#5648) ────────────────────────────────────────────────────────────────
+//  매니지드 세션 컨테이너(#2545)는 세션마다 따로 뜨지만 멤버 홈(/home/box_<slug>)은 **모든 세션 컨테이너가 9p 로 같이 붙는**
+//   공유 저장소다. codex(0.157.1 실측)는 `~/.codex` 에 WAL 모드 SQLite(state_5·thread_history_1·logs_2·goals_1·memories_1·queue_1)를
+//   두는데, WAL 은 공유 메모리(-shm mmap)가 프로세스 사이에서 맞아야 성립한다 — 샌드박스가 다른 codex 둘이 같은 파일을 쓰면 그
+//   전제가 깨져 파일이 상한다(2026-11-21 실측: thread_history_1 ptrmap 손상, logs_2 «database disk image is malformed»).
+//  증상: 세션이 종료 규칙(#4690)으로 꺼진 뒤 다시 들어가 지시를 보내면 `codex resume <id>` 가 «thread/resume failed … malformed» 로
+//   죽고, 런처 ②(LAUNCH_STOP_SH)가 **새 대화**로 떨어진다(맥락·보낸 지시 유실). 새 대화마저 죽으면 ③ 안내 + 셸만 남는다.
+//  처방: SQLite 자리(CODEX_SQLITE_HOME)만 컨테이너 안의 휘발 폴더로 옮긴다. 대화 원본(rollout jsonl)·자격·설정은 그대로 홈에 남고,
+//   codex 는 빈 SQLite 에서 rollout 을 읽어 대화를 다시 세운다(같은 손상 홈에서 이 env 만 주고 resume → 이전 대화 복원 실측).
+//   폴더가 없으면 codex 가 만든다(실측). 잃는 것: 그 DB 에만 있는 기억(memories)·목표(goals)의 세션 간 지속 — 대화 복원보다 작다.
+//  ⚠ 세션 컨테이너 밖(셀프호스트·노드)은 로컬 파일시스템이라 SQLite 잠금이 선다 → 종전대로 홈에 둔다(무회귀).
+//  ⚠ 다른 하네스는 이 자리를 안 쓰거나(claude = jsonl) 실측이 없다 — 얹지 않는다.
+export const CODEX_SQLITE_HOME_IN_CONTAINER = "/tmp/lively-codex-sqlite";
+
+/** 하네스 상태 DB 를 세션 컨테이너 안으로 옮기는 tmux `-e` 인자 (순수). 해당 없으면 빈 배열. */
+export function harnessStateEnvArgs(harnessKey: string, opts: { inSessionContainer: boolean }): string[] {
+  if (harnessKey !== "codex" || !opts.inSessionContainer) return [];
+  return ["-e", `CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME_IN_CONTAINER}`];
+}
