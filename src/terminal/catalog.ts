@@ -1344,10 +1344,18 @@ export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform
 //   폴더가 없으면 codex 가 만든다(실측). 잃는 것: 그 DB 에만 있는 기억(memories)·목표(goals)의 세션 간 지속 — 대화 복원보다 작다.
 //  ⚠ 세션 컨테이너 밖(셀프호스트·노드)은 로컬 파일시스템이라 SQLite 잠금이 선다 → 종전대로 홈에 둔다(무회귀).
 //  ⚠ 다른 하네스는 이 자리를 안 쓰거나(claude = jsonl) 실측이 없다 — 얹지 않는다.
+//  ⚠ 남은 자리: 훅 신뢰 1회 조회(codex-hook-trust-apply.ts — 몇 초 도는 app-server)는 CODEX_HOME 만 준다. 짧고 드물어 이번엔 두었다.
 export const CODEX_SQLITE_HOME_IN_CONTAINER = "/tmp/lively-codex-sqlite";
 
-/** 하네스 상태 DB 를 세션 컨테이너 안으로 옮기는 tmux `-e` 인자 (순수). 해당 없으면 빈 배열. */
+/** 하네스 상태 DB 를 세션 컨테이너 안으로 옮기는 env (순수, 단일 출처). 해당 없으면 빈 객체.
+ *  두 실행 통로가 쓴다 — tmux pane(아래 harnessStateEnvArgs · sessions.ts)과 매니지드 app-server 의 컨테이너 exec
+ *  (codex-chat-runtime.ts managedAppServerEnv — 그 exec 은 pane 의 자식이 아니라 tmux `-e` 가 안 닿는다). */
+export function harnessStateEnv(harnessKey: string, opts: { inSessionContainer: boolean }): Record<string, string> {
+  if (harnessKey !== "codex" || !opts.inSessionContainer) return {};
+  return { CODEX_SQLITE_HOME: CODEX_SQLITE_HOME_IN_CONTAINER };
+}
+
+/** 위 env 를 tmux `-e` 인자로 (순수). 해당 없으면 빈 배열. */
 export function harnessStateEnvArgs(harnessKey: string, opts: { inSessionContainer: boolean }): string[] {
-  if (harnessKey !== "codex" || !opts.inSessionContainer) return [];
-  return ["-e", `CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME_IN_CONTAINER}`];
+  return Object.entries(harnessStateEnv(harnessKey, opts)).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
 }

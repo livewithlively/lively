@@ -24,6 +24,7 @@ import { memberShOut, memberSpawnArgv, memberWriteFile } from "../terminal-membe
 import { MEMBER_HOME_BASE } from "../terminal-transcript.js";
 import { SUPERVISOR_JS, sessionSockName, supervisorStartSh } from "./codex-as-supervisor.js";
 import { sessionExecConfigured, sessionSpawnArgv } from "../session-exec.js";   // 프로세스는 세션 경계
+import { harnessStateEnv } from "../catalog.js";   // #5648 — 컨테이너 안 SQLite 자리(단일 출처)
 import type { ChatLine } from "./chat-line.js";
 import { logger } from "../../log.js";
 import { codexAppServerEvent } from "./codex-stream.js";              // #2439 — 하네스 무관 어휘로도 흘린다
@@ -285,7 +286,7 @@ async function connect(o: CodexChatOpts): Promise<AppServerTransport> {
   //  다리는 게이트웨이가 죽으면 같이 죽지만 **서버는 남는다** — 그게 이 구조의 요점이다.
   if (sessionExecConfigured()) {
     const log = `$HOME/.codex/lively-app-server-${o.sessionId}.log`;
-    const out = await sessionSh(o.sessionId, detachedStartSh(port, log, sessionEnv(o.sessionId))).catch((e: unknown) => {
+    const out = await sessionSh(o.sessionId, detachedStartSh(port, log, managedAppServerEnv(o.sessionId))).catch((e: unknown) => {
       throw new CodexChatUnavailable(`세션 컨테이너에서 codex app-server 를 띄우지 못했습니다 — ${msg(e)}`, e);
     });
     if (!/started|already/.test(String(out ?? ""))) throw new CodexChatUnavailable(`codex app-server 기동 신호가 없습니다 — ${String(out ?? "").slice(0, 120)}`);
@@ -620,6 +621,16 @@ export function dropAllCodexChats(): void {
  */
 export function sessionEnv(sessionId: string): Record<string, string> {
   return { LIVELY_SESSION_ID: sessionId, LIVELY_HARNESS: "codex" };
+}
+
+/**
+ * 매니지드(세션 컨테이너) app-server 에 실을 env — 세션 신원 + **컨테이너 안 SQLite 자리**(#5648).
+ *  멤버 홈(~/.codex)은 세션 컨테이너들이 9p 로 같이 붙는 공유 저장소라, 거기 둔 codex 의 WAL SQLite 는 다른 컨테이너의
+ *  codex 와 동시에 쓰이면 깨진다(근거·실측은 catalog.ts harnessStateEnv). pane 은 tmux `-e` 로 받지만 이 서버는
+ *  sessionSh 로 따로 뜨는 exec 이라 여기서 따로 싣는다. 격리·로컬 분기(sessionEnv 그대로)는 로컬 파일시스템이라 무변경.
+ */
+export function managedAppServerEnv(sessionId: string): Record<string, string> {
+  return { ...sessionEnv(sessionId), ...harnessStateEnv("codex", { inSessionContainer: true }) };
 }
 
 /** (순수) 스레드 id → 대화 파일을 찾는 셸 한 줄. 파일명에 **시각**이 들어가 규약으로 못 만들고, 날짜 폴더도 갈린다. */
