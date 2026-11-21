@@ -284,6 +284,9 @@ const answer = (data, source = parent) => [...listeners].forEach((fn) => fn({ or
 const reset = () => { posted.length = 0; opened = []; timers = []; listeners.clear(); };
 const P = "/work/shared/project/12/a.md";
 const SHARED = "https://gw.test/ui/#/f?root=shared&path=" + encodeURIComponent("project/12/a.md");
+//  #5583 — 셸이 못 연 프로젝트 자료는 새 탭이 아니라 **곁칸 웹 칸**에 자료 보기(#/f)를 싣는다(postToPane). 셸이 그것도 400ms 안에
+//   받았다고 하지 않을 때만(구 셸·단독 화면) 새 탭이다.
+const toWeb = () => posted.filter((d) => d.type === "lively:open-in-pane").map((d) => d.url);
 
 t("B1 셸이 열었다고 답하면 — 알림 한 번(판정 실어서), 새 탭 없음, 시간이 지나도 없음", () => {
   reset();
@@ -295,23 +298,38 @@ t("B1 셸이 열었다고 답하면 — 알림 한 번(판정 실어서), 새 �
   tick(10000);
   assert.deepEqual(opened, []);
 });
-t("B2 셸이 못 연다고 답하면 — 곧바로 공유 폴더 뷰어로 한 번", () => {
+t("B2 셸이 못 연다고 답하면 — 곧바로 곁칸 웹 칸에 공유 폴더 뷰어를 한 번(#5583 — 새 탭 아님)", () => {
   reset();
   openPathFromTerminal(P);
   answer({ type: "lively:open-file-in-pane:ok", path: P, handled: false });
-  assert.deepEqual(opened, [SHARED]);
+  assert.deepEqual(toWeb(), [SHARED]);
+  answer({ type: "lively:open-in-pane:ok" });
   tick(10000);
-  assert.deepEqual(opened, [SHARED], "시간이 지나도 두 번 열지 않는다");
+  assert.deepEqual(opened, [], "곁칸이 받았으면 새 탭은 없다");
+  assert.deepEqual(toWeb(), [SHARED], "시간이 지나도 두 번 보내지 않는다");
 });
-t("B3 답이 없으면(구 셸·단독 화면) — 400ms 뒤 한 번 폴백, 그 뒤 늦게 온 «열었다» 는 버린다(리뷰 블로킹 2)", () => {
+t("B2b 셸이 웹 칸 알림도 안 받으면 — 그때만 400ms 뒤 새 탭 한 번", () => {
   reset();
   openPathFromTerminal(P);
+  answer({ type: "lively:open-file-in-pane:ok", path: P, handled: false });
   tick(399);
   assert.deepEqual(opened, []);
   tick(400);
   assert.deepEqual(opened, [SHARED]);
+  tick(10000);
+  assert.deepEqual(opened, [SHARED]);
+});
+t("B3 답이 없으면(구 셸·단독 화면) — 400ms 뒤 한 번 폴백(웹 칸 → 그것도 무응답이면 새 탭), 그 뒤 늦게 온 «열었다» 는 버린다(리뷰 블로킹 2)", () => {
+  reset();
+  openPathFromTerminal(P);
+  tick(399);
+  assert.deepEqual(toWeb(), []);
+  tick(400);
+  assert.deepEqual(toWeb(), [SHARED]);
   answer({ type: "lively:open-file-in-pane:ok", path: P, handled: false });
-  assert.deepEqual(opened, [SHARED], "늦은 답이 폴백을 한 번 더 부르지 않는다");
+  assert.deepEqual(toWeb(), [SHARED], "늦은 답이 폴백을 한 번 더 부르지 않는다");
+  tick(400);
+  assert.deepEqual(opened, [SHARED], "웹 칸도 안 받으면 새 탭 한 번");
   tick(10000);
   assert.equal(listeners.size, 0, "듣기는 결국 걷힌다");
 });
@@ -321,9 +339,9 @@ t("B4 연타(더블클릭) — 답을 기다리는 동안 두 번째는 버린�
   openPathFromTerminal(P);
   assert.equal(posted.length, 1);
   answer({ type: "lively:open-file-in-pane:ok", path: P, handled: false });
-  assert.deepEqual(opened, [SHARED]);
+  assert.deepEqual(toWeb(), [SHARED]);
   openPathFromTerminal(P);
-  assert.equal(posted.length, 2, "끝난 뒤의 클릭은 새 클릭이다");
+  assert.equal(posted.filter((d) => d.type === "lively:open-file-in-pane").length, 2, "끝난 뒤의 클릭은 새 클릭이다");
   tick(10000);
 });
 t("B5 부모가 아닌 프레임의 답은 듣지 않는다 — 폴백이 그대로 돈다", () => {
@@ -331,7 +349,7 @@ t("B5 부모가 아닌 프레임의 답은 듣지 않는다 — 폴백이 그대
   openPathFromTerminal(P);
   answer({ type: "lively:open-file-in-pane:ok", path: P, handled: true }, { postMessage() {} });
   tick(400);
-  assert.deepEqual(opened, [SHARED]);
+  assert.deepEqual(toWeb(), [SHARED]);
   tick(10000);
 });
 t("B7 빈칸 든 상대 경로 — 앞 낱말 붙인 후보를 먼저, 화면의 경로를 맨 끝에 실어 보낸다", () => {
@@ -359,7 +377,7 @@ t("B6 경로가 아닌 것 · 다른 경로의 답 — 아무것도 안 하거�
   openPathFromTerminal(P);
   answer({ type: "lively:open-file-in-pane:ok", path: "/work/shared/project/12/b.md", handled: true });
   tick(400);
-  assert.deepEqual(opened, [SHARED], "다른 경로의 답은 이 클릭의 답이 아니다");
+  assert.deepEqual(toWeb(), [SHARED], "다른 경로의 답은 이 클릭의 답이 아니다");
   tick(10000);
 });
 

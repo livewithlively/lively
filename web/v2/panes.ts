@@ -61,6 +61,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
 import { isAbs, pathOpenPlans, pickTailHit, slash, type PathOpenPlan } from '../lib/path-open.js';
+import { PANE_LINK_EVENT, type UiPaneLink } from '../lib/ui-link.js';   // #5583 대화창의 자료 링크(#/f · #/k/)를 곁칸에서
 import { type Sess, type V2Data } from './views.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { openProjectSharePopover, projAccessTag, setAccessConfig } from '../projects/access-ui.js';   // #5598 문패의 «누가 보나» 꼬리표 · 프로젝트 [공유] 창
@@ -1288,6 +1289,23 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     try { (e.source as Window | null)?.postMessage({ type: 'lively:open-in-pane:ok' }, e.origin); } catch (_) { /* 이미 닫힘 */ }
   };
   window.addEventListener('message', onMsg);
+  //  #5583 대화창(같은 문서 — 터미널은 iframe 이라 위 postMessage)의 **자료 링크**(원준 2026-11-22 «경로로 주는 것 눌렀을 때처럼 곁칸에서»).
+  //   터미널의 두 알림과 같은 일을 한다 — 프로젝트 자료 파일은 [자료] + 뷰어 탭(planPathOpen), 이 곁칸이 못 여는 파일(남의 프로젝트)과
+  //   그 밖의 자료 보기·지식은 웹 칸에 그 화면을. 받으면 handled 를 켠다 — 대화창은 그걸 보고서야 링크의 기본 이동(셸 해시 → 셸 탭 하나 더)을
+  //   막는다. 곁칸이 없는 화면이면 아무도 안 켜서 종전대로 간다. 이 곁칸 안(wrap)에서 올라온 것만 받는다 — 남의 탭 대화창은 그 탭의 곁칸 몫.
+  const onPaneLink = (e: Event): void => {
+    const d = (e as CustomEvent).detail as { link?: UiPaneLink; handled?: boolean } | null;
+    const link = d && d.link;
+    if (!d || d.handled || !link) return;
+    d.handled = true;
+    if (link.kind === 'file') {
+      const m = /^project\/(\d+)\/(.+)$/.exec(link.path);
+      const run = m ? planPathOpen({ path: link.path, target: { kind: 'project', id: Number(m[1]), rel: m[2] } }) : null;
+      if (run) { window.setTimeout(run, 0); return; }
+    }
+    openInWebPart(ctx, link.url); addTab('side', 'web');
+  };
+  wrap.addEventListener(PANE_LINK_EVENT, onPaneLink);
 
   // ── 탭 닫기 · 옮기기 · 고정 · 되살리기 (#3870 «곁칸 탭 관리», 원준 2026-09-30) ──────────────────────
   //  "하나 닫고 하나씩 다 찾으러 다녀야 함 … 사파리나 크롬 탭들 닫거나 열거나 끌거나 드래그하는 거 최대한 참고해서."
