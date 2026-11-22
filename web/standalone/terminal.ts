@@ -297,7 +297,13 @@ export function linkOpenTarget(href: string, here: { href: string; framed: boole
   //  곁칸에 넣을지 새 탭으로 열지는 **부모가 정한다**(앱이면 webview 라 뚫린다, #1829). 터미널은 넘기기만 한다.
   const toPane = (u.origin === h.origin && /\/preview\/[^/]+\//.test(u.pathname))
     || (/(^|\.)claude\.ai$/.test(u.hostname) && /^\/code\/artifact\//.test(u.pathname));
-  return toPane && here.framed ? 'pane' : 'tab';
+  if (toPane && here.framed) return 'pane';
+  // #5699 남의 사이트(http·https)도 **데스크톱 앱에선** 곁칸 웹 칸으로(원준 2026-11-22 «url 누르면 우측 곁칸 웹 브라우저에서»).
+  //  종전엔 window.open → 메인의 openTargetFor 가 'external' → PC 기본 브라우저 새 창이었다. 앱의 웹 칸은 webview 라 남의 사이트가 들어간다.
+  //  브라우저에선 그대로 새 탭이다 — 남의 사이트는 iframe 을 스스로 막고(CSP·X-Frame-Options), 셸이 대신 여는 window.open 은
+  //  사람의 클릭 밖이라 팝업 차단에 걸린다.
+  if (here.framed && here.desktop && u.origin !== h.origin && /^https?:$/.test(u.protocol)) return 'pane';
+  return 'tab';
 }
 
 // 데스크톱 앱 안인가 — 능력 다리(`livelyDesktop`, desktop/preload/web.cjs)의 유무로만 본다(UA 추측 금지, browser-surface.ts 와 같은 규칙).
@@ -5255,8 +5261,28 @@ function linkAtPoint(host: HTMLElement, clientX: number, clientY: number): strin
   const col = Math.floor((clientX - r.left) / (r.width / term.cols));
   const row = Math.floor((clientY - r.top) / (r.height / term.rows));
   if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
-  const w = readRows(term.buffer.active.viewportY + row);
-  return w ? urlAtCell(w.rows, w.soft, w.at, col, term.cols) : null;
+  const absY = term.buffer.active.viewportY + row;
+  const w = readRows(absY);
+  //  OSC 8 이 먼저 — 하네스가 심은 주소가 정본이다(트래킹 없는 클릭은 xterm 의 OSC 8 제공자가 그 주소를 연다 · 둘이 같은 곳을 열게).
+  return oscLinkAtCell(term, absY, col) || (w ? urlAtCell(w.rows, w.soft, w.at, col, term.cols) : null);
+}
+// 그 칸에 심긴 OSC 8 하이퍼링크의 주소(#5699). 표시 글이 주소가 아닌 링크 — Codex 는 `[라벨](주소)` 를 «라벨» 만 그리고 주소는 OSC 8 로
+//  심는다. 글자로 찾는 판정(urlAtCell)은 그 라벨을 못 알아보고, 그러면 클릭이 pty 로 새어 **Codex 가 제 손으로** 링크를 연다 —
+//  Codex 가 도는 기계의 기본 브라우저(실측 0.171.0: 마우스 트래킹 ?1003h 를 켜고, 라벨·맨 주소 클릭 모두 로컬 탐침 서버에 GET 이 왔다).
+//  xterm 5.5 공개 API 에는 칸의 링크 id 가 없어 내부(_core._oscLinkService)를 읽는다 — 모양이 바뀌면 null(종전 판정만).
+//  열 수 있는 것만 준다: http·https·file. 그 밖의 스킴은 xterm 의 OSC 8 제공자도 막는다.
+export function oscLinkAtCell(t: any, absY: number, col: number): string | null {
+  try {
+    const cell = t.buffer.active.getLine(absY)?.getCell(col);
+    const id = cell && typeof cell.hasExtendedAttrs === 'function' && cell.hasExtendedAttrs() ? cell.extended?.urlId : 0;
+    if (!id) return null;
+    const uri = t._core?._oscLinkService?.getLinkData(id)?.uri;
+    if (typeof uri !== 'string') return null;
+    if (/^https?:\/\//i.test(uri)) return uri;
+    //  file:// 은 곁칸이 열 수 있는 경로일 때만 — 못 여는 것까지 삼키면 TUI 가 받던 클릭이 아무 일 없이 사라진다.
+    if (/^file:\/\//i.test(uri)) { let p = ''; try { p = decodeURIComponent(new URL(uri).pathname); } catch (_) { /* 깨진 주소 */ } return p && pathLinkTarget(p) ? uri : null; }
+    return null;
+  } catch (_) { return null; }
 }
 // 버퍼의 absY 행 둘레(위아래 12행)를 칸 정렬로 편다 — 긴 URL 은 여러 행에 걸친다(이음 규칙은 joinRows 머리말).
 //  클릭 판정(linkAtPoint)과 호버 밑줄(링크 제공자)이 같은 창을 본다.
