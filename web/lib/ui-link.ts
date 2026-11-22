@@ -47,3 +47,17 @@ export function uiPaneLink(href: string, here: string): UiPaneLink | null {
   if (/^k\/[^/]+/.test(seg)) return { kind: 'web', url: u.href };
   return null;
 }
+
+/**
+ * (#5699) 대화창의 **남의 사이트**·미리보기 링크 → 곁칸 웹 칸 후보. 터미널(linkOpenTarget)과 같은 규칙을 대화창에도 —
+ *  원준 2026-11-22 «url 누르면 우측 곁칸 웹 브라우저에서». Codex 대화창(app-server)과 Claude 대화창이 같은 판정을 탄다.
+ *  남의 사이트를 칸에 넣을 수 있나(데스크톱 앱의 webview)는 **곁칸이 정한다**(panes onPaneLink) — 못 넣으면 받지 않아 종전 이동 그대로.
+ *  우리 화면(/ui/)은 여기 몫이 아니다 — 자료는 uiPaneLink, 그 밖은 «옮겨 갈 화면»(종전).
+ */
+export function webPaneLink(href: string, here: string): UiPaneLink | null {
+  let u: URL, h: URL;
+  try { u = new URL(String(href || ''), here); h = new URL(here); } catch (_) { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  if (u.origin !== h.origin) return { kind: 'web', url: u.href };
+  return /\/preview\/[^/]+\//.test(u.pathname) ? { kind: 'web', url: u.href } : null;
+}

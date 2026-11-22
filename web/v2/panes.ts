@@ -1297,6 +1297,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const d = (e as CustomEvent).detail as { link?: UiPaneLink; handled?: boolean } | null;
     const link = d && d.link;
     if (!d || d.handled || !link) return;
+    //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 앱의 webview)만 받는다 — 브라우저 iframe 은 상대가 막아 빈 칸만 남는다.
+    //   안 받으면 대화창이 기본 이동을 그대로 둔다(종전).
+    let cross = false;
+    try { cross = new URL(link.url, location.href).origin !== location.origin; } catch (_) { /* 파싱 실패 — 같은 곳으로 본다 */ }
+    if (cross && !hasBrowserSurface()) return;
     d.handled = true;
     if (link.kind === 'file') {
       const m = /^project\/(\d+)\/(.+)$/.exec(link.path);

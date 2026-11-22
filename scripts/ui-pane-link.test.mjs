@@ -176,11 +176,11 @@ t("T5 우클릭 [링크 열기] 힌트도 같은 판정 — 자료 파일은 뷰
 
 t("W1 대화창 — 목록 링크 맨클릭에서 곁칸에 묻고, 받았을 때만 기본 이동을 막는다", () => {
   const cv = src("web/chat-view.ts");
-  assert.match(cv, /import \{ PANE_LINK_EVENT, uiPaneLink \} from '\.\/lib\/ui-link\.js';/);
+  assert.match(cv, /import \{ PANE_LINK_EVENT, uiPaneLink, webPaneLink \} from '\.\/lib\/ui-link\.js';/);
   const i = cv.indexOf("list.addEventListener('click', (e: MouseEvent) => {\n    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;");
   assert.ok(i > 0, "꾸밈키 클릭은 건드리지 않는다");
   const body = cv.slice(i, i + 700);
-  assert.match(body, /uiPaneLink\(a\.getAttribute\('href'\) \|\| '', location\.href\)/);
+  assert.match(body, /const href = a\.getAttribute\('href'\) \|\| '';\n\s+const link = uiPaneLink\(href, location\.href\) \|\| webPaneLink\(href, location\.href\);/);
   assert.match(body, /a\.dispatchEvent\(new CustomEvent\(PANE_LINK_EVENT, \{ bubbles: true, detail \}\)\);\n\s+if \(detail\.handled\) e\.preventDefault\(\);/);
 });
 t("W2 곁칸 — 자기 wrap 에서 받는다 · 파일은 경로와 같은 길 · 못 열면·그 밖은 웹 칸 · handled 를 켠다", () => {
@@ -188,12 +188,32 @@ t("W2 곁칸 — 자기 wrap 에서 받는다 · 파일은 경로와 같은 길 
   assert.match(pn, /wrap\.addEventListener\(PANE_LINK_EVENT, onPaneLink\);/);
   const i = pn.indexOf("const onPaneLink = (e: Event): void => {");
   assert.ok(i > 0);
-  const body = pn.slice(i, i + 900);
-  assert.match(body, /if \(!d \|\| d\.handled \|\| !link\) return;\n\s+d\.handled = true;/);
+  const body = pn.slice(i, i + 1400);
+  assert.match(body, /if \(!d \|\| d\.handled \|\| !link\) return;/);
+  //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 webview)만 받는다 — handled 를 켜기 **전에** 거른다
+  const gate = body.indexOf("if (cross && !hasBrowserSurface()) return;");
+  assert.ok(gate > 0 && gate < body.indexOf("d.handled = true;"), "못 넣는 남의 사이트는 handled 를 안 켜야 종전 이동이 산다");
   assert.match(body, /planPathOpen\(\{ path: link\.path, target: \{ kind: 'project', id: Number\(m\[1\]\), rel: m\[2\] \} \}\)/);
   assert.match(body, /if \(run\) \{ window\.setTimeout\(run, 0\); return; \}/);
   assert.match(body, /openInWebPart\(ctx, link\.url\); addTab\('side', 'web'\);/);
 });
+// ── #5699 대화창의 남의 사이트·미리보기 링크 → 곁칸 웹 칸 후보(webPaneLink, 정본 web/lib 만 — 터미널은 linkOpenTarget) ──
+{
+  const { webPaneLink } = COPIES.lib;
+  t("X1 남의 사이트 http·https → web(곁칸이 넣을 수 있나는 곁칸이 정한다)", () => {
+    assert.deepEqual(webPaneLink("https://example.com/docs?a=1", SHELL), { kind: "web", url: "https://example.com/docs?a=1" });
+    assert.deepEqual(webPaneLink("http://127.0.0.1:3000/", SHELL), { kind: "web", url: "http://127.0.0.1:3000/" });
+  });
+  t("X2 같은 출처 미리보기 → web · 그 밖 같은 출처(우리 화면 · api)는 null(종전)", () => {
+    assert.deepEqual(webPaneLink("/preview/p1/ui/", SHELL), { kind: "web", url: GW + "/preview/p1/ui/" });
+    assert.equal(webPaneLink("#/projects/12", SHELL), null);
+    assert.equal(webPaneLink(GW + "/api/ui/me", SHELL), null);
+  });
+  t("X3 http(s) 아닌 스킴 · 깨진 주소 → null", () => {
+    for (const h of ["mailto:a@b.c", "javascript:alert(1)", "file:///etc/passwd", "http://["]) assert.equal(webPaneLink(h, SHELL), null, h);
+  });
+}
+
 t("W3 이벤트 이름은 lib 상수 하나 — 대화창·곁칸에 문자열 복제 없음", () => {
   for (const p of ["web/chat-view.ts", "web/v2/panes.ts"]) assert.doesNotMatch(src(p), /'lively:pane-link'/, p);
 });
