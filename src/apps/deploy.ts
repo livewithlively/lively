@@ -98,7 +98,8 @@ const KIND_HANDLERS: Record<string, KindHandler> = {
           params: JSON.stringify({ app_id: appId, app_component_ref: item.comp.ref, job_key: key, route: run.route, body: run.body ?? {}, ...(runAs ? { run_as: runAs } : {}) }),
           interval_sec: 600,
           cron_expr: p.schedule,
-          enabled: prev && prev.action === "app_server_job" ? prev.enabled : true,
+          //  관리자가 끈 것은 끈 채로, 연속 실패로 저절로 멈춘 것(auto_disabled_at)은 다시 켠다 — 새 판이 그 까닭을 고쳤을 수 있다(에이전트 잡의 재설치와 같은 뜻).
+          enabled: prev && prev.action === "app_server_job" ? (prev.enabled || prev.auto_disabled_at != null) : true,
           note: null,
           run_once: false,
           actor: ctx.actor ?? null,

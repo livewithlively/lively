@@ -4,7 +4,7 @@
 //  B3 아무도 없으면 null · app 이 null 이어도 된다
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { runAsOf } from "./app-server-job.js";
+import { installedJobError, runAsOf, serverJobOf } from "./app-server-job.js";
 
 type Args = Parameters<typeof runAsOf>;
 /** 글이 아닌 값도 넣어 보려고 인자 꼴을 풀어 부른다. */
@@ -54,4 +54,36 @@ test("B3 아무도 없으면 null · app 이 null 이어도 된다", () => {
   assert.equal(run({ run_as: "" }, { owner_member: " ", installed_by: null }, { created_by: undefined }), null);
   assert.deepEqual(run({ run_as: "x" }, null, {}), { member: "x", via: "run_as" });
   assert.deepEqual(run({}, null, { created_by: "c" }), { member: "c", via: "creator" });
+});
+
+// ── 앱 설치가 깐 잡만(격리 리뷰 2026-11-22 막을 것) ─────────────────────────
+//  I1 id = app:<앱>:<key> 이고 params.app_component_ref 가 같으면 통과 · I2 구성원이 cron_set 으로 만든 잡(id 가 다름 · 앵커 없음 · 앵커가 다른 앱)은 거절
+//  M1 설치된 판 매니페스트의 server 잡에서 라우트 · 본문을 읽는다 · M2 없는 key · 에이전트 잡 · 라우트 없음 · 매니페스트 없음은 null
+
+test("I1 앱 설치가 깐 잡 — 통과", () => {
+  assert.equal(installedJobError({ id: "app:card-policy:code-sync" }, { app_id: "card-policy", job_key: "code-sync", app_component_ref: "app:card-policy:code-sync" }), null);
+});
+
+test("I2 구성원이 만든 잡 — id · 앵커가 설치 꼴이 아니면 거절", () => {
+  const ok = { app_id: "card-policy", job_key: "code-sync", app_component_ref: "app:card-policy:code-sync" };
+  assert.ok(installedJobError({ id: "x" }, ok), "id 가 다르다(cron_set 은 콜론 id 를 못 만든다)");
+  assert.ok(installedJobError({ id: "app:card-policy:code-sync" }, { ...ok, app_component_ref: undefined }), "앵커 없음");
+  assert.ok(installedJobError({ id: "app:card-policy:code-sync" }, { ...ok, app_id: "other" }), "다른 앱 이름을 적음");
+  assert.ok(installedJobError({ id: "app:card-policy:code-sync" }, { ...ok, job_key: "" }), "key 없음");
+  assert.ok(installedJobError({ id: "app:card-policy:code-sync" }, {}), "params 없음");
+});
+
+test("M1 설치된 판 매니페스트에서 server 잡의 라우트 · 본문", () => {
+  const manifest = { jobs: [{ key: "other", run: { kind: "headless", prompt: "x" } }, { key: "code-sync", schedule: "20 * * * *", run: { kind: "server", route: "/api/jobs/code-sync", body: { trigger: "schedule" } } }] };
+  assert.deepEqual(serverJobOf(manifest, "code-sync"), { route: "/api/jobs/code-sync", body: { trigger: "schedule" } });
+  assert.deepEqual(serverJobOf({ jobs: [{ key: "k", run: { kind: "server", route: "/r" } }] }, "k"), { route: "/r", body: {} });
+});
+
+test("M2 없는 key · 에이전트 잡 · 라우트 없음 · 매니페스트 없음 — null", () => {
+  const manifest = { jobs: [{ key: "agent", run: { kind: "headless", prompt: "x" } }, { key: "noroute", run: { kind: "server" } }] };
+  assert.equal(serverJobOf(manifest, "missing"), null);
+  assert.equal(serverJobOf(manifest, "agent"), null);
+  assert.equal(serverJobOf(manifest, "noroute"), null);
+  assert.equal(serverJobOf(null, "k"), null);
+  assert.equal(serverJobOf({}, "k"), null);
 });

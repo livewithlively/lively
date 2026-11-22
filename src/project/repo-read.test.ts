@@ -13,7 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { isRefName, isRepoPath, remoteKey, repoDiffAt, repoFileAt, repoGrepAt, repoRefsAt, resolveCommit } from "./repo-read.js";
+import { isRefName, isRepoPath, parseGrepZ, remoteKey, repoDiffAt, repoFileAt, repoGrepAt, repoRefsAt, resolveCommit } from "./repo-read.js";
 
 // ───────────────────────── 사양이 적은 돌려받는 꼴 ─────────────────────────
 interface Head { branch: string; commit: string; date: string; subject: string }
@@ -128,6 +128,7 @@ git(cloneDir, ["checkout", "-q", "main"]);
 put(cloneDir, "a.txt", "alpha\nLOCAL_MAIN_AHEAD\n");
 const localMain = commit(cloneDir, "local main ahead", "2026-01-05T01:00:00Z"); // 로컬 main 이 origin/main 보다 앞선다
 const dangling = git(cloneDir, ["commit-tree", `${c3}^{tree}`, "-p", c3, "-m", "dangling"], "2026-01-05T02:00:00Z"); // 어디에도 매이지 않은 커밋
+git(cloneDir, ["tag", "wip-local", local1]); // 세션이 사본에 단 로컬 태그 — 올라가지 않은 커밋을 가리킨다(격리 리뷰 2026-11-22)
 git(cloneDir, ["fetch", "-q", "--tags", "origin"]);
 
 // origin/HEAD 가 develop 을 가리키는 사본 · origin/HEAD 가 없는 사본 · 원격에서 받은 적이 없는 사본
@@ -181,12 +182,18 @@ test("고정물 — 주석 태그 객체는 커밋과 다르고 · 로컬 main �
 });
 
 // ───────────────────────── A1 판 고르기 ─────────────────────────
-test("A1-1 해시 — 원격 브랜치 머리 · 그 조상 · 다른 원격 브랜치 · 태그에서만 닿는 커밋은 읽는다", async () => {
+test("A1-1 해시 — 원격 브랜치 머리 · 그 조상 · 다른 원격 브랜치의 커밋은 읽는다", async () => {
   assert.equal(await resolveCommit(c, c3), c3);
   assert.equal(await resolveCommit(c, c1), c1); // origin/main 의 조상
   assert.equal(await resolveCommit(c, c2), c2);
   assert.equal(await resolveCommit(c, cdev), cdev); // origin/develop
-  assert.equal(await resolveCommit(c, ctag), ctag); // 태그 snap-only 에서만 닿는다
+});
+
+//  사양 A1-1 을 좁힘(격리 리뷰 2026-11-22): 태그만으로는 받지 않는다 — refs/tags 는 세션이 단 로컬 태그와 원격에서 받은 태그를 가를 수 없다.
+test("A1-1b 원격 브랜치에서 닿지 않는 커밋 — 원격 태그에서만 닿아도 · 로컬 태그로 이름을 붙여도 404(해시 · 태그 이름 둘 다)", async () => {
+  await assert.rejects(() => resolveCommit(c, ctag), status(404), "원격 태그에서만 닿는 커밋(해시)");
+  await assert.rejects(() => resolveCommit(c, "snap-only"), status(404), "원격 태그 이름 — 커밋이 원격 브랜치에 없다");
+  await assert.rejects(() => resolveCommit(c, "wip-local"), status(404), "로컬 태그 이름 — 올라가지 않은 커밋");
 });
 
 test("A1-2 원격에 올리지 않은 커밋 — 로컬 브랜치 project/1 · 앞선 로컬 main · 매이지 않은 커밋은 해시로 줘도 404", async () => {
@@ -206,7 +213,6 @@ test("A1-4 이름 — main · origin/main 은 원격 머리(앞선 로컬 main �
   assert.equal(await resolveCommit(c, "v1.0.0"), c1); // 가벼운 태그
   assert.equal(await resolveCommit(c, "v1.1.0"), c2); // 주석 태그 — 태그 객체가 아니라 커밋
   assert.equal(await resolveCommit(c, "rel-late"), c1);
-  assert.equal(await resolveCommit(c, "snap-only"), ctag);
 });
 
 test("A1-5 로컬에만 있는 브랜치 이름 — 404", async () => {
@@ -284,19 +290,18 @@ test("A2-2 그 원격 브랜치가 없으면 head 는 null (로컬에만 있는 
   assert.equal((await refs(ctx(neverFetched, {}))).head, null);
 });
 
-test("A2-3 tags — 주석 태그의 commit 은 벗긴 커밋 · 커밋이 아닌 것을 가리키는 태그는 빠진다 · 최근 만든 것부터", async () => {
+test("A2-3 tags — 주석 태그의 commit 은 벗긴 커밋 · 커밋이 아닌 것 · 원격 브랜치에서 닿지 않는 것(원격 태그만 · 로컬 태그)을 가리키는 태그는 빠진다 · 최근 만든 것부터", async () => {
   const r = await refs(c);
   const names = r.tags.map((t) => t.name);
-  assert.deepEqual(sorted(names), sorted(["rel-late", "snap-only", "v2.0.0", "v1.1.0", "v1.0.0"]));
+  assert.deepEqual(sorted(names), sorted(["rel-late", "v2.0.0", "v1.1.0", "v1.0.0"]));
   const by = new Map(r.tags.map((t) => [t.name, t]));
   assert.equal(by.get("v1.0.0")?.commit, c1);
   assert.equal(by.get("v1.1.0")?.commit, c2);
   assert.notEqual(by.get("v1.1.0")?.commit, v110Obj);
   assert.equal(by.get("v2.0.0")?.commit, c3);
-  assert.equal(by.get("snap-only")?.commit, ctag);
   assert.equal(by.get("rel-late")?.commit, c1);
-  // 커밋 시각과 태그 만든 시각이 같은 차례인 넷 — 어느 쪽으로 읽어도 이 차례
-  assert.deepEqual(names.filter((n) => ["snap-only", "v2.0.0", "v1.1.0", "v1.0.0"].includes(n)), ["snap-only", "v2.0.0", "v1.1.0", "v1.0.0"]);
+  // 커밋 시각과 태그 만든 시각이 같은 차례인 셋 — 어느 쪽으로 읽어도 이 차례
+  assert.deepEqual(names.filter((n) => ["v2.0.0", "v1.1.0", "v1.0.0"].includes(n)), ["v2.0.0", "v1.1.0", "v1.0.0"]);
   for (const t of r.tags) {
     assert.ok("date" in t, `${t.name} 에 date 칸이 없다`);
     assert.ok("tagged_at" in t, `${t.name} 에 tagged_at 칸이 없다`);
@@ -319,7 +324,7 @@ test("A2-4 tags 옵션으로 개수를 자르면 tags_truncated 참", async () =
   assert.equal(one.tags.length, 1);
   assert.equal(one.tags_truncated, true);
   const wide = await refs(c, { tags: 50 });
-  assert.equal(wide.tags.length, 5);
+  assert.equal(wide.tags.length, 4); // 원격 브랜치에서 닿는 태그 넷(rel-late · v2.0.0 · v1.1.0 · v1.0.0 — 사양 A1-1 좁힘)
   assert.equal(wide.tags_truncated, false);
 });
 
@@ -631,4 +636,17 @@ test("A6-3 호스트가 없는 로컬 경로 — 경로 그대로 견준다(같�
 
 test("A6-4 빈 글 → null", () => {
   assert.equal(remoteKey(""), null);
+});
+
+
+// ───────────────────────── 찾기 출력 읽기(격리 리뷰 2026-11-22) ─────────────────────────
+//  git grep -z 의 한 줄은 «판:경로\0줄\0글\n». 경로에 줄바꿈이 들어도 깨지지 않고, 끝이 잘린 마지막 줄(출력 상한)은 버린다.
+test("parseGrepZ — 경로 안 줄바꿈 · 판 머리 떼기 · 잘린 끝 줄 버리기", () => {
+  const sha = "a".repeat(40);
+  const raw = `${sha}:src/a.ts\x0012\x00const x = 1;\n${sha}:odd\nname.txt\x003\x00hit\n${sha}:cut.ts\x009\x00part`;
+  assert.deepEqual(parseGrepZ(raw, sha), [
+    { path: "src/a.ts", line: 12, text: "const x = 1;" },
+    { path: "odd\nname.txt", line: 3, text: "hit" },
+  ]);
+  assert.deepEqual(parseGrepZ("", sha), []);
 });
