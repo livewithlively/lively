@@ -5312,7 +5312,7 @@
   "rest": [
    "POST /api/ui/apps/:id/grant"
   ],
-  "input_hash": "5347532fd52b6c4f"
+  "input_hash": "4d69d99e554ba50f"
  },
  {
   "name": "me_app_revoke",

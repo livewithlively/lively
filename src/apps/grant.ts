@@ -137,10 +137,11 @@ export const OPTIONAL_SCOPE_REQUIRED = "optional_scope_required";
  *  그 낱말을 보고 그 자리에서 동의 창을 띄우는데, 동의 창은 선택 권한을 주지 않아 다시 해도 풀리지 않는다(#1644 — 풀리지 않는 안내를 내지 않는다).
  */
 export function optionalScopeMessage(appId: string, scope: string, tool?: string): string {
-  const tail = "수 없습니다 — 선택 권한은 필요한 사람만 optional_scopes 로 따로 줍니다";
-  const full = `앱 '${appId}' 의 선택 권한 '${scope}' 을 이 사람이 주지 않아 ${tool ? `'${tool}' 을 쓸` : "그 권한이 드는 일을 할"} ${tail}`;
-  //  앱 id · 도구 이름 자체에 그 낱말이 들 수 있다(예: 앱 grants-tracker · 도구 me_app_grant) — 그러면 이름을 빼고 쓴다(scope 이름에는 들지 않는다).
-  return CONSENT_DIALOG_WORDS.test(full) ? `이 앱의 선택 권한 '${scope}' 을 이 사람이 주지 않아 그 일을 할 ${tail}` : full;
+  //  앱 id · 도구 이름 자체에 그 낱말이 들 수 있다(예: 앱 grants-tracker · 도구 me_app_grant) — 걸리는 이름만 빼고 쓴다(scope 이름에는 들지 않는다).
+  const clean = (s: string): boolean => !CONSENT_DIALOG_WORDS.test(s);
+  const app = clean(appId) ? `앱 '${appId}' 의` : "이 앱의";
+  const what = !tool ? "그 권한이 드는 일을 할" : clean(tool) ? `'${tool}' 을 쓸` : "그 도구를 쓸";
+  return `${app} 선택 권한 '${scope}' 을 이 사람이 주지 않아 ${what} 수 없습니다 — 선택 권한은 필요한 사람만 optional_scopes 로 따로 줍니다`;
 }
 /** 웹 호스트가 거절 글에서 «그 자리에서 동의 창» 을 띄우는 낱말(web/v2/app-ui.ts 와 같은 식). */
 const CONSENT_DIALOG_WORDS = /동의|grant/i;
