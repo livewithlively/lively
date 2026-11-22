@@ -59,7 +59,7 @@ const bridgeSetInput = {
   channels: z.array(z.string().max(32)).max(100).optional().describe("넘길 채널 id 목록(C… · G… · D…). 비우면 봇이 들어간 모든 채널. 고르면 앱의 답(slack_bridge_call)도 그 채널과 DM 으로만 나간다"),
   bot_messages: z.boolean().optional().describe("워크플로 · 봇이 쓴 글도 넘기나(기본 false). 켜면 run_as 가 필요하다 — 그 글은 run_as 구성원 이름으로 돈다. 이 봇 자신의 글은 늘 거른다"),
   bot_ids: z.array(z.string().max(32)).max(20).optional().describe("넘길 봇 · 워크플로의 bot_id 목록(B…). 비우면 bot_messages 가 켜졌을 때 채널의 모든 봇 글을 넘긴다 — 정한 워크플로 글만 받으려면 적는다"),
-  run_as: z.string().max(64).nullable().optional().describe("사람이 쓰지 않은 글(워크플로 · 봇)을 돌릴 구성원 id. 그 작업은 자동화로 표시돼 AI 실행에 구독(공용 시트 포함)을 못 쓰고 워크스페이스 API 키만 쓴다. null 이면 지운다"),
+  run_as: z.string().max(64).nullable().optional().describe("사람이 쓰지 않은 글(워크플로 · 봇)을 돌릴 구성원 id. 그 작업은 자동화로 표시돼 AI 실행에 개인 구독은 못 쓰고 공용 시트나 워크스페이스 API 키를 쓴다. null 이면 지운다"),
   react: z.string().max(64).nullable().optional().describe("작업을 시작한 글에 다는 받음 표시(슬랙 이모지 이름 — 예 eyes). 봇에 reactions:write 가 필요하다. null 이면 안 단다"),
   note: z.string().max(500).nullable().optional().describe("메모"),
 };
@@ -112,7 +112,7 @@ const orgSlackBridgeSet: Capability = {
     "토큰 값은 받지 않는다 — app_token_ref(xapp-) · bot_token_ref(xoxb-)는 금고 칸(org_credential_set 으로 넣은 칸)을 가리킨다. " +
     "받은 글 · 태그 · 버튼은 그 슬랙 사람을 구성원으로 찾아(구성원 신원 system=slack · [Slack 연결] 한 계정 · 같은 이메일) 그 사람 이름으로 앱 작업(source slack-bridge)을 시작한다. " +
     "못 찾거나 그 사람이 앱에 동의하지 않았으면 시작하지 않고, 봇을 직접 부른 것(태그 · DM · 버튼)이면 그 사람에게만 보이는 안내를 스레드에 단다. " +
-    "워크플로 · 봇 글(bot_messages · bot_ids)은 run_as 구성원 이름으로 돌고 자동화로 표시된다(AI 실행은 워크스페이스 API 키만). 작업 본문: { kind, bridge, team_id, received_at, actor:{slack_user,member,via}, event_id, event | payload }. " +
+    "워크플로 · 봇 글(bot_messages · bot_ids)은 run_as 구성원 이름으로 돌고 자동화로 표시된다(AI 실행은 공용 시트나 워크스페이스 API 키 — 개인 구독은 못 쓴다). 작업 본문: { kind, bridge, team_id, received_at, actor:{slack_user,member,via}, event_id, event | payload }. " +
     "봇을 태그한 사람의 글은 app_mention 하나로만 넘긴다(같은 글이 두 번 작업이 되지 않게). 전달은 최대 한 번이다 — ack 를 먼저 보내므로 게이트웨이가 넘기던 중에 죽으면 그 이벤트는 다시 오지 않는다. " +
     "한 슬랙 앱에는 다리 하나만 — 슬랙이 같은 앱의 이벤트를 연결 하나에만 준다. 응답의 warnings 는 저장은 됐지만 그대로면 동작하지 않을 것들이다. " +
     "연결은 게이트웨이가 쥔다 — 셀프호스트는 30초마다 맞춘다. 매니지드는 그 워크스페이스에 요청이 올 때 맞추므로 게이트웨이가 다시 뜬 뒤 멈춘(한가한) 워크스페이스는 다음 요청까지 붙지 않는다.",

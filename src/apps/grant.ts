@@ -57,18 +57,32 @@ export function grantableOf(manifest: unknown): ResolvedGrant | null {
 /** 동의가 앱의 지금 선언을 덮지 못한 것(#1644) — 다시 동의하면 얻는 scope · 도구. */
 export interface GrantGap { scopes: string[]; tools: string[] }
 
+//  도구 이름 → 그 도구(라이블리 능력)가 요구하는 scope(앱 v2 #124). 능력 등록부(capabilities/index.ts)가 부팅 때 넣는다 — 이 모듈은 순수 잎이라
+//   등록부를 import 하지 않는다(순환). 넣기 전 · 등록부에 없는 이름(앱 선언 도구 · 외부 도구 · 글롭)은 null(종전대로 센다).
+let toolScopeOf: (name: string) => string | null = () => null;
+export function setToolScopeResolver(fn: (name: string) => string | null): void { toolScopeOf = fn; }
+
 /**
  * 동의가 앱의 지금 선언(grantableOf)을 다 덮나 — 덮지 못한 scope · 도구(둘 다 비면 덮는다 · grantGapEmpty).
  *  · 도구: 선언한 이름(글롭 포함)마다 동의 목록이 그 이름을 덮나(toolAllowed — 같은 글롭 · 더 넓은 글롭도 덮는다).
  *  · scope: memberScopes 를 주면 그 사람이 가진 것만 센다(scopeNeedsRegrant 와 같은 까닭 — 구성원에게 없는 scope 는 다시 동의해도 못 얻는다).
  *    그 사람이 나중에 그 권한을 받으면 그때 «다시 동의» 가 된다.
+ *  · 도구도 같은 까닭으로(앱 v2 #124): memberScopes 를 주면, 그 도구가 요구하는 scope 를 그 사람이 갖지 않은 도구는 세지 않는다 — 다시 동의해도
+ *    앱이 그 사람 이름으로 그 도구를 못 부른다(능력 관문 requireCapScope 가 그 사람의 scope 로 막는다). 이게 없으면 앱이 소수만 쓰는 도구
+ *    (예: code scope 의 레포 판 읽기 — 관리자 이름으로 도는 정기 작업만 쓴다)를 더할 때 그 권한이 없는 구성원 모두가 쓰지도 못할 도구 때문에
+ *    다시 동의해야 하고, 그동안 앱의 다른 일까지 막힌다(#1644 — 일 시작 전 거절).
  *  동의 창은 선언 전체로 동의하므로, 이게 비지 않는 것은 «앱이 동의한 뒤에 넓어졌다» 이거나 «사람이 API 로 일부만 동의했다» 둘 중 하나다.
  */
 export function grantGap(grant: { scopes: readonly string[]; tools: readonly string[] }, declared: ResolvedGrant, memberScopes?: readonly string[]): GrantGap {
   const held = memberScopes ? new Set(memberScopes) : null;
+  const unusable = (tool: string): boolean => {
+    if (!held) return false;
+    const need = toolScopeOf(tool);
+    return need != null && !held.has(need);
+  };
   return {
     scopes: declared.scopes.filter((s) => !grant.scopes.includes(s) && (!held || held.has(s))),
-    tools: declared.tools.filter((t) => !toolAllowed(grant.tools, t)),
+    tools: declared.tools.filter((t) => !toolAllowed(grant.tools, t) && !unusable(t)),
   };
 }
 

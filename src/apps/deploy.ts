@@ -19,14 +19,14 @@ import { upsertApp, setAppStatus, addComponent, removeComponent, hostReferenceCo
 import { upsertOrgHarnessAsset, removeOrgHarnessAsset } from "../org/store/harness-assets.js";
 import type { HookHarness } from "../org/store/hooks.js";   // 자산·훅이 공유하는 하네스 값(“all” 포함)
 import { getRuntimeConfig, updateRuntimeConfig } from "../org/store/runtime-config.js";
-import { upsertCronJob, deleteCronJob } from "../org/cron-store.js";
+import { upsertCronJob, deleteCronJob, getCronJobState } from "../org/cron-store.js";
 import { upsertMcpServer, removeMcpServer, type McpServerInput } from "../org/store/mcp-servers.js";
 import { upsertTool, removeTool, type OrgToolInput } from "../org/store/tools.js";
 
 // harness_asset payload 계약(loader.ts) — { kind, harness, body, label }.
 interface HarnessAssetPayload { kind: "skill" | "subagent" | "command"; harness: HookHarness; body: string; label: string }
-// cron payload 계약(loader.ts) — { schedule, run:{ kind, prompt?, prompt_asset? } }.
-interface CronPayload { schedule: string; run: { kind: string; prompt?: string; prompt_asset?: string } }
+// cron payload 계약(loader.ts) — { schedule, run:{ kind, prompt?, prompt_asset?, route?, body? } }.
+interface CronPayload { schedule: string; run: { kind: string; prompt?: string; prompt_asset?: string; route?: string; body?: Record<string, unknown> } }
 interface RuntimeWorkerPayload { entry: string; code: Buffer; code_hash: string; package_hash: string }
 
 // 한 kind 의 전개/회수 한 쌍. appId·ctx 는 배선 클로저가 주입한다.
@@ -84,6 +84,27 @@ const KIND_HANDLERS: Record<string, KindHandler> = {
     async deploy(appId, item, ctx) {
       const p = item.payload as CronPayload;
       const run = p.run ?? { kind: "", prompt: undefined, prompt_asset: undefined };
+      if (run.kind === "server") {
+        //  앱 v2 #121 server 잡 — 에이전트 없이 앱 서버 라우트를 부른다(app_server_job). 관리자가 정한 run_as 와 켜고 끈 상태는 재설치가 덮지 않는다
+        //   (upsertCronJob 은 params · enabled 를 통째로 갈아 끼운다 — 그대로 두면 판을 올릴 때마다 run_as 가 지워지고 꺼 둔 잡이 다시 켜진다).
+        if (!run.route) throw new HttpError(500, `server 잡의 route 가 비어 있습니다: ${item.comp.ref}`);
+        const prev = await getCronJobState(item.comp.ref);
+        const runAs = typeof prev?.params?.run_as === "string" && prev.params.run_as.trim() ? prev.params.run_as.trim() : null;
+        const key = item.comp.orig_name ?? item.comp.ref;
+        await upsertCronJob({
+          id: item.comp.ref,
+          label: `앱 정기 작업: ${key}`,
+          action: "app_server_job",
+          params: JSON.stringify({ app_id: appId, app_component_ref: item.comp.ref, job_key: key, route: run.route, body: run.body ?? {}, ...(runAs ? { run_as: runAs } : {}) }),
+          interval_sec: 600,
+          cron_expr: p.schedule,
+          enabled: prev && prev.action === "app_server_job" ? prev.enabled : true,
+          note: null,
+          run_once: false,
+          actor: ctx.actor ?? null,
+        });
+        return;
+      }
       const prompt = (run.prompt && run.prompt.trim()) ? run.prompt : (run.prompt_asset ?? "");
       if (!prompt) throw new HttpError(500, `크론 잡 프롬프트가 비어 있습니다: ${item.comp.ref}`);
       await upsertCronJob({

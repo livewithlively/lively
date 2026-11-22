@@ -15,6 +15,8 @@ import { SCOPES_ALLOWED } from "../auth/scopes.js";
 import { STRICT_SLUG, assertAssetId } from "../org/asset-id.js";
 import { parseColumnType, defaultLiteralText, DEFAULT_EXPRS } from "./store-ddl.js";
 import { SOURCE_KINDS } from "../v6/source-kinds.js";   // #5100 맥락 범위의 자료 종류(잎 모듈 — DB 무접근)
+import { jobRouteError } from "./app-jobs-plan.js";        // 앱 v2 #121 server 정기 작업의 route 검사(순수 — 타입 import 만 있는 잎 모듈)
+import { isValidCron } from "../scheduler/cron-expr.js";   // 앱 v2 #121 server 정기 작업의 schedule 검사(순수)
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 
@@ -33,7 +35,11 @@ export const APP_DISPLAY_MODES = ["inline", "fullscreen", "pip"] as const;
 export const APP_WIDGET_SURFACES = ["home", "aside", "launchpad"] as const;
 
 // 잡 실행 종류(design D4 — v1 은 headless 만 실효, inject/managed 는 스펙 예약).
-export const APP_JOB_KINDS = ["headless", "inject"] as const;
+//  server(앱 v2 #121) — 에이전트 없이 앱 서버 라우트를 백그라운드 작업으로 부른다(run.route · run.body · web.server 필요). 누구로 도는지는
+//   설치 뒤 관리자가 정한다(org_app_job_set — 기본은 앱 책임자). scheduler/actions/app-server-job.ts.
+export const APP_JOB_KINDS = ["headless", "inject", "server"] as const;
+/** server 정기 작업 본문(run.body) 상한 — JSON 글 바이트. 작업 본문 상한(정책)보다 훨씬 작게: 정해진 설정만 싣는다. */
+export const APP_SERVER_JOB_BODY_MAX = 8 * 1024;
 
 // 앱 **실행 인스턴스**가 프로젝트 맥락을 갖는 방식(#1780 v2.1).
 //  package 설치와 instance 실행은 다른 축이다: 같은 package 에서 프로젝트가 다른 인스턴스가 여러 개 열릴 수 있다.
@@ -203,11 +209,13 @@ const runtimeSchema = z.object({
 
 const jobSchema = z.object({
   key: slugSchema,
-  schedule: z.string().min(1).max(120),              // cron 식 — 스케줄러가 재검증
+  schedule: z.string().min(1).max(120),              // cron 식 — 스케줄러가 재검증(server 는 설치 때도 본다)
   run: z.object({
     kind: z.enum(APP_JOB_KINDS),
-    prompt_asset: z.string().min(1).max(512).optional(), // 패키지 내 프롬프트 파일 상대경로
-    prompt: z.string().max(20000).optional(),
+    prompt_asset: z.string().min(1).max(512).optional(), // 패키지 내 프롬프트 파일 상대경로(headless · inject)
+    prompt: z.string().max(20000).optional(),             // (headless · inject)
+    route: z.string().min(1).max(512).optional(),         // server — 부를 앱 라우트(/ 로 시작 · app_job_start 의 route 와 같은 규칙)
+    body: z.record(z.string(), z.unknown()).optional(),   // server — 작업 본문(JSON 객체 · APP_SERVER_JOB_BODY_MAX 까지)
   }).strict(),
 }).strict();
 
@@ -272,8 +280,12 @@ const agentSchema = z.object({
 //    따라가지 않는다(상민 2026-10-28 결정 ①). 없는 key 는 설치 · 저장 때 거절한다(apps/app-context.ts assertContextInstallable).
 //  · source_kinds — 읽을 자료의 종류(v6/source-kinds.ts). **적지 않으면 자료는 하나도 못 읽는다**(닫힘 — 결정 ②).
 //  · folders — 다음 판이다. 지금 적으면 저장을 거절한다(적은 범위가 지켜지지 않는데 지켜진다고 믿게 두지 않는다).
+//  · repos — 판 읽기 도구(repo_refs · repo_diff · repo_file · repo_grep · 앱 v2 #124)로 읽을 등록 레포 이름. **적지 않으면 레포는 하나도 못 읽는다**
+//    (새 도구라 닫힌 쪽이 기본 — context 를 아예 적지 않은 앱도 같다). 도구 이름(permissions.tools) · code scope 동의는 따로 있어야 한다.
+//    없는 레포는 설치 · 저장 때 거절한다. 판정은 능력 handler 가 한다(apps/app-context.ts assertAppRepoAllowed).
 //  ★ strict — 최상위(passthrough)와 달리 오타를 거절한다: 좁히는 선언에서 모르는 칸을 버리면 앱 제작자는 좁혔다고 믿는데 실제로는
 //   안 좁혀진다(권한 선언 permissions 가 strict 인 것과 같은 까닭). 이 칸을 모르는 옛 코어로 되돌리면 범위 없이 읽힌다 — 롤백 메모.
+//   (repos 를 적은 매니페스트는 그 칸을 모르는 옛 코어에서 다시 읽을 때 400 이다 — 판 읽기 도구도 옛 코어엔 없어 닫히는 쪽이다.)
 const contextSchema = z.object({
   knowledge_categories: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "카테고리 key 는 소문자 슬러그(a-z0-9_-, 64자 이내) — category_list 의 key"))
     .max(50).default([])
@@ -281,6 +293,9 @@ const contextSchema = z.object({
   source_kinds: z.array(z.enum(SOURCE_KINDS)).max(SOURCE_KINDS.length).default([])
     .describe("이 앱이 읽을 자료의 종류. 적지 않으면 자료 도구(source_*)로는 하나도 못 읽는다 — 파일 권한(project_files · workspace_files · 앱 폴더)은 이 범위 밖이다(폴더 범위는 다음 판)"),
   folders: z.unknown().optional().describe("다음 판 — 지금 적으면 저장을 거절한다"),
+  repos: z.array(z.string().regex(/^(?!\.+$)[A-Za-z0-9._-]{1,100}$/, "레포 이름(repo_list 의 name — 영문 · 숫자 · . _ - 100자 이내)"))
+    .max(100).default([])
+    .describe("판 읽기 도구(repo_refs · repo_diff · repo_file · repo_grep)로 읽을 등록 레포 이름(repo_list 의 name). 적은 레포만 읽힌다 — 적지 않으면 하나도 못 읽는다. 도구 이름(permissions.tools)과 code scope 는 따로 적는다"),
 }).strict().optional()
   .describe("이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기(검색 · 목록 · 상세 · 링크)가 공개범위 ∩ 이 범위로 좁혀지고, 활동 · 프로젝트에 달린 지식 참조에서도 범위 밖은 빠진다. 범위 밖을 이름으로 열면 거절된다. 범위를 지킬 수 없는 도구(휴지통 · 실행 취소 · 내 사용 내역 · 맥락 파이프라인(수집 · 증류 · 카테고리 붙이기 · 관리기) · 새 토큰 발급 · 구성원 이름의 실행(위탁 · 브로커 · 예약 작업 · 프로젝트 대화 · 리브 · 처음 설정 분석) · self 소스 SQL)와 지운 문서의 이력은 쓸 수 없다. 범위를 적은 앱은 도구를 «전부»(permissions.tools · ext_tools 의 *)로 받을 수 없다 — 쓸 도구를 이름이나 좁은 꼴로 적는다. 항상-주입 문서(규칙 · 페르소나 섹션)는 범위와 무관하게 모든 세션에 들어간다. 범위는 실수를 막는 안전망이라 알려진 길을 막은 것이다 — 능력 밖 길(앱 세션의 터미널 세션 만들기 등)은 다음 판이다. 적지 않으면 실행한 사람이 보는 것 전부");
 
@@ -473,7 +488,7 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
 
   // #5100 폴더 범위는 다음 판 — 적어 둔 범위가 지켜지지 않는데 지켜진다고 믿게 두지 않는다(결정 ②).
   if (m.context && m.context.folders !== undefined) {
-    throw new HttpError(400, "매니페스트 오류 [context.folders]: 폴더 범위는 아직 지원하지 않습니다(다음 판) — 지금은 knowledge_categories · source_kinds 만 적을 수 있습니다");
+    throw new HttpError(400, "매니페스트 오류 [context.folders]: 폴더 범위는 아직 지원하지 않습니다(다음 판) — 지금은 knowledge_categories · source_kinds · repos 만 적을 수 있습니다");
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.
@@ -562,10 +577,27 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   }
   assertUniqueKeys("sections", m.sections.map((s) => s.key));
 
-  // 잡 run 은 prompt_asset 또는 prompt 중 하나가 있어야 한다.
+  // 잡 run — 에이전트 잡(headless · inject)은 prompt_asset 또는 prompt 가, server 잡은 route 가 있어야 한다(서로의 칸은 받지 않는다).
   for (const j of m.jobs) {
+    const at = `매니페스트 오류 [jobs.${j.key}.run]`;
+    if (j.run.kind === "server") {
+      if (j.run.prompt_asset || j.run.prompt) throw new HttpError(400, `${at}: server 잡은 에이전트를 띄우지 않습니다 — prompt · prompt_asset 대신 route 를 적으세요`);
+      const routeErr = jobRouteError(j.run.route);
+      if (routeErr) throw new HttpError(400, `${at}: ${routeErr}`);
+      const srv = (m as { web?: { server?: unknown } }).web?.server;
+      if (!(srv === true || (!!srv && typeof srv === "object" && !Array.isArray(srv)))) {
+        throw new HttpError(400, `${at}: server 잡은 앱 서버(web.server)를 선언한 앱만 둘 수 있습니다`);
+      }
+      if (j.run.body && Buffer.byteLength(JSON.stringify(j.run.body), "utf8") > APP_SERVER_JOB_BODY_MAX) {
+        throw new HttpError(400, `${at}: body 는 JSON ${APP_SERVER_JOB_BODY_MAX} 바이트까지입니다`);
+      }
+      //  틀린 cron 식은 스케줄러에서 조용히 «때가 아님» 이 되어 영영 돌지 않는다(cron-due) — server 잡은 설치 때 막는다.
+      if (!isValidCron(j.schedule)) throw new HttpError(400, `매니페스트 오류 [jobs.${j.key}.schedule]: cron 식(분 시 일 월 요일)이 아닙니다 — '${j.schedule}'`);
+      continue;
+    }
+    if (j.run.route || j.run.body) throw new HttpError(400, `${at}: route · body 는 server 잡에만 씁니다`);
     if (!j.run.prompt_asset && !j.run.prompt) {
-      throw new HttpError(400, `매니페스트 오류 [jobs.${j.key}.run]: prompt_asset 또는 prompt 가 필요합니다`);
+      throw new HttpError(400, `${at}: prompt_asset 또는 prompt 가 필요합니다`);
     }
   }
   return m;

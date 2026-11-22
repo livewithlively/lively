@@ -12,6 +12,8 @@ import { assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 �
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { requireSessionWriter } from "../sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
+import { repoReadCapabilities } from "./repo-read.js";
+import { setToolScopeResolver } from "../apps/grant.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
 import { domainmapCrudCapabilities } from "./domainmap-crud.js";
@@ -55,6 +57,7 @@ import { trashCapabilities } from "./trash.js";
 import { visAxesCapabilities } from "./vis-axes.js";
 import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
+import { appScheduleCapabilities } from "./app-schedule.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
@@ -140,6 +143,7 @@ const all: Capability[] = [
   ...undoCapabilities, // #702: 전역 실행취소(Cmd+Z) — org_content_audit before/after 역적용(content_undo, REST 전용 /api/ui/undo). 사람전용(에이전트 403), 대상=내 웹 채널 변경만.
   ...feedTargetCapabilities, // #976 위키 아웃바운드 — 피드 목적지(feed_target)+카테고리 N:M 매핑 CRUD+드레인. admin scope, MCP+REST(/api/ui/feed-targets*). 관리탭 '위키 아웃바운드' 패널.
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
+  ...appScheduleCapabilities, // 앱 v2 #121 org_app_job_set — 앱 server 정기 작업의 실행 신원(run_as) · 켜고 끔 · 지금 한 번(admin · POST /api/ui/apps/:app_id/jobs/:job).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
   ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
@@ -150,6 +154,7 @@ const all: Capability[] = [
   ...memberAiConnectorCapabilities, // #4213 T6 구성원 Claude 커넥터 — 누가 무엇을 연결했나(보기) · 내 것 새로 확인 · 워크스페이스 정책(관리자).
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
+  ...repoReadCapabilities, // 앱 v2 #124 레포 판 읽기 — repo_refs/diff/file/grep(code scope · GET /api/ui/repos/:repo/{refs,diff,file,grep}). 앱 토큰은 context.repos 에 적은 레포만.
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
   ...delegateCapabilities, // P2(#869): 작업 위탁 — delegate_run/status/list/cancel(context scope, MCP+REST /api/ui/delegate*). 예상 소모량 신고→스케줄러가 노드 리소스 대조 배치, 결과는 .lively-task/<id>/.
   ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
@@ -201,6 +206,9 @@ const all: Capability[] = [
 //  ku/knowledge 가 단일 캐노니컬 표면 — 지식 grep/단건 knowledge_grep·knowledge_get, 활동 activity_list·activity_log. REST 전용: GET /api/ui/learn(kind_registry+data_source ground-truth).
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
+//  앱 동의 빈칸 판정(apps/grant.ts grantGap)이 «그 사람이 쓸 수 없는 도구» 를 세지 않게 — 도구 이름 → 요구 scope 를 알려 준다(앱 v2 #124).
+//   등록부를 부를 때마다 읽으므로 나중에 합류하는 EE 표면도 따라간다.
+setToolScopeResolver((name) => registry.get(name)?.scope ?? null);
 
 // Enterprise(src/ee) 표면 합류 — 부팅 시 loadEnterprise() 가 EE 를 적재하면 ee/register.ts 가 이걸 호출한다.
 //  ⚠ 반드시 buildToolCandidates()/restMounts() 가 처음 불리기 **전에** 끝나야 한다(index.ts 최상단에서 await).
