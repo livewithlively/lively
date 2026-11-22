@@ -30,7 +30,7 @@ import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens
 import { caretShape, ccWheelRows, isWheelNotch, newCcWheel, newWheelTickAcc, parseTermPrefs, TERM_PREFS_KEY, termFace, termWheelTicks, type TermPrefs } from './lib/term-prefs.js';
 import { routeKey, type FocusSpot } from './lib/chat-keys.js';   // #4797 터미널처럼 — 이 화면이 보이면 글쇠가 입력칸으로
 import { isDark } from './theme.js';
-import { PANE_LINK_EVENT, uiPaneLink } from './lib/ui-link.js';   // #5583 자료 링크는 곁칸에서(셸 탭을 하나 더 열지 않게)
+import { PANE_LINK_EVENT, uiPaneLink, webPaneLink } from './lib/ui-link.js';   // #5583 자료 링크는 곁칸에서(셸 탭을 하나 더 열지 않게)
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -665,7 +665,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const a = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
     if (!a || !list.contains(a)) return;
-    const link = uiPaneLink(a.getAttribute('href') || '', location.href);
+    const href = a.getAttribute('href') || '';
+    const link = uiPaneLink(href, location.href) || webPaneLink(href, location.href);   // #5699 남의 사이트·미리보기도 곁칸 후보
     if (!link) return;
     const detail = { link, handled: false };
     a.dispatchEvent(new CustomEvent(PANE_LINK_EVENT, { bubbles: true, detail }));
