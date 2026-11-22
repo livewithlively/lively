@@ -51,6 +51,16 @@ export async function getCronJob(id: string): Promise<{ id: string; action: stri
   return (await itemsPool.query(`SELECT id, action, params FROM org_cron WHERE id=$1`, [id])).rows[0];
 }
 
+// 재전개가 지켜야 할 사람 조작(앱 v2 #121 — server 정기 작업의 run_as · 켜고 끔)까지 — 없으면 undefined.
+export interface CronJobState {
+  id: string; action: string; params: Record<string, unknown> | null; enabled: boolean; created_by: string | null; cron_expr: string | null;
+  last_run_at: string | null; last_status: string | null; last_summary: unknown;
+}
+export async function getCronJobState(id: string): Promise<CronJobState | undefined> {
+  return (await itemsPool.query(
+    `SELECT id, action, params, enabled, created_by, cron_expr, last_run_at, last_status, last_summary FROM org_cron WHERE id=$1`, [id])).rows[0];
+}
+
 export async function insertCronJob(v: CronJobInsert): Promise<CronJobRow> {
   const r = await itemsPool.query(
     `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,run_once,max_fail_streak,created_by,updated_by)

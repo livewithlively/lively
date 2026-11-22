@@ -17,8 +17,8 @@ import { HttpError } from "../http-error.js";
 import { logToolCall } from "../org/policies/tool-log.js";
 import { logger } from "../log.js";
 
-/** 매니페스트의 맥락 범위 선언(정규화 · 중복 제거). */
-export interface AppContextDecl { knowledgeCategories: string[]; sourceKinds: string[] }
+/** 매니페스트의 맥락 범위 선언(정규화 · 중복 제거). repos — 판 읽기 도구로 읽을 등록 레포(앱 v2 #124 · assertAppRepoAllowed). */
+export interface AppContextDecl { knowledgeCategories: string[]; sourceKinds: string[]; repos: string[] }
 
 /**
  * 저장된 매니페스트의 context 선언(순수 · 던지지 않는다). 칸이 없으면 null(범위 없음 = 종전).
@@ -28,10 +28,10 @@ export function appContextDeclOf(manifest: unknown): AppContextDecl | null {
   if (!manifest || typeof manifest !== "object" || !("context" in manifest)) return null;
   const raw = (manifest as { context?: unknown }).context;
   if (raw === undefined) return null;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { knowledgeCategories: [], sourceKinds: [] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { knowledgeCategories: [], sourceKinds: [], repos: [] };
   const o = raw as Record<string, unknown>;
   const strs = (v: unknown): string[] => Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string" && x.length > 0))] : [];
-  return { knowledgeCategories: strs(o.knowledge_categories), sourceKinds: strs(o.source_kinds) };
+  return { knowledgeCategories: strs(o.knowledge_categories), sourceKinds: strs(o.source_kinds), repos: strs(o.repos) };
 }
 
 /** 카테고리 key → id(합쳐진 카테고리는 빼고 — category_key_uq 와 같은 기준). 없는 key 는 버린다(범위가 줄어드는 쪽). */
@@ -47,8 +47,11 @@ async function categoryIdsForKeys(keys: readonly string[]): Promise<number[]> {
 const CACHE_TTL_MS = 5000;
 const CACHE_MAX = 2000;   // 키는 워크스페이스 × 앱 × 사람 × 주소라 보통 작다 — 넘치면 통째로 비운다(다음 요청이 다시 푼다)
 const cache = new Map<string, { scope: ReadScope | null; at: number }>();
+const repoCache = new Map<string, { repos: readonly string[]; at: number }>();
 /** 기억 비우기 — 앱을 설치 · 저장하면 부른다(install-run · 범위를 좁힌 저장이 이 게이트웨이에선 곧바로 반영되게). 다른 게이트웨이 프로세스는 5초 안에. */
-export function clearAppContextCache(): void { cache.clear(); }
+export function clearAppContextCache(): void { cache.clear(); repoCache.clear(); }
+const cacheKey = (appId: string, user: Pick<LivelyUser, "userId" | "appAddress">) =>
+  [currentTenant()?.id ?? "", appId, user.userId ?? "", user.appAddress ?? ""].join("\0");
 
 /** 닫힌 범위 — 앱을 못 찾았다(토큰 검증이 보통 먼저 막는다). 아무것도 읽지 못한다. */
 const closed = (appId: string): ReadScope => ({ appId, knowledgeCategoryIds: [], sourceKinds: [] });
@@ -57,7 +60,7 @@ const closed = (appId: string): ReadScope => ({ appId, knowledgeCategoryIds: [],
 export async function resolveAppReadScope(user: Pick<LivelyUser, "appId" | "userId" | "scopes" | "appAddress">): Promise<ReadScope | null> {
   const appId = user.appId;
   if (!appId) return null;
-  const key = [currentTenant()?.id ?? "", appId, user.userId ?? "", user.appAddress ?? ""].join("\0");
+  const key = cacheKey(appId, user);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.scope;
   const scope = await computeScope(appId, user);
@@ -66,16 +69,46 @@ export async function resolveAppReadScope(user: Pick<LivelyUser, "appId" | "user
   return scope;
 }
 
-async function computeScope(appId: string, user: Pick<LivelyUser, "userId" | "scopes" | "appAddress">): Promise<ReadScope | null> {
+/** 이 요청이 보는 판의 context 선언 — 앱이 없으면 'no_app', 선언이 없으면 null. */
+async function declFor(appId: string, user: Pick<LivelyUser, "userId" | "scopes" | "appAddress">): Promise<AppContextDecl | null | "no_app"> {
   const app = await getApp(appId);
-  if (!app) return closed(appId);
+  if (!app) return "no_app";
   //  판(결정 ③) — 표 · 도구와 같은 viewAppFor. 'none'(이 토큰의 scope 로는 그 판을 못 본다 — 관리자가 남의 «나만» 앱을 연 경우 등)이면
   //   설치된 판의 선언을 쓴다: 여기는 문을 여는 자리가 아니라(앱을 열 수 있나는 토큰 발급 · 다리가 이미 정했다) 선언을 찾는 자리다.
   //   앱 주소 길(appAddress 가 있는 요청)은 'none' 이면 app-front-api 가 먼저 404 로 막아 여기까지 오지 않는다(격리 리뷰 N8).
   const seen = await viewAppFor(app, { userId: String(user.userId ?? ""), scopes: user.scopes ?? [], ...(user.appAddress ? { address: user.appAddress } : {}) });
-  const decl = appContextDeclOf(seen.view === "none" ? app.manifest : seen.app.manifest);
+  return appContextDeclOf(seen.view === "none" ? app.manifest : seen.app.manifest);
+}
+
+async function computeScope(appId: string, user: Pick<LivelyUser, "userId" | "scopes" | "appAddress">): Promise<ReadScope | null> {
+  const decl = await declFor(appId, user);
+  if (decl === "no_app") return closed(appId);
   if (!decl) return null;
   return { appId, knowledgeCategoryIds: await categoryIdsForKeys(decl.knowledgeCategories), sourceKinds: decl.sourceKinds };
+}
+
+/**
+ * 앱 토큰 요청의 레포 읽기 관문(앱 v2 #124 — 판 읽기 도구 repo_refs · repo_diff · repo_file · repo_grep 의 handler 가 부른다).
+ *  그 앱이 (이 요청이 보는 판의) 매니페스트 context.repos 에 적은 레포만 읽는다. 앱 토큰이 아니면 통과한다 — 사람 · 일반 토큰은 code scope 가 정한다.
+ *  context 를 적지 않은 앱 · repos 를 적지 않은 앱은 하나도 못 읽는다(새 도구라 닫힌 쪽이 기본 — 지식 범위의 «선언 없으면 종전» 과 다르다).
+ *  판정은 도구 이름(requireAppTool · 동의)과 따로다: 도구를 동의받았어도 적지 않은 레포는 못 읽고, 적었어도 도구 동의가 없으면 여기까지 오지 않는다.
+ */
+export async function assertAppRepoAllowed(user: Pick<LivelyUser, "appId" | "userId" | "scopes" | "appAddress"> | null | undefined, repo: string): Promise<void> {
+  const appId = user?.appId;
+  if (!appId || !user) return;
+  const key = cacheKey(appId, user);
+  let hit = repoCache.get(key);
+  if (!hit || Date.now() - hit.at >= CACHE_TTL_MS) {
+    const decl = await declFor(appId, user);
+    hit = { repos: decl && decl !== "no_app" ? decl.repos : [], at: Date.now() };
+    if (repoCache.size >= CACHE_MAX) repoCache.clear();
+    repoCache.set(key, hit);
+  }
+  const name = String(repo ?? "").trim();
+  if (!hit.repos.includes(name)) {
+    throw new HttpError(403, `이 앱은 레포 '${name}' 를 읽을 수 없습니다 — 앱 매니페스트 context.repos 에 적은 레포만 읽습니다(지금: ${hit.repos.length ? hit.repos.join(", ") : "없음"})`,
+      { body: { code: OUT_OF_APP_CONTEXT } });
+  }
 }
 
 /**
@@ -107,12 +140,22 @@ export async function assertContextInstallable(manifest: unknown): Promise<void>
       throw new HttpError(400, `매니페스트 오류 [permissions.${field}]: 맥락 범위(context)를 선언한 앱은 도구를 «전부»(${all.map((x) => `'${x}'`).join(", ")})로 받을 수 없습니다 — 쓸 도구를 이름이나 좁은 꼴(knowledge_* 등)로 적으세요(앞으로 생기는 도구가 범위 앱에 저절로 열리지 않게)`);
     }
   }
-  if (!decl.knowledgeCategories.length) return;
-  const rows = await q(itemsPool, `SELECT key FROM category WHERE key = ANY($1::text[]) AND state <> 'merged'`, [decl.knowledgeCategories]);
-  const have = new Set(rows.map((r) => String(r.key)));
-  const missing = decl.knowledgeCategories.filter((k) => !have.has(k));
-  if (missing.length) {
-    throw new HttpError(400, `매니페스트 오류 [context.knowledge_categories]: 이 워크스페이스에 없는 카테고리입니다 — ${missing.map((k) => `'${k}'`).join(", ")} (category_list 의 key 를 적으세요)`);
+  if (decl.knowledgeCategories.length) {
+    const rows = await q(itemsPool, `SELECT key FROM category WHERE key = ANY($1::text[]) AND state <> 'merged'`, [decl.knowledgeCategories]);
+    const have = new Set(rows.map((r) => String(r.key)));
+    const missing = decl.knowledgeCategories.filter((k) => !have.has(k));
+    if (missing.length) {
+      throw new HttpError(400, `매니페스트 오류 [context.knowledge_categories]: 이 워크스페이스에 없는 카테고리입니다 — ${missing.map((k) => `'${k}'`).join(", ")} (category_list 의 key 를 적으세요)`);
+    }
+  }
+  //  레포(앱 v2 #124) — 이 워크스페이스에 등록된 이름이어야 한다. 오타 하나로 «읽을 코드가 없다» 로 보이지 않게. 나중에 레포를 지우면 그 레포만 못 읽는다.
+  if (decl.repos.length) {
+    const rows = await q(itemsPool, `SELECT name FROM repo WHERE name = ANY($1::text[])`, [decl.repos]);
+    const have = new Set(rows.map((r) => String(r.name)));
+    const missing = decl.repos.filter((n) => !have.has(n));
+    if (missing.length) {
+      throw new HttpError(400, `매니페스트 오류 [context.repos]: 이 워크스페이스에 등록되지 않은 레포입니다 — ${missing.map((n) => `'${n}'`).join(", ")} (repo_list 의 name 을 적으세요)`);
+    }
   }
 }
 

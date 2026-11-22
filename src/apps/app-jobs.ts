@@ -59,7 +59,8 @@ const SWEEP_PAGE_SIZE = 200, SWEEP_MAX_PAGES = 25;
  *  app-ui(라이블리 화면 안의 앱 — 다리 org_app_tool_call) · app-front(앱 주소로 연 앱 화면 — /_lively/*) · mcp(MCP 도구 부르기 — AI 세션 포함) ·
  *  web(능력 REST POST /api/ui/app-jobs — 사람 토큰 · 웹 로그인) · app-server(앱 서버 코드 — SDK livelyJobs) · app-job(작업 안에서 시작한 작업) ·
  *  mcp-tool(앱이 선언한 MCP 도구에서 비롯된 작업 — 아래 MCP_TOOL_JOB_SOURCE) · person(자리를 말하지 않은 사람 호출) ·
- *  slack-bridge(#1782 슬랙 다리가 슬랙 이벤트로 시작한 작업 — 아래 SLACK_BRIDGE_JOB_SOURCE · 게이트웨이 안에서 ctx.source 로 준다).
+ *  slack-bridge(#1782 슬랙 다리가 슬랙 이벤트로 시작한 작업 — 아래 SLACK_BRIDGE_JOB_SOURCE · 게이트웨이 안에서 ctx.source 로 준다) ·
+ *  schedule(앱 v2 #121 매니페스트 정기 작업의 server 갈래 — 아래 SCHEDULE_JOB_SOURCE · 같은 방식).
  *  화면 두 자리는 apps/app-screen-sources.ts 한 벌이다. ⓘ 이것은 «어느 입구로 왔나» 다 — app-ui 다리는 REST 라 그 사람의 토큰으로도 부를 수 있다.
  */
 const actorSource = (user: LivelyUser, source?: string): string =>
@@ -71,6 +72,9 @@ const actorSource = (user: LivelyUser, source?: string): string =>
 export const MCP_TOOL_JOB_SOURCE = "mcp-tool";
 /** #1782 슬랙 다리가 시작한 작업의 source — 앱은 x-lively-job-source 로 «슬랙에서 온 작업» 을 가른다(org/slack-bridge/manager.ts). */
 export const SLACK_BRIDGE_JOB_SOURCE = "slack-bridge";
+/** 앱 v2 #121 매니페스트 정기 작업(jobs[].run.kind "server")이 시작한 작업의 source — 앱은 x-lively-job-source 로 «정기 실행» 을 가른다
+ *  (scheduler/actions/app-server-job.ts · 사람 주체로 시작하므로 ctx.source 로 준다). */
+export const SCHEDULE_JOB_SOURCE = "schedule";
 
 /**
  * 작업 하나를 받는다 — 앱 서버 · 앱 화면 · 사람(MCP) 공용. 줄을 세우고 곧바로 부를 수 있으면 부른다. 돌려주는 것은 작업 보기(+ wait 초 동안 끝나기를 기다림).
@@ -135,7 +139,7 @@ export async function startAppJob(input: Record<string, unknown>, user: LivelyUs
   const unattended = ctx.unattended === true
     || (user.appJobId != null && await js.appJobUnattended(user.appJobId))
     || (user.appCallId != null && await (await import("./app-server-call-store.js")).appCallUnattended(user.appCallId));
-  //  #1782 사람이 시키지 않은 작업(슬랙 다리의 run_as) — 부르는 쪽이 정하거나, 그런 작업 안에서 앱이 시작한 작업이 물려받는다(구독을 쓰지 못하는 표시를 벗지 못하게).
+  //  #1782 사람이 시키지 않은 작업(슬랙 다리의 run_as · 앱 v2 #121 앱 정기 작업) — 부르는 쪽이 정하거나, 그런 작업 안에서 앱이 시작한 작업이 물려받는다(개인 구독을 쓰지 못하는 표시를 벗지 못하게).
   const automation = ctx.automation === true || (user.appJobId != null && await js.appJobAutomation(user.appJobId));
   const tokenHash = (alias === "pub" ? row.pub_token_hash : row.cur_token_hash) ?? null;
   const out = await js.insertAppJob({

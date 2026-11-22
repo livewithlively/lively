@@ -53,7 +53,7 @@ export interface NewAppJob {
   scopeCeiling?: string[] | null;
   /** #1639 사람 신원이 사람이 보지 않는 자리에서 왔다 — 그 돌기 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended). 아니면 생략. */
   unattended?: boolean;
-  /** #1782 사람이 시키지 않은 작업(슬랙 다리의 run_as) — 그 돌기 신원으로는 공용 시트를 포함한 구독을 쓰지 못한다(ai-runs/plan.subscriptionRefusal). 아니면 생략. */
+  /** #1782 사람이 시키지 않은 작업(슬랙 다리의 run_as · 앱 v2 #121 앱 정기 작업) — 그 돌기 신원으로는 개인 구독을 쓰지 못한다(공용 시트 · API 키만 — ai-runs/plan.subscriptionRefusal). 아니면 생략. */
   automation?: boolean;
 }
 
