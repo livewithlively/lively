@@ -21,7 +21,12 @@ export interface SessTableItem extends AllSessLike {
   pj?: { id: number; status: string; made: number; rank?: number; sess?: { n: number; key: string; label: string } | null };
 }
 /** 표가 쥐는 화면 상태 — 부르는 쪽이 모듈 수준으로 들고 있다(통째로 다시 그려도 남게). */
-export interface SessTableUi { shown: number; closed: Set<string>; openUntitled: Set<string>; sort: SessSort | null }
+export interface SessTableUi { shown: number; closed: Set<string>; openUntitled: Set<string>; sort: SessSort | null;
+  /** #5630 — groupCap 을 넘겨 끝까지 편 묶음(`${by}:${key}`). */
+  expanded?: Set<string>;
+  /** #5630 — «처음부터 접어 둔» 묶음 중 사람이 아직 손대지 않은 것. 그런 묶음이 화면의 유일한 묶음이면 펴서 그린다
+   *  (머리 한 줄만 서서 빈 화면처럼 보이지 않게). 사람이 머리를 누르면 여기서 빠지고 그 뒤로는 closed 만 따른다. */
+  softClosed?: Set<string> }
 export const SESS_TABLE_PAGE = 50;
 
 const BIN_PROJ_PX = 15;
@@ -128,6 +133,13 @@ export interface SessTableOpts<T extends SessTableItem> {
   /** 줄에 붙는 클래스 · 이름 뒤 꼬리표(예: 「치움」). */
   rowClass?: (it: T) => string;
   rowTag?: (it: T) => HTMLElement | null;
+  /** #5630 — 프로젝트 줄의 「사람」 칸을 부르는 쪽이 그린다(리드 + 함께 얼굴 묶음). 주면 그 칸이 이름 바로 다음(둘째 열)으로 올라오고 넓어진다. */
+  peopleCell?: (it: T) => HTMLElement | null;
+  /** #5630 — 묶음마다 처음 몇 줄만(넘치면 묶음 끝에 «N개 더»). 관계 묶음(초대받은 · 내가 만든 · 그 밖)이 한 화면에 다 서게 —
+   *  없으면 첫 묶음이 쪽(50줄)을 다 먹어 둘째 묶음 머리가 첫 화면에 안 선다. */
+  groupCap?: number;
+  /** #5630 — 묶음 머리 개수 뒤 흐린 설명 한 줄(관계 묶음이 «무엇이 여기 드나» 를 말한다). */
+  groupHint?: (key: string) => string;
   repaint: () => void;
 }
 
@@ -148,10 +160,13 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
       el('span', { text: label }),
       on ? svgI(on.dir === 'asc' ? IC_UP : IC_CHEV, 'v2-sa-ic sm') : null);
   };
-  const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
+  //  #5630 사람 칸 격상 — peopleCell 을 주면 「사람」 이 이름 바로 다음 열로 오고(.pp 격자), 리드 + 함께가 이름과 함께 읽힌다.
+  const pp = !!o.peopleCell;
+  const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') + (pp ? ' pp' : '') },
     hc('name', o.nameHead || '세션'),
+    ...(pp ? [hc('owner', '사람')] : []),
     ...(cols ? [hc('proj', o.projHead || '프로젝트')] : []),
-    hc('state', '상태'), hc('owner', '사람'),
+    hc('state', '상태'), ...(pp ? [] : [hc('owner', '사람')]),
     hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
   const rowOf = (it: T): HTMLElement => (it.pj ? projRowOf(it, it.pj) : sessRowOf(it));
   //  프로젝트 줄 — 세션 줄과 같은 칸에 프로젝트 것을 넣는다: 이름(과녁) · 프로젝트 칸 비움(이름과 겹친다) · 상태 = 프로젝트 상태 · 사람 = 만든 사람.
@@ -167,14 +182,18 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
           ...(o.menuRows ? o.menuRows(it) : []),
         ], { title: it.name });
       } }, svgI(IC_MORE));
-    const row = el('div', { class: 'v2-sa-row pj' + (cols ? '' : ' np') + (o.rowClass ? o.rowClass(it) : ''),
+    const who = o.peopleCell
+      ? el('div', { class: 'c-who c-ppl' }, o.peopleCell(it))
+      : el('div', { class: 'c-who' }, it.owner ? personFace(it.owner === 'me' ? o.meId : it.owner, 'v2-sall-face', o.ownerName(it.owner)) : null);
+    const row = el('div', { class: 'v2-sa-row pj' + (cols ? '' : ' np') + (pp ? ' pp' : '') + (o.rowClass ? o.rowClass(it) : ''),
       role: 'button', tabindex: '0', 'data-pid': String(pj.id) },
       el('div', { class: 'c-name' }, projIcon(true),
         el('a', { class: 't', href, text: it.name, onclick: (ev: MouseEvent) => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); ev.stopPropagation(); go(); } }),
         o.rowTag ? o.rowTag(it) : null),
+      pp ? who : null,
       cols ? sessSumCell(pj.sess) : null,
       el('div', { class: 'c-kind' }, el('span', { class: 'v2-sa-st quiet' }, el('span', { text: pj.status }))),
-      el('div', { class: 'c-who' }, it.owner ? personFace(it.owner === 'me' ? o.meId : it.owner, 'v2-sall-face', o.ownerName(it.owner)) : null),
+      pp ? null : who,
       el('div', { class: 'c-made' }, madeCell(pj.made)),
       el('div', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(it.lastSeen) || 0), title: it.lastSeen ? new Date(Number(it.lastSeen)).toLocaleString() : '' })),
       el('div', { class: 'c-acts' }, more));
@@ -228,12 +247,15 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
     rank: it.pj && it.pj.rank != null ? it.pj.rank : stateRank(String(it.stateKey || '')), made: it.pj ? it.pj.made : Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
   const ordered = (rs: readonly T[]): T[] => sortAllSess(rs, ui.sort, sortFields);
   const groups = by === 'none' ? [] : groupAllSess(vis, by, o.now, stateRank);
+  const capOf = (gk: string): number => (o.groupCap && !(ui.expanded && ui.expanded.has(gk)) ? o.groupCap : Infinity);
   //  [더 보기]의 «외 N개» — 쪽수 때문에 못 그린 줄만 센다. 접은 묶음 · 접은 «이름 없는 세션» 은 더 보기로 나오지 않으니 빼고 센다.
+  const isClosed = (gk: string): boolean => ui.closed.has(gk) && !(groups.length === 1 && !!ui.softClosed && ui.softClosed.has(gk));
   const reachable = by === 'none' ? vis.length : groups.reduce((n, g) => {
     const gk = `${by}:${g.key}`;
-    if (ui.closed.has(gk)) return n;
+    if (isClosed(gk)) return n;
     const un = g.rows.filter((it) => it.untitled).length;
-    return n + (g.rows.length - un) + (ui.openUntitled.has(gk) ? un : 0);
+    const named = Math.min(g.rows.length - un, capOf(gk));
+    return n + named + (ui.openUntitled.has(gk) ? un : 0);
   }, 0);
   let budget = ui.shown;
   let drawn = 0;
@@ -245,16 +267,27 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
   for (const g of groups) {
     if (budget <= 0) break;
     const gk = `${by}:${g.key}`;
-    const closed = ui.closed.has(gk);
-    list.append(el('div', { class: 'v2-sa-gh plain' },
-      el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); o.repaint(); } },
+    const closed = isClosed(gk);
+    list.append(el('div', { class: 'v2-sa-gh plain' + (pp ? ' pp' : '') + (by === 'rel' ? ' rel rel-' + g.key : '') },
+      el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); if (ui.softClosed) ui.softClosed.delete(gk); o.repaint(); } },
         el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
-        el('span', { class: 'pill', text: o.groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }))));
+        el('span', { class: 'pill', text: o.groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }),
+        o.groupHint ? el('span', { class: 'hint', text: o.groupHint(g.key) }) : null)));
     if (closed) continue;
     const rows = ordered(g.rows);
     const named = rows.filter((it) => !it.untitled);
     const unnamed = rows.filter((it) => it.untitled);
-    for (const it of named) { if (budget-- <= 0) break; list.append(rowOf(it)); drawn++; }
+    const cap = capOf(gk);
+    let k = 0;
+    for (const it of named) { if (k >= cap || budget-- <= 0) break; list.append(rowOf(it)); drawn++; k++; }
+    //  #5630 묶음 끝 «N개 더» / «접기» — 이 묶음만 편다(쪽 [더 보기]와 따로).
+    if (o.groupCap && named.length > o.groupCap && budget > 0) {
+      const open = !!(ui.expanded && ui.expanded.has(gk));
+      list.append(el('button', { class: 'v2-sa-fold v2-sa-gmore', type: 'button', 'aria-expanded': String(open),
+        onclick: () => { ui.expanded = ui.expanded || new Set(); if (open) ui.expanded.delete(gk); else ui.expanded.add(gk); o.repaint(); } },
+        el('span', { class: 'car' + (open ? '' : ' shut') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
+        el('span', { text: open ? '접기' : `${o.groupLabel(g.key)} ${named.length - o.groupCap}개 더 보기` })));
+    }
     if (unnamed.length && budget > 0) {
       const uOpen = ui.openUntitled.has(gk);
       const hs = [...new Set(unnamed.map((it) => harnessName(it.s)).filter(Boolean))].join(' · ');
