@@ -5,59 +5,48 @@ export const SHARE_GUIDE_ROUTE = /^#\/share-guide(?:[/?]|$)/;
 
 export type ProjMode = 'invite' | 'open' | 'all';
 export const I = (id: string): string => `<svg class="sg-ic"><use href="#sg-i-${id}"/></svg>`;
-export const B = {
-  sess: `<span class="sg-bd sg-what">${I('chat')}AI 세션</span>`,
-  proj: `<span class="sg-bd sg-what">${I('folder')}프로젝트</span>`,
-  know: `<span class="sg-bd sg-what">${I('know')}지식</span>`,
-  priv: `<span class="sg-bd sg-priv">${I('lock')}비공개</span>`,
-  pub: `<span class="sg-bd sg-pub">${I('globe')}전체 공개</span>`,
-  off: `<span class="sg-bd sg-off">${I('power')}라이블리 꺼짐</span>`,
-};
 
 export interface Step {
   scene: string;
-  badges: (m: ProjMode) => string;
   title: (m: ProjMode) => string;
   lead: (m: ProjMode) => string;
   extra?: () => string;
 }
-/** (순수) 단계 문구 — 워크스페이스의 프로젝트 공개 방식에 따라 2장만 달라진다. 시험이 이 표를 직접 읽는다. */
+/** (순수) 단계 문구 — 안내 팝업(2026-11-22): 1~4장은 개념(AI 세션 · 프로젝트 · 자료 · 지식), 5장만 «누가 볼 수 있나» 이고
+ *  워크스페이스의 프로젝트 공개 방식에 따라 갈린다. 시험이 이 표를 직접 읽는다. */
 export const SG_STEPS: Step[] = [
   {
-    scene: 's1', badges: () => B.sess + B.priv,
-    title: () => 'AI와 나눈 대화는 기본으로 비공개예요',
-    lead: () => 'AI와 나누는 대화 하나하나를 <strong>AI 세션</strong>이라고 불러요. AI 세션은 기본으로 <strong>비공개</strong>예요. 다른 사람이 보길 원하면 세션에서 <strong>[공유]</strong>를 눌러 초대하세요.',
+    scene: 's1',
+    title: () => 'AI 세션은 AI와 일하는 대화창이에요',
+    lead: () => 'AI에게 일을 시키는 대화창 하나가 <strong>AI 세션</strong> 하나예요. 연 대화창은 왼쪽 목록에 쌓여서, 언제든 다시 열어 이어서 시킬 수 있어요.',
   },
   {
-    scene: 's2', badges: (m) => B.proj + (m === 'invite' ? B.priv : B.pub),
-    title: (m) => (m === 'invite' ? '세션은 프로젝트로 묶이고, 프로젝트도 비공개예요' : '세션은 프로젝트로 묶이고, 프로젝트는 팀에 공개돼요'),
-    lead: (m) => 'AI 세션을 열면 <strong>프로젝트</strong>가 자동으로 생기고, 같은 일을 이어 하는 세션은 그 프로젝트로 묶여요. '
-      + (m === 'invite'
-        ? '프로젝트도 기본으로 <strong>비공개</strong>라, 보여 주려면 초대하세요. 단, 프로젝트에 초대받은 사람도 <strong>남이 만든 세션 안은 볼 수 없어요.</strong>'
-        : m === 'open'
-          ? '이 워크스페이스는 프로젝트를 팀과 함께 보는 방식이라, 결과를 남긴 프로젝트는 <strong>팀 전원</strong>이 봐요. 그래도 <strong>남이 만든 세션 안은 볼 수 없어요.</strong>'
-          : '이 워크스페이스는 프로젝트를 <strong>팀 전원</strong>이 봐요. 그래도 <strong>남이 만든 세션 안은 볼 수 없어요.</strong>'),
+    scene: 's2',
+    title: () => '프로젝트는 한 가지 일을 모아 두는 곳이에요',
+    lead: () => '같은 일을 하는 AI 세션과 AI가 만든 파일은 <strong>프로젝트</strong> 하나에 모여요. 처음 일을 시키면 프로젝트가 자동으로 생겨요.',
   },
   {
-    scene: 's3', badges: () => B.know + B.pub,
-    title: () => '지식은 자동으로 만들어지고, 모두에게 공유돼요',
-    lead: () => 'AI는 일하다가 팀에 쓸모 있는 결론·결정·방법을 얻으면 <strong>지식</strong>으로 저장해요. 이때 내 질문이나 대화를 그대로 옮기지 않고, <strong>누가 읽어도 같은 형식의 문서로 다시 써요.</strong> 지식은 <strong>팀 전원에게 자동으로 공유</strong>되고, 대화 원문은 공유되지 않아요.',
+    scene: 's3',
+    title: () => '자료는 AI가 읽는 회사의 글과 파일이에요',
+    lead: () => '연결한 슬랙 · 노션 · 드라이브, 내가 올린 파일, AI가 만든 파일이 모두 <strong>자료</strong>예요. AI는 일할 때 여기서 필요한 것을 찾아 읽어요.',
+  },
+  {
+    scene: 's4',
+    title: () => '지식은 AI가 정리해 둔 메모예요',
+    lead: () => 'AI가 자료를 읽고 알게 된 것을 짧게 정리해 둔 글이 <strong>지식</strong>이에요. 다음에 비슷한 일을 시키면 AI가 이 메모부터 꺼내 봐요.',
     extra: () => `<span class="sg-more-wrap" data-sg="more-wrap"><button type="button" class="sg-more" data-sg="more" aria-expanded="false">${I('help')}지식으로 남기기 싫을 때는?</button></span>`,
   },
   {
-    scene: 's4', badges: () => B.sess + B.off,
-    title: () => '쓰다가 라이블리를 끄고 싶으면 /lively-disconnect',
-    lead: () => 'AI를 쓰다가 <strong>이 세션에서만</strong> 라이블리를 끄고 싶으면 AI에게 <code>/lively-disconnect</code>를 입력하세요. 그때부터 이 세션은 기록되지 않고, 회사 자료도 쓰지 않아요. 다시 켜려면 <code>/lively-connect</code>예요.',
-  },
-  {
-    scene: 's5', badges: () => '',
-    title: () => '한눈에 보기',
-    lead: () => '',
-    extra: () => '<p class="sg-note">연결한 앱(슬랙·노션 등)에서 가져온 자료는 원래 볼 수 있던 사람만 봐요. 남는 기록은 회사의 라이블리 서버에 저장돼요.</p>',
+    scene: 's5',
+    title: () => '누가 무엇을 볼 수 있나요',
+    lead: (m) => (m === 'invite'
+      ? 'AI 세션과 프로젝트는 <strong>나와 내가 초대한 사람만</strong>,<br>자료와 지식은 <strong>팀 전원</strong>이 봐요.'
+      : 'AI 세션은 <strong>나와 내가 초대한 사람만</strong>,<br>프로젝트 · 자료 · 지식은 <strong>팀 전원</strong>이 봐요.'),
+    extra: () => '<p class="sg-note">쓰다가 이 대화창에서만 라이블리를 끄려면 AI에게 <code>/lively-disconnect</code>를 입력하세요.</p>',
   },
 ];
 
-/** (순수) 워크스페이스 설정 → 2장 갈래. 못 읽으면 초대제(새 프로젝트 기본값)로 본다. */
+/** (순수) 워크스페이스 설정 → 5장(누가 보나) 갈래. 못 읽으면 초대제(새 프로젝트 기본값)로 본다. */
 export function projModeOf(access: { mode?: string; enforced?: boolean } | null | undefined): ProjMode {
   if (!access) return 'invite';
   if (access.enforced === false) return 'all';
