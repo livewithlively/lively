@@ -12,7 +12,9 @@
 
 export type HubTool = 'tasks' | 'sessions' | 'body' | 'folder' | 'knowledge' | 'timeline';
 export interface HubItem { tool: HubTool; w: number; h: number }
-export interface HubLayout { v: 2; items: HubItem[]; hidden: HubTool[] }
+/** m = 저장본이 지나온 «한 번짜리 옮김» 단계(없으면 0). 1 = #5630 세션 목록을 기본으로 보이게(아래 normalizeHubLayout). */
+export interface HubLayout { v: 2; items: HubItem[]; hidden: HubTool[]; m?: number }
+const HUB_MIG = 2;
 export type HubScope = 'global' | 'project';
 export type HubView = 'glance' | 'list' | 'band' | 'full';
 
@@ -21,29 +23,44 @@ export const HUB_COLS = 3;
 export const HUB_MAX_H = 6;
 export const HUB_VIEW_LABEL: Record<HubView, string> = { glance: '한눈', list: '목록', band: '띠', full: '전체' };
 export const HUB_TOOL_LABEL: Record<HubTool, string> = {
-  tasks: '태스크', sessions: '터미널 세션', body: '본문', folder: '공유 폴더', knowledge: '연결된 지식', timeline: '작업 타임라인',
+  tasks: '태스크', sessions: '세션', body: '본문', folder: '공유 폴더', knowledge: '연결된 지식', timeline: '작업 타임라인',
 };
 
 const item = (tool: HubTool, w: number, h: number): HubItem => ({ tool, w, h });
 
 /** 도구마다 «처음 붙을 때» 크기 — 숨겼다 되살리거나, 저장본에 없던 새 도구가 붙을 때 쓴다. 기본 한 벌(HUB_DEFAULT)의 크기와 같다. */
 export const HUB_TOOL_DEFAULT: Record<HubTool, { w: number; h: number }> = {
-  tasks: { w: 1, h: 2 }, sessions: { w: 1, h: 1 }, body: { w: 2, h: 2 }, folder: { w: 2, h: 2 }, knowledge: { w: 1, h: 2 }, timeline: { w: 3, h: 2 },
+  tasks: { w: 1, h: 2 }, sessions: { w: 2, h: 2 }, body: { w: 2, h: 1 }, folder: { w: 3, h: 1 }, knowledge: { w: 1, h: 1 }, timeline: { w: 1, h: 2 },
 };
 
 /** 기본 한 벌 — 원준이 쓰던 배치를 그대로(2026-09-30 «디폴트 프로젝트 창 지금 내가 세팅한 걸로 바꿔»).
  *  본문이 먼저 보이고(2×2) 옆에 태스크(1×2), 그 아래 지식(1×2) 옆에 폴더(2×2), 맨 밑에 타임라인(3×2) = 18칸 · 6줄 · 빈틈 0.
- *  세션 목록은 «내용» 이 아니라서 기본에선 뺀다(태스크 = 세션이라 태스크에서 들어간다) — 「＋ 위젯」으로 되살린다.
+ *  #5630(2026-11-22 원준 «세션들 목록은 좀 보여줘야 — 회수된 것 포함, 누르면 다시 실행») — 둘째 줄에 세션 목록(2×2)을 세우고,
+ *   그 옆에 작업 타임라인을 날짜별 흐름(1×2)으로 옮긴다. 셋째 줄은 지식(1×2) · 폴더(2×2) = 18칸 · 6줄 · 빈틈 0(줄 수는 종전과 같다).
+ *   타임라인은 종전 3×2 였는데 기록이 적은 프로젝트에서 판이 거의 비어 섰다 — 흐름은 한 건이어도 맨 위부터 찬다.
+ *   종전엔 세션을 «내용이 아니라서» 기본에서 뺐다. 저장본이 숨겨 둔 사람에게도 한 번 되살린다(normalizeHubLayout 의 m).
  *  (이전 기본, #4164 회의 2026-09-21: 본문 2×2 · 태스크 1×3 · 지식 1×1 · 폴더 1×1 · 타임라인 3×1 = 12칸.) */
 export const HUB_DEFAULT: HubLayout = {
   v: 2,
-  items: [item('body', 2, 2), item('tasks', 1, 2), item('knowledge', 1, 2), item('folder', 2, 2), item('timeline', 3, 2)],
-  hidden: ['sessions'],
+  //  #5630 3판(2026-11-22 원준 «협업에 편한 대시보드» · «너무 글이 많으면 안 보고 싶어») — 사람이 움직이는 것이 먼저다:
+  //   첫 줄 세션(2×2) · 태스크(1×2), 그 아래 본문은 요약 몇 줄(2×1) · 타임라인(1×2) · 폴더(1×1) · 지식(1×1) = 12칸 · 4줄 · 빈틈 0.
+  //   종전 18칸 · 6줄(본문 2×2 가 맨 앞)은 프리셋 「넓게」 로 남는다.
+  //  같은 날 원준 «작업 타임라인은 그냥 빼버리자 — 다른 사람 한 게 기본으로 보이는 것 자체가 별로» · «본문이 제일 좌상단에 있는 게 맞다»:
+  //   본문(2×1)이 맨 앞 · 옆에 태스크(1×2) · 그 아래 세션(2×2) · 지식(1×1) · 맨 밑 폴더 띠(3×1) = 12칸 · 4줄 · 빈틈 0. 타임라인은 숨김(배치 편집에서 되살린다).
+  items: [item('body', 2, 1), item('tasks', 1, 2), item('sessions', 2, 2), item('knowledge', 1, 1), item('folder', 3, 1)],
+  hidden: ['timeline'],
 };
+/** 옛 기본(#5630 이전 — 세션 숨김 · 타임라인 3×2). 저장본이 이것과 같으면 새 기본으로 통째로 옮긴다(손댄 적 없는 배치다). */
+const HUB_DEFAULT_V1_SIG = 'body:2x2,tasks:1x2,knowledge:1x2,folder:2x2,timeline:3x2|sessions';
+/** #5630 2판의 기본(세션 2×2 를 둘째 줄에). 3판 전에 이 배치를 받은 저장본도 손댄 적이 없으면 새 기본으로 옮긴다. */
+const HUB_DEFAULT_V2_SIG = 'body:2x2,tasks:1x2,sessions:2x2,timeline:1x2,knowledge:1x2,folder:2x2|';
 
 /** 프리셋 — 편집의 «시작점». 고르면 순서·크기·숨김 한 벌이 통째로 바뀐다. 전부 3열을 빈틈 없이 채운다(기본 18칸, 나머지 12칸). */
 export const HUB_PRESETS: { id: string; label: string; items: HubItem[]; hidden: HubTool[] }[] = [
   { id: 'default', label: '기본', items: HUB_DEFAULT.items, hidden: HUB_DEFAULT.hidden },
+  //  「넓게」 — 3판 전의 기본(본문 2×2 가 맨 앞 · 지식 1×2 · 폴더 2×2 = 18칸 · 6줄). 글과 파일을 크게 보는 사람에게.
+  { id: 'wide', label: '넓게', hidden: [],
+    items: [item('body', 2, 2), item('tasks', 1, 2), item('sessions', 2, 2), item('timeline', 1, 2), item('knowledge', 1, 2), item('folder', 2, 2)] },
   { id: 'tasks', label: '태스크 중심', hidden: [],
     items: [item('tasks', 2, 3), item('body', 1, 1), item('knowledge', 1, 1), item('sessions', 1, 1), item('folder', 1, 1), item('timeline', 2, 1)] },
   { id: 'sessions', label: '세션 중심', hidden: [],
@@ -86,7 +103,20 @@ export function normalizeHubLayout(raw: unknown): HubLayout {
     }
   }
   if (Array.isArray(r.hidden)) for (const h of r.hidden) if (isTool(h) && !seen.has(h)) { seen.add(h); out.hidden.push(h); }
-  if (!known) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden] };
+  if (!known) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
+  //  #5630 한 번짜리 옮김 — 옛 기본이 숨겼던 세션 목록을 되살린다(태스크 바로 뒤, 없으면 맨 앞 줄 뒤). m 을 적어 두므로 그 뒤에 사람이 숨기면 그대로 숨는다.
+  const mig = Number((r as { m?: unknown }).m) || 0;
+  //  3판 — 손댄 적 없는 2판 기본도 새 기본으로(한 번).
+  if (mig < 2 && sigOf(out.items, out.hidden) === HUB_DEFAULT_V2_SIG) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
+  if (mig < 1 && !out.items.some((x) => x.tool === 'sessions')) {
+    //  손댄 적 없는 옛 기본이면 새 기본으로 통째로. 손댄 배치면 줄을 흩뜨리지 않게 태스크 바로 뒤에 띠(3×1)로 끼운다.
+    if (sigOf(out.items, out.hidden) === HUB_DEFAULT_V1_SIG) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
+    out.hidden = out.hidden.filter((h) => h !== 'sessions');
+    seen.add('sessions');
+    const at = out.items.findIndex((x) => x.tool === 'tasks');
+    out.items.splice(at >= 0 ? at + 1 : Math.min(2, out.items.length), 0, item('sessions', 3, 1));
+  }
+  out.m = HUB_MIG;
   for (const t of HUB_TOOLS) {
     if (seen.has(t)) continue;
     if (HUB_DEFAULT.hidden.includes(t)) out.hidden.push(t);
@@ -131,11 +161,12 @@ export function resetHubLayout(pid: number | string, scope: HubScope): HubLayout
 /** 프리셋 적용 — 순서·크기·숨김을 통째로. */
 export function applyHubPreset(presetId: string): HubLayout {
   const p = HUB_PRESETS.find((x) => x.id === presetId) || HUB_PRESETS[0];
-  return normalizeHubLayout({ items: p.items, hidden: p.hidden });
+  return normalizeHubLayout({ items: p.items, hidden: p.hidden, m: HUB_MIG });   // m — 방금 고른 것이다(「넓게」 가 옛 기본과 같은 모양이라 옮김이 되돌리면 안 된다)
 }
 
-const sigOf = (items: HubItem[], hidden: HubTool[]): string =>
-  items.map((x) => x.tool + ':' + x.w + 'x' + x.h).join(',') + '|' + [...hidden].sort().join(',');
+function sigOf(items: HubItem[], hidden: HubTool[]): string {
+  return items.map((x) => x.tool + ':' + x.w + 'x' + x.h).join(',') + '|' + [...hidden].sort().join(',');
+}
 
 /** 지금 배치가 어느 프리셋과 같은가(순서·크기·숨김 모두) — 편집 띠의 프리셋 단추 표시용. 없으면 null. */
 export function matchHubPreset(layout: HubLayout): string | null {

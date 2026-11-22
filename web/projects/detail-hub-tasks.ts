@@ -64,7 +64,7 @@ export const fillTasks: Fill = (ctx, f, body, foot, sub, acts) => {
 
   // 「⚙ 보기」 — 1칸 폭에만(글자가 많아 산만하다는 5판 코멘트). 묶기 · 필터 · 오른쪽 열.
   if (w <= 1 && !modal) {
-    const cfg = el('button', { class: 'pjh-cfg', type: 'button', title: '보기 설정 — 묶기 · 필터 · 오른쪽 열' }, hubIcon('gear', 13), '보기');
+    const cfg = el('button', { class: 'pjh-hbtn', type: 'button', title: '보기 설정 — 묶기 · 필터 · 오른쪽 열', 'aria-label': '보기 설정' }, hubIcon('sliders', 15));   // #5630 — 글자 «보기» 대신 아이콘
     cfg.onclick = (e) => {
       e.stopPropagation();
       const menu = el('div', { class: 'pjv-menu pjh-pop' });

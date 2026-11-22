@@ -75,6 +75,8 @@ function pjvBundleIcon(color, kind?) {
   if (kind === 'none') n.append(sv('path', { d: ICONS.projNone, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   //  #5522 「초안」 — 셸 사이드바의 「초안」 줄과 같은 연필(lib/icon-paths ICONS.pencil).
   else if (kind === 'draft') n.append(sv('path', { d: ICONS.pencil, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  //  #5630 관계 스코프 — 셸 사이드바 「초대받은」 · 「내가 만든」 줄과 같은 사람 그림.
+  else if (kind === 'invited' || kind === 'mine') n.append(sv('path', { d: kind === 'invited' ? ICONS.people : ICONS.person, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   else n.append(sv('path', { d: ICONS.folder, fill: 'none', stroke: color || 'var(--muted-2)', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   return n;
 }

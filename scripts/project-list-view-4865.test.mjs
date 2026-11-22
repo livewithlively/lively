@@ -111,7 +111,8 @@ ok(/from '\.\.\/v2\/sess-table\.js'/.test(slSrc) && /sessTable\(\{/.test(slSrc),
 ok(/from '\.\/sess-table\.js'/.test(binsSrc) && /sessTable\(\{/.test(binsSrc), "S10 [세션 목록] 앱도 같은 sessTable 로 그린다");
 ok(!/pjvProjStatusDot|statusDot/.test(slSrc) && !/pjv-tgroup-head/.test(slSrc), "S11 리스트 뷰 묶음 머리에 프로젝트 상태 동그라미가 없다");
 ok(/sessFilterPicks\(/.test(slSrc) && /sessFilterPicks\(/.test(binsSrc), "S12 거르개 줄(기간 · 사람 · 상태)도 한 벌");
-ok(/return 'day';/.test(cut(slSrc, "function loadGroupBy", "\n}")), "S13 리스트 뷰 기본 묶기 = 세션 목록과 같은 «시간»");
+//  #5630(원준 2026-11-22) — 프로젝트가 기본 초대제가 된 뒤 리스트 뷰의 기본 묶기는 «관계»(초대받은 · 내가 만든 · 그 밖)다. «시간» 은 고를 수 있다.
+ok(/return 'rel';/.test(cut(slSrc, "function loadGroupBy", "\n}")) && /\{ key: 'day'/.test(slSrc), "S13 리스트 뷰 기본 묶기 = «관계»(시간은 고를 수 있다)");
 
 // ── S: 첫 진입 «불러오는 중» 줄이기(2026-10-19) — 지난 판 먼저, 새 판은 뒤에서 · 다시 받기는 보관함을 건너뛴다 · 로그아웃이 비운다 ──
 const entry2 = code(cut(read("web/projects/board.ts"), "async function renderProjectV2Board", "function pjvProjectListBoard"));

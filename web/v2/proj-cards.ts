@@ -138,6 +138,7 @@ export function planProjCards<L extends ProjCardList>(input: {
   const onKey = selId ? (selFav ? 'fav:' + selId : 'card:' + selId)
     : input.sel === 'none' ? 'none'
     : input.sel === 'drafts' ? 'drafts'
+    : input.sel === 'invited' || input.sel === 'mine' ? input.sel   // #5630 — 관계 줄은 side.ts 가 직접 켠다(리스트 줄은 꺼진다)
     : input.sel === 'all' ? 'all'
     : selFolder ? 'folder:' + cardFolderOf(Number(selFolder[1])) : '';
   const noneN = Math.max(0, input.noneN || 0);
