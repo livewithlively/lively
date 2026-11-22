@@ -177,7 +177,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
           el('div', { class: 'pjh-sc-n', text: x.label || x.id }),
           el('span', { class: 'pjh-sc-go' + (v.key === 'waiting' ? ' on' : '') }, v.key === 'waiting' ? '답하기' : '입장', hubIcon('right', 12))) as HTMLElement;
         c.onclick = () => enterSession(x);
-        c.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); enterSession(x); } });
+        c.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enterSession(x); } });
         return withMenu(c, x);
       };
       const cardMode = w >= 2 && h >= 2;

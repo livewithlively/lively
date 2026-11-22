@@ -38,7 +38,7 @@ export const HUB_TOOL_DEFAULT: Record<HubTool, { w: number; h: number }> = {
  *  #5630(2026-11-22 원준 «세션들 목록은 좀 보여줘야 — 회수된 것 포함, 누르면 다시 실행») — 둘째 줄에 세션 목록(2×2)을 세우고,
  *   그 옆에 작업 타임라인을 날짜별 흐름(1×2)으로 옮긴다. 셋째 줄은 지식(1×2) · 폴더(2×2) = 18칸 · 6줄 · 빈틈 0(줄 수는 종전과 같다).
  *   타임라인은 종전 3×2 였는데 기록이 적은 프로젝트에서 판이 거의 비어 섰다 — 흐름은 한 건이어도 맨 위부터 찬다.
- *   종전엔 세션을 «내용이 아니라서» 기본에서 뺐다. 저장본이 숨겨 둔 사람에게도 한 번 되살린다(normalizeHubLayout 의 m).
+ *   종전엔 세션을 «내용이 아니라서» 기본에서 뺐다. 손댄 적 없는 옛 기본만 새 기본으로 옮긴다(normalizeHubLayout 의 m) — 손댄 배치는 그대로 둔다.
  *  (이전 기본, #4164 회의 2026-09-21: 본문 2×2 · 태스크 1×3 · 지식 1×1 · 폴더 1×1 · 타임라인 3×1 = 12칸.) */
 export const HUB_DEFAULT: HubLayout = {
   v: 2,
@@ -104,17 +104,12 @@ export function normalizeHubLayout(raw: unknown): HubLayout {
   }
   if (Array.isArray(r.hidden)) for (const h of r.hidden) if (isTool(h) && !seen.has(h)) { seen.add(h); out.hidden.push(h); }
   if (!known) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
-  //  #5630 한 번짜리 옮김 — 옛 기본이 숨겼던 세션 목록을 되살린다(태스크 바로 뒤, 없으면 맨 앞 줄 뒤). m 을 적어 두므로 그 뒤에 사람이 숨기면 그대로 숨는다.
+  //  #5630 한 번짜리 옮김 — «손댄 적 없는» 옛 기본(1판 · 2판)만 새 기본으로 통째로 옮긴다. m 을 적어 두므로 한 번뿐이다.
+  //  손댄 배치는 건드리지 않는다 — 세션 목록을 숨긴 채 쓰던 사람에게 띠를 끼워 넣지 않는다(위젯 추가에서 직접 세운다).
   const mig = Number((r as { m?: unknown }).m) || 0;
-  //  3판 — 손댄 적 없는 2판 기본도 새 기본으로(한 번).
-  if (mig < 2 && sigOf(out.items, out.hidden) === HUB_DEFAULT_V2_SIG) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
-  if (mig < 1 && !out.items.some((x) => x.tool === 'sessions')) {
-    //  손댄 적 없는 옛 기본이면 새 기본으로 통째로. 손댄 배치면 줄을 흩뜨리지 않게 태스크 바로 뒤에 띠(3×1)로 끼운다.
-    if (sigOf(out.items, out.hidden) === HUB_DEFAULT_V1_SIG) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
-    out.hidden = out.hidden.filter((h) => h !== 'sessions');
-    seen.add('sessions');
-    const at = out.items.findIndex((x) => x.tool === 'tasks');
-    out.items.splice(at >= 0 ? at + 1 : Math.min(2, out.items.length), 0, item('sessions', 3, 1));
+  if (mig < 2) {
+    const sig = sigOf(out.items, out.hidden);
+    if (sig === HUB_DEFAULT_V1_SIG || sig === HUB_DEFAULT_V2_SIG) return { v: 2, items: HUB_DEFAULT.items.map((x) => ({ ...x })), hidden: [...HUB_DEFAULT.hidden], m: HUB_MIG };
   }
   out.m = HUB_MIG;
   for (const t of HUB_TOOLS) {
