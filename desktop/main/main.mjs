@@ -36,7 +36,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, sessionHash, personLink, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, bannerHome, sessionHash, personLink, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { workspaceEnterRequest, workspaceExchange, accountHomeNavigation } from "./account-workspace.mjs";
 import { execFileSync } from "node:child_process";
@@ -680,15 +680,24 @@ async function openFromBanner(event) {
       const v = await wc.executeJavaScript(READ_WEB_WORKSPACE_JS).catch(() => null);
       windowWs = typeof v === "string" ? v : null;
     }
-    const t = clickTarget(event, { gatewayUrl: state.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins() });
+    //  #5701 «그곳» = 이 배너를 받아 온 게이트웨이(bannerHome). 종전엔 처음 로그인한 곳(state.gatewayUrl)이라, 앱 안에서 다른
+    //   워크스페이스로 옮겨 둔 뒤 그 워크스페이스의 «작업을 마쳤어요» 를 누르면 처음 곳에서 그 세션을 찾았다(원준 2026-11-22 «눌러도 그 워크스페이스로 안가»).
+    const home = bannerHome(event, { selected: selectedGatewayUrl, bound: state.gatewayUrl, cloud: cloudUrl() });
+    const t = clickTarget(event, { gatewayUrl: home, windowUrl, windowWs, cpOrigins: cpOrigins() });
     if (ws?.via === "enter") {
       const enter = workspaceEnterRequest(ws.enter, webOrigin(cloudUrl()));
       const hash = event?.id ? sessionHash(event.id) : event?.link ? personLink(event.link) : null;
-      if (enter && hash) { await enterWorkspaceInApp(enter.id, hash); return; }
+      if (enter && hash) {
+        //  #5701 앱 안 입장이 실패하면(계정 연결 안 됨 · 깨우는 중 시간 초과 · 권한) **조용히 끝내지 않는다** — 종전엔 아래 catch 가
+        //   삼켜 «눌러도 아무 일 없음» 이었다. 사유를 보여 주고, 브라우저로 갈 길이 있으면 그 단추를 준다(#4054 의 종전 길).
+        try { await enterWorkspaceInApp(enter.id, hash); }
+        catch (err) { await enterFailed(err, t.how === "external" ? t.url : null); }
+        return;
+      }
     }
     if (t.how === "external") { await shell.openExternal(t.url); return; }
     if (t.how === "hash") { openHashInApp(t.hash); return; }
-    if (t.how === "load") { loadInApp(t.url); return; }
+    if (t.how === "load") { followGateway(home); loadInApp(t.url); return; }
     showMain();                                                        // 묶음·갈 곳 없음
   } catch { /* 클릭 처리 실패가 앱을 흔들지 않는다 */ }
 }
@@ -697,6 +706,28 @@ function cpOrigins() {
   const out = new Set([webOrigin(DEFAULT_CLOUD_URL)]);
   try { out.add(webOrigin(cloudUrl())); } catch { /* 개발용 덮어쓰기가 형식 오류 — 기본만 */ }
   return [...out].filter(Boolean);
+}
+
+/** #5701 다른 워크스페이스 입장 실패를 사람에게 — 사람이 취소한 계정 연결은 말하지 않는다. 브라우저 길이 있으면 단추로 준다. */
+async function enterFailed(err, browserUrl) {
+  const msg = String((err && err.message) || err || "");
+  if (msg === "계정 연결을 취소했습니다.") return;
+  const parent = appWin && !appWin.isDestroyed() ? appWin : undefined;
+  const r = await dialog.showMessageBox(parent, {
+    type: "error", message: "그 워크스페이스를 앱에서 열지 못했습니다.",
+    detail: (msg || "알 수 없는 이유입니다.") + (browserUrl ? "\n\n브라우저에서 열 수 있습니다." : ""),
+    buttons: browserUrl ? ["브라우저에서 열기", "닫기"] : ["확인"], defaultId: 0, cancelId: browserUrl ? 1 : 0,
+  }).catch(() => ({ response: -1 }));
+  if (browserUrl && r.response === 0) await shell.openExternal(browserUrl).catch(() => { /* 브라우저가 없다 */ });
+}
+/** #5701 배너가 앱 화면과 다른 워크스페이스(계정으로 들어가 둔 곳)의 것이면 앱 화면을 그리로 옮겨 적는다 — 창만 그곳을 싣고 «보는 워크스페이스»
+ *  (selectedGatewayUrl)가 옛 곳(또는 계정 서버 화면)에 남으면 알림이 옛 곳에 붙은 채 어긋난다.
+ *  처음 로그인한 곳(토큰)으로만 보는 판(selected 없음)은 손대지 않는다 — 그 판의 배너는 전부 그곳에서 온다. */
+function followGateway(gw) {
+  if (!gw || !selectedGatewayUrl || gw === selectedGatewayUrl.replace(/\/+$/, "")) return;
+  selectedGatewayUrl = gw;
+  appLoaded = { url: webUiUrl(gw), token: null };   // showApp 이 해시 없이 한 번 더 싣지 않게 — 곧 loadInApp 이 해시까지 실어 준다
+  resetNotifyBinding();
 }
 
 async function accountCookie(cloud) {
@@ -830,7 +861,7 @@ async function connectNotifyStream() {
         if (!hit) continue;
         streamSeen.add(hit.key);
         while (streamSeen.size > SEEN_MAX) streamSeen.delete(streamSeen.values().next().value);
-        showBanner({ ...bannerFor(hit, process.platform), event: hit });
+        showBanner({ ...bannerFor(hit, process.platform), event: { ...hit, gw } });   // #5701 받아 온 곳 — 누르면 그곳 기준으로 간다(bannerHome)
       }
     }
   } catch { /* 끊김·타임아웃·게이트웨이 재시작 — 아래에서 다시 붙는다 */ }
@@ -880,7 +911,8 @@ async function pollNotifications() {
     notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
     //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
     //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
-    if (!streamAlive) for (const b of planBanners(events, undefined, process.platform)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
+    //  스트림이 살아 있으면 배너는 그쪽이 만든다 · #5701 받아 온 곳(gw)을 붙여서 — 누르면 그곳 기준으로 간다(bannerHome)
+    if (!streamAlive) for (const b of planBanners(events.map((e) => ({ ...e, gw })), undefined, process.platform)) showBanner(b);
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
   finally {
     notifyPolling = false;
@@ -907,7 +939,7 @@ async function pollPersonFeed(gw, headers, gen) {
   if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
   rememberSeen(personSeen, events);
   personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
-  for (const b of planPersonBanners(events, undefined, process.platform)) showBanner(b);
+  for (const b of planPersonBanners(events.map((e) => ({ ...e, gw })), undefined, process.platform)) showBanner(b);   // #5701 받아 온 곳을 붙여서
 }
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
