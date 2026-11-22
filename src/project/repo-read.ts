@@ -12,7 +12,10 @@
 //
 //  ── 어떤 판만 읽나 ──
 //   공유 클론엔 다른 프로젝트가 아직 올리지 않은 커밋도 있다(워크트리 브랜치 project/* · stage/* · wt/* 가 같은 객체 저장소를 쓴다). 그래서
-//   판은 원격 브랜치(refs/remotes/origin/*) · 태그(refs/tags/*) 이름이나, 그 가운데 하나에서 닿는 커밋 해시만 받는다. 로컬 브랜치 이름은 받지 않는다.
+//   **원격 브랜치(refs/remotes/origin/*)에서 닿는 커밋만** 읽는다 — 원격 브랜치 이름 · 태그 이름 · 커밋 해시로 받되, 태그와 해시는 그 커밋이
+//   원격 브랜치에서 닿아야 한다. 태그만으로는 받지 않는다: refs/tags 는 모든 워크트리가 함께 쓰는 자리라 세션이 단 로컬 태그와 원격에서 받은 태그를
+//   가를 수 없다(격리 리뷰 2026-11-22). 배포 태그는 보통 원격 기본 브랜치의 커밋에 달린다(한 고객사 레포 6개의 최근 태그 18개 모두 그랬다).
+//   로컬 브랜치 이름은 받지 않는다. repo_refs 의 태그 목록도 원격 브랜치에서 닿는 태그만 싣는다.
 //
 //  ── 어느 레포만 읽나 ──
 //   이 워크스페이스에 등록되고(활성) git 주소가 있는 레포. 공유 클론 경로는 워크스페이스로 갈리지 않아(project-storage.ts) 이름만 보면 다른
@@ -45,6 +48,8 @@ export const REPO_READ_LIMITS = Object.freeze({
   grepMax: 300,
   grepLineChars: 400,
   patternMax: 200,
+  /** 찾기 출력 상한(바이트) — 넘으면 받은 데까지로 자른다(맞은 줄 상한이 300 이라 앞부분이면 된다). */
+  grepOutBytes: 4 * 1024 * 1024,
   /** repo_refs 태그 — 기본 · 최대(최근 만든 순). */
   tagsDefault: 50,
   tagsMax: 500,
@@ -117,17 +122,20 @@ class GitFail extends Error {
   constructor(readonly code: number, readonly stderr: string) { super(`git 실패(${code})`); }
 }
 
-function runGit(dir: string, args: string[], opts: { buffer?: boolean; okCodes?: number[] } = {}): Promise<{ code: number; out: string | Buffer }> {
+/** partial — 출력이 상한(maxBuffer)을 넘으면 413 대신 받은 데까지 돌려준다(truncated: 참 · 찾기처럼 앞부분만으로 쓸 수 있는 출력). */
+function runGit(dir: string, args: string[], opts: { buffer?: boolean; okCodes?: number[]; maxBuffer?: number; partial?: boolean } = {}): Promise<{ code: number; out: string | Buffer; truncated?: boolean }> {
   return slot(() => new Promise((resolve, reject) => {
     execFile("git", [...GIT_PRE, ...args], {
-      cwd: dir, timeout: REPO_READ_LIMITS.timeoutMs, maxBuffer: REPO_READ_LIMITS.outBytes, encoding: opts.buffer ? "buffer" : "utf8",
+      cwd: dir, timeout: REPO_READ_LIMITS.timeoutMs, maxBuffer: opts.maxBuffer ?? REPO_READ_LIMITS.outBytes, encoding: opts.buffer ? "buffer" : "utf8",
       env: { ...process.env, ...GIT_ENV },
     }, (err, stdout, stderr) => {
       if (!err) return resolve({ code: 0, out: stdout });
       const e = err as NodeJS.ErrnoException & { code?: number | string; killed?: boolean; signal?: string | null };
       const code = typeof e.code === "number" ? e.code : -1;
       if (opts.okCodes?.includes(code)) return resolve({ code, out: stdout });
-      if (/maxBuffer/i.test(String(e.message))) return reject(new HttpError(413, "결과가 너무 큽니다 — 범위(경로 · 줄)를 좁혀 주세요"));
+      const overflow = e.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /maxBuffer/i.test(String(e.message));
+      if (overflow && opts.partial) return resolve({ code: -2, out: stdout, truncated: true });
+      if (overflow) return reject(new HttpError(413, "결과가 너무 큽니다 — 범위(경로 · 줄)를 좁혀 주세요"));
       if (e.killed || e.signal) return reject(new HttpError(504, `git 이 ${REPO_READ_LIMITS.timeoutMs / 1000}초 안에 끝나지 않았습니다 — 범위를 좁혀 주세요`));
       reject(new GitFail(code, String(stderr ?? "")));
     });
@@ -173,24 +181,34 @@ export async function resolveCommit(c: Clone, rev: string): Promise<string> {
   if (HASH_RE.test(r)) {
     const sha = (await text(c.dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${r}^{commit}`], [1]).catch(() => "")).trim();
     if (!sha) throw new HttpError(404, `커밋 ${r.slice(0, 12)} 이 받아 둔 사본에 없습니다(아직 받지 않았거나 없는 커밋)`);
-    const key = `${c.dir}\0${sha}`;
-    const at = reachCache.get(key);
-    if (at == null || Date.now() - at > REACH_TTL_MS) {
-      const hit = (await text(c.dir, ["for-each-ref", "--count=1", "--format=%(refname)", "--contains", sha, "refs/remotes/origin/", "refs/tags/"])).trim();
-      if (!hit) throw new HttpError(404, `커밋 ${sha.slice(0, 12)} 은 원격 브랜치 · 태그에서 닿지 않아 읽지 않습니다(올라가지 않은 작업 커밋)`);
-      if (reachCache.size >= REACH_MAX) reachCache.clear();
-      reachCache.set(key, Date.now());
-    }
+    await assertReachable(c, sha, `커밋 ${sha.slice(0, 12)}`);
     return sha;
   }
   if (!isRefName(r)) throw new HttpError(400, "판은 커밋 해시(40자) · 원격 브랜치 이름 · 태그 이름 가운데 하나여야 합니다");
   const branch = r.startsWith("origin/") ? r.slice("origin/".length) : r;
-  for (const full of [`refs/remotes/origin/${branch}`, `refs/tags/${r}`]) {
-    if (full === "refs/remotes/origin/HEAD") continue;
-    const sha = (await text(c.dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${full}^{commit}`], [1]).catch(() => "")).trim();
+  const peel = async (full: string) => (await text(c.dir, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${full}^{commit}`], [1]).catch(() => "")).trim();
+  //  원격 브랜치 머리는 그 자체로 닿는다. 태그는 그 커밋이 원격 브랜치에서 닿아야 한다(머리말 «어떤 판만»).
+  if (branch !== "HEAD") {
+    const sha = await peel(`refs/remotes/origin/${branch}`);
     if (sha) return sha;
   }
+  const tagged = await peel(`refs/tags/${r}`);
+  if (tagged) {
+    await assertReachable(c, tagged, `태그 '${r}' 의 커밋`);
+    return tagged;
+  }
   throw new HttpError(404, `'${r}' 라는 원격 브랜치나 태그가 받아 둔 사본에 없습니다`);
+}
+
+/** 원격 브랜치에서 닿는가(기억 10분) — 아니면 404. */
+async function assertReachable(c: Clone, sha: string, what: string): Promise<void> {
+  const key = `${c.dir}\0${sha}`;
+  const at = reachCache.get(key);
+  if (at != null && Date.now() - at <= REACH_TTL_MS) return;
+  const hit = (await text(c.dir, ["for-each-ref", "--count=1", "--format=%(refname)", "--contains", sha, "refs/remotes/origin/"])).trim();
+  if (!hit) throw new HttpError(404, `${what} 은 원격 브랜치에서 닿지 않아 읽지 않습니다(올라가지 않은 작업 커밋이거나 로컬 태그)`);
+  if (reachCache.size >= REACH_MAX) reachCache.clear();
+  reachCache.set(key, Date.now());
 }
 
 /** 등록한 기본 브랜치 — 등록값(git 소스를 등록한 레포만 · 판 이름 꼴일 때만) → 원격 기본(origin/HEAD) → main. */
@@ -228,8 +246,12 @@ export async function repoRefsAt(c: Clone, opts: { tags?: number } = {}): Promis
   const head = hc && HASH_RE.test(hc) ? { branch, commit: hc, date: hd ?? "", subject: (hs ?? "").slice(0, 300) } : null;
   const limit = Math.min(Math.max(1, opts.tags ?? REPO_READ_LIMITS.tagsDefault), REPO_READ_LIMITS.tagsMax);
   //  태그가 가리키는 것: 주석 태그면 *objectname(벗긴 커밋), 아니면 objectname. 커밋이 아닌 것을 가리키는 태그는 버린다.
+  //  원격 브랜치에서 닿는 태그만(머리말 «어떤 판만») — --merged 를 원격 브랜치마다 주면 그 가운데 하나에서 닿는 태그다(git 2.30+ 은 여럿을 «또는» 으로 본다).
   const fmt = "%(refname:strip=2)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)%00%(committerdate:iso-strict)%00%(*committerdate:iso-strict)%00%(creatordate:iso-strict)";
-  const raw = await text(c.dir, ["for-each-ref", "--sort=-creatordate", `--count=${limit + 1}`, `--format=${fmt}`, "refs/tags/"]);
+  const remotes = (await text(c.dir, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin/"])).split("\n").filter((x) => x && x !== "refs/remotes/origin/HEAD");
+  const raw = remotes.length
+    ? await text(c.dir, ["for-each-ref", "--sort=-creatordate", `--count=${limit + 1}`, `--format=${fmt}`, ...remotes.map((x) => `--merged=${x}`), "refs/tags/"])
+    : "";
   const rows = raw.split("\n").filter(Boolean);
   const tags: RepoRefs["tags"] = [];
   for (const line of rows.slice(0, limit)) {
@@ -324,20 +346,33 @@ export async function repoGrepAt(c: Clone, rev: string, pattern: string, opts: {
   if (p != null && !isRepoPath(p)) throw new HttpError(400, "path 는 레포 안의 경로여야 합니다(앞에 / 없이 · . .. 마디 없이)");
   const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? REPO_READ_LIMITS.grepDefault)), REPO_READ_LIMITS.grepMax);
   //  git grep 은 판 앞의 --end-of-options 를 받지 않는다(«must come before non-option arguments») — 판은 위에서 해시로 해소했고 찾을 글은 -e 로 넘긴다.
-  const args = ["grep", "-n", "-I", "-F", "-z", "--no-color", "--full-name", ...(opts.ignore_case ? ["-i"] : []), "-e", pat, sha, ...(p ? ["--", p] : [])];
-  const raw = await text(c.dir, args, [1]);
-  //  -z: «판:경로\0줄\0글». 판 머리를 떼고 줄마다 읽는다.
-  const hits: RepoGrep["hits"] = [];
-  let truncated = false;
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    const [where, num, ...rest] = line.split("\0");
+  //  -m: 파일마다 맞은 줄 상한(흔한 글자로 큰 레포를 찾을 때 출력이 커지지 않게) · 출력 상한을 넘으면 받은 데까지(partial).
+  const args = ["grep", "-n", "-I", "-F", "-z", "--no-color", "--full-name", `--max-count=${limit + 1}`, ...(opts.ignore_case ? ["-i"] : []), "-e", pat, sha, ...(p ? ["--", p] : [])];
+  const res = await runGit(c.dir, args, { okCodes: [1], maxBuffer: REPO_READ_LIMITS.grepOutBytes, partial: true });
+  const all = parseGrepZ(String(res.out), sha);
+  const hits = all.slice(0, limit).map((h) => ({ ...h, text: h.text.length > REPO_READ_LIMITS.grepLineChars ? `${h.text.slice(0, REPO_READ_LIMITS.grepLineChars)}…` : h.text }));
+  return { repo: c.name, commit: sha, pattern: pat, hits, truncated: all.length > limit || res.truncated === true };
+}
+
+/**
+ * git grep -z 출력 읽기 — 한 줄은 «판:경로\0줄 번호\0글\n». 경로에 줄바꿈이 들어도 깨지지 않게 줄로 먼저 나누지 않고 차례로 읽는다.
+ *  끝이 잘린 마지막 줄(출력 상한)은 버린다.
+ */
+export function parseGrepZ(raw: string, sha: string): Array<{ path: string; line: number; text: string }> {
+  const out: Array<{ path: string; line: number; text: string }> = [];
+  let i = 0;
+  while (i < raw.length) {
+    const a = raw.indexOf("\0", i);
+    if (a < 0) break;
+    const b = raw.indexOf("\0", a + 1);
+    if (b < 0) break;
+    const e = raw.indexOf("\n", b + 1);
+    if (e < 0) break;
+    const where = raw.slice(i, a);
     const file = where.startsWith(`${sha}:`) ? where.slice(sha.length + 1) : where;
-    const n = Number(num);
-    if (!file || !Number.isInteger(n)) continue;
-    if (hits.length >= limit) { truncated = true; break; }
-    const body = rest.join("\0");
-    hits.push({ path: file, line: n, text: body.length > REPO_READ_LIMITS.grepLineChars ? `${body.slice(0, REPO_READ_LIMITS.grepLineChars)}…` : body });
+    const n = Number(raw.slice(a + 1, b));
+    if (file && Number.isInteger(n) && n > 0) out.push({ path: file, line: n, text: raw.slice(b + 1, e) });
+    i = e + 1;
   }
-  return { repo: c.name, commit: sha, pattern: pat, hits, truncated };
+  return out;
 }

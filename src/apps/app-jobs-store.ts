@@ -121,6 +121,14 @@ export async function jobScopeCeiling(id: number): Promise<string[] | null> {
 }
 
 /** 목록 — 결과 본문은 싣지 않는다(작업 하나에 64KB 까지라 목록이 무거워진다 — app_job_get 으로 본다). */
+/** 같은 이름 · 출처의 열린(줄 · 보냄 · 도는 중) 작업 하나의 번호 — 없으면 null(앱 v2 #121 정기 작업이 앞 실행이 아직 열려 있는지 본다). */
+export async function openAppJobWithLabel(appId: string, label: string, source: string): Promise<number | null> {
+  const r = await itemsPool.query(
+    `SELECT id FROM org_app_job WHERE app_id = $1 AND label = $2 AND source = $3 AND status IN ('queued', 'dispatched', 'running') ORDER BY id DESC LIMIT 1`,
+    [appId, label, source]);
+  return r.rows[0] ? Number(r.rows[0].id) : null;
+}
+
 export async function listAppJobs(f: { appId?: string | null; requester?: string | null; status?: AppJobStatus | null; limit: number }): Promise<AppJobRow[]> {
   const r = await itemsPool.query(
     `SELECT ${LIGHT} FROM org_app_job
