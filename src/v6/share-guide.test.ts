@@ -6,12 +6,17 @@
 //   R1  워크스페이스 설정 → 2장 갈래: 못 읽음(null) → 초대제 · open → 전체 공개 · ★enforced=false(축 꺼짐) → «팀 전원»(초대제라도)
 //   R2  자동으로 띄우지 않는 자리: 처음 설정 · 승인 · 앱 전체 화면 · 앱 허가 · 앱 열기 · 다시 보기 주소 자신.
 //       경계 — 그 이름으로 시작하는 다른 주소(#/welcomes)는 막지 않는다 · 쿼리가 붙어도(#/welcome?resume=1) 막는다 · 빈 주소는 띄운다
-//   R3  2장 문구 — 초대제는 «비공개», 전체 공개 · 축 꺼짐은 «팀» — ★어느 쪽이든 «남이 만든 세션 안은 볼 수 없어요» 를 말한다
-//   R4  뱃지는 [대상][공개 범위] 두 개 — 1~4장 모두 정확히 두 개 · 5장(요약)은 없음 · «남아요/안 남아요» 같은 말은 없다
+//   R3  (2026-11-22 안내 팝업으로 바꿈) 1~4장은 개념 설명(AI 세션 · 프로젝트 · 자료 · 지식) — 갈래와 상관없이 같은 문구.
+//       5장 «누가 무엇을 볼 수 있나요» 만 갈래를 탄다: 초대제는 «AI 세션과 프로젝트는 나와 내가 초대한 사람만,» ↵ «자료와 지식은 팀 전원»
+//       · 전체 공개 · 축 꺼짐은 «AI 세션은 …,» ↵ «프로젝트 · 자료 · 지식은 팀 전원» — ★줄은 «사람만,» 바로 뒤에서 나눈다(<br>)
+//   R4  그림 위 뱃지는 없다(권한 팝업이 아니다) · «남아요/안 남아요» 같은 말은 없다
+//   R6  ★사실만 — «앱에서 가져온 자료는 원래 볼 수 있던 사람만» 같은 거짓 문구가 없다 · 요약 4줄(세션 · 프로젝트 · 자료 · 지식)이 있고
+//       세션 줄은 «관리자도 대화 내용은 못 봐요», 자료 줄은 «올린 파일 · AI가 만든 파일은 팀 전원» 을 말한다 · 실제 로고(슬랙 · 노션 · 드라이브)를 쓴다
 //   R5  다시 보기 주소 — #/share-guide · #/share-guide?x · 다른 주소는 아니다
 //   C1  ★CLI 상자 — 모든 갈래 × 링크 유무에서 상자 줄의 화면 폭이 같다(오른쪽 테두리가 맞는다, 한글 2칸)
 //   C2  CLI 상자 안엔 폭이 터미널마다 다른 기호(· — ↵)가 없다
 //   C3  CLI 프로젝트 줄 — 초대제는 «나와 초대한 사람만 봐요» 가 먼저 · 둘째 줄 «초대받아도 남의 세션 안은 못 봐요» · 전체 공개는 «팀 전원»
+//       · 네 줄(AI 세션 · 프로젝트 · 자료 · 지식) — 웹 요약과 같은 사실
 //   C4  color=false 면 ANSI 가 하나도 없다 · narrow 면 테두리가 없다 · 링크가 비면 링크 줄이 없다
 //   W1  배선 — 셸(main.ts)이 첫 안내를 띄우고 다시 보기 주소를 가로챈다 · 승인 페이지가 승인 뒤 안내를 붙인다 · 스타일이 실린다
 //   W2  배선 — 서버 표식 share_guide_seen: 받는다 · 처음 시각을 지킨다 · GET 이 돌려준다
@@ -67,31 +72,55 @@ test("R2 자동으로 띄우지 않는 자리 · 경계", async () => {
   }
 });
 
-test("R3 2장 문구 — 갈래마다 공개 범위가 맞고, 어느 쪽이든 «남이 만든 세션 안» 을 말한다", async () => {
+test("R3 1~4장은 개념 설명 · 5장만 갈래 — 줄은 «사람만,» 뒤에서 나눈다", async () => {
   const m = await loadRules();
-  const s2 = m.SG_STEPS.find((s: { scene: string }) => s.scene === "s2");
-  assert.match(s2.title("invite"), /프로젝트도 비공개/);
-  assert.match(s2.title("open"), /팀에 공개/);
-  assert.match(s2.title("all"), /팀에 공개/);
-  assert.match(text(s2.badges("invite")), /프로젝트비공개/);
-  assert.match(text(s2.badges("open")), /프로젝트전체 공개/);
-  for (const md of ["invite", "open", "all"]) assert.match(text(s2.lead(md)), /남이 만든 세션 안은 볼 수 없어요/, md);
-  assert.match(text(s2.lead("open")), /결과를 남긴 프로젝트는 팀 전원/);
-  assert.doesNotMatch(text(s2.lead("all")), /결과를 남긴/, "축이 꺼진 곳은 결과와 상관없이 전원이 본다");
+  assert.deepEqual(m.SG_STEPS.map((s: { scene: string }) => s.scene), ["s1", "s2", "s3", "s4", "s5"]);
+  const t = (i: number, md: string) => m.SG_STEPS[i].title(md);
+  assert.equal(t(0, "invite"), "AI 세션은 AI와 일하는 대화창이에요");
+  assert.equal(t(1, "invite"), "프로젝트는 한 가지 일을 모아 두는 곳이에요");
+  assert.equal(t(2, "invite"), "자료는 AI가 읽는 회사의 글과 파일이에요");
+  assert.equal(t(3, "invite"), "지식은 AI가 정리해 둔 메모예요");
+  for (let i = 0; i < 4; i++) {
+    assert.equal(m.SG_STEPS[i].lead("invite"), m.SG_STEPS[i].lead("open"), `${i + 1}장은 갈래를 타지 않는다`);
+    assert.equal(t(i, "invite"), t(i, "all"));
+  }
+  const last = m.SG_STEPS[4];
+  assert.equal(last.title("invite"), "누가 무엇을 볼 수 있나요");
+  assert.equal(text(last.lead("invite").replace("<br>", "\n")), "AI 세션과 프로젝트는 나와 내가 초대한 사람만,\n자료와 지식은 팀 전원이 봐요.");
+  for (const md of ["open", "all"]) {
+    assert.equal(text(last.lead(md).replace("<br>", "\n")), "AI 세션은 나와 내가 초대한 사람만,\n프로젝트 · 자료 · 지식은 팀 전원이 봐요.", md);
+  }
+  assert.match(last.extra(), /\/lively-disconnect/);
+  assert.match(m.SG_STEPS[3].extra(), /지식으로 남기기 싫을 때는\?/);
 });
 
-test("R4 뱃지 — 1~4장은 [대상][공개 범위] 정확히 두 개 · 요약은 없음 · «남아요» 류 금지", async () => {
+test("R4 그림 위 뱃지 없음 · «남아요» 류 금지", async () => {
   const m = await loadRules();
   assert.equal(m.SG_STEPS.length, 5);
-  m.SG_STEPS.forEach((s: { scene: string; badges: (x: string) => string; title: (x: string) => string; lead: (x: string) => string }, i: number) => {
-    for (const md of ["invite", "open"]) {
-      const n = (s.badges(md).match(/class="sg-bd /g) || []).length;
-      assert.equal(n, i < 4 ? 2 : 0, `${s.scene} ${md}`);
-      assert.match(s.badges(md), i < 4 ? /sg-what/ : /^$/);
-      const all = text(s.badges(md) + s.title(md) + s.lead(md));
-      assert.doesNotMatch(all, /남아요|안 남아요|작업 폴더/, s.scene);
-    }
-  });
+  for (const s of m.SG_STEPS) {
+    assert.equal("badges" in s, false, s.scene);
+    for (const md of ["invite", "open", "all"]) assert.doesNotMatch(text(s.title(md) + s.lead(md)), /남아요|안 남아요|작업 폴더/, s.scene);
+  }
+  assert.doesNotMatch(readFileSync("web/v2/share-guide.ts", "utf8"), /badges/);
+});
+
+test("R6 ★사실만 — 거짓 문구 없음 · 요약 4줄 · 실제 로고", async () => {
+  const m = await loadRules();
+  const mk = readFileSync("web/v2/share-guide-markup.ts", "utf8");
+  const all = mk + m.SG_STEPS.map((s: { title: (x: string) => string; lead: (x: string) => string; extra?: () => string }) =>
+    s.title("invite") + s.lead("invite") + (s.extra ? s.extra() : "")).join("");
+  assert.doesNotMatch(text(all), /원래 볼 수 있던/, "앱에서 모은 자료는 기본이 열려 있다(관리자 규칙이 없으면) — «원래 보던 사람만» 은 거짓");
+  const recap = mk.slice(mk.indexOf('class="sg-rcap"'));
+  const rows = recap.match(/class="sg-rrow/g) || [];
+  assert.equal(rows.length, 4, "세션 · 프로젝트 · 자료 · 지식");
+  assert.match(recap, /관리자도 대화 내용은 못 봐요/);
+  assert.match(text(recap), /올린 파일 · AI가 만든 파일은 팀 전원이 찾아봐요/);
+  assert.match(text(recap), /닫힌 자료에서 나온 지식은 그 자료를 볼 수 있는 사람만/);
+  for (const id of ["slack", "notion", "google-drive"]) {
+    assert.match(mk, new RegExp(`<symbol id="sg-lg-${id}" viewBox="0 0 \\d+ \\d+"><path`), id);
+    assert.match(mk, new RegExp(`href="#sg-lg-${id}"`), `${id} 로고를 그림에서 쓴다`);
+  }
+  assert.doesNotMatch(mk, /class="sg-tile/, "글자 상자(S · N)로 로고를 흉내 내지 않는다");
 });
 
 test("R5 다시 보기 주소", async () => {
@@ -125,7 +154,7 @@ test("C2 CLI 상자 안엔 폭이 애매한 기호가 없다", async () => {
   }
 });
 
-test("C3 CLI 프로젝트 줄 — 초대제는 «나와 초대한 사람만 봐요» 가 먼저, 남의 세션 줄이 뒤에", async () => {
+test("C3 CLI 네 줄 — 웹 요약과 같은 사실 · 프로젝트 줄은 갈래를 탄다", async () => {
   const c = await loadCli();
   const inv = c.shareGuideLines({ mode: "invite", color: false }).map(strip);
   const i = inv.findIndex((l: string) => l.includes("프로젝트"));
@@ -137,10 +166,16 @@ test("C3 CLI 프로젝트 줄 — 초대제는 «나와 초대한 사람만 봐�
   assert.match(open[j + 1], /초대받아도 남의 세션 안은 못 봐요/);
   const all = c.shareGuideLines({ mode: "all", color: false }).map(strip);
   assert.ok(all.some((l: string) => /프로젝트\s+전체 공개\s+팀 전원이 봐요/.test(l)));
-  // 다른 두 줄은 갈래와 상관없다
   for (const ls of [inv, open, all]) {
-    assert.ok(ls.some((l: string) => /AI 세션\s+비공개\s+나와 초대한 사람만 봐요/.test(l)));
-    assert.ok(ls.some((l: string) => /지식\s+전체 공개\s+AI가 정리한 글만 팀에 자동 공유돼요/.test(l)));
+    const at = (re: RegExp) => ls.findIndex((l: string) => re.test(l));
+    const s = at(/AI 세션\s+비공개\s+나와 초대한 사람만 봐요/);
+    assert.ok(s >= 0); assert.match(ls[s + 1], /관리자도 대화 내용은 못 봐요/);
+    const d = at(/자료\s+전체 공개\s+올린 파일과 AI가 만든 파일은 팀 전원이 봐요/);
+    assert.ok(d >= 0, "자료 줄"); assert.match(ls[d + 1], /앱에서 모은 자료는 모을 때 정한 범위만큼/);
+    const k = at(/지식\s+전체 공개\s+AI가 정리한 글을 팀 전원이 봐요/);
+    assert.ok(k > d, "지식 줄은 자료 줄 뒤"); assert.match(ls[k + 1], /닫힌 자료로 만든 지식은 그 자료를 보는 사람만/);
+    assert.ok(s < at(/프로젝트\s/) && at(/프로젝트\s/) < d, "순서: 세션 · 프로젝트 · 자료 · 지식");
+    assert.ok(!ls.some((l: string) => /원래 볼 수 있던|AI가 정리한 글만/.test(l)));
     assert.ok(ls.some((l: string) => l.includes("lively run --readonly") && l.includes("--incognito")));
     assert.ok(ls.some((l: string) => l.includes("/lively-disconnect")));
   }

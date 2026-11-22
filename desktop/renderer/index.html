@@ -25,7 +25,7 @@
     </ol>
     <div class="sidefoot">
       <div class="acct hidden" id="acct">
-        <div class="av" id="acct-av"></div>
+        <div class="av"><span id="acct-av"></span></div>
         <div class="acct-t"><div class="em" id="acct-email"></div><div class="wsn" id="acct-ws"></div></div>
       </div>
       <button class="linkbtn hidden" id="notme">다른 계정으로 로그인</button>
@@ -144,10 +144,20 @@
         </div>
         <div class="chips" id="done-chips"></div>
         <div class="carry">
-          <div class="carry-h">전에 쓰던 AI 설정 가져오기</div>
-          <div class="carry-d">AI 도구를 쓰면서 만들어 둔 것이 있다면 회사 동료와 함께 쓸 수 있습니다. 예를 들어 AI 에게 늘 주던 지시, 직접 만든 명령, AI 가 저장해 둔 작업 메모입니다. 위에서 연결한 AI 도구 중 아무거나 열고 아래 문장을 입력하세요. 찾은 것을 하나씩 보여 주고 회사에 올릴지 묻습니다. 원래 파일은 바꾸지 않습니다.</div>
+          <div class="carry-h">직접 만든 AI 설정을 회사 워크스페이스에 올리기 <span class="opt">선택</span></div>
+          <div class="carry-d">이 컴퓨터의 AI 도구에 직접 만들어 둔 설정 파일이 있으면 회사 워크스페이스에 올려 동료도 쓰게 할 수 있습니다. 찾는 파일은 다음과 같습니다.</div>
+          <ul class="carry-l">
+            <li>지시 파일: CLAUDE.md, AGENTS.md, Cursor 규칙</li>
+            <li>직접 만든 스킬과 슬래시 명령</li>
+            <li>AI 도구가 저장한 메모리 파일</li>
+          </ul>
+          <ol class="carry-s">
+            <li>Claude Code, Cursor 같은 AI 도구를 여세요.</li>
+            <li>AI 와 대화하는 입력 칸에 아래 문장을 붙여 넣고 보내세요. 터미널 명령어가 아니라 AI 에게 보내는 메시지입니다.</li>
+            <li>AI 가 찾은 파일을 하나씩 보여 주고 올릴지 묻습니다. 올릴 것만 고르세요. 원래 파일은 바뀌지 않습니다.</li>
+          </ol>
           <div class="sayrow"><button class="say" id="onboard-say" title="눌러서 복사">온보딩 도와줘</button><span class="hint" id="onboard-copied">누르면 복사됩니다</span></div>
-          <div class="carry-n">처음 쓰는 분은 할 일이 없습니다.</div>
+          <div class="carry-n">직접 만든 설정이 없으면 이 단계는 하지 않아도 됩니다.</div>
         </div>
       </div>
       <div class="mfoot"><span class="grow"></span><button class="btn pri" id="done-open">라이블리 열기</button></div>
