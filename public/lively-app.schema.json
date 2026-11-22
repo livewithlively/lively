@@ -71,6 +71,13 @@
               },
               "default": []
             },
+            "optional_scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
             "tools": {
               "type": "array",
               "items": {
