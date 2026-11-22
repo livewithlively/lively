@@ -582,15 +582,21 @@ const appSetEnabled: Capability = {
 const appGrant: Capability = {
   name: "me_app_grant",
   title: "앱 사용 동의",
-  description: "이 앱을 내 자격으로 쓰겠다고 동의한다. 부여되는 권한(scope·도구)은 앱이 선언한 상한의 부분집합만 — scopes/tools 를 주면 그만큼만, 안 주면 앱 선언 전체.",
+  description: "이 앱을 내 자격으로 쓰겠다고 동의한다. 부여되는 권한(scope·도구)은 앱이 선언한 상한의 부분집합만 — scopes/tools 를 주면 그만큼만, 안 주면 앱 선언 전체(필수 scope 전부 · 도구 전부). " +
+    "앱의 선택 권한(매니페스트 permissions.optional_scopes — 예: 정기 작업을 도는 한 사람만 줄 code)은 동의 창이 주지 않고 optional_scopes 로 따로 준다: " +
+    "주면 그것만(선언한 선택 권한 안 · [] 면 모두 뺀다). 주지 않았으면 범위 없는 동의(app_id 만)는 이미 준 선택 권한을 그대로 두고, scopes · tools 로 범위를 정해 준 동의는 선택 권한을 넣지 않는다. " +
+    "선택 권한은 scopes 에 넣지 않는다(400).",
   scope: null,
-  input: { app_id: z.string(), scopes: z.array(z.string()).optional(), tools: z.array(z.string()).optional() },
+  input: {
+    app_id: z.string(), scopes: z.array(z.string()).optional(), tools: z.array(z.string()).optional(),
+    optional_scopes: z.array(z.string()).optional().describe("앱이 선언한 선택 권한(permissions.optional_scopes) 가운데 줄 것 — [] 면 모두 뺀다 · 생략하면 범위 없는 동의는 이미 준 것을 그대로 두고 scopes · tools 를 준 동의는 넣지 않는다"),
+  },
   expose: {
     mcp: true,
     rest: [{ method: "POST", paths: ["/api/ui/apps/:id/grant"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { app_id: (req.params as Record<string, string>)?.id, scopes: b.scopes, tools: b.tools };
+        return { app_id: (req.params as Record<string, string>)?.id, scopes: b.scopes, tools: b.tools, optional_scopes: b.optional_scopes };
       } }],
   },
   handler: async (input: Record<string, unknown>, user, ctx) => {
@@ -599,10 +605,12 @@ const appGrant: Capability = {
     const who = viewerOf(user);
     const { app } = await viewApp(await requireVisibleApp(id, who), who);
     const m = parseAppManifest(app.manifest);
-    const requested = (input.scopes !== undefined || input.tools !== undefined)
-      ? { scopes: input.scopes as string[] | undefined, tools: input.tools as string[] | undefined }
+    const requested = (input.scopes !== undefined || input.tools !== undefined || input.optional_scopes !== undefined)
+      ? { scopes: input.scopes as string[] | undefined, tools: input.tools as string[] | undefined, optional_scopes: input.optional_scopes as string[] | undefined }
       : undefined;
-    const g = resolveGrant(m, requested);
+    //  앱 v2 #124 — 선택 권한을 주지 않은 동의(동의 창 · 다시 동의)는 이 사람이 이미 준 선택 권한을 그대로 둔다(resolveGrant prior).
+    const prior = await store.getActiveGrant(id, actorOf(user));
+    const g = resolveGrant(m, requested, prior);
     const row = await store.upsertGrant(id, actorOf(user), g.scopes, g.tools, wctx(user, ctx));
     //  #4684 — 동의를 거둬 떨어졌던 앱 폴더가, 이 사람이 붙여 둔 세션에 다시 붙는다(기다리지 않는다).
     resyncSessionsWithApp(id, "동의", actorOf(user));

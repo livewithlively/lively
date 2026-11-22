@@ -26,7 +26,8 @@ import { CONSENT_REQUIRED } from "./app-consent.js";
 import { isAppScreenSource } from "./app-screen-sources.js";
 import {
   grantableOf, grantGap, grantGapEmpty, intersectGrantable, needsRegrant, regrantMessage, regrantScopePhrase, regrantToolPhrase, scopeNeedsRegrant,
-  type GrantGap, type ResolvedGrant,
+  optionalScopeMissing, optionalScopeMessage, OPTIONAL_SCOPE_REQUIRED,
+  type DeclaredGrant, type GrantGap,
 } from "./grant.js";
 
 /** 이 사람의 이 앱 동의를 그 판의 지금 선언과 견준 결과. */
@@ -34,8 +35,9 @@ export interface ConsentCoverage {
   grant: AppGrantRow;
   /** 그 사람(구성원)이 가진 scope — 다시 동의해서 앱이 얻을 수 있는 상한. */
   memberScopes: string[];
-  /** 동의가 덮어야 할 것 — 그 판의 선언 중 다시 동의로 얻을 수 있는 것(주소의 판과 그 사람이 보는 판이 다르면 둘 다에 있는 것). */
-  declared: ResolvedGrant;
+  /** 동의가 덮어야 할 것 — 그 판의 선언 중 다시 동의로 얻을 수 있는 것(주소의 판과 그 사람이 보는 판이 다르면 둘 다에 있는 것).
+   *  optional_scopes(앱 v2 #124 선택 권한)는 덮지 않아도 된다 — 필요한 사람만 따로 준다. */
+  declared: DeclaredGrant;
   /** 덮지 못한 것(구성원에게 없는 scope 는 뺀다). 비면 덮는다. */
   gap: GrantGap;
   /** 견준 판의 앱(이름표 · 판 칸은 그 판의 것). */
@@ -111,6 +113,12 @@ export async function appRegrantError(user: LivelyUser, need: { tool: string } |
   const appId = user.appId;
   const c = await consentCoverage(appId, user.userId, user.appAddress ? { address: user.appAddress } : {}).catch(() => null);
   if (!c) return null;
+  //  앱 v2 #124 — 그 사람이 주지 않은 선택 권한 때문이면 «다시 동의» 로 보내지 않는다(동의 창은 선택 권한을 주지 않아 풀리지 않는다).
+  //   선택 권한이 먼저다 — 필수 쪽 빈칸도 함께 있으면 선택 권한을 준 뒤의 다음 호출이 «다시 동의» 를 말한다(한 번에 하나씩 · 둘 다 풀리는 길로).
+  const optional = optionalScopeMissing(c.grant.scopes, c.declared, c.memberScopes, need);
+  if (optional) {
+    return new HttpError(403, optionalScopeMessage(appId, optional, "tool" in need ? need.tool : undefined), { body: { code: OPTIONAL_SCOPE_REQUIRED, scope: optional } });
+  }
   const hit = "tool" in need
     ? needsRegrant(c.grant.tools, c.declared.tools, need.tool)
     : scopeNeedsRegrant(c.grant.scopes, c.declared.scopes, need.scope, c.memberScopes);

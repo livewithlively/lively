@@ -6,6 +6,7 @@
 // 설계 근거: 지식 lively-os-app-layer-analysis-2026-08 · 설계문서 project/1780/design-v1.md (R1·R2 적대검증 반영).
 // 핵심 불변식:
 //  - permissions 는 **상한 선언**이다(설치 시 사람이 보고 동의, 실행 시 이 범위로 축소). admin·runtime scope 선언은 거부.
+//    permissions.optional_scopes(선택 권한)도 상한에 들지만 동의 창은 주지 않는다 — 필요한 사람만 따로 받는다(grant.ts resolveGrant).
 //  - id 는 워크스페이스 유일·32자 상한(자산 id 합성 `app-<hash10>-<slug>` 이 64자 STRICT_SLUG 를 넘지 않게 — design R1-F4).
 //  - 검증은 **순수**(DB·FS 무접근). 설치 파이프라인(별도)이 이 파서를 먼저 태운 뒤 전개한다.
 import { z } from "zod";
@@ -94,6 +95,10 @@ const toolGlobSchema = z.string().min(1).max(128).regex(/^[a-z0-9_*]+$/i, "tool 
 
 const permissionsSchema = z.object({
   scopes: z.array(z.string()).default([]),
+  // 앱 v2 #124 선택 권한 — 동의 창이 주지 않고, 그 권한이 필요한 사람만 따로 받는 scope(me_app_grant optional_scopes).
+  //  예: 정기 작업을 도는 한 사람(run_as)만 줄 code. 받지 않아도 «다시 동의» 빈칸이 아니어서(#1644) 그 scope 를 가진 구성원 모두가
+  //  앱이 그 권한을 더할 때마다 다시 동의하지 않아도 된다. 받지 않은 사람 이름으로는 앱이 그 scope 를 못 쓴다(앱의 권한 = 구성원 ∩ 동의).
+  optional_scopes: z.array(z.string()).default([]),
   tools: z.array(toolGlobSchema).default([]),        // lively 능력(빌트인) allowlist. 빈 배열 = lively 툴 0
   ext_tools: z.array(toolGlobSchema).default([]),    // 프록시(ext__*)·HTTP 도구 allowlist(글롭)
   hosts: z.array(hostSchema).default([]),            // 자체 백엔드 — 설치 시 url_allowlist 병합
@@ -496,6 +501,13 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
     if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.scopes]: 알 수 없는 scope '${s}'`);
     if (APP_FORBIDDEN_SCOPES.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.scopes]: '${s}' 는 앱이 요청할 수 없는 scope 입니다(관리·런타임)`);
   }
+  //  앱 v2 #124 선택 권한 — 같은 상한 규칙. 필수와 선택에 함께 두면 동의 창이 주는지가 흐려지니 거절한다.
+  for (const s of m.permissions.optional_scopes) {
+    if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.optional_scopes]: 알 수 없는 scope '${s}'`);
+    if (APP_FORBIDDEN_SCOPES.has(s)) throw new HttpError(400, `매니페스트 오류 [permissions.optional_scopes]: '${s}' 는 앱이 요청할 수 없는 scope 입니다(관리·런타임)`);
+    if (m.permissions.scopes.includes(s)) throw new HttpError(400, `매니페스트 오류 [permissions.optional_scopes]: '${s}' 가 permissions.scopes 에도 있습니다 — 필수(scopes)와 선택(optional_scopes) 가운데 한 곳에만 둡니다`);
+  }
+  m.permissions.optional_scopes = [...new Set(m.permissions.optional_scopes)];
 
   // connect_domains 의 `*` 는 거부한다 — 프레임(남의 페이지를 보여줌)과 달리 connect 는 **우리 안의 데이터를
   //  임의 서버로 보내는 통로**다. 넓게 열고 싶다는 선언을 그대로 받아 주면 동의 화면이 의미를 잃는다.
