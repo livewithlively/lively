@@ -28,7 +28,7 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, bannerHome, enterUrlWith, tenantUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, bannerHome, shouldFollowGateway, enterUrlWith, tenantUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
 import { createHashNav } from "./web-shell.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
@@ -3021,7 +3021,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const open = main.slice(main.indexOf("async function openFromBanner("), main.indexOf("function cpOrigins("));
     assert.ok(/clickTarget\(event, \{ gatewayUrl: home, windowUrl, windowWs, cpOrigins: cpOrigins\(\) \}\)/.test(open), "클릭 판정에 창·그곳(#5701 받아 온 곳)·계정 서버를 안 넘긴다");
     assert.ok(/t\.how === "external"\) \{ await shell\.openExternal\(t\.url\)/.test(open), "다른 워크스페이스를 브라우저로 안 연다");
-    assert.ok(/t\.how === "load"\) \{ followGateway\(home\); loadInApp\(t\.url\)/.test(open), "매인 곳을 다시 싣지 않는다");
+    assert.ok(/t\.how === "load"\) \{ await loadGatewayInApp\(home, t\.url\)/.test(open), "매인 곳을 다시 싣지 않는다");
     assert.ok(/READ_WEB_WORKSPACE_JS/.test(open) && /ws\.via === "header"/.test(open), "셀프호스트 다중에서 창의 선택을 안 묻는다");
     const load = main.slice(main.indexOf("function loadInApp("), main.indexOf("function resetNotifyBinding("));
     assert.ok(load.indexOf("hashNav.failed()") >= 0 && load.indexOf("hashNav.failed()") < load.indexOf("loadURL(url)"), "다시 싣기 전에 기다리던 해시를 안 버린다");
@@ -3094,8 +3094,17 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.deepEqual(clickTarget(ev, { ...ctx, gatewayUrl: home }), { how: "hash", hash: "#/s/box-b-9" });
     //  종전 배선(gatewayUrl = 처음 로그인한 곳) — 이 판정이 B 의 세션을 A 에서 찾게 했다(원인 기록).
     assert.deepEqual(clickTarget(ev, { ...ctx, gatewayUrl: GW_A }), { how: "load", url: GW_A + "/ui/#/s/box-b-9" });
-    //  B 의 배너를 받아 둔 뒤 C 로 옮겼다 — 그 배너는 B 를 다시 싣는다(그곳 = 받아 온 곳). 앱 화면은 followGateway 가 B 로 옮겨 적는다(A50).
+    //  B 의 배너를 받아 둔 뒤 C 로 옮겼다 — 그 배너는 B 를 다시 싣는다(그곳 = 받아 온 곳). 앱 화면은 B 세션이 있으면 B 로 옮겨 적는다(A49b · A50).
     assert.deepEqual(clickTarget(ev, { ...ctx, windowUrl: GW_C + "/ui/", gatewayUrl: bannerHome(ev, { selected: GW_C, bound: GW_A, cloud: CLOUD }) }), { how: "load", url: GW_B + "/ui/#/s/box-b-9" });
+  });
+  t("A49b F1~F5 다시 실을 때 «보는 워크스페이스» 도 옮겨 적나(shouldFollowGateway) — 그곳 세션이 있을 때만", () => {
+    assert.equal(shouldFollowGateway(GW_B, { selected: null, hasSession: true }), false, "F1 토큰 판은 손대지 않는다");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_B + "/", hasSession: true }), false, "F2 이미 그곳");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_C, hasSession: true }), true, "F3 다른 워크스페이스 · 세션 있음");
+    assert.equal(shouldFollowGateway(GW_B, { selected: CLOUD, hasSession: true }), true, "F3 계정 서버 화면에서도");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_C, hasSession: false }), false, "F4 세션이 없으면 창만 싣는다(알림을 끊지 않는다)");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_C }), false, "F4 모르면 옮기지 않는다");
+    assert.equal(shouldFollowGateway(null, { selected: GW_C, hasSession: true }), false, "F5 그곳을 모른다");
   });
   t("A50 배선 — 배너는 받아 온 곳을 달고 · 클릭은 그곳으로 판정 · 다른 워크스페이스 입장 실패를 삼키지 않는다(#5701)", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
@@ -3110,12 +3119,20 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/const home = bannerHome\(event, \{ selected: selectedGatewayUrl, bound: state\.gatewayUrl, cloud: cloudUrl\(\) \}\);/.test(open), "그곳을 받아 온 곳·보는 워크스페이스로 안 정한다");
     assert.ok(!/gatewayUrl: state\.gatewayUrl/.test(open), "클릭 판정이 아직 처음 로그인한 곳을 매인으로 쓴다");
     assert.ok(/try \{ await enterWorkspaceInApp\(enter\.id, hash\); \}\s*catch \(err\) \{ await enterFailed\(err, t\.how === "external" \? t\.url : null\); \}/.test(open), "앱 안 입장 실패를 삼킨다(눌러도 아무 일 없음)");
-    const fail = main.slice(main.indexOf("async function enterFailed("), main.indexOf("function followGateway("));
-    assert.ok(/if \(msg === "계정 연결을 취소했습니다\."\) return;/.test(fail), "사람이 취소한 계정 연결까지 오류로 띄운다");
+    const fail = main.slice(main.indexOf("async function enterFailed("), main.indexOf("async function hasGatewaySession("));
+    assert.ok(!/계정 연결을 취소/.test(fail), "아무도 던지지 않는 문구로 실패를 거른다(리뷰 #1)");
+    assert.ok(/if \(\/ERR_ABORTED\|\\\(-3\\\)\/\.test\(msg\)\) return;/.test(fail), "밀린 싣기(-3)까지 실패로 띄운다");
+    assert.ok(/appWin\.isVisible\(\) && !appWin\.isMinimized\(\) \? appWin : null/.test(fail), "숨은 창에 대화상자를 붙인다(macOS 에서 안 보인다, 리뷰 #2)");
     assert.ok(/dialog\.showMessageBox\(/.test(fail) && /브라우저에서 열기/.test(fail) && /shell\.openExternal\(browserUrl\)/.test(fail), "실패 사유·브라우저 길을 안 준다");
-    const follow = main.slice(main.indexOf("function followGateway("), main.indexOf("async function accountCookie("));
-    assert.ok(/if \(!gw \|\| !selectedGatewayUrl \|\|/.test(follow), "토큰 판(selected 없음)까지 옮겨 적는다");
-    for (const k of ["selectedGatewayUrl = gw;", "appLoaded = { url: webUiUrl(gw), token: null };", "resetNotifyBinding();"]) assert.ok(follow.includes(k), `followGateway 에 ${k} 가 없다`);
+    const go = main.slice(main.indexOf("async function loadGatewayInApp("), main.indexOf("async function accountCookie("));
+    assert.ok(/shouldFollowGateway\(gw, \{ selected: selectedGatewayUrl, hasSession: gw \? await hasGatewaySession\(gw\) : false \}\)/.test(go), "옮겨 적기 판정이 그곳 세션을 안 본다(리뷰 #3)");
+    const startAt = go.indexOf("if (!loadInApp(url) || !follow) return;");
+    assert.ok(startAt > 0, "창이 싣기 시작했는지 안 본다(리뷰 #4)");
+    for (const k of ["selectedGatewayUrl = gw;", "lastGen = null;", "appLoaded = { url: webUiUrl(gw), token: null };", "resetNotifyBinding();"]) {
+      assert.ok(go.indexOf(k) > startAt, `${k} 가 없거나 싣기 시작 전에 적는다`);
+    }
+    const load = main.slice(main.indexOf("function loadInApp("), main.indexOf("function resetNotifyBinding("));
+    assert.ok(/return false;/.test(load) && /return true;/.test(load), "loadInApp 이 싣기 시작 여부를 안 알린다");
   });
 }
 

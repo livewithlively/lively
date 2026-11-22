@@ -466,6 +466,18 @@ export function bannerHome(event, ctx = {}) {
 }
 
 /**
+ * #5701 배너의 그곳을 앱 창에 다시 실을 때 앱의 «보는 워크스페이스»(selectedGatewayUrl)도 그리로 옮겨 적을까(순수 · 표 F1~F5).
+ *  창만 그곳을 싣고 «보는 워크스페이스» 가 옛 곳에 남으면 알림 바인딩(notifyConnection)이 옛 곳에 붙은 채 어긋난다.
+ *  그렇다고 아무 데로나 옮기면 안 된다 — 그곳의 웹 세션 쿠키가 없으면 창은 로그인 화면이고 알림 연결은 끊긴다(리뷰 #3).
+ *  @param {string|null} gw 그곳(bannerHome) · @param {{selected?:string|null, hasSession?:boolean}} ctx
+ */
+export function shouldFollowGateway(gw, ctx = {}) {
+  if (!gw || !ctx.selected) return false;                                   // F1 토큰 판(selected 없음) — 그 판의 배너는 전부 매인 곳에서 온다
+  if (String(ctx.selected).replace(/\/+$/, "") === gw) return false;        // F2 이미 그곳
+  return ctx.hasSession === true;                                            // F3 그곳 세션이 있을 때만 · F4 없으면 창만 싣는다
+}
+
+/**
  * 배너를 눌렀을 때 할 일(순수) — 사양 표 K1~K12.
  * @param {object|null} event 배너의 사건(묶음이면 null)
  * @param {{gatewayUrl?:string|null, windowUrl?:string|null, windowWs?:string|null, cpOrigins?:string[]}} ctx
