@@ -23,7 +23,10 @@ export interface SessTableItem extends AllSessLike {
 /** 표가 쥐는 화면 상태 — 부르는 쪽이 모듈 수준으로 들고 있다(통째로 다시 그려도 남게). */
 export interface SessTableUi { shown: number; closed: Set<string>; openUntitled: Set<string>; sort: SessSort | null;
   /** #5630 — groupCap 을 넘겨 끝까지 편 묶음(`${by}:${key}`). */
-  expanded?: Set<string> }
+  expanded?: Set<string>;
+  /** #5630 — «처음부터 접어 둔» 묶음 중 사람이 아직 손대지 않은 것. 그런 묶음이 화면의 유일한 묶음이면 펴서 그린다
+   *  (머리 한 줄만 서서 빈 화면처럼 보이지 않게). 사람이 머리를 누르면 여기서 빠지고 그 뒤로는 closed 만 따른다. */
+  softClosed?: Set<string> }
 export const SESS_TABLE_PAGE = 50;
 
 const BIN_PROJ_PX = 15;
@@ -246,9 +249,10 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
   const groups = by === 'none' ? [] : groupAllSess(vis, by, o.now, stateRank);
   const capOf = (gk: string): number => (o.groupCap && !(ui.expanded && ui.expanded.has(gk)) ? o.groupCap : Infinity);
   //  [더 보기]의 «외 N개» — 쪽수 때문에 못 그린 줄만 센다. 접은 묶음 · 접은 «이름 없는 세션» 은 더 보기로 나오지 않으니 빼고 센다.
+  const isClosed = (gk: string): boolean => ui.closed.has(gk) && !(groups.length === 1 && !!ui.softClosed && ui.softClosed.has(gk));
   const reachable = by === 'none' ? vis.length : groups.reduce((n, g) => {
     const gk = `${by}:${g.key}`;
-    if (ui.closed.has(gk)) return n;
+    if (isClosed(gk)) return n;
     const un = g.rows.filter((it) => it.untitled).length;
     const named = Math.min(g.rows.length - un, capOf(gk));
     return n + named + (ui.openUntitled.has(gk) ? un : 0);
@@ -263,9 +267,9 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
   for (const g of groups) {
     if (budget <= 0) break;
     const gk = `${by}:${g.key}`;
-    const closed = ui.closed.has(gk);
+    const closed = isClosed(gk);
     list.append(el('div', { class: 'v2-sa-gh plain' + (pp ? ' pp' : '') + (by === 'rel' ? ' rel rel-' + g.key : '') },
-      el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); o.repaint(); } },
+      el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); if (ui.softClosed) ui.softClosed.delete(gk); o.repaint(); } },
         el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
         el('span', { class: 'pill', text: o.groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }),
         o.groupHint ? el('span', { class: 'hint', text: o.groupHint(g.key) }) : null)));

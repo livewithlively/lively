@@ -59,7 +59,8 @@ const ui: SessTableUi & { period: PastPeriod; owner: string; state: string; by: 
   shown: PAGE,
   scopeKey: '',
   //  #5630 — «그 밖 · 전체 공개» 묶음은 처음엔 접혀 있다(원준 2026-11-22: 나와 직접 관계없는 수백 줄이 먼저 펼쳐지지 않게). 머리를 누르면 펴진다.
-  closed: new Set<string>(['rel:open']), openUntitled: new Set<string>(), expanded: new Set<string>(),
+  //  단, 그 묶음이 화면의 유일한 묶음이면 펴서 그린다(softClosed — 남의 공개 프로젝트만 든 리스트가 머리 한 줄로 비어 보이지 않게).
+  closed: new Set<string>(['rel:open']), softClosed: new Set<string>(['rel:open']), openUntitled: new Set<string>(), expanded: new Set<string>(),
 };
 /** #5630 관계 묶음 머리 밑 한 줄 — 무엇이 이 묶음에 드나. */
 const REL_HINT: Record<ProjRelation, string> = {

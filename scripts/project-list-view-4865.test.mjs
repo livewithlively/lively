@@ -113,6 +113,14 @@ ok(!/pjvProjStatusDot|statusDot/.test(slSrc) && !/pjv-tgroup-head/.test(slSrc), 
 ok(/sessFilterPicks\(/.test(slSrc) && /sessFilterPicks\(/.test(binsSrc), "S12 거르개 줄(기간 · 사람 · 상태)도 한 벌");
 //  #5630(원준 2026-11-22) — 프로젝트가 기본 초대제가 된 뒤 리스트 뷰의 기본 묶기는 «관계»(초대받은 · 내가 만든 · 그 밖)다. «시간» 은 고를 수 있다.
 ok(/return 'rel';/.test(cut(slSrc, "function loadGroupBy", "\n}")) && /\{ key: 'day'/.test(slSrc), "S13 리스트 뷰 기본 묶기 = «관계»(시간은 고를 수 있다)");
+//  «그 밖» 은 처음에 접혀 있되, 그 묶음이 화면의 유일한 묶음이면 펴서 그린다(머리 한 줄만 선 빈 화면 방지). 사람이 머리를 누른 뒤로는 그 선택만 따른다.
+{
+  const tbl = read("web/v2/sess-table.ts");
+  ok(/closed: new Set<string>\(\['rel:open'\]\), softClosed: new Set<string>\(\['rel:open'\]\)/.test(slSrc)
+    && /const isClosed = \(gk: string\): boolean => ui\.closed\.has\(gk\) && !\(groups\.length === 1 && !!ui\.softClosed && ui\.softClosed\.has\(gk\)\);/.test(tbl)
+    && /if \(ui\.softClosed\) ui\.softClosed\.delete\(gk\);/.test(tbl) && !/const closed = ui\.closed\.has\(gk\)/.test(tbl),
+    "S13b «그 밖» 묶음 — 처음엔 접힘 · 유일한 묶음이면 펴짐 · 사람이 누르면 그 선택을 따른다");
+}
 
 // ── S: 첫 진입 «불러오는 중» 줄이기(2026-10-19) — 지난 판 먼저, 새 판은 뒤에서 · 다시 받기는 보관함을 건너뛴다 · 로그아웃이 비운다 ──
 const entry2 = code(cut(read("web/projects/board.ts"), "async function renderProjectV2Board", "function pjvProjectListBoard"));
