@@ -5,7 +5,7 @@
 //   (레포 · 커밋 · 파일 · 줄)를 새 배포판과 견주고, 바뀐 근거만 AI 가 새 판을 다시 읽어 값을 고친다.
 //
 //  ── 무엇을 읽나 ──
-//   게이트웨이의 공유 클론(PROJECT_SHARED_BASE/repos/<이름> — 워크트리의 부모)의 **깃 객체만** 읽는다. 워킹트리 파일을 fs 로 읽지 않는다
+//   게이트웨이의 공유 클론(이 워크스페이스의 repos/<이름> — 워크트리의 부모)의 **깃 객체만** 읽는다. 워킹트리 파일을 fs 로 읽지 않는다
 //   (symlink 를 따라가고, 받아 둔 사본에 누가 손댄 변경이 섞인다). clone · fetch 는 하지 않는다 — 최신화는 정기 작업(refresh_bases · 30분)과
 //   repo_refresh 의 몫이다(앱 호출이 원격 · git 자격을 쓰지 않게 · 느린 호출이 쌓이지 않게). 그래서 repo_refs 는 마지막으로 받은 시각
 //   (fetched_at — FETCH_HEAD 의 시각)을 함께 준다: 사본이 손댄 채로 남으면 refresh_bases 가 fetch 를 건너뛰어(refreshSharedRepo «dirty») 조용히 낡는다.
@@ -18,9 +18,10 @@
 //   로컬 브랜치 이름은 받지 않는다. repo_refs 의 태그 목록도 원격 브랜치에서 닿는 태그만 싣는다.
 //
 //  ── 어느 레포만 읽나 ──
-//   이 워크스페이스에 등록되고(활성) git 주소가 있는 레포. 공유 클론 경로는 워크스페이스로 갈리지 않아(project-storage.ts) 이름만 보면 다른
-//   워크스페이스의 클론을 읽게 된다 — 등록 행이 있고, 클론의 원격 주소가 등록 주소와 같아야 읽는다. 앱 토큰 요청은 그 앱이 매니페스트
-//   context.repos 에 적은 레포만(apps/app-context.ts assertAppRepoAllowed — 능력 handler 가 부른다).
+//   이 워크스페이스에 등록되고(활성) git 주소가 있는 레포의, **이 워크스페이스가 받아 둔** 클론(project-provision sharedRepoPath —
+//   게이트웨이 하나가 여러 워크스페이스를 서비스하면 워크스페이스마다 자리가 다르다). 그 위에 클론의 원격 주소가 등록 주소와 같아야 읽는다
+//   (주소를 바꿔 등록했는데 옛 클론이 남은 경우). 앱 토큰 요청은 그 앱이 매니페스트 context.repos 에 적은 레포만
+//   (apps/app-context.ts assertAppRepoAllowed — 능력 handler 가 부른다).
 //
 //  ── git 을 부르는 법 ──
 //   execFile(셸 없음) · 인자 앞에서 꼴 검사(판 이름은 선두 영숫자 · 경로는 . .. 마디 금지) · --end-of-options · 출력 상한 · 시간 상한 ·
@@ -29,8 +30,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { PROJECT_SHARED_BASE } from "./project-fs.js";
-import { REPOS_SUBDIR, registeredBranchOfRow } from "./project-provision.js";
+import { sharedRepoPath, registeredBranchOfRow } from "./project-provision.js";
 import { getRepo } from "../domainmap/core/repos.js";
 import { HttpError } from "../http-error.js";
 
@@ -157,7 +157,7 @@ export async function cloneOf(name: string): Promise<Clone> {
   if (row.state && row.state !== "active") throw new HttpError(409, `레포 '${repo}' 는 지금 쓰지 않는 상태(${row.state})라 읽지 않습니다`);
   const gitUrl = typeof row.git_url === "string" ? row.git_url.trim() : "";
   if (!gitUrl) throw new HttpError(409, `레포 '${repo}' 는 git 주소가 등록되지 않아 판을 읽을 수 없습니다(repo_set_source 로 주소를 등록하세요)`);
-  const dir = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, repo);
+  const dir = sharedRepoPath(repo);
   if (!fs.existsSync(path.join(dir, ".git"))) throw new HttpError(409, `레포 '${repo}' 를 게이트웨이가 아직 받아 두지 않았습니다 — repo_refresh 나 이 레포를 쓰는 프로젝트의 provision 으로 먼저 받으세요`);
   const origin = (await text(dir, ["config", "--get", "remote.origin.url"], [1]).catch(() => "")).trim();
   const want = remoteKey(gitUrl);

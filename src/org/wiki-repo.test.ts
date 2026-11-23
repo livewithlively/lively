@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { wikiCollectorKey, wikiInstance, repoClonePath, detectContentSubdir, blobBaseUrl } from "./wiki-repo.js";
+import { wikiCollectorKey, wikiInstance, repoClonePath, legacyRepoClonePath, wikiRepointNeeded, detectContentSubdir, blobBaseUrl } from "./wiki-repo.js";
+import { installWorkspaceDirKeyResolver } from "../ops/workspace-dir-key.js";
 import { REPOS_SUBDIR } from "../project/project-provision.js";
 import { PROJECT_SHARED_BASE } from "../project/project-fs.js";
 
@@ -114,6 +115,37 @@ t("P1 클론 경로가 provision 이 쓰는 자리와 같다 — 다르면 수�
   // 상수를 재진술하지 않고 **provision 의 SoT 를 그대로 임포트해** 비교한다(둘이 갈리는 순간 red).
   assert.equal(repoClonePath("lively"), path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, "lively"));
   assert.equal(repoClonePath("  lively  "), path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, "lively"));
+});
+
+// ══ 워크스페이스별 클론 자리(공유 클론을 워크스페이스마다 가른 뒤) ══
+//  P2 | 워크스페이스 열쇠가 있음                          | 클론 경로 = repos/@ws/<id>/<레포> · 옛 공용 자리는 그대로 repos/<레포>
+//  R1 | 수집기 경로 = 옛 자리 · 새 자리에 클론 있음        | 옮긴다
+//  R2 | 수집기 경로 = 옛 자리 · 새 자리에 클론 없음        | 옮기지 않는다(없는 경로로 옮기면 수집기가 빈 폴더를 본다)
+//  R3 | 열쇠 없음(옛 자리 = 새 자리)                       | 옮기지 않는다
+//  R4 | 수집기 경로 = 다른 값(사람이 고친 경로 · 이미 새 자리 · 비어 있음) | 옮기지 않는다
+const WS = "cccccccc-1111-2222-3333-444444444444";
+t("P2 열쇠가 있으면 클론 경로가 그 워크스페이스의 자리다 — 옛 공용 자리와 다르다", () => {
+  installWorkspaceDirKeyResolver(() => WS);
+  try {
+    assert.equal(repoClonePath("lively"), path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, "@ws", WS, "lively"));
+    assert.equal(legacyRepoClonePath("lively"), path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, "lively"));
+  } finally { installWorkspaceDirKeyResolver(() => null); }
+  assert.equal(repoClonePath("lively"), legacyRepoClonePath("lively"), "열쇠가 없으면 둘이 같다");
+});
+const LEG = "/w/repos/wiki", NEXT = `/w/repos/@ws/${WS}/wiki`;
+t("R1 옛 자리를 가리키고 새 자리에 클론이 있으면 옮긴다", () => {
+  assert.equal(wikiRepointNeeded({ current: LEG, legacy: LEG, next: NEXT, nextCloned: true }), true);
+});
+t("R2 새 자리에 클론이 아직 없으면 옮기지 않는다", () => {
+  assert.equal(wikiRepointNeeded({ current: LEG, legacy: LEG, next: NEXT, nextCloned: false }), false);
+});
+t("R3 열쇠가 없어 옛 자리와 새 자리가 같으면 옮기지 않는다", () => {
+  assert.equal(wikiRepointNeeded({ current: LEG, legacy: LEG, next: LEG, nextCloned: true }), false);
+});
+t("R4 수집기 경로가 옛 자리가 아니면(사람이 고친 경로 · 이미 새 자리 · 없음) 옮기지 않는다", () => {
+  for (const current of ["/srv/custom/wiki", NEXT, "", null, undefined, `${LEG}/`]) {
+    assert.equal(wikiRepointNeeded({ current, legacy: LEG, next: NEXT, nextCloned: true }), false, JSON.stringify(current));
+  }
 });
 
 console.log(`\nwiki-repo tests: ${pass} passed`);
