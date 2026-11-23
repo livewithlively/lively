@@ -23,13 +23,14 @@ import { itemsPool } from "../../db/client.js";
 import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { getMember, upsertMember, memberIdByEmail, type MemberIdentity } from "../../org/store/members.js";
 import { hasCredential } from "../../auth/local-accounts.js";
+import { DEFAULT_MEMBER_SCOPES } from "../../auth/scopes.js";
 import { logger } from "../../log.js";
 import { domainOf, emailFromClaims, type IdTokenClaims, type OidcConfig } from "./oidc.js";
 
 export const OIDC_IDENTITY_SYSTEM = "oidc";
-// 자동 가입 구성원의 초기 권한 — org/schema/core.ts 의 org_member.scopes DEFAULT 와 같은 값(단일 출처는 DB
-//  기본값이지만 여기서 명시적으로 준다: '자동 가입이 무엇을 주는가'가 코드에 보여야 검토가 가능하다).
-export const AUTO_PROVISION_SCOPES = ["items", "context", "memory"] as const;
+// 자동 가입 구성원의 초기 권한 — 새 구성원 기본 권한(auth/scopes.ts DEFAULT_MEMBER_SCOPES)과 같은 값. 생략해도 같은 값이
+//  들어가지만 여기서 명시적으로 준다: '자동 가입이 무엇을 주는가'가 코드에 보여야 검토가 가능하다.
+export const AUTO_PROVISION_SCOPES: readonly string[] = DEFAULT_MEMBER_SCOPES;
 
 export interface OidcIdentity { sub: string; email: string; displayName: string | null }
 

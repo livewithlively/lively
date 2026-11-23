@@ -98,8 +98,9 @@ export function serviceSeatConsented(s: AiAccountSettings, member: string): bool
 }
 
 /**
- * 공용 시트 계정이 가져도 되는 권한 — 허용 목록이라 여기서 따로 정한다. 지금은 구성원 기본값(org/store/members.upsertMember)과 같은 셋이지만
- *  기본값이 넓어져도 이 셋은 함께 넓어지지 않는다(넓히려면 여기를 고친다). 그 밖(admin · runtime · db · db:<소스> · code)이 하나라도 있으면
+ * 공용 시트 계정이 가져도 되는 권한 — 허용 목록이라 여기서 따로 정한다. 새 구성원 기본값(auth/scopes.ts DEFAULT_MEMBER_SCOPES)은
+ *  2026-11-23 에 db · code 까지 넓어졌지만 이 셋은 함께 넓어지지 않았다(넓히려면 여기를 고친다) — 그래서 기본값 그대로 만든 구성원은
+ *  db · code 를 내려야 공용 시트가 된다. 그 밖(admin · runtime · db · db:<소스> · code)이 하나라도 있으면
  *  «높은 권한» 이다(seatElevated).
  */
 export const SEAT_BASIC_SCOPES: ReadonlySet<string> = new Set(["items", "context", "memory"]);

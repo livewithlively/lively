@@ -42,7 +42,17 @@ export async function initOrgCore(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     -- scopes = 구성원 권한(발급 토큰의 scope). memory 기본 포함(단일 공유 풀=에이전트 생산·소비, 06-17).
-    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context","memory"]'::jsonb;
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '["items","context","memory","db","code"]'::jsonb;
+    -- 새 구성원 기본 권한이 db · code 까지로 넓어졌다(2026-11-23, auth/scopes.ts DEFAULT_MEMBER_SCOPES 와 같은 값). 칸이 이미 있는
+    --  DB 는 위 ADD COLUMN 이 건너뛰므로 기본값만 따로 맞춘다 — 옛 기본값일 때만(멱등). 이미 있는 구성원의 권한은 건드리지 않는다.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM pg_attribute a
+                   JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                  WHERE a.attrelid = 'org_member'::regclass AND a.attname = 'scopes'
+                    AND pg_get_expr(d.adbin, d.adrelid) NOT LIKE '%"code"%') THEN
+        ALTER TABLE org_member ALTER COLUMN scopes SET DEFAULT '["items","context","memory","db","code"]'::jsonb;
+      END IF;
+    END $$;
     -- avatar = 셀프 업로드 프로필 이미지(data URL, 클라이언트에서 128px 리사이즈). null/'' = 이니셜+색상 자동생성.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar TEXT;
     -- avatar_char/color = 이미지 없을 때 쓰는 커스텀 글자/배경색(프로필 설정). null = 이니셜/해시색 자동.

@@ -3,7 +3,7 @@
 import type { Capability, CapabilityCtx } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
-import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "../scopes.js";
+import { SCOPES_ALLOWED, DANGEROUS_SCOPES, DEFAULT_MEMBER_SCOPES, type Scope } from "../scopes.js";
 import type { LivelyUser } from "../../context.js";
 import { getMember, mintToken, listTokens, revokeToken, mintSessionCode } from "../../org/store.js";
 import { resolveTokenHandle, MIN_HANDLE_LEN, TOKEN_HASH_LEN } from "../../org/store/tokens.js";
@@ -43,7 +43,7 @@ export const tokenMintCapabilities: Capability[] = [
       if (Array.isArray(input.scopes) && input.scopes.length) rawScopes = input.scopes;
       else {
         const mem = await getMember(memberId);
-        rawScopes = mem?.scopes?.length ? mem.scopes : ["items", "context", "memory"];
+        rawScopes = mem?.scopes?.length ? mem.scopes : [...DEFAULT_MEMBER_SCOPES];
         followSafeScopes = !!mem;
       }
       const scopes = rawScopes.map((s) => str(s, "scopes[]", 20));
