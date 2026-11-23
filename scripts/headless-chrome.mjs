@@ -141,6 +141,99 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
 }
 
 /**
+ * 헤드리스 크롬(`--headless=new`)을 띄워 페이지 하나에 DevTools 프로토콜로 붙는다 — **연결은 포트가 아니라 파이프**다
+ *  (`--remote-debugging-pipe` · 크롬의 fd 3 = 명령을 읽는 쪽 · fd 4 = 답을 쓰는 쪽 · 메시지는 `\0` 로 끝나는 JSON).
+ *
+ *  왜 파이프인가: 포트(`--remote-debugging-port`)로 띄운 크롬은 띄운 프로세스가 죽어도 살아남는다. 치우기가 호출자의
+ *   `finally` 한 곳뿐이라, 시험이 상한·세션 종료·SIGKILL 로 중간에 죽으면 크롬이 주인 없이 남는다(실측 2026-11-23:
+ *   부모가 죽은 헤드리스 크롬 3개가 34시간 떠 있었고 그 박스의 스왑 16GB 가 다 찼다). 파이프는 띄운 프로세스가
+ *   **어떻게 죽든** 닫히고, 크롬은 fd 3 이 닫히면 스스로 끝난다(headless-chrome-cdp.test.mjs 가 SIGKILL 로 잰다).
+ *   ⚠ 그래서 scripts/ 에서 크롬을 포트로 띄우는 코드는 같은 시험이 막는다 — DevTools 로 몰 크롬은 여기로 띄운다.
+ *  남는 것: 부모가 죽으면 임시 디렉터리(`dir`)는 못 지운다 — 프로세스만 걷힌다.
+ *
+ *  dir — 이미 만든 임시 디렉터리를 쓰려면 준다(페이지 파일을 먼저 써 두는 시험). 없으면 `prefix` 로 만든다. 어느 쪽이든 close 가 지운다.
+ *  args — 공통 인자 뒤에 더하는 인자(`--no-sandbox` 등) · url — 처음 여는 주소 · pickPage — 붙을 페이지 대상을 고르는 술어.
+ *  startTimeoutMs — 크롬이 떠서 페이지 대상이 설 때까지의 상한(기본 45초 — 종전 «포트 30초 + 대상 15초» 의 합. 병렬 러너에서
+ *   크롬을 여럿 함께 띄우면 늦게 선다: frame-scroll-keep #1331 · md-mermaid 2026-11-09 실측).
+ * @returns {{ child, dir: string, version: string | null, cdp: (method: string, params?: object) => Promise<any>, close: () => Promise<void> }}
+ *   cdp 는 답 전체(`{ id, result }` 또는 `{ id, error }`)를 돌려준다 — 크롬이 먼저 끝나면 던진다. close 는 여러 번 불러도 된다.
+ */
+export async function launchCdp(chrome, { prefix = "cdp-", dir = null, windowSize = "1000,800", args = [], url = "about:blank", pickPage = (t) => t.type === "page", startTimeoutMs = 45_000 } = {}) {
+  dir = dir || mkdtempSync(path.join(tmpdir(), prefix));
+  const child = spawn(chrome, [
+    "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    // ⚠ 맥에서 새 프로필 크롬이 «키체인» 모달을 사람 화면에 띄우지 않게(dumpDom 과 같은 이유)
+    "--use-mock-keychain", "--password-store=basic", "--disable-background-networking", "--disable-component-update",
+    "--disable-sync", "--disable-default-apps", "--disable-extensions", "--mute-audio", "--disable-breakpad",
+    `--user-data-dir=${path.join(dir, "profile")}`, "--remote-debugging-pipe", `--window-size=${windowSize}`, ...args, url,
+  ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] });
+  const toChrome = child.stdio[3], fromChrome = child.stdio[4];
+  const exited = new Promise((r) => child.once("close", r));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let seq = 0, gone = null;
+  const pend = new Map();
+  const fail = (why) => { if (gone) return; gone = why; for (const p of pend.values()) p.reject(new Error(why)); pend.clear(); };
+  //  ⚠ 조각(Buffer)째로 모아 `\0` 에서 자른 뒤 글자로 바꾼다 — 조각마다 바꾸면 경계에 걸친 한글이 깨진다(dumpDom 의 setEncoding 과 같은 까닭).
+  let buf = Buffer.alloc(0);
+  fromChrome.on("data", (b) => {
+    buf = buf.length ? Buffer.concat([buf, b]) : b;
+    for (let at = buf.indexOf(0); at !== -1; at = buf.indexOf(0)) {
+      const text = buf.subarray(0, at).toString("utf8");
+      buf = buf.subarray(at + 1);
+      let d = null;
+      try { d = JSON.parse(text); } catch (_) { continue; }
+      const p = d.id && pend.get(d.id);
+      if (p) { pend.delete(d.id); p.resolve(d); }
+    }
+  });
+  toChrome.on("error", () => fail("크롬에 명령을 못 보냈다(파이프가 닫혔다)"));
+  fromChrome.on("error", () => fail("크롬의 답을 못 읽었다(파이프가 닫혔다)"));
+  child.on("error", (e) => fail("크롬을 못 띄웠다 — " + (e?.message || e)));
+  child.on("close", () => fail("크롬이 먼저 끝났다"));
+  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+    if (gone) return reject(new Error(gone));
+    const id = ++seq;
+    pend.set(id, { resolve, reject });
+    toChrome.write(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }) + "\0");
+  });
+
+  let closing = null;
+  const close = () => (closing ||= (async () => {
+    try { child.kill("SIGKILL"); } catch (_) { /* 이미 끝났다 */ }
+    await Promise.race([exited, sleep(3000)]);
+    toChrome.destroy(); fromChrome.destroy();
+    //  크롬 본체만 죽이면 남은 보조 프로세스가 지운 프로필 폴더를 다시 만드는 판이 있었다(app-ui-focus 격리 리뷰 실측 5회 중 2회) — 잠깐 쉬고 지운다.
+    await sleep(300);
+    try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+    catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }
+  })());
+
+  try {
+    const deadline = Date.now() + startTimeoutMs;
+    const within = (p, what) => {
+      let t;
+      const late = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`크롬이 ${startTimeoutMs / 1000}초 안에 ${what}`)), Math.max(0, deadline - Date.now())); });
+      return Promise.race([p, late]).finally(() => clearTimeout(t));
+    };
+    let page = null;
+    while (!page) {
+      const list = (await within(send("Target.getTargets"), "페이지 대상을 안 세웠다")).result?.targetInfos || [];
+      page = list.find(pickPage) || null;
+      if (page) break;
+      if (Date.now() >= deadline) throw new Error(`크롬이 ${startTimeoutMs / 1000}초 안에 페이지 대상을 안 세웠다`);
+      await sleep(100);
+    }
+    const sessionId = (await within(send("Target.attachToTarget", { targetId: page.targetId, flatten: true }), "페이지에 안 붙었다")).result?.sessionId;
+    if (!sessionId) throw new Error("크롬 페이지에 못 붙었다(sessionId 없음)");
+    const version = (await within(send("Browser.getVersion"), "판을 안 알렸다")).result?.product ?? null;
+    return { child, dir, version, cdp: (method, params = {}) => send(method, params, sessionId), close };
+  } catch (e) {
+    await close();
+    throw e;
+  }
+}
+
+/**
  * dump 된 DOM 에서 `<pre id="out">` 의 결과 본문을 꺼내 엔티티를 되돌린다.
  *  ⚠ 본문은 `[^<]` 로만 잡는다 — `[\s\S]*?` 로 잡으면 페이지가 결과를 쓰기 전에 덤프됐을 때(본문이 아직 PENDING)
  *   `</pre>` 를 넘어 인라인 스크립트 속 marker 문자열까지 건너가 그 사이 HTML 을 결과로 집는다. 그러면 «결과 없음» 이

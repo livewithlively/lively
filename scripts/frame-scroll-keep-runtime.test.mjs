@@ -9,19 +9,17 @@
 //  빌드 산출물(public/app/lib/frame-bridge.js)을 그대로 싣는다 — 시험하는 코드가 곧 서빙되는 코드다.
 //  fail-first(2026-10-01): 스크립트를 빼고 srcdoc 만 두면(변경 전 뷰어) 재생성·새로고침·옆 띠 행이 전부 0 으로 빨갛다.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findChrome } from "./headless-chrome.mjs";
+import { findChrome, launchCdp } from "./headless-chrome.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const chrome = findChrome();
 const BRIDGE = path.join(root, "public/app/lib/frame-bridge.js");
-if (!chrome || typeof WebSocket === "undefined") {
-  console.log("skip  크롬(또는 WebSocket 전역)이 없어 건너뜁니다(CHROME_BIN 으로 지정) — 보던 자리 런타임 검증 미실행");
+if (!chrome) {
+  console.log("skip  크롬이 없어 건너뜁니다(CHROME_BIN 으로 지정) — 보던 자리 런타임 검증 미실행");
   process.exit(0);
 }
 assert.ok(existsSync(BRIDGE), "public/app/lib/frame-bridge.js 가 없다 — 빌드(node scripts/build-web.mjs) 먼저");
@@ -97,40 +95,18 @@ const srv = http.createServer((q, r) => {
 await new Promise((res) => srv.listen(0, "127.0.0.1", res));
 const origin = "http://127.0.0.1:" + srv.address().port;
 
-const dir = mkdtempSync(path.join(tmpdir(), "scroll-keep-"));
-const child = spawn(chrome, [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-  // ⚠ 맥에서 새 프로필 크롬이 «키체인» 모달을 사람 화면에 띄우지 않게(headless-chrome.mjs 와 같은 이유)
-  "--use-mock-keychain", "--password-store=basic", "--disable-background-networking", "--disable-component-update",
-  "--disable-sync", "--disable-default-apps", "--disable-extensions", "--mute-audio", "--disable-breakpad",
-  `--user-data-dir=${path.join(dir, "profile")}`, "--remote-debugging-port=0", "--window-size=1000,800", "about:blank",
-], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "ignore", "ignore"] });
-
 let pass = 0;
 const ok = (cond, name, info) => { assert.ok(cond, name + "  " + JSON.stringify(info)); pass++; console.log(`ok  ${name}  ${JSON.stringify(info)}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RESET_QUIET = 1600;   // 프레임 스크립트의 RESET_QUIET_MS(1500) 보다 조금 길게
-let ws = null;
+let browser = null;
 try {
-  const pf = path.join(dir, "profile", "DevToolsActivePort");
-  //  기동 대기는 넉넉히(30초) — 병렬 러너(-j 4)에서 다른 크롬 시험과 겹치면 10초 안에 못 뜬 판이 있었다(CI 실측 2026-10-12·14).
-  for (let i = 0; i < 600 && !existsSync(pf); i++) await sleep(50);
-  assert.ok(existsSync(pf), "크롬 디버깅 포트가 30초 안에 안 열렸다");
-  const port = readFileSync(pf, "utf8").split("\n")[0];
+  //  기동 상한(45초)은 launchCdp 가 쥔다 — 병렬 러너에서 다른 크롬 시험과 겹치면 늦게 뜬다(#1331 · 2026-11-09 실측).
+  browser = await launchCdp(chrome, { prefix: "scroll-keep-", windowSize: "1000,800", args: ["--no-sandbox"] });
+  const { cdp } = browser;
   //  크롬 판을 남긴다 — CI 리눅스에서만 가끔 빨간 «숨겼다 보여도 보던 자리»(R4·R14)가 맥·도커 Chromium 155 에서는 재현되지
   //   않았다(2026-10-14). 빨개진 판의 로그에서 어느 판이었는지 바로 보이게 한다.
-  const ver = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.json()).catch(() => null);
-  console.log(`note  크롬 판: ${ver?.Browser ?? "모름"}`);
-  let targets = [];
-  for (let i = 0; i < 150 && !targets.some((t) => t.type === "page"); i++) {
-    targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
-    if (!targets.some((t) => t.type === "page")) await sleep(100);
-  }
-  ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let seq = 0; const pend = new Map();
-  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pend.has(d.id)) { pend.get(d.id)(d); pend.delete(d.id); } };
-  const cdp = (method, params = {}) => new Promise((res) => { const i = ++seq; pend.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
+  console.log(`note  크롬 판: ${browser.version ?? "모름"}`);
   const ev = async (expression) => (await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })).result?.result?.value;
   /** 조건이 설 때까지(상한 ms) — 선 값 또는 마지막 값을 돌려준다. */
   const until = async (fn, pred, ms = 5000) => { const t0 = Date.now(); let v; do { v = await fn(); if (pred(v)) return v; await sleep(80); } while (Date.now() - t0 < ms); return v; };
@@ -215,10 +191,7 @@ try {
     ok(w2 === w0, `R${++n} win: 되돌려도 안 닿은 도약은 닿을 수 있게 되면 되돌린다`, { w0, w2 });
   }
 } finally {
-  try { ws?.close(); } catch (_) { /* noop */ }
-  child.kill("SIGKILL");
   srv.close();
-  await new Promise((r) => (child.exitCode !== null || child.signalCode !== null ? r() : child.once("close", r)));
-  for (let i = 0; i < 5; i++) { try { rmSync(dir, { recursive: true, force: true }); break; } catch (_) { await sleep(200); } }
+  await browser?.close();   // 크롬을 죽이고 임시 디렉터리를 지운다(launchCdp)
 }
 console.log(`\n${pass} passed`);

@@ -18,12 +18,13 @@
 // 대상은 web/lib/older-autoload.ts **그 파일 자체**다(컴파일해 페이지에 싣는다). 가짜는 «서버» 쪽뿐 — 부르면 일정 지연 뒤
 //  위에 항목 n 개를 끼우고 표지를 새로 그린다(web/session-chat.ts loadOlder 와 같은 순서: 끼우기 → olderBar → watch).
 // 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { launchCdp } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 //  크롬 찾기 — scripts/headless-chrome.mjs 의 후보와 같다. 그 모듈(dumpDom)은 --headless=old 전용이라 여기선 안 쓰고,
@@ -35,7 +36,6 @@ const chrome = [
   "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser",
 ].filter(Boolean).find((p) => existsSync(p)) || null;
 if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BIN 으로 지정) — 런타임 자동 불러오기 검증 미실행"); process.exit(0); }
-if (typeof WebSocket !== "function") { console.log("skip  이 node 에 WebSocket 이 없어 건너뜁니다(node 22+)"); process.exit(0); }
 
 const dir = mkdtempSync(path.join(tmpdir(), "older-rt-"));
 execFileSync(path.join(ROOT, "node_modules/.bin/tsc"),
@@ -133,41 +133,18 @@ var T = (function () {
 writeFileSync(path.join(dir, "page.html"), PAGE);
 
 // ── 크롬 + DevTools 프로토콜 ──────────────────────────────────────────────────
-const proc = spawn(chrome, [
-  "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-  "--use-mock-keychain", "--password-store=basic",   // 맥 세션에서 키체인 모달이 사람 화면에 뜨지 않게(scripts/headless-chrome.mjs 와 같은 이유)
-  "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps", "--disable-extensions",
-  "--mute-audio", "--no-pings", "--disable-breakpad", "--disable-crash-reporter",
-  "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
-  "--window-size=900,800", `--user-data-dir=${path.join(dir, "profile")}`, "--remote-debugging-port=0",
-  `file://${path.join(dir, "page.html")}`,
-], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "ignore", "pipe"] });
-const closed = new Promise((r) => proc.once("close", r));
 let pass = 0, fail = 0;
 const ok = (cond, label, detail) => { if (cond) { pass++; console.log("ok   " + label); } else { fail++; console.log("FAIL " + label + "  ← " + detail); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-let ws = null;
+let browser = null;
 try {
-  const wsUrl = await new Promise((resolve, reject) => {
-    let err = "";
-    const t = setTimeout(() => reject(new Error("크롬이 20초 안에 디버깅 주소를 안 냈다\n" + err.slice(0, 600))), 20_000);
-    proc.stderr.on("data", (b) => { err += b; const m = err.match(/DevTools listening on (ws:\/\/\S+)/); if (m) { clearTimeout(t); resolve(m[1]); } });
-    proc.on("error", reject);
+  browser = await launchCdp(chrome, {
+    dir, windowSize: "900,800", url: `file://${path.join(dir, "page.html")}`,
+    args: ["--no-pings", "--disable-crash-reporter", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"],
+    pickPage: (t) => t.type === "page" && String(t.url).startsWith("file:"),
   });
-  const port = new URL(wsUrl).port;
-  let page = null;
-  for (let i = 0; i < 50 && !page; i++) {
-    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    page = list.find((t) => t.type === "page" && String(t.url).startsWith("file:"));
-    if (!page) await sleep(100);
-  }
-  if (!page) throw new Error("페이지 대상을 못 찾았다");
-  ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
-  let seq = 0; const waiting = new Map();
-  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && waiting.has(d.id)) { waiting.get(d.id)(d); waiting.delete(d.id); } };
-  const send = (method, params = {}) => new Promise((r) => { const id = ++seq; waiting.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+  const send = browser.cdp;
   const ev = async (expr) => {
     const d = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true });
     if (d.result?.exceptionDetails) throw new Error("페이지 오류: " + JSON.stringify(d.result.exceptionDetails).slice(0, 400));
@@ -303,9 +280,7 @@ try {
 } catch (e) {
   fail++; console.log("FAIL 하네스가 끝까지 못 갔다 — " + (e?.message || e));
 } finally {
-  try { ws?.close(); } catch { /* 이미 닫혔다 */ }
-  try { proc.kill("SIGKILL"); } catch { /* 이미 끝났다 */ }
-  await Promise.race([closed, sleep(3000)]);
+  await browser?.close();   // 크롬을 죽이고 임시 디렉터리를 지운다(launchCdp) — 못 띄운 판은 아래가 지운다
   try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }
 }
 console.log(`\n${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
