@@ -219,7 +219,7 @@ const MACHINE_SESSION_REFUSAL = "이 요청이 매인 세션을 확인할 수 �
  *   자동화가 보낸 사람(run_as · 앱 책임자)은 활성 사람 구성원이어야 한다(아래 seat.requesterActive) — 구성원이 아닌 주체는 여전히 막힌다.
  *  개인 구독(공용 시트가 아닌 구독)은 그대로 거절한다 — 한 사람의 구독이 그 사람이 시키지 않은 일로 도는 모양이라서.
  */
-export const AUTOMATION_REFUSAL = "이 실행은 사람이 시키지 않은 자동화(슬랙 다리 · 앱 정기 작업)에서 왔습니다 — 자동화는 개인 구독을 쓸 수 없습니다. 공용 시트(관리자와 그 계정 본인이 지정한 구독)나 워크스페이스 API 키를 이 앱의 실행 계정으로 정하세요";
+export const AUTOMATION_REFUSAL = "이 실행은 사람이 시키지 않은 자동화(슬랙 다리 · 앱 정기 작업)에서 왔습니다 — 자동화는 개인 구독을 쓸 수 없습니다. 공용 시트(관리자와 그 계정 본인이 지정한 구독)나 워크스페이스 API 키를 이 앱의 실행 계정으로 정하세요. 사람이 양식을 내고 답을 기다리는 슬랙 워크플로라면 관리자가 그 다리의 run_as_human 을 켜면(bot_ids 로 그 워크플로를 고른 뒤) 사람의 질문으로 봅니다";
 export function subscriptionRefusal(
   account: AiAccount, requester: RunRequester, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
 ): string | null {
