@@ -21,7 +21,12 @@ import { findChrome, launchCdp } from "./headless-chrome.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (_) { return false; } };
+/** 살아 있나 — 끝났는데 아직 안 거둬진 프로세스(좀비)는 «끝났다» 로 센다. 컨테이너 러너처럼 PID 1 이 고아를 안 거두는 자리에서
+ *   신호 0 은 좀비에게도 성공해, 스스로 끝난 크롬이 «살아 있다» 로 보인다. */
+const alive = (pid) => {
+  try { process.kill(pid, 0); } catch (_) { return false; }
+  try { return !/^Z/.test(execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim()); } catch (_) { return false; }
+};
 const goneWithin = async (pid, ms) => { const t0 = Date.now(); while (alive(pid) && Date.now() - t0 < ms) await sleep(100); return !alive(pid); };
 /** 그 임시 디렉터리를 프로필로 쥔 프로세스 수 — pid 를 모르는 자리(띄우다 던진 판)에서 «크롬이 안 남았다» 를 잰다. */
 const holding = (dir) => execFileSync("ps", ["-axo", "args="], { encoding: "utf8", maxBuffer: 64 << 20 }).split("\n").filter((l) => l.includes(dir)).length;
