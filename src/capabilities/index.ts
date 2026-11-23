@@ -299,6 +299,8 @@ export function registerMcpCapabilities(
     // 앱 토큰(#1780): EXEMPT 배관 도구는 REST 전용 — LLM 도구 표면에서 소거(appMcpHidden 주석). 등록 필터는 UX,
     //  경계는 아래 핸들러의 requireAppToolMcp(sessioned 서버 재사용·헤더 드리프트에도 안전).
     if (appMcpHidden(appId, cap.name)) continue;
+    // 앱만 부르는 도구(mcpAppOnly — 슬랙 다리의 파일 읽기)는 앱 토큰의 목록에만 싣는다.
+    if (cap.mcpAppOnly && !appId) continue;
     const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,

@@ -74,6 +74,9 @@ export interface Capability {
   //  handler 결과를 받아 조각 배열을 돌려주면 MCP 어댑터가 그대로 싣고, null 이면 종전대로 JSON 글이다.
   //  REST 는 이 훅을 타지 않는다 — 같은 handler 결과를 JSON 으로(그림은 base64 필드로) 그대로 낸다(표면 동일성 유지).
   mcpContent?: (out: unknown) => McpContent[] | null;
+  // 앱 토큰(앱 서버 · 앱 AI 작업)의 MCP 도구 목록에만 싣는다 — 구성원 세션의 tools/list 에는 올리지 않는다(슬랙 다리의 파일 읽기처럼 앱만 부르는 도구).
+  //  목록에서 빼는 것일 뿐이다 — 누가 부를 수 있는지는 종전대로 handler 와 앱 도구 게이트(requireAppTool)가 정한다.
+  mcpAppOnly?: boolean;
   // canonical JSON 반환. 도메인 에러는 plain Error throw —
   // REST 는 wrap() 의 한국어 부분문자열 매핑('없음'→404 등), MCP 는 SDK isError 로 변환된다.
   // 입력은 어댑터 경계에서 검증되므로 레지스트리 차원에선 넓게 받는다(각 op 파일에서 좁혀 캐스팅).

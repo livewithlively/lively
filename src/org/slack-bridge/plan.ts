@@ -421,6 +421,98 @@ export function formBodyOf(args: Record<string, unknown>): string {
   return p.toString();
 }
 
+// ── 앱이 읽는 슬랙 파일(slack_bridge_file) ─────────────────────────────────────────────────
+/** 슬랙 파일 id(F…). */
+export const SLACK_FILE_ID_RE = /^F[A-Z0-9]{6,20}$/;
+/** 내려받는 파일의 크기 상한 — 넘으면 받지 않는다. */
+export const BRIDGE_FILE_MAX_BYTES = 20 * 1024 * 1024;
+/** 그림을 줄일 긴 변(px) — 모델이 그림을 보는 크기. PNG · JPEG · HEIC 는 이 크기의 JPEG 로 바꿔 준다. */
+export const BRIDGE_FILE_IMAGE_EDGE = 1568;
+/** 바꾸지 못하는 그림(GIF · WEBP)을 그대로 줄 때의 크기 상한 — 넘으면 주지 않는다(모델 입력 상한 5MB 를 base64 로 넘지 않게). */
+export const BRIDGE_FILE_RAW_IMAGE_MAX = 3_500_000;
+/** 글 파일을 줄 때의 글자 상한 — 넘으면 앞부분만 주고 truncated 로 알린다. */
+export const BRIDGE_FILE_TEXT_MAX = 100_000;
+
+/** 파일을 무엇으로 주나 — image(그림 조각) · text(글) · unsupported(읽지 않는다 · 까닭은 reason). */
+export type BridgeFileKind = "image" | "text" | "unsupported";
+export interface BridgeFilePlan {
+  id: string; name: string; mimetype: string | null; filetype: string | null; size: number | null;
+  kind: BridgeFileKind;
+  /** image 일 때 — 줄여 JPEG 로 바꿀 형식. null 이면 그대로 준다(GIF · WEBP). */
+  convert: "png" | "jpeg" | "heic" | null;
+  /** 내려받을 주소(슬랙 파일 서버) — unsupported 면 null. */
+  url: string | null;
+  /** unsupported 인 까닭(사람이 읽는 글). */
+  reason: string | null;
+  /** 이 파일이 공유된 채널 중 다리가 고른 채널(기록용 · 다리가 채널을 고르지 않았으면 첫 채널). */
+  channel: string | null;
+}
+
+/** 슬랙 파일 서버의 주소인가 — https 이고 files.slack.com(또는 그 아래)만. 파일 정보(files.info)가 준 주소를 그대로 믿지 않는다(봇 토큰을 실어 보내는 자리다). */
+export function isSlackFileUrl(raw: unknown): boolean {
+  if (typeof raw !== "string") return false;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" && !u.username && !u.password && (u.hostname === "files.slack.com" || u.hostname.endsWith(".files.slack.com"));
+  } catch { return false; }
+}
+
+/** 파일이 공유된 채널 — files.info 의 channels · groups · ims 와 shares(public · private)의 열쇠. */
+export function slackFileChannels(file: Record<string, unknown>): string[] {
+  const out = new Set<string>();
+  for (const k of ["channels", "groups", "ims"]) {
+    const v = file[k];
+    if (Array.isArray(v)) for (const c of v) if (typeof c === "string" && c) out.add(c);
+  }
+  const shares = objOf(file.shares);
+  for (const k of ["public", "private"]) {
+    const m = objOf(shares?.[k]);
+    if (m) for (const c of Object.keys(m)) if (c) out.add(c);
+  }
+  return [...out];
+}
+
+const TEXT_MIMES: ReadonlySet<string> = new Set(["application/json", "application/xml", "application/x-yaml", "application/yaml", "application/csv"]);
+
+/**
+ * slack_bridge_file 판정(순수) — files.info 가 준 파일 하나를 이 다리로 읽어도 되나 · 무엇으로 주나.
+ *  다리에 채널을 골라 두었으면 그 채널에 공유된 파일만(403) — slack_bridge_call 과 같이 다리 설정이 앱이 닿는 자리를 정한다(봇이 들어간 다른 채널의 파일을 앱이 읽지 못하게).
+ *  읽지 못하는 파일(바깥 저장소의 파일 · 너무 큰 파일 · 그림도 글도 아닌 형식)은 던지지 않고 unsupported 로 답한다 — 부른 쪽(AI)이 까닭을 사람에게 전하게.
+ */
+export function bridgeFilePlan(file: unknown, bridge: Pick<BridgeRow, "channels">, urlOk: (url: string) => boolean = isSlackFileUrl): BridgeFilePlan {
+  const f = objOf(file);
+  const id = sOf(f?.id);
+  if (!f || !id || !SLACK_FILE_ID_RE.test(id)) throw new HttpError(502, "슬랙이 파일 정보를 주지 않았습니다");
+  const shared = slackFileChannels(f);
+  const hit = bridge.channels.length ? shared.find((c) => bridge.channels.includes(c)) ?? null : shared[0] ?? null;
+  if (bridge.channels.length && !hit) {
+    throw new HttpError(403, `이 다리는 고른 채널(${bridge.channels.join(", ")})에 공유된 파일만 읽습니다 — ${id} 은(는) 그 채널에 없습니다`);
+  }
+  const mimetype = sOf(f.mimetype)?.toLowerCase().split(";")[0]!.trim() || null;
+  const size = typeof f.size === "number" && Number.isFinite(f.size) && f.size >= 0 ? f.size : null;
+  const base = {
+    id, name: (sOf(f.name) ?? sOf(f.title) ?? id).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200) || id,
+    mimetype, filetype: sOf(f.filetype), size, channel: hit,
+  };
+  const no = (reason: string): BridgeFilePlan => ({ ...base, kind: "unsupported", convert: null, url: null, reason });
+  const mode = sOf(f.mode);
+  if (mode === "external" || f.is_external === true) return no("슬랙 밖 저장소(구글 드라이브 등)에 있는 파일이라 슬랙에서 받을 수 없습니다");
+  if (mode === "tombstone" || mode === "hidden_by_limit") return no("지워졌거나 슬랙 요금제 한도로 가려진 파일입니다");
+  //  urlOk — 내려받아도 되는 주소(기본은 슬랙 파일 서버). 시험이 가짜 슬랙의 주소를 받게 바꿔 끼운다(slack-api SlackApiDeps.fileUrlOk 와 같은 것).
+  const url = [f.url_private_download, f.url_private].find((u): u is string => typeof u === "string" && urlOk(u));
+  if (!url) return no("슬랙이 내려받을 주소를 주지 않았습니다");
+  if (size !== null && size > BRIDGE_FILE_MAX_BYTES) return no(`파일이 너무 큽니다(${size}바이트 — ${BRIDGE_FILE_MAX_BYTES}바이트까지)`);
+  if (mimetype === "image/png") return { ...base, kind: "image", convert: "png", url, reason: null };
+  if (mimetype === "image/jpeg" || mimetype === "image/jpg") return { ...base, kind: "image", convert: "jpeg", url, reason: null };
+  if (mimetype === "image/heic" || mimetype === "image/heif") return { ...base, kind: "image", convert: "heic", url, reason: null };
+  if (mimetype === "image/gif" || mimetype === "image/webp") {
+    if (size !== null && size > BRIDGE_FILE_RAW_IMAGE_MAX) return no(`줄일 수 없는 형식(${mimetype})인데 너무 큽니다(${size}바이트 — ${BRIDGE_FILE_RAW_IMAGE_MAX}바이트까지)`);
+    return { ...base, kind: "image", convert: null, url, reason: null };
+  }
+  if (mimetype && (mimetype.startsWith("text/") || TEXT_MIMES.has(mimetype))) return { ...base, kind: "text", convert: null, url, reason: null };
+  return no(`읽지 못하는 형식입니다(${mimetype ?? base.filetype ?? "형식 모름"}) — 그림(PNG · JPEG · HEIC · GIF · WEBP)과 글 파일만 읽습니다`);
+}
+
 // ── 연결 ──────────────────────────────────────────────────────────────────────────────────
 /** 다시 붙기까지 기다릴 시간 — 1초부터 두 배씩 60초까지 + 0~0.5초 흔들기(여러 다리가 한꺼번에 몰리지 않게). */
 export function reconnectDelayMs(attempt: number, rand: () => number = Math.random): number {

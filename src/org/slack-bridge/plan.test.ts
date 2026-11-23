@@ -4,7 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { HttpError } from "../../http-error.js";
 import {
-  BRIDGE_CALL_ARGS_MAX, DEFAULT_BRIDGE_EVENTS, bridgeCallPlan, bridgeJobBody, envelopeVerdict, formBodyOf, isSlackSocketUrl, normalizeBridgeInput,
+  BRIDGE_CALL_ARGS_MAX, BRIDGE_FILE_MAX_BYTES, BRIDGE_FILE_RAW_IMAGE_MAX, DEFAULT_BRIDGE_EVENTS, bridgeCallPlan, bridgeFilePlan, bridgeJobBody, envelopeVerdict, formBodyOf,
+  isSlackFileUrl, isSlackSocketUrl, normalizeBridgeInput, slackFileChannels,
   parseTokenRef, reconnectDelayMs, shortError, socketAppIdOf, type BotIdentity, type BridgeRow, type SocketEnvelope,
 } from "./plan.js";
 
@@ -309,4 +310,55 @@ test("N8 bot_ids — 꼴 · 20/21 · 생략하면 유지", () => {
   const prev = { ...normalizeBridgeInput({ ...base, bot_ids: ["B0TESTWF01"] }, null, "boss"), status: {}, created_at: null, updated_at: null, updated_by: null } as BridgeRow;
   assert.deepEqual(normalizeBridgeInput({ id: "ops" }, prev, "boss").bot_ids, ["B0TESTWF01"], "생략 = 유지");
   assert.deepEqual(normalizeBridgeInput({ id: "ops", bot_ids: [] }, prev, "boss").bot_ids, [], "빈 목록 = 지움");
+});
+
+// ── 앱이 읽는 슬랙 파일(slack_bridge_file) ──
+const URL_OK = "https://files.slack.com/files-pri/T1-F0ABC12345/download/a.png";
+const fileOf = (o: Record<string, unknown> = {}) => ({ id: "F0ABC12345", name: "a.png", mimetype: "image/png", filetype: "png", size: 1000, mode: "hosted", channels: ["C1"], url_private: URL_OK, ...o });
+
+test("F-u 파일 주소 — https 의 슬랙 파일 서버만(봇 토큰을 실어 보내는 자리)", () => {
+  assert.ok(isSlackFileUrl(URL_OK));
+  assert.ok(!isSlackFileUrl("http://files.slack.com/files-pri/T1-F0ABC12345/a.png"), "https 만");
+  assert.ok(!isSlackFileUrl("https://files.slack.com.evil.example/files-pri/T1-F0ABC12345/a.png"), "슬랙 아래가 아닌 곳");
+  assert.ok(!isSlackFileUrl("https://evil.example/files.slack.com/a.png"));
+  assert.ok(!isSlackFileUrl("https://gowid.slack.com/files/U1/F0ABC12345/a.png"), "파일 서버가 아닌 슬랙 주소");
+  assert.ok(!isSlackFileUrl("https://user:pw@files.slack.com/a.png"), "주소에 신원을 싣지 않는다");
+  assert.ok(!isSlackFileUrl("files.slack.com/a.png")); assert.ok(!isSlackFileUrl(null)); assert.ok(!isSlackFileUrl(""));
+});
+
+test("F-c 파일이 공유된 채널 — channels · groups · ims 와 shares 의 열쇠", () => {
+  assert.deepEqual(slackFileChannels({ channels: ["C1"], groups: ["G1"], ims: ["D1"], shares: { public: { C2: [{}] }, private: { G2: [{}] } } }).sort(), ["C1", "C2", "D1", "G1", "G2"]);
+  assert.deepEqual(slackFileChannels({ channels: ["C1", "C1", 3, ""], shares: "x" }), ["C1"]);
+  assert.deepEqual(slackFileChannels({}), []);
+});
+
+test("F-p 판정 — 그림은 줄일 형식 · 글 · 읽지 못하는 것은 까닭", () => {
+  const B = { channels: ["C1"] };
+  const png = bridgeFilePlan(fileOf(), B);
+  assert.deepEqual([png.kind, png.convert, png.url, png.channel, png.reason], ["image", "png", URL_OK, "C1", null]);
+  assert.equal(bridgeFilePlan(fileOf({ mimetype: "image/jpeg" }), B).convert, "jpeg");
+  assert.equal(bridgeFilePlan(fileOf({ mimetype: "IMAGE/HEIC" }), B).convert, "heic");
+  const gif = bridgeFilePlan(fileOf({ mimetype: "image/gif" }), B);
+  assert.deepEqual([gif.kind, gif.convert], ["image", null], "GIF 는 그대로");
+  assert.equal(bridgeFilePlan(fileOf({ mimetype: "image/webp", size: BRIDGE_FILE_RAW_IMAGE_MAX + 1 }), B).kind, "unsupported", "줄일 수 없는데 크면 주지 않는다");
+  assert.equal(bridgeFilePlan(fileOf({ mimetype: "text/csv; charset=utf-8" }), B).kind, "text");
+  assert.equal(bridgeFilePlan(fileOf({ mimetype: "application/json" }), B).kind, "text");
+  const pdf = bridgeFilePlan(fileOf({ mimetype: "application/pdf" }), B);
+  assert.equal(pdf.kind, "unsupported"); assert.equal(pdf.url, null); assert.match(String(pdf.reason), /형식/);
+  assert.equal(bridgeFilePlan(fileOf({ size: BRIDGE_FILE_MAX_BYTES + 1 }), B).kind, "unsupported", "너무 큰 파일");
+  assert.equal(bridgeFilePlan(fileOf({ mode: "external" }), B).kind, "unsupported", "슬랙 밖 저장소의 파일");
+  assert.equal(bridgeFilePlan(fileOf({ url_private: "https://evil.example/a.png" }), B).kind, "unsupported", "슬랙 파일 서버가 아닌 주소로는 받지 않는다");
+  assert.equal(bridgeFilePlan(fileOf({ url_private: "https://evil.example/a.png", url_private_download: URL_OK }), B).url, URL_OK);
+  assert.equal(bridgeFilePlan(fileOf({ name: "a\nb.png" }), B).name, "a b.png", "이름의 제어 문자는 빈칸으로");
+});
+
+test("F-g 채널 — 다리가 고른 채널에 공유된 파일만 · 고르지 않았으면 모두", () => {
+  const out = (() => { try { bridgeFilePlan(fileOf({ channels: ["C9"] }), { channels: ["C1"] }); return null; } catch (e) { return e; } })();
+  assert.ok(out instanceof HttpError && out.status === 403, "다리 채널 밖");
+  assert.equal(bridgeFilePlan(fileOf({ channels: [], shares: { private: { C1: [{}] } } }), { channels: ["C1", "C2"] }).channel, "C1", "shares 로 공유된 채널도 본다");
+  assert.equal(bridgeFilePlan(fileOf({ channels: ["C9"] }), { channels: [] }).channel, "C9", "채널을 고르지 않은 다리");
+  const none = (() => { try { bridgeFilePlan(fileOf({ channels: [] }), { channels: ["C1"] }); return null; } catch (e) { return e; } })();
+  assert.ok(none instanceof HttpError && none.status === 403, "어디에도 공유되지 않은 파일");
+  const bad = (() => { try { bridgeFilePlan({ id: "x" }, { channels: [] }); return null; } catch (e) { return e; } })();
+  assert.ok(bad instanceof HttpError && bad.status === 502, "파일 정보가 아닌 응답");
 });
