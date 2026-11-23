@@ -91,15 +91,25 @@ export type StopState = "done" | "asking" | "exited";
  */
 export type KeepWhy =
   | "unobserved" | "managed" | "no-state" | "kind" | "harness" | "runtime" | "no-conv"
-  | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock" | "net-clock";
+  | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock" | "net-clock"
+  | "stale-clock";
 /** 판정은 끄라는데 집행이 멈춘 이유(stopOne · 집행 상한 · 작업 판별 · 한도 자동 이어감 대기). */
 export type HoldWhy =
   | "jobs" | "jobs-unknown" | "turn-now" | "answered" | "asking-now" | "viewing-now" | "capped" | "failed" | "busy-sweep"
-  | "limit-wait" | "limit-unknown";
+  | "limit-wait" | "limit-unknown"
+  | "reminded" | "remind-wait" | "remind-failed" | "remind-off";
 /** stop 의 `net` = #5043 상태 모름 안전망이 끈다(StopMinutes.unknownMin) — 그 밖의 끄기에는 이 칸이 아예 없다. */
 export type StopVerdict =
   | { act: "keep"; why: KeepWhy; state?: StopState; dueAt?: number }
-  | { act: "stop"; state: StopState; since: number; dueAt: number; net?: true };
+  | { act: "stop"; state: StopState; since: number; dueAt: number; net?: true; stale?: StaleWhy };
+/**
+ * #5623 — 오래 남은 세션(staleMin · 원격 PC 전용)의 두 갈래. 종전엔 둘 다 시간 제한 없이 남았다(2026-11-19 맥미니 실측: 23일 · 14일째).
+ *  · background — 마지막 턴 끝 보고가 «백그라운드 작업 N개» 였다. 그 수는 턴이 끝날 때만 보고되어, 작업이 끝난 뒤에도 옛 값으로 굳는다.
+ *  · no-conv    — 장부에 하네스 대화 id 가 없다(복제만 하고 말을 걸지 않은 세션 등). 끄면 그 대화로 다시 열 수 없다.
+ *  집행(sweepSessionStopRule): background 는 그 컴퓨터에 실제로 도는 작업이 없으면 끄고, 있으면 그 세션에 확인 글을 보낸다.
+ *   no-conv 는 끄지 않고 확인 글만 보낸다 — 세션이 한 번 답하면 대화 id 와 새 보고가 서서 그 뒤로는 평소 규칙이 맡는다.
+ */
+export type StaleWhy = "background" | "no-conv";
 
 /**
  * 끄는 시각 — 분. 0 이면 그 상태는 끄지 않는다.
@@ -108,8 +118,9 @@ export type StopVerdict =
  *   그 시계가 없어(session-reaper.ts «범위 = 중앙 세션만») 영영 안 꺼진다. 이 값을 주면 마지막 활동·안 보기 시작 뒤 이만큼 지난 그 세션을
  *   «완료» 로 보고 끈다 — 집행 직전 화면 재확인(도는 턴 · 질문)과 작업 판정(살아 있는 셸 작업)은 그대로 지킨다.
  *   없거나 0 이면 종전과 같다(매니지드는 주지 않는다 — 무회귀).
+ *  staleMin(#5623 · 원격 PC 전용) — StaleWhy 머리말. 없거나 0 이면 종전과 같다(그 세션은 남는다 · 매니지드는 주지 않는다 — 무회귀).
  */
-export interface StopMinutes { doneMin: number; askingMin: number; unknownMin?: number }
+export interface StopMinutes { doneMin: number; askingMin: number; unknownMin?: number; staleMin?: number }
 
 /**
  * (순수) 이 세션을 지금 끄나 — 사양 엣지 표 V1~V27(session-stop-rule.test.ts). 위에서부터 먼저 걸리는 것이 답이다.
@@ -123,19 +134,28 @@ export function stopVerdict(f: StopFacts, view: Pick<ViewState, "viewing" | "unk
   if ((f.kind || "human") !== "human") return { act: "keep", why: "kind" };
   if (!STOP_RULE_HARNESSES.has(f.harness)) return { act: "keep", why: "harness" };
   if (f.runtime !== "tui") return { act: "keep", why: "runtime" };
-  if (!f.convMapped) return { act: "keep", why: "no-conv" };
+  const stale = p.staleMin ?? 0;
+  if (!f.convMapped && !(stale > 0)) return { act: "keep", why: "no-conv" };
   // ② 보는 중이면 어느 상태든 유지. 모르면(게이트웨이가 막 떴다) 보는 중으로 본다.
   if (view.viewing) return { act: "keep", why: "viewing" };
   if (view.unknown) return { act: "keep", why: "view-unknown" };
   // ③ 상태 — 작업이 질의·완료보다 앞선다(둘 다 참이면 끄지 않는 쪽).
   let state: StopState;
   const r = f.lastReport;
-  if (f.agentState === "exited") state = "exited";
+  if (f.agentState === "exited" && f.convMapped) state = "exited";
+  else if (f.agentState === "exited") return { act: "keep", why: "no-conv" };   // #5623 — 하네스가 꺼진 대화 id 없는 세션엔 글을 받을 것이 없다
   else if (f.working || f.harnessWorking || f.agentState === "busy") return { act: "keep", why: "working" };
+  else if (!f.convMapped) {
+    //  #5623 — 대화 id 없는 세션: 쉬고 있고 아무도 안 본 지 staleMin 이 지났으면 확인 글을 보낼 차례다(끄지 않는다 — StaleWhy 머리말).
+    //   질문을 띄운 채면 건드리지 않는다(그 글이 질문의 답으로 들어간다).
+    if (f.awaiting || f.agentState === "waiting") return { act: "keep", why: "no-conv" };
+    return staleClock(f, view, stale, nowSec, "no-conv");
+  }
   else if (f.awaiting || f.agentState === "waiting") state = "asking";
   else {
-    if (f.background) return { act: "keep", why: "background" };
-    if (r?.phase === "idle" && (r.bg ?? 0) > 0) return { act: "keep", why: "background" };
+    if (f.background || (r?.phase === "idle" && (r.bg ?? 0) > 0)) {
+      return stale > 0 ? staleClock(f, view, stale, nowSec, "background") : { act: "keep", why: "background" };
+    }
     if (r?.phase === "idle" && r.wake !== undefined) {
       if (r.wake > 0 && r.wake > nowSec - WAKE_GRACE_SEC) return { act: "keep", why: "scheduled" };
       if ((r.cron ?? 0) > 0) return { act: "keep", why: "scheduled" };
@@ -169,6 +189,14 @@ function stopClock(
   const dueAt = since + min * 60;
   if (nowSec < dueAt) return { act: "keep", why: net ? "net-clock" : "clock", state, dueAt };
   return net ? { act: "stop", state, since, dueAt, net: true } : { act: "stop", state, since, dueAt };
+}
+
+/** #5623 — 오래 남은 세션의 시계. stopClock 과 같은 시작점(마지막 활동 · 안 보기 시작 중 나중)에서 staleMin 을 잰다. */
+function staleClock(f: StopFacts, view: Pick<ViewState, "endedAtMs">, min: number, nowSec: number, why: StaleWhy): StopVerdict {
+  const v = stopClock(f, view, "done", min, nowSec, false);
+  if (v.act === "stop") return { ...v, stale: why };
+  //  시계가 가는 중이면 원래 이유로 남긴다(로그 · 측정이 «왜 남았나» 를 종전 이름으로 읽게) — 다음 마감만 싣는다.
+  return v.why === "clock" ? { act: "keep", why: "stale-clock", state: "done", dueAt: v.dueAt } : { act: "keep", why };
 }
 
 // ── 옛 회수 시계와의 경계 (#4697 T7) ─────────────────────────────────────────────────────────────────────────────────
@@ -286,6 +314,11 @@ export interface StopRuleDeps {
   /** #4783 후속 — 관측한 실행 상태를 적는다(run 이 바뀌었을 때만 부른다). 선택 — 안 주면 실행 상태를 안 적는다(옛 시험 무회귀). */
   markLastRun?: (id: string, s: SessionLastRunState) => Promise<unknown>;
   reap: (id: string) => Promise<void>;
+  /**
+   * #5623 — 오래 남은 세션에 확인 글을 보낸다(STALE_REMINDER_TEXT). 선택 — 안 주면 그 세션은 종전대로 남는다(«remind-off»).
+   *  보는 사람이 있으면 던져야 한다(그 사람의 입력칸에 글이 끼어든다) — 원격 PC 판은 끄기와 같은 «직전 확인» 을 건다.
+   */
+  remind?: (id: string, text: string, why: StaleWhy) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   /** 다음 마감에 이 테넌트를 다시 판정하도록 깨움을 건다(시험은 끈다) */
@@ -312,6 +345,8 @@ export interface StopRuleResult {
   scanned: number;
   /** net = #5043 상태 모름 안전망이 끈 세션(그 밖엔 칸이 없다). */
   stopped: Array<{ id: string; state: StopState; idleSec: number; draft: boolean; question: StopQuestion["kind"] | null; net?: true }>;
+  /** #5623 — 이번 판에 확인 글을 보낸 세션. */
+  reminded?: Array<{ id: string; why: StaleWhy; idleSec: number }>;
   /** 남겨 둔 이유별 수 */
   kept: Partial<Record<KeepWhy | HoldWhy, number>>;
   /**
@@ -338,7 +373,24 @@ const MAX_TABS = 4;
 export const MAX_STOPS_PER_SWEEP = 10;
 /** 하네스가 띄운 작업이 살아 있던 세션은 이만큼 다시 재지 않는다 — 30초마다 컨테이너 프로브를 맞지 않게(옛 회수기는 5분 간격). */
 export const JOB_HOLD_MS = 3 * 60_000;
+/** #5623 — 한 판에 보내는 확인 글 수의 상한. 글 하나가 그 세션에서 모델 턴 하나를 돈다(오래 쉰 세션은 대화가 길다). */
+export const MAX_REMINDS_PER_SWEEP = 2;
+/**
+ * #5623 — 확인 글을 보낸(또는 보내려다 실패한) 세션을 다시 건드리지 않는 시간의 바닥. 글이 닿으면 마지막 활동이 지금으로 옮겨져 시계가 스스로
+ *  staleMin 을 다시 세지만, 닿지 않았을 때(로그인 화면 · 배달 실패) 매 판(1분)마다 다시 보내지 않게 한다. 실제 대기는 max(이 값, staleMin)다.
+ */
+export const REMIND_RETRY_MIN_MS = 60 * 60_000;
+/**
+ * #5623 — 확인 글. 새 일을 시키지 않는다: 도는 작업이 아직 필요한지 보고, 필요 없으면 끄고, 한 줄로 답하게 한다.
+ *  답이 끝나면 턴 끝 보고가 새 백그라운드 수 · 대화 id 를 올리고, 그 뒤는 평소 규칙(완료 + 안 봄 N분)이 맡는다.
+ */
+export const STALE_REMINDER_TEXT =
+  "[라이블리 자동 확인] 이 세션은 오랫동안 아무도 보지 않았습니다. 새 작업을 시작하지 말고 다음만 해 주세요. "
+  + "① 이 세션이 띄워 둔 백그라운드 작업(셸 · 서버 · 감시 · 예약)이 아직 필요한지 확인합니다. "
+  + "② 필요 없으면 그 작업을 끕니다. ③ 필요하면 그대로 둡니다. "
+  + "④ 무엇을 껐고 무엇을 왜 남겼는지 한 줄로 답합니다. 띄워 둔 작업이 없으면 «없음» 이라고만 답합니다.";
 /** 테넌트·세션 → 작업 보호가 풀리는 시각(ms). */
+const remindHold = new Map<string, number>();
 const jobHold = new Map<string, number>();
 /**
  * #4810 — 한도 자동 이어감을 기다리던 세션은 이만큼 다시 재지 않는다(대화 기록 끝 1MB 를 30초마다 읽지 않게). 대기는 보통 몇 시간이고
@@ -421,7 +473,7 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const byId = new Map(states.map((s) => [s.id, s]));
     const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
     const nowSec = Math.floor(d.now() / 1000);
-    const due: Array<{ s: SessionInfo; state: StopState; since: number; net: boolean }> = [];
+    const due: Array<{ s: SessionInfo; state: StopState; since: number; net: boolean; stale?: StaleWhy }> = [];
     let nextDue = Infinity;
     //  #4783 후속 — 관측한 실행 상태가 바뀌었으면 적는다(세션이 어떤 길로 꺼져도 이 값이 남는다). run 이 그대로면 안 쓴다(매 틱 전수 UPDATE 를 피한다).
     const runWrites: Array<Promise<unknown>> = [];
@@ -434,10 +486,10 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       if (v.act === "keep") {
         count(v.why);
         noteOldest(v.why, s.id, nowSec - (f.lastActive || (f.lastReport?.at ?? 0) || f.created || nowSec));
-        if ((v.why === "clock" || v.why === "net-clock") && v.dueAt) nextDue = Math.min(nextDue, v.dueAt);
+        if ((v.why === "clock" || v.why === "net-clock" || v.why === "stale-clock") && v.dueAt) nextDue = Math.min(nextDue, v.dueAt);
         continue;
       }
-      due.push({ s, state: v.state, since: v.since, net: v.net === true });
+      due.push({ s, state: v.state, since: v.since, net: v.net === true, ...(v.stale ? { stale: v.stale } : {}) });
     }
     if (runWrites.length) await Promise.allSettled(runWrites);   // best-effort — 실행 상태 기록이 집행을 막지 않는다
     //  ⑥ 하네스가 띄운 작업(셸·빌드)이 살아 있으면 끄지 않는다 — 회수기와 같은 판별자(#2652). 판정 자체가 실패하면 **이번 판은 아무것도 안 끈다**
@@ -447,12 +499,14 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const nowMs = d.now();
     const holdKey = (id: string): string => key + "\u0000" + id;
     for (const [k, until] of jobHold) if (until <= nowMs) jobHold.delete(k);
+    for (const [k, until] of remindHold) if (until <= nowMs) remindHold.delete(k);
     for (const [k, h] of limitHold) if (h.until <= nowMs) limitHold.delete(k);
     for (const [k, u] of quotaUnknown) if (nowMs - u.at > 3_600_000) quotaUnknown.delete(k);   // 메모리 정리 — 셈 규칙(공백 재시작)은 judgeQuotaWait 가 맡는다
     for (const [k, atMs] of limitSeen) if (nowMs - atMs > QUOTA_WAIT_MAX_MS) limitSeen.delete(k);
     //  보호 중인 세션은 프로브·화면·대화 기록 어느 것도 다시 재지 않는다 — 작업 보호(3분)가 한도 대기 보호보다 앞선다(둘 다면 작업으로 센다).
-    const heldWhy = (id: string): "jobs" | "limit-wait" | "limit-unknown" | null =>
-      jobHold.has(holdKey(id)) ? "jobs" : limitHold.get(holdKey(id))?.why ?? null;
+    //  #5623 — 확인 글을 보낸 세션은 그 대기 동안 다시 재지 않는다(작업 보호보다 앞선다 — 도는 작업이 있어 글을 보낸 세션이다).
+    const heldWhy = (id: string): "remind-wait" | "jobs" | "limit-wait" | "limit-unknown" | null =>
+      remindHold.has(holdKey(id)) ? "remind-wait" : jobHold.has(holdKey(id)) ? "jobs" : limitHold.get(holdKey(id))?.why ?? null;
     for (const x of due) { const w = heldWhy(x.s.id); if (w) { count(w); noteOldest(w, x.s.id, nowSec - x.since); } }
     const toJudge = due.filter((x) => !heldWhy(x.s.id));
     //  상한은 프로브 **앞**에서도 건다 — 롤 직후처럼 후보가 많을 때 전부를 동시에 컨테이너 프로브하지 않게(격리 리뷰). 오래 논 것부터 본다.
@@ -469,8 +523,32 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       }
     }
     const stopped: StopRuleResult["stopped"] = [];
-    for (const { s, state, since, net } of toJudge) {
-      if (verdicts.jobs.has(s.id)) { count("jobs"); noteOldest("jobs", s.id, nowSec - since); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue; }
+    const reminded: NonNullable<StopRuleResult["reminded"]> = [];
+    //  #5623 — 확인 글 보내기. 보낸 뒤(또는 실패 뒤)엔 max(staleMin, 바닥) 동안 다시 건드리지 않는다. 글이 닿으면 마지막 활동이 지금으로 옮겨진다.
+    const remindWaitMs = Math.max(REMIND_RETRY_MIN_MS, (mins.staleMin ?? 0) * 60_000);
+    const remindOne = async (s: SessionInfo, why: StaleWhy, since: number): Promise<void> => {
+      if (!d.remind) { count("remind-off"); noteOldest("remind-off", s.id, nowSec - since); return; }
+      if (reminded.length >= MAX_REMINDS_PER_SWEEP) { count("capped"); noteOldest("capped", s.id, nowSec - since); capped = true; return; }
+      const v = d.view(s.id);
+      if (v.viewing || v.unknown) { count("viewing-now"); noteOldest("viewing-now", s.id, nowSec - since); return; }
+      remindHold.set(holdKey(s.id), nowMs + remindWaitMs);
+      try {
+        await d.remind(s.id, STALE_REMINDER_TEXT, why);
+        reminded.push({ id: s.id, why, idleSec: Math.max(0, nowSec - since) });
+        count("reminded");
+      } catch (e) {
+        count("remind-failed"); noteOldest("remind-failed", s.id, nowSec - since);
+        logger.warn({ err: e, id: s.id, why, ...(d.logCtx ?? {}) }, "하네스 종료 규칙: 확인 글 보내기 실패(대기 뒤 다시)");
+      }
+    };
+    for (const { s, state, since, net, stale } of toJudge) {
+      //  #5623 — 대화 id 없는 세션은 끄지 않는다(다시 열 수 없다) — 확인 글만. 작업 판정과 무관하다.
+      if (stale === "no-conv") { await remindOne(s, stale, since); continue; }
+      if (verdicts.jobs.has(s.id)) {
+        //  #5623 — 오래 남은 세션에 실제로 도는 작업이 있으면 끄지 않고 그 세션에 묻는다. 그 밖의 세션은 종전대로 작업 보호(3분).
+        if (stale === "background") { await remindOne(s, stale, since); continue; }
+        count("jobs"); noteOldest("jobs", s.id, nowSec - since); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue;
+      }
       if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); noteOldest("jobs-unknown", s.id, nowSec - since); continue; }
       if (stopped.length >= MAX_STOPS_PER_SWEEP) { count("capped"); noteOldest("capped", s.id, nowSec - since); capped = true; continue; }
       try {
@@ -495,11 +573,13 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     if (nextDueInSec !== undefined) d.arm(nextDue);
     const result: StopRuleResult = {
       enabled: true, ...mins, scanned: live.length, stopped, kept,
+      ...(reminded.length ? { reminded } : {}),
       ...(Object.keys(oldest).length ? { keptOldest: oldest } : {}),
       ...(nextDueInSec !== undefined ? { nextDueInSec } : {}),
     };
     //  끈 판은 무엇을 왜 껐는지 남긴다(#2652 교훈 — 개수만 남긴 로그는 사후에 아무것도 못 판다). 아무것도 안 끈 판은 조용히(30초마다 돈다).
     //  #4697 — 어느 워크스페이스의 판인지 싣는다(7일 측정이 워크스페이스별로 센다). 결과 모양(CP 가 읽는다)은 그대로 둔다.
+    if (reminded.length) logger.info({ tenant: currentTenant()?.slug ?? null, ...(d.logCtx ?? {}), reminded }, "하네스 종료 규칙: 오래 남은 세션에 확인 글을 보냈다(#5623)");
     if (stopped.length) logger.info({ tenant: currentTenant()?.slug ?? null, ...(d.logCtx ?? {}), ...result }, "하네스 종료 규칙: 하네스를 껐다(쪽지를 남기고 tmux 종료 — 행 보존 · 다시 열면 이어진다)");
     return result;
   } finally {
@@ -665,6 +745,7 @@ export function clearStopTimers(): void {
 export function resetStopRule(): void {
   clearStopTimers();
   jobHold.clear();
+  remindHold.clear();
   limitHold.clear();
   quotaUnknown.clear();
   limitSeen.clear();
