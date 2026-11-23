@@ -210,6 +210,8 @@ export const APP_CONTEXT_UNSAFE_FAMILIES: ReadonlyArray<{ label: string; match: 
   { label: "예약 작업", match: /^cron_/, why: NEW_TOKEN_OR_RUN_WHY },         // 헤드리스 AI 를 구성원 이름으로 예약 · 지금 실행
   { label: "프로젝트 대화", match: /^project_chat_/, why: NEW_TOKEN_OR_RUN_WHY },   // 헤드리스 대화 한 턴 · 그 기록
   { label: "리브", match: /^me_liv_/, why: NEW_TOKEN_OR_RUN_WHY },                // 구성원의 도우미 세션(지시와 함께 열기 · 그 세션 · 물음)
+  //  #5713 — 세션 요청(옛 리브 물음): 구성원 화면에 입력칸을 띄워 그 사람 금고에 값을 받고, 답을 그 사람의 세션에 말로 넣는다(앱 범위 밖의 쓰기 · 실행).
+  { label: "세션 요청", match: /^session_ask_/, why: NEW_TOKEN_OR_RUN_WHY },
   { label: "첫 분석", match: /^me_welcome_/, why: NEW_TOKEN_OR_RUN_WHY },         // 처음 설정의 분석 세션(구성원 이름으로 띄움 · 그 스트림 · 적용)
 ];
 

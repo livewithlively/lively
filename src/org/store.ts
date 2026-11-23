@@ -32,7 +32,7 @@ export {
   getLocalModePreferences, setLocalModePreference,
   getLocalScopePreferences, getLocalScopePreference, updateLocalScopePreference, applyLocalScopeChange, localScopeView,
   DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN, isWorkRootForm,
-  getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivSession,
+  getLivProfile, appendLivProfile, appendLivAnswer, livAnswerStats, setLivSession,
   setLivWelcomeProgress, listLivSecondTurnCandidates,
   memberIdByEmail, upsertMember, removeMember,
 } from "./store/members.js";
