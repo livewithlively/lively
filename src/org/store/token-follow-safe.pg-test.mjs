@@ -126,10 +126,12 @@ try {
   await setMember(["items", "context"]);
   const c2 = await deviceLogin(["items", "context"], false);
   chk("C3 옛 판이 승인한 행 → 표시 없이 굽는다(종전 결과)", c2.ok === true && same(c2.scopes, ["items", "context"]) && (await flagOf(c2.token))?.f === false, JSON.stringify(c2));
-  //  비위험 권한을 전부 쥔 승인자의 상한은 «따른다» 와 같은 뜻이다(그 자격은 이미 구성원의 비위험 권한 전체를 쥐고 있다).
+  //  ★ 비위험 권한을 전부 쥔 승인자라도 표지 없이 승인한 행은 따르지 않는다 — 상한의 scope 수로 뜻을 미루어 읽지 않는다.
   await setMember(ALL_SAFE);
   const c3 = await deviceLogin(ALL_SAFE, false);
-  chk("C4 비위험을 전부 쥔 승인자 → 따른다", c3.ok === true && (await flagOf(c3.token))?.f === true, JSON.stringify(c3));
+  chk("C4 ★ 비위험을 전부 쥔 승인자 · 표지 없음 → 따르지 않는다", c3.ok === true && same(c3.scopes, ALL_SAFE) && (await flagOf(c3.token))?.f === false, JSON.stringify(c3));
+  const c4row = (await itemsPool.query(`SELECT approver_scopes FROM pending_device_auth WHERE member_id=$1 ORDER BY approved_at DESC LIMIT 1`, [MID])).rows[0];
+  chk("C5 표지 없는 승인 행의 상한은 scope 만 담는다", Array.isArray(c4row?.approver_scopes) && same(c4row.approver_scopes, ALL_SAFE), JSON.stringify(c4row));
 
   // ── D. mintToken 가드 · 발급 응답 · 감사 ──
   let dErr = null;
@@ -203,6 +205,11 @@ try {
   const appUser = { ...sessionUser(ALL_SAFE), tokenSource: "db", followsMemberSafe: true, appId: "__pgtest_app__" };
   const h6b = await cap("org_token_mint_self").handler({}, appUser);
   chk("H6b 앱 토큰 신원으로 본인 발급 → 따르지 않는다", (await flagOf(h6b.token))?.f === false);
+  //  ★ 같은 자격들로 디바이스 로그인을 승인 — 비위험 scope 를 전부 쥐고 있어도 따르는 토큰이 나오지 않는다.
+  const h6c = await deviceLoginVia(oauthUser);
+  const h6d = await deviceLoginVia(appUser);
+  chk("H6c ★ OAuth 토큰으로 device_approve → 발급은 되지만 따르지 않는다", h6c.ok === true && same(h6c.scopes, ALL_SAFE) && (await flagOf(h6c.token))?.f === false, JSON.stringify(h6c));
+  chk("H6d ★ 앱 토큰 신원으로 device_approve → 따르지 않는다", h6d.ok === true && (await flagOf(h6d.token))?.f === false, JSON.stringify(h6d));
   //  H7 상한이 비위험 전부인 토큰(컨트롤플레인이 굽는 꼴)은 그 자체로 구성원을 따른다 → 그 자격의 승인도 따른다.
   const wide = await cap("org_token_mint").handler({ memberId: MID, scopes: ALL_SAFE, label: LABEL }, adminUser);
   const wideUser = await dbUser(wide.token);
