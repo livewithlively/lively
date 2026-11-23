@@ -5,20 +5,22 @@ import test from "node:test";
 import { effectiveNodeStopRule, mergeNodeStopRuleOverride, nodeStopRuleNote, parseNodeStopRuleOverride } from "./node-stop-rule-policy.js";
 import { DEFAULT_SESSION_RECLAIM_POLICY } from "./session-reclaim-policy.js";
 
-const WS = { node_stop_enabled: true, node_stop_done_minutes: 30, node_stop_asking_minutes: 180, node_stop_unknown_minutes: 1440 };
+const WS = { node_stop_enabled: true, node_stop_done_minutes: 30, node_stop_asking_minutes: 180, node_stop_unknown_minutes: 1440, node_stop_stale_minutes: 1440 };
 
 test("C1 컴퓨터 값이 없으면 전부 워크스페이스 값 — 출처 workspace", () => {
   for (const o of [null, undefined, {}]) {
     assert.deepEqual(effectiveNodeStopRule(WS, o), {
-      enabled: true, doneMin: 30, askingMin: 180, unknownMin: 1440,
-      source: { enabled: "workspace", done: "workspace", asking: "workspace", unknown: "workspace" },
+      enabled: true, doneMin: 30, askingMin: 180, unknownMin: 1440, staleMin: 1440,
+      source: { enabled: "workspace", done: "workspace", asking: "workspace", unknown: "workspace", stale: "workspace" },
     });
   }
 });
 test("C2 한 칸만 정하면 그 칸만 컴퓨터 값 — 0 도 «정한 값» 이다(끔)", () => {
   const e = effectiveNodeStopRule(WS, { done_minutes: 5 });
   assert.deepEqual([e.doneMin, e.askingMin, e.unknownMin], [5, 180, 1440]);
-  assert.deepEqual(e.source, { enabled: "workspace", done: "node", asking: "workspace", unknown: "workspace" });
+  assert.deepEqual(e.source, { enabled: "workspace", done: "node", asking: "workspace", unknown: "workspace", stale: "workspace" });
+  const st = effectiveNodeStopRule(WS, { stale_minutes: 0 });
+  assert.deepEqual([st.staleMin, st.source.stale], [0, "node"], "#5623 오래 남은 세션 확인도 컴퓨터별 · 0 = 끔");
   const z = effectiveNodeStopRule(WS, { unknown_minutes: 0 });
   assert.equal(z.unknownMin, 0);
   assert.equal(z.source.unknown, "node");

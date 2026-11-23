@@ -294,6 +294,7 @@ function storageEditor(detail, data) {
     const nodeDoneIn = numIn(srp.node_stop_done_minutes ?? 30, 0, 43200);
     const nodeAskingIn = numIn(srp.node_stop_asking_minutes ?? 180, 0, 43200);
     const nodeUnknownIn = numIn(srp.node_stop_unknown_minutes ?? 1440, 0, 43200);
+    const nodeStaleIn = numIn(srp.node_stop_stale_minutes ?? 1440, 0, 43200);   // #5623
     const nodeStopBtn = el('button', { class: 'btn btn-primary btn-sm', text: '원격 PC 규칙 저장' }); nodeStopBtn.disabled = !canEdit;
     nodeStopBtn.addEventListener('click', async () => {
       nodeStopBtn.disabled = true;
@@ -303,6 +304,7 @@ function storageEditor(detail, data) {
           node_stop_done_minutes: Number(nodeDoneIn.value),
           node_stop_asking_minutes: Number(nodeAskingIn.value),
           node_stop_unknown_minutes: Number(nodeUnknownIn.value),
+          node_stop_stale_minutes: Number(nodeStaleIn.value),
         } }) });
         toast('저장됨 — 1분 안에 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); nodeStopBtn.disabled = false; }
@@ -471,10 +473,12 @@ function storageEditor(detail, data) {
         el('div', { class: 'storage-fields' },
           el('label', {}, el('span', { text: '작업이 끝난 뒤 끄기(분, 0=끔)' }), nodeDoneIn),
           el('label', {}, el('span', { text: '답을 기다린 뒤 끄기(분, 0=끔)' }), nodeAskingIn),
-          el('label', {}, el('span', { text: '상태를 모를 때 끄기(분, 0=끔)' }), nodeUnknownIn)),
+          el('label', {}, el('span', { text: '상태를 모를 때 끄기(분, 0=끔)' }), nodeUnknownIn),
+          el('label', {}, el('span', { text: '오래 남은 세션 확인(분, 0=끔)' }), nodeStaleIn)),
         el('p', { class: 'storage-calc', text: '구성원이 연결한 컴퓨터(노드)에서 도는 세션의 AI(하네스)를 위 규칙과 같은 방식으로 끕니다. 대화는 그대로 남아, 그 세션을 열거나 말을 걸면 이어집니다. 컴퓨터는 매니지드보다 세션이 며칠씩 쌓이는 것이 문제라 시간을 넉넉히 잡았습니다.' }),
         el('p', { class: 'admin-hint' }, ...uiText('누군가 웹에서 보고 있거나 그 컴퓨터의 터미널에서 직접 붙어 있는 세션, 작업 중이거나 백그라운드 작업·예약된 다시 깨우기·사용량 한도 자동 이어감을 기다리는 세션은 끄지 않습니다. 그 컴퓨터에서 직접 띄워 라이블리가 다시 열 수 없는 세션도 끄지 않습니다.')),
         el('p', { class: 'admin-hint' }, ...uiText('“상태를 모를 때”는 AI 가 작업을 마쳤는지 알리지 않은 세션(옛 버전에서 시작했거나 마지막 알림이 작업 중에서 멈춘 세션)에 걸리는 안전망입니다. 컴퓨터마다 켜고 끄거나 시간을 따로 정하려면 [내 설정 ▸ 내 컴퓨터]에서 그 컴퓨터의 “하네스 자동 종료”를 누르세요 — 비워 둔 칸은 여기 값을 따릅니다. 기본값은 꺼짐 · 작업이 끝난 뒤 30분 · 답을 기다린 뒤 180분 · 상태를 모를 때 1440분(24시간)입니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('“오래 남은 세션 확인”은 백그라운드 작업이 있다고 알린 채 남은 세션과 대화 기록이 연결되지 않은 세션에 걸립니다. 아무도 안 본 지 이 시간이 지나면, 그 컴퓨터에 실제로 도는 작업이 없는 세션은 끄고, 도는 작업이 있거나 대화 기록이 연결되지 않은 세션에는 «아직 필요한지 확인하고 필요 없으면 끄라» 는 글을 자동으로 보냅니다. 그 세션에서 AI 가 한 번 답하므로 사용량이 듭니다. 0 이면 이런 세션은 그대로 남습니다. 기본값은 1440분(24시간)입니다.')),
         el('div', { class: 'storage-actions' }, nodeStopBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: 'idle 세션 자동 회수' }),
