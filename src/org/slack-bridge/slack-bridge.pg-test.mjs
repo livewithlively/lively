@@ -3,7 +3,7 @@
 //
 // 왜 이 계층인가: 한 번만 넘기기(열쇠 UNIQUE) · 신원 매핑(person_identity · 금고 · 이메일) · 동의 · 작업 행의 source/automation · 호출 기록 · 토큰이 어디에도
 //  안 남는다는 약속은 전부 DB 의 사실이다. 슬랙은 가짜(로컬 HTTP + 소켓 모드 ws 서버)고, 다리는 진짜 맞추기 · 진짜 소켓 · 진짜 startAppJob(가짜 Lambda)으로 돈다.
-//  엣지 표 N6 · N7 · I1~I11 · D1 · D5~D10 · K1~K6 · A-h · S1 (spec-1782) · I12 · I13 예전 범위 동의(#1644).
+//  엣지 표 N6 · N7 · I1~I11 · D1 · D5~D10 · K1~K6 · A-h · S1 (spec-1782) · I12 · I13 예전 범위 동의(#1644) · RW1~RW5 롤 창(run_as_human 칸이 아직 없을 때).
 import "../../../scripts/test-apps-root.mjs";
 import pg from "pg";
 import http from "node:http";
@@ -390,7 +390,19 @@ try {
     const child = await svc.startAppJob({ route: "/api/child", body: {} },
       { userId: "runner", email: "", scopes: ["memory"], projects: ["*"], appId: "policy", appServer: true, appAddress: "pub", appJobId: Number(jr.id) }, {}, jobDeps);
     chk("A-h 자동화 작업 안에서 시작한 작업은 자동화를 물려받는다", (await js.appJobAutomation(Number(child.id))) === true && (await js.appJobAutomation(Number((await jobs())[0].id))) === false);
-    await setBridge({ id: "ops", bot_messages: false, run_as: null, bot_ids: [] });
+    //  run_as_human — 사람이 양식을 내는 워크플로를 bot_ids 로 고르고 켜면 run_as 작업에 자동화 · 사람이 보지 않음 표시를 달지 않는다(공용 시트를 쓸 수 있다).
+    const noIds = await errOf(setBridge({ id: "ops", bot_ids: [], run_as_human: true }));
+    chk("N10 run_as_human 은 bot_ids 없이 켜지 못한다", noIds?.status === 400 && /bot_ids/.test(noIds.message), String(noIds?.message));
+    const offWarn = (await setBridge({ id: "ops", bot_ids: ["BWF"] })).warnings;
+    chk("N10b run_as_human 꺼짐 + bot_messages → 자동화(공용 시트 · API 키) 경고", offWarn.some((x) => /run_as_human/.test(x)), JSON.stringify(offWarn));
+    const humanSet = await setBridge({ id: "ops", run_as_human: true });
+    chk("N10c run_as_human 이 저장 · 보기에 실린다", humanSet.bridge.run_as_human === true && !humanSet.warnings.some((x) => /자동화로 표시/.test(x)), JSON.stringify(humanSet));
+    await send(message(undefined, "업무 요청 접수 2", { user: undefined, bot_id: "BWF", subtype: "bot_message" }));
+    await until(async () => (await jobs()).length === before + 3, 3000, "run_as_human 작업");
+    const jh = (await jobs()).at(-1);
+    chk("I10b run_as_human — run_as 이름 그대로 · 자동화 · 사람이 보지 않음 표시 없음 · via run_as",
+      jh.requester === "runner" && jh.automation === false && jh.unattended === false && JSON.parse(jh.body).actor.via === "run_as", JSON.stringify(jh));
+    await setBridge({ id: "ops", bot_messages: false, run_as: null, bot_ids: [], run_as_human: false });
   }
 
   // ── E12 버튼 ──
@@ -508,6 +520,37 @@ try {
       && (await q(`SELECT count(*)::int AS n FROM org_slack_bridge_call WHERE bridge_id='ops'`))[0].n >= 1);
     const e = await errOf(cap("org_slack_bridge_remove").handler({ id: "ops" }, boss, {}));
     chk("없는 다리 지우기 → 404", e?.status === 404);
+  }
+
+  // ── 롤 창 — run_as_human 칸이 아직 없을 때(매니지드 롤은 새 게이트웨이를 먼저 띄우고 마이그레이션을 맨 끝에 돌린다) ──
+  //  RW1 조회 · RW2 맞추기 · RW3 꺼진 값 저장은 돈다(칸 없이) · RW4 켜려는 저장만 503(조용히 꺼진 채 남지 않게) · RW5 칸이 생기면 그대로 켜진다.
+  {
+    const rollIn = (over = {}) => ({
+      id: "roll", app_id: "policy", route: "POST /api/slack/event", enabled: false,
+      app_token_ref: { owner: "gateway", kind: "slack_bridge_app", scope_key: "ops" }, bot_token_ref: { owner: "gateway", kind: "slack_bridge_bot", scope_key: "ops" },
+      events: [], channels: [], bot_messages: true, bot_ids: ["BWF"], run_as: "runner", run_as_human: false, react: null, note: "앞", ...over,
+    });
+    await store.upsertBridge(rollIn(), "boss");
+    await dbc.query(`ALTER TABLE org_slack_bridge DROP COLUMN run_as_human`);
+    try {
+      const list = await errOf(store.listBridges().then((rows) => { throw { rows }; }));
+      const one = await errOf(store.getBridge("roll").then((row) => { throw { row }; }));
+      chk("RW1 칸이 없어도 목록 · 한 건 읽기가 돈다(run_as_human 은 false)",
+        Array.isArray(list?.rows) && list.rows.some((r) => r.id === "roll" && r.run_as_human === false) && one?.row?.id === "roll" && one.row.run_as_human === false && one.row.note === "앞",
+        JSON.stringify(list?.rows ?? list?.message) + " / " + JSON.stringify(one?.row ?? one?.message));
+      const rec = await errOf(mgr.reconcileSlackBridges().then((out) => { throw { out }; }));
+      chk("RW2 칸이 없어도 맞추기가 던지지 않는다", !!rec?.out && typeof rec.out.active === "number", String(rec?.message ?? JSON.stringify(rec)));
+      const saved = await errOf(store.upsertBridge(rollIn({ note: "뒤" }), "boss").then((row) => { throw { row }; }));
+      chk("RW3 칸이 없어도 꺼진 값(false) 저장은 된다", saved?.row?.note === "뒤" && saved.row.run_as_human === false && (await q(`SELECT note FROM org_slack_bridge WHERE id='roll'`))[0]?.note === "뒤",
+        String(saved?.message ?? JSON.stringify(saved)));
+      const on = await errOf(store.upsertBridge(rollIn({ run_as_human: true, note: "켬" }), "boss"));
+      chk("RW4 칸이 없을 때 켜려는 저장은 503 이고 행은 그대로다", on?.status === 503 && (await q(`SELECT note FROM org_slack_bridge WHERE id='roll'`))[0]?.note === "뒤", String(on?.status) + " " + String(on?.message));
+    } finally {
+      await dbc.query(`ALTER TABLE org_slack_bridge ADD COLUMN IF NOT EXISTS run_as_human BOOLEAN NOT NULL DEFAULT false`);
+    }
+    const after = await store.upsertBridge(rollIn({ run_as_human: true }), "boss");
+    chk("RW5 칸이 생기면 켠 값이 저장 · 읽기에 실린다", after.run_as_human === true && (await store.getBridge("roll"))?.run_as_human === true);
+    await store.removeBridge("roll");
   }
 } catch (e) {
   fail++;

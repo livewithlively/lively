@@ -433,7 +433,7 @@
   "rest": [
    "POST /api/ui/org/token"
   ],
-  "input_hash": "fb87b54b720db2ca"
+  "input_hash": "68ad3047692135f0"
  },
  {
   "name": "org_session_mint",
@@ -3975,6 +3975,16 @@
   "input_hash": "c55c5e0068a50942"
  },
  {
+  "name": "org_app_job_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:app_id/jobs/:job"
+  ],
+  "input_hash": "634b9817ae495a72"
+ },
+ {
   "name": "list_unmapped",
   "scope": "context",
   "mcp": true,
@@ -4395,6 +4405,46 @@
   "input_hash": "57db86da49b40ff6"
  },
  {
+  "name": "repo_refs",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/refs"
+  ],
+  "input_hash": "bf92efba23a66769"
+ },
+ {
+  "name": "repo_diff",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/diff"
+  ],
+  "input_hash": "1f79aee6783f8954"
+ },
+ {
+  "name": "repo_file",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/file"
+  ],
+  "input_hash": "a2e1bcc3bce6ccbc"
+ },
+ {
+  "name": "repo_grep",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/grep"
+  ],
+  "input_hash": "1a26d5f167372a71"
+ },
+ {
   "name": "stack_profile_list",
   "scope": "code",
   "mcp": true,
@@ -4712,7 +4762,7 @@
   "rest": [
    "POST /api/ui/org/slack/bridge"
   ],
-  "input_hash": "f92390bbe14d2349"
+  "input_hash": "000a39fdec7595ae"
  },
  {
   "name": "org_slack_bridge_remove",
@@ -5322,7 +5372,7 @@
   "rest": [
    "POST /api/ui/apps/:id/grant"
   ],
-  "input_hash": "2b26d1171bc83fae"
+  "input_hash": "4d69d99e554ba50f"
  },
  {
   "name": "me_app_revoke",

@@ -32,6 +32,9 @@ export async function initSlackBridge(pool: pg.Pool): Promise<void> {
       updated_by TEXT
     );
   `);
+  //  run_as_human — run_as 로 도는 워크플로 · 봇 글을 «사람이 낸 질문»으로 본다: 그 작업에 자동화 표시를 달지 않아 run_as 구성원의 요청으로
+  //   공용 시트(구독)를 쓸 수 있다. 사람이 양식을 내고 답을 기다리는 워크플로를 bot_ids 로 골랐을 때만 켠다(plan.ts — bot_ids 없이 켜지 못한다).
+  await pool.query(`ALTER TABLE org_slack_bridge ADD COLUMN IF NOT EXISTS run_as_human BOOLEAN NOT NULL DEFAULT false;`);
   //  org_slack_bridge_event — 한 번만 넘기기. 슬랙은 같은 이벤트를 다시 보낸다(retry_attempt · 다시 연결) — 열쇠(event_id · trigger_id · envelope_id)를 먼저 적은
   //   쪽만 작업을 만든다. 본문은 적지 않는다(무엇이 · 언제 · 어떻게 끝났나만). 7일이 지나면 지운다(정비 pruneBridgeRecords).
   await pool.query(`

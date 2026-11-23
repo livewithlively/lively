@@ -156,7 +156,7 @@ check("⑥ cmdSetup 이 토큰 유효성을 확인한다 (존재만 보면 401 �
     const ps1Path = join(HERE, "bootstrap.ps1");
 
     // ⑦ 파서 통과 — BOM·따옴표·괄호 등 문법 사고 전반의 그물
-    const parse = `$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseInput((Get-Content -Raw '${ps1Path}'),[ref]$t,[ref]$e)|Out-Null;$e.Count`;
+    const parse = `$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseInput((Get-Content -Raw -Encoding UTF8 '${ps1Path}'),[ref]$t,[ref]$e)|Out-Null;$e.Count`;
     const pr = spawnSync(pwsh, ["-NoProfile", "-Command", parse], { encoding: "utf8" });
     check("⑦ PowerShell 파서 통과(파스 에러 0)", pr.stdout.trim() === "0", `에러 ${pr.stdout.trim()}건 / ${pr.stderr}`);
 
@@ -178,7 +178,7 @@ check("⑥ cmdSetup 이 토큰 유효성을 확인한다 (존재만 보면 401 �
     ];
     const driver = join(box, "drive.ps1");
     writeFileSync(driver, [
-      `$src = Get-Content -Raw '${ps1Path}'`,
+      `$src = Get-Content -Raw -Encoding UTF8 '${ps1Path}'`,
       // 부트스트랩에서 판정 함수 2개만 떼어내 **그대로** 실행한다.
       `$fn = [regex]::Match($src, '(?ms)^function Get-NodeMajor.*?^\\}\\r?\\n(?:.*?)^function Test-NodeUsable.*?^\\}')`,
       `if (-not $fn.Success) { Write-Output 'EXTRACT_FAIL'; exit 0 }`,
