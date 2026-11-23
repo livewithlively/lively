@@ -213,6 +213,18 @@ async function settleInterruptedRestore(oldId: string, st: SessionState, newId: 
   await carrySessionDismissals(oldId, newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 치움 승계 실패(비치명)"));
   await closeSessionAppInstances(oldId, "restore").catch((e) => logger.warn({ err: e, id: oldId }, "restore(이어 붙이기): 옛 앱 인스턴스 닫기 실패(비치명)"));
   await markSessionSuperseded(oldId, newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 옛 행 이정표 기록 실패(비치명)"));
+  await carryAsksToRestored(oldId, newId);
+}
+
+/**
+ * #5713 — 새 id 로 복원이 확정됐다: 옛 세션에서 AI 가 걸어 둔 **열린 요청**(값 입력 · 고르기 …)을 새 id 로 넘긴다. 안 넘기면 되살린 세션의
+ *  사이드바 «요청» 탭에서 그 요청이 사라진다(요청은 세션 id 로 고른다 — 주소 #/ask/<id> 로는 여전히 열린다). 이정표(markSessionSuperseded)를
+ *  적는 세 자리에서 같이 부른다. 비치명.
+ *  ⚠ 세션 상태 모듈(sessions/session-state.ts)에서 부르지 않는다 — 그 모듈은 노드 에이전트 번들에 실리고, 노드엔 DB 가 없다(번들 경계 가드).
+ */
+async function carryAsksToRestored(oldId: string, newId: string): Promise<void> {
+  await import("../asks/store.js").then((m) => m.carrySessionAsks(oldId, newId))
+    .catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore: 열린 요청 승계 실패(비치명 — 요청 탭에서만 빠진다)"));
 }
 
 // (#3626) themeOf · prepareRemoteAppSession · relayNodeOp 는 세션 생성 관문(session-launch.ts)으로 옮겼다 —
@@ -2081,6 +2093,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //   사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
       //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
       if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 이정표 기록 실패(비치명)"));
+      if (carried) await carryAsksToRestored(id, session.id);   // #5713 열린 요청도 새 id 로
       const ln = liveNodes().find((n) => n.id === nodeId);
       //  #3870 — «이어받았나» 를 사실대로 싣는다. 새 대화로 열었으면 화면이 «이어받았어요» 라고 말하면 안 된다.
       res.json({ ok: true, resumed: resumedKind(nodePlan),
@@ -2247,6 +2260,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
     //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
     if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 이정표 기록 실패(비치명)"));
+    if (carried) await carryAsksToRestored(id, session.id);   // #5713 열린 요청도 새 id 로
     //  #3870 — 위 노드 갈래와 같은 축(그 머리말).
     res.json({ ok: true, resumed: resumedKind(boxPlan), session });
   })));
