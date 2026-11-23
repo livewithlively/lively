@@ -304,21 +304,29 @@ try {
     waitCap("run-custom.mjs", 2); waitCap("work-flag.mjs", 2);   // 뒤 작업이 다음 행의 관측을 오염시키지 않게
     stub("run-custom.mjs"); stub("work-flag.mjs");
   }
-  // [E3][E4][E5] stop — 자동 후속 메시지를 만들지 않는다(IDE 는 followup_message 를 사용자 메시지로 자동 제출). 게이트 0회.
+  // [E3][E4][E5] stop — 기록 게이트는 기다려 block 을 followup_message 로 옮긴다(기록 넛지 — #5675 에서 되살림).
+  //  조직 Stop 훅·work-flag 는 뒤에서 각 1회(게이트를 기다리는 동안 그것들까지 기다리지 않는다). 중단·오류 턴은 게이트 0회.
   {
     resetCaps();
     stub("stop-writeback-gate.mjs", JSON.stringify({ decision: "block", reason: "기록을 남기세요" }));
-    eq("R23[E3] completed + 게이트 block → {}", outOf(runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 })), {});
+    eq("R23[E3] completed + 게이트 block → followup_message", outOf(runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 })), { followup_message: "기록을 남기세요" });
     eq("R23b[E3] org·work-flag 각 1회(뒤에서)", [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1)], [1, 1]);
-    eq("R23c[E3] 게이트 0회", capOf("stop-writeback-gate.mjs").length, 0);
+    eq("R23c[E3] 게이트 1회 · 페이로드 Stop·stop_hook_active:false · harness=cursor",
+      [capOf("stop-writeback-gate.mjs").length, sentOf("stop-writeback-gate.mjs").hook_event_name, sentOf("stop-writeback-gate.mjs").stop_hook_active, capOf("stop-writeback-gate.mjs")[0]?.harness],
+      [1, "Stop", false, "cursor"]);
     eq("R23d[E3] org Stop 페이로드 stop_hook_active:false", sentOf("run-custom.mjs").stop_hook_active, false);
     resetCaps();
+    stub("stop-writeback-gate.mjs", "");
+    eq("R23e[E3] 게이트 통과(출력 없음) → {}", outOf(runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 })), {});
+    waitCap("run-custom.mjs", 1); waitCap("work-flag.mjs", 1);
+    resetCaps();
+    stub("stop-writeback-gate.mjs", JSON.stringify({ decision: "block", reason: "기록을 남기세요" }));
     eq("R24a[E4] aborted → {}", outOf(runAdapter("stop", { ...BASE, status: "aborted", loop_count: 0 })), {});
     eq("R24b[E4] 게이트 0회 · org·work-flag 1회", [waitCap("run-custom.mjs", 1), waitCap("work-flag.mjs", 1), capOf("stop-writeback-gate.mjs").length], [1, 1, 0]);
     resetCaps();
     runAdapter("stop", { ...BASE, status: "completed", loop_count: 1 });
     waitCap("run-custom.mjs", 1);
-    eq("R25[E5] loop_count 1 → org 페이로드 stop_hook_active:true", sentOf("run-custom.mjs").stop_hook_active, true);
+    eq("R25[E5] loop_count 1 → 게이트·org 페이로드 stop_hook_active:true", [sentOf("stop-writeback-gate.mjs").stop_hook_active, sentOf("run-custom.mjs").stop_hook_active], [true, true]);
     waitCap("work-flag.mjs", 1);
     stub("stop-writeback-gate.mjs");
   }
@@ -351,6 +359,8 @@ process.stdin.on("end", () => setTimeout(() => {
 `);
     runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" });
     runAdapter("stop", { ...BASE, status: "completed", loop_count: 0 });
+    // [E3] stop 은 게이트만 기다린다 — 자기 work-flag·조직 Stop 훅은 앞 턴의 차례(2초) 뒤에 돌므로, 응답 시점엔 아직 0건이어야 한다.
+    eq("R23a[E3] stop 응답은 뒤 작업(work-flag·조직 Stop 훅)을 기다리지 않는다", capOf("work-flag.mjs").length, 0);
     waitCap("work-flag.mjs", 2);
     eq("R45[E12] 같은 세션 — 보고 순서 UserPromptSubmit → Stop", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).hook_event_name), ["UserPromptSubmit", "Stop"]);
     waitCap("run-custom.mjs", 2);

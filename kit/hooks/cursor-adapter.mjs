@@ -83,14 +83,14 @@ const argsOf = (ti) => asObj(ti) || asObj(typeof ti === "string" ? tryJson(ti) :
 //  이벤트별 합(BUDGET_MS) + stdin 이 hooks.json timeout(user-install CURSOR_HOOK_EVENTS)보다 작아야 Cursor 가 우리를 죽이기
 //  전에 유효 출력으로 끝난다 — cursor-adapter 시험(P5)이 `node cursor-adapter.mjs --budget` 으로 읽어 그 표와 대조한다.
 // T.runner = harness-registry cursor.runnerCapMs — 러너가 이보다 앞서 끝내도록 예산을 잡는다(#5034). 바꾸면 함께 바꾼다.
-const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, workFlag: 5000, stdin: 2000 };
+const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, gate: 10000, workFlag: 5000, stdin: 2000 };
 const BUDGET_MS = {
   sessionStart: T.preload + T.sync + T.runner + T.workFlag,
   beforeSubmitPrompt: T.runner + T.workFlag,
   preToolUse: T.runner,
   beforeMCPExecution: T.runner,
   postToolUse: T.runner + T.workFlag,
-  stop: T.runner + T.workFlag,          // 게이트 없음(#5647) — 뒤 작업 상한
+  stop: T.gate,                         // 기록 게이트만 기다린다 — 조직 Stop 훅·work-flag 는 뒤에서(#5647 · 게이트 복원 #5675)
   sessionEnd: T.runnerEnd + T.workFlag,
   subagentStop: T.runner + T.workFlag,
   preCompact: T.runner + T.workFlag,
@@ -230,12 +230,13 @@ function toolOf(input) {
 //  · beforeSubmitPrompt — IDE(2.6.13 번들 실측)는 응답의 continue·user_message 만 보고 additional_context 는 버린다. 그런데
 //    모델 호출 전에 이 훅을 await 한다 → 조직 훅(프로젝트 붙이기·당겨오기·밀어올리기 …) 시간이 고스란히 «턴마다 지연» 이 됐다
 //    (원준 맥북 실측 4.4~7.5초/턴 — 위시스트 VOC «턴마다 10초»). 맥락은 sessionStart 가 싣는다(IDE 가 받는 자리).
-//  · stop — 응답에서 쓰이는 것은 followup_message 뿐인데, IDE 는 그것을 **사용자 메시지로 자동 제출**한다
-//    (isAutoFollowupFromStopHook — VOC «자동 후속 메시지»). Cursor 에선 기록 게이트(stop-writeback-gate)를 돌리지 않고 늘 {} 로 답한다.
+//  · stop — 조직 Stop 훅·work-flag(쉼 보고)는 뒤로 미룬다. 단 **기록 게이트는 여기서 기다린다**(아래 handle 의 stop 절):
+//    게이트의 block 이 followup_message(기록 넛지)가 되는 유일한 자리라서다. #5647 에서 게이트를 껐다가 «재촉이 없으면 남길
+//    지식이 유실된다» 는 판단(원준 2026-11-23, #5675)으로 되살렸다.
 //  · sessionEnd·subagentStop·preCompact — 출력이 없는 부수효과 전용.
 //  뒤 작업은 분리된 프로세스(detached)라 Cursor 가 훅을 끝내도 산다. 시간 상한은 종전과 같은 러너 타임박스(BUDGET_MS)다.
 //  상태 보고 순서: work-flag 를 먼저 — «작업 중» 이 조직 훅 몇 초 뒤로 밀리면 짧은 턴의 stop(쉼)보다 늦게 도착할 수 있다.
-const DEFERRED = new Set(["beforeSubmitPrompt", "stop", "sessionEnd", "subagentStop", "preCompact"]);
+const DEFERRED = new Set(["beforeSubmitPrompt", "sessionEnd", "subagentStop", "preCompact"]);
 
 function deferredWork(event, input) {
   if (event === "beforeSubmitPrompt") {
@@ -324,6 +325,23 @@ function runDeferred(event, file) {
 // 이벤트별 처리 → Cursor 에 낼 출력 객체(stdout 쓰기는 main 이 한 번만).
 function handle(input) {
   if (DEFERRED.has(EVENT)) { spawnDeferred(EVENT, input); return fallbackFor(EVENT); }
+
+  if (EVENT === "stop") {
+    // 턴 종료. 상태 보고(쉼)·조직 Stop 훅은 뒤에서(위 «뒤로 미루는 이벤트»). 기록 게이트는 **정상 완료(completed)** 일 때만 —
+    //  중단·오류로 끝난 턴에 «기록하라» 를 덧붙이면 사람이 멈춘 것을 다시 굴린다(claude StopFailure 에 게이트를 안 거는 것과 같다).
+    //  게이트의 {"decision":"block","reason"} 은 Cursor 의 followup_message 로 옮긴다 — IDE·CLI 는 그것을 사용자 메시지처럼 자동
+    //  제출한다(isAutoFollowupFromStopHook). 치던 입력칸은 건드리지 않는다(IDE 3.31.15·CLI 2026.11.22 실기기 녹화, #5675).
+    //  루프가드: 게이트가 <sid>.blocked 로 세션당 1회를 보장하고, 후속 턴이면(loop_count>0) stop_hook_active 로 알린다.
+    spawnDeferred("stop", input);
+    const extra = { stop_hook_active: Number(input?.loop_count) > 0 };
+    if (String(input?.status || "") !== "completed") return {};
+    const gate = runScript("stop-writeback-gate.mjs", [], payload("Stop", input, extra), T.gate);
+    for (const l of String(gate || "").split(/\r?\n/)) {
+      const g = asObj(tryJson(l.trim()));
+      if (g && g.decision === "block" && String(g.reason || "").trim()) return { followup_message: String(g.reason) };
+    }
+    return {};
+  }
 
   if (EVENT === "sessionStart") {
     // 맥락 주입의 정본 자리 — 첫 턴이 이 훅을 기다리고(실측) additional_context 에 클라이언트 상한이 없다.
