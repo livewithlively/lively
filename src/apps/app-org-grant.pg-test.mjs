@@ -464,6 +464,48 @@ try {
     chk("R3 「나만」 으로 되돌리면 조직 동의도 거둬진다 — 다시 공개해도 예전 조직 동의가 되살아나지 않는다(관리자가 다시 적어야 한다)",
       toMe?.changed === true && rawMe?.org_grant == null && afterRepublish === null, J({ toMe, rawMe, afterRepublish }));
   });
+
+  // ── PR 리뷰에서 더한 절(구현을 본 사람이 썼다 — 블라인드가 아니다) — 롤 창 ──
+  //  매니지드 롤은 새 게이트웨이를 먼저 띄우고 공용 DB 마이그레이션을 맨 끝에 돌린다. 그 사이에는 org_app.org_grant 칸이 없다.
+  //  그때 동의 읽기(요청마다 도는 자리)가 42703 으로 깨지면 앱 호출이 전부 막힌다 — 칸이 없으면 «조직 동의 없음» 으로 읽고(본인 동의는 그대로),
+  //  조직 동의를 적는 것만 실패해야 한다(닫힌 쪽). 칸을 지웠다가 같은 DDL 로 되살린다 — 맨 끝 절이라 지운 값은 다른 절에 영향이 없다.
+  await step("RW 롤 창 — org_grant 칸이 아직 없을 때", async () => {
+    await install(manifest("rollw", V1));
+    await grant("dana", "rollw");
+    await setOrg("rollw");
+    fresh();
+    const before = await getActiveGrant("rollw", "alice");
+    await itemsPool.query(`ALTER TABLE org_app DROP COLUMN org_grant`);
+    let rw = null;
+    try {
+      fresh();
+      rw = {
+        dana: await tryCall(getActiveGrant("rollw", "dana")), alice: await tryCall(getActiveGrant("rollw", "alice")),
+        danaList: await tryCall(listActiveGrants("dana")), aliceList: await tryCall(listActiveGrants("alice")),
+        danaMint: await errOf(mintAppToken("dana", "rollw", "pgt")), aliceMint: await errOf(mintAppToken("alice", "rollw", "pgt")),
+        danaCall: await asApp("dana", PROJECTS, "rollw"), aliceCall: await asApp("alice", PROJECTS, "rollw"),
+        get: await tryCall(cap("org_app_get").handler({ app_id: "rollw" }, P("admin"), ctx)),
+        set: await errOf(setOrg("rollw")),
+      };
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS org_grant JSONB`);
+    }
+    chk("RW1 칸이 없을 때 동의 읽기가 깨지지 않는다 — 본인 동의는 그대로(dana) · 조직 동의만 받던 사람은 동의 없음(alice · 닫힌 쪽)",
+      before?.org_granted === true && rw.dana.e === null && sameSet(rw.dana.r?.tools, TOOLS) && rw.dana.r?.org_granted === undefined
+        && rw.alice.e === null && rw.alice.r === null, J({ before, dana: rw.dana, alice: rw.alice, err: rw.dana.e?.message ?? rw.alice.e?.message }));
+    chk("RW2 칸이 없을 때 동의한 앱 목록도 깨지지 않는다 — dana 에는 들고 alice 에는 없다",
+      rw.danaList.e === null && hasApp(rw.danaList.r, "rollw") && rw.aliceList.e === null && !hasApp(rw.aliceList.r, "rollw"),
+      J({ dana: rw.danaList, alice: rw.aliceList, err: rw.danaList.e?.message ?? rw.aliceList.e?.message }));
+    chk("RW3 칸이 없을 때 진짜 문 — dana 의 앱 토큰 · 앱 서버 호출은 200 · alice 는 종전의 «동의 없음»(403) · 앱 상세는 org_grant 없이 열린다",
+      rw.danaMint === null && rw.danaCall.status === 200 && rw.aliceMint?.status === 403 && rw.aliceCall.status === 403
+        && rw.get.e === null && rw.get.r?.app?.org_grant == null,
+      J({ danaMint: rw.danaMint?.message, danaCall: rw.danaCall, aliceMint: rw.aliceMint?.status, aliceCall: rw.aliceCall.status, get: rw.get.e?.message ?? rw.get.r?.app?.org_grant }));
+    chk("RW4 칸이 없을 때 조직 동의를 적는 것은 실패한다(조용히 성공한 척하지 않는다)", rw.set !== null, J({ set: rw.set?.message }));
+    const s = await setOrg("rollw");
+    fresh();
+    const after = await getActiveGrant("rollw", "alice");
+    chk("RW5 칸이 생기면 다시 적히고 조직 동의가 닿는다", s?.org_grant?.covers === true && after?.org_granted === true, J({ s, after }));
+  });
 } catch (e) {
   fail++;
   console.error("FAIL (예외)", e?.stack ?? e);
