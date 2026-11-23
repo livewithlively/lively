@@ -7,6 +7,7 @@
 //  그래서 여기 거르기는 «앱이 받으면 안 되는 것» 만 거른다: 고른 종류 · 고른 채널 밖, 봇 자신의 글(답이 다시 이벤트로 돌아오는 고리), 고친 · 지운 글 같은
 //  부수 이벤트, 고르지 않았으면 봇 · 워크플로 글, 다른 워크스페이스(Slack Connect) 사람의 글.
 import { HttpError } from "../../http-error.js";
+import { ooxmlKindFromMime, ooxmlKindFromName, type OoxmlKind } from "../../connectors/ooxml.js";
 import { jobRouteError } from "../../apps/app-jobs-plan.js";
 
 /** 금고 칸 하나를 가리키는 참조 — 값은 여기 없다(org/credentials/member-secret-store getMemberSecret 이 읽는다). */
@@ -440,6 +441,8 @@ export interface BridgeFilePlan {
   kind: BridgeFileKind;
   /** image 일 때 — 줄여 JPEG 로 바꿀 형식. null 이면 그대로 준다(GIF · WEBP). */
   convert: "png" | "jpeg" | "heic" | null;
+  /** text 일 때 — 오피스 문서(xlsx · docx · pptx · hwpx)면 글을 뽑을 종류(connectors/ooxml.extractOoxml). null 이면 받은 바이트가 곧 글이다. */
+  ooxml: OoxmlKind | null;
   /** 내려받을 주소(슬랙 파일 서버) — unsupported 면 null. */
   url: string | null;
   /** unsupported 인 까닭(사람이 읽는 글). */
@@ -494,7 +497,7 @@ export function bridgeFilePlan(file: unknown, bridge: Pick<BridgeRow, "channels"
     id, name: (sOf(f.name) ?? sOf(f.title) ?? id).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200) || id,
     mimetype, filetype: sOf(f.filetype), size, channel: hit,
   };
-  const no = (reason: string): BridgeFilePlan => ({ ...base, kind: "unsupported", convert: null, url: null, reason });
+  const no = (reason: string): BridgeFilePlan => ({ ...base, kind: "unsupported", convert: null, ooxml: null, url: null, reason });
   const mode = sOf(f.mode);
   if (mode === "external" || f.is_external === true) return no("슬랙 밖 저장소(구글 드라이브 등)에 있는 파일이라 슬랙에서 받을 수 없습니다");
   if (mode === "tombstone" || mode === "hidden_by_limit") return no("지워졌거나 슬랙 요금제 한도로 가려진 파일입니다");
@@ -502,15 +505,19 @@ export function bridgeFilePlan(file: unknown, bridge: Pick<BridgeRow, "channels"
   const url = [f.url_private_download, f.url_private].find((u): u is string => typeof u === "string" && urlOk(u));
   if (!url) return no("슬랙이 내려받을 주소를 주지 않았습니다");
   if (size !== null && size > BRIDGE_FILE_MAX_BYTES) return no(`파일이 너무 큽니다(${size}바이트 — ${BRIDGE_FILE_MAX_BYTES}바이트까지)`);
-  if (mimetype === "image/png") return { ...base, kind: "image", convert: "png", url, reason: null };
-  if (mimetype === "image/jpeg" || mimetype === "image/jpg") return { ...base, kind: "image", convert: "jpeg", url, reason: null };
-  if (mimetype === "image/heic" || mimetype === "image/heif") return { ...base, kind: "image", convert: "heic", url, reason: null };
+  if (mimetype === "image/png") return { ...base, kind: "image", convert: "png", ooxml: null, url, reason: null };
+  if (mimetype === "image/jpeg" || mimetype === "image/jpg") return { ...base, kind: "image", convert: "jpeg", ooxml: null, url, reason: null };
+  if (mimetype === "image/heic" || mimetype === "image/heif") return { ...base, kind: "image", convert: "heic", ooxml: null, url, reason: null };
   if (mimetype === "image/gif" || mimetype === "image/webp") {
     if (size !== null && size > BRIDGE_FILE_RAW_IMAGE_MAX) return no(`줄일 수 없는 형식(${mimetype})인데 너무 큽니다(${size}바이트 — ${BRIDGE_FILE_RAW_IMAGE_MAX}바이트까지)`);
-    return { ...base, kind: "image", convert: null, url, reason: null };
+    return { ...base, kind: "image", convert: null, ooxml: null, url, reason: null };
   }
-  if (mimetype && (mimetype.startsWith("text/") || TEXT_MIMES.has(mimetype))) return { ...base, kind: "text", convert: null, url, reason: null };
-  return no(`읽지 못하는 형식입니다(${mimetype ?? base.filetype ?? "형식 모름"}) — 그림(PNG · JPEG · HEIC · GIF · WEBP)과 글 파일만 읽습니다`);
+  if (mimetype && (mimetype.startsWith("text/") || TEXT_MIMES.has(mimetype))) return { ...base, kind: "text", convert: null, ooxml: null, url, reason: null };
+  //  오피스 문서 — 형식(mimetype)으로 먼저, 없거나 뭉뚱그린 값(octet-stream · zip)이면 이름의 확장자로. 글은 받은 뒤 뽑는다(extractOoxml).
+  const ooxml = ooxmlKindFromMime(mimetype ?? undefined)
+    ?? (!mimetype || mimetype === "application/octet-stream" || mimetype === "application/zip" ? ooxmlKindFromName(base.name) : undefined);
+  if (ooxml) return { ...base, kind: "text", convert: null, ooxml, url, reason: null };
+  return no(`읽지 못하는 형식입니다(${mimetype ?? base.filetype ?? "형식 모름"}) — 그림(PNG · JPEG · HEIC · GIF · WEBP) · 글 파일 · 오피스 문서(xlsx · docx · pptx · hwpx)만 읽습니다`);
 }
 
 // ── 연결 ──────────────────────────────────────────────────────────────────────────────────

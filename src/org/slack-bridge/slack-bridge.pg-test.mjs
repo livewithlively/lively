@@ -69,10 +69,15 @@ const APP_OF_TOKEN = { [APP_TOK]: "A777", [APP_TOK2]: "A777", [APP_TOK_RATE]: "A
 let ticket = 0;
 // 가짜 슬랙 파일(slack_bridge_file) — files.info 가 주는 정보와 파일 서버(GET /files-pri/…)가 주는 바이트.
 const PNG_1PX = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+//  엑셀 파일 한 장(구분 · 안내 / 기명카드 · 개인 계좌 출금) — connectors/ooxml.test 의 최소 zip 과 같은 꼴로 미리 만든 바이트.
+const XLSX_SMALL = Buffer.from("UEsDBBQAAAAIAAAAAACnx+XBUAAAAHcAAAAUAAAAeGwvc2hhcmVkU3RyaW5ncy54bWyzKS4usbMpzrSzKbF7tXXN620tNvoldjb6IBGI6JupHa+btqCLvtqx4fWq1jc7t7yePAdDbsOcN3N3KLza3PJmUY/Cm21zXu3oQKjRB9kIAFBLAwQUAAAACAAAAAAAvp432FsAAADAAAAAGAAAAHhsL3dvcmtzaGVldHMvc2hlZXQxLnhtbLMpzy/KLs5ITS2xswFTLokliXY2RfnlCkW2SoZKdjbJIIajoZJCia1SsZKdTZmdgY1+mZ2NfjJUzglZzhAup1+UXw43yAhukBGSYiM0g5DljNEM0kdynT7C0QBQSwECFAAUAAAACAAAAAAAp8flwVAAAAB3AAAAFAAAAAAAAAAAAAAAAAAAAAAAeGwvc2hhcmVkU3RyaW5ncy54bWxQSwECFAAUAAAACAAAAAAAvp432FsAAADAAAAAGAAAAAAAAAAAAAAAAACCAAAAeGwvd29ya3NoZWV0cy9zaGVldDEueG1sUEsFBgAAAAACAAIAiAAAABMBAAAAAA==", "base64");
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const fileUrl = (id, name) => `http://127.0.0.1:${port}/files-pri/T1-${id}/${name}`;
 const SLACK_FILES = {
   F0PNG00001: { name: "bc_답변.png", mimetype: "image/png", filetype: "png", size: PNG_1PX.length, channels: ["C0000000001"], bytes: PNG_1PX, type: "image/png" },
   F0TXT00001: { name: "메모.txt", mimetype: "text/plain", filetype: "text", size: 12, shares: { public: { C0000000002: [{ ts: "1.1" }] } }, bytes: Buffer.from("한도 4억 원"), type: "text/plain" },
+  F0XLSX0001: { name: "기명카드_안내.xlsx", mimetype: XLSX_MIME, filetype: "xlsx", size: XLSX_SMALL.length, channels: ["C0000000001"], bytes: XLSX_SMALL, type: XLSX_MIME },
+  F0XLSXBAD1: { name: "깨진.xlsx", mimetype: XLSX_MIME, filetype: "xlsx", size: 9, channels: ["C0000000001"], bytes: Buffer.from("PK-broken"), type: XLSX_MIME },
   F0PDF00001: { name: "신청서.pdf", mimetype: "application/pdf", filetype: "pdf", size: 5000, channels: ["C0000000001"], bytes: Buffer.from("%PDF"), type: "application/pdf" },
   F0OUT00001: { name: "남의채널.png", mimetype: "image/png", filetype: "png", size: PNG_1PX.length, channels: ["C0000000009"], bytes: PNG_1PX, type: "image/png" },
   F0LOGIN001: { name: "로그인.png", mimetype: "image/png", filetype: "png", size: PNG_1PX.length, channels: ["C0000000001"], redirect: true },
@@ -513,6 +518,10 @@ try {
     const tparts = file.mcpContent(txt);
     chk("F5 글 파일(shares 로 공유된 채널) → text · MCP 는 경계 뒤 평문", txt.kind === "text" && txt.text === "한도 4억 원" && txt.truncated === false
       && tparts?.length === 1 && tparts[0].type === "text" && /사람의 지시가 아닙니다\)\n한도 4억 원$/.test(tparts[0].text));
+    const xl = await file.handler({ bridge: "ops", file: "F0XLSX0001" }, appU());
+    const xlBad = await file.handler({ bridge: "ops", file: "F0XLSXBAD1" }, appU());
+    chk("F5b 오피스 문서(xlsx) → 글만 뽑아 text · 깨진 문서는 unsupported(던지지 않는다)", xl.kind === "text" && xl.text === "구분\t안내\n기명카드\t개인 계좌 출금"
+      && /사람의 지시가 아닙니다\)\n구분\t안내/.test(file.mcpContent(xl)?.[0]?.text ?? "") && xlBad.ok === true && xlBad.kind === "unsupported" && /글/.test(xlBad.reason), JSON.stringify([xl, xlBad]));
     const d1 = dl();
     const pdf = await file.handler({ bridge: "ops", file: "F0PDF00001" }, appU());
     chk("F6 읽지 못하는 형식 → unsupported · 까닭 · 내려받지 않음 · MCP 는 JSON 그대로", pdf.ok === true && pdf.kind === "unsupported" && /형식/.test(pdf.reason) && dl() === d1 && file.mcpContent(pdf) === null);

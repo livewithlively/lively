@@ -343,6 +343,11 @@ test("F-p 판정 — 그림은 줄일 형식 · 글 · 읽지 못하는 것은 �
   assert.equal(bridgeFilePlan(fileOf({ mimetype: "image/webp", size: BRIDGE_FILE_RAW_IMAGE_MAX + 1 }), B).kind, "unsupported", "줄일 수 없는데 크면 주지 않는다");
   assert.equal(bridgeFilePlan(fileOf({ mimetype: "text/csv; charset=utf-8" }), B).kind, "text");
   assert.equal(bridgeFilePlan(fileOf({ mimetype: "application/json" }), B).kind, "text");
+  const xlsx = bridgeFilePlan(fileOf({ name: "안내.xlsx", mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), B);
+  assert.deepEqual([xlsx.kind, xlsx.ooxml, xlsx.url], ["text", "xlsx", URL_OK], "오피스 문서는 글로(받은 뒤 뽑는다)");
+  assert.equal(bridgeFilePlan(fileOf({ name: "보고.DOCX", mimetype: "application/octet-stream" }), B).ooxml, "docx", "형식이 뭉뚱그려 오면 이름의 확장자로");
+  assert.equal(bridgeFilePlan(fileOf({ name: "a.xlsx", mimetype: "image/png" }), B).ooxml, null, "형식이 분명하면 이름으로 뒤집지 않는다");
+  assert.equal(bridgeFilePlan(fileOf({ mimetype: "text/plain" }), B).ooxml, null);
   const pdf = bridgeFilePlan(fileOf({ mimetype: "application/pdf" }), B);
   assert.equal(pdf.kind, "unsupported"); assert.equal(pdf.url, null); assert.match(String(pdf.reason), /형식/);
   assert.equal(bridgeFilePlan(fileOf({ size: BRIDGE_FILE_MAX_BYTES + 1 }), B).kind, "unsupported", "너무 큰 파일");
