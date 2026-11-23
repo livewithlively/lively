@@ -101,7 +101,7 @@ export function quotaWaitOf(raw: unknown): QuotaWait | null {
 export interface NodeStopResult {
   enabled: boolean;
   why?: string;
-  nodes: Array<{ id: string; skip?: NodeSkipWhy; rule?: { doneMin: number; askingMin: number; unknownMin: number }; result?: StopRuleResult }>;
+  nodes: Array<{ id: string; skip?: NodeSkipWhy; rule?: { doneMin: number; askingMin: number; unknownMin: number; staleMin?: number }; result?: StopRuleResult }>;
   nextDueInSec?: number;
 }
 
@@ -117,6 +117,8 @@ export interface NodeStopDeps {
   listManaged: () => Promise<Array<{ session_id: string | null }>>;
   view: (id: string) => ViewState;
   reap: (nodeId: string, id: string, owner: string) => Promise<void>;
+  /** #5623 — 오래 남은 세션에 확인 글을 보낸다(그 세션의 배달 큐에 넣는다 — 사람이 보낸 글과 같은 길로 그 컴퓨터에 닿는다). */
+  remind: (id: string, text: string) => Promise<void>;
   /** 컴퓨터 하나를 판정·집행한다 — 기본은 매니지드와 같은 sweepSessionStopRule(부품만 바꿔 끼워 부른다) */
   sweep: (over: Partial<StopRuleDeps>) => Promise<StopRuleResult>;
   now: () => number;
@@ -135,6 +137,7 @@ function defaultDeps(): NodeStopDeps {
     listManaged: () => listManagedSessions(),
     view: (id) => viewState(id),
     reap: (nodeId, id, owner) => reapNodeSession(nodeId, id, owner),
+    remind: async (id, text) => { const { enqueuePrompt } = await import("./session-outbox.js"); await enqueuePrompt(id, text); },
     sweep: (over) => sweepSessionStopRule(over),
     now: () => Date.now(),
     arm: (dueAtSec) => armNodeStopTimer(dueAtSec),
@@ -189,7 +192,7 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
       if (rule.enabled && row?.enabled) out.enabled = true;
       const skip = nodeStopEligibility({ snap, row, rule, supports: d.supports(snap.nodeId), staleMs: d.staleMs });
       if (skip) { out.nodes.push({ id: snap.nodeId, skip }); continue; }
-      const mins = { doneMin: rule.doneMin, askingMin: rule.askingMin, unknownMin: rule.unknownMin };
+      const mins = { doneMin: rule.doneMin, askingMin: rule.askingMin, unknownMin: rule.unknownMin, staleMin: rule.staleMin };
       const sessions = snap.sessions.filter((s) => ID_RE.test(s.id));
       if (!sessions.length) { out.nodes.push({ id: snap.nodeId, skip: "no-sessions", rule: mins }); continue; }
       const nodeId = snap.nodeId;
@@ -243,6 +246,8 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
           await stillAlone(id);
           await d.reap(nodeId, id, owner);
         },
+        //  #5623 — 끄기와 같은 «직전 확인»: 그 PC 터미널에 사람이 붙어 있으면 보내지 않는다(그 사람의 입력칸에 글이 끼어든다).
+        remind: async (id, text) => { await stillAlone(id); await d.remind(id, text); },
         arm: (dueAtSec) => { nextDue = Math.min(nextDue, dueAtSec); },
         logCtx: { node: nodeId },
       });
