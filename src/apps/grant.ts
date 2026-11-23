@@ -161,6 +161,45 @@ export function optionalScopeMissing(
 
 export interface ResolvedGrant { scopes: string[]; tools: string[] }
 
+/** 조직 동의 — 관리자가 워크스페이스 구성원 모두를 대신해 한 앱 동의(org_app.org_grant). 그때의 선언(필수 scope · 도구 전부)을 적어 둔다. */
+export interface OrgGrant { scopes: string[]; tools: string[]; granted_at: string; granted_by: string | null }
+
+/** 합친 동의의 모양 — store 의 AppGrantRow 와 같다(이 모듈은 순수 잎이라 store 를 import 하지 않는다). */
+export interface EffectiveGrant {
+  app_id: string; member_id: string; scopes: string[]; tools: string[];
+  granted_at: string; granted_by: string | null; revoked_at: string | null;
+  /** 이 동의에 조직 동의가 들어 있다 — 본인 동의를 거둬도(me_app_revoke) 조직 동의는 남는다. */
+  org_granted?: true;
+}
+
+/**
+ * 본인 동의와 조직 동의를 합친다 — 앱이 그 사람 이름으로 얻는 것 = (본인 동의 ∪ 조직 동의) ∩ 그 사람의 권한(뒤쪽 교집합은 토큰이 한다).
+ *  · 조직 동의가 없으면 본인 동의 그대로(같은 객체 — 종전 동작과 한 글자도 다르지 않게).
+ *  · 본인 동의가 없으면 조직 동의가 그 사람의 동의다(granted_at · granted_by 는 관리자가 동의한 때 · 사람).
+ *  · 둘 다 있으면 합집합(순서는 본인 것 먼저). 본인이 따로 준 선택 권한(optional_scopes)은 본인 동의에만 있고 그대로 남는다 —
+ *    조직 동의는 선택 권한을 주지 않는다(필요한 사람만 따로 받는 권한이라 모두에게 넓히지 않는다).
+ *  조직 동의는 그때의 선언을 적어 둔 것이라, 앱이 그 뒤에 넓어지면 합친 동의도 새 선언을 덮지 못한다(grantGap) — 관리자가 한 번 다시 동의하면
+ *   모두가 풀린다. 켜 두면 앞으로 무엇이 늘든 따라가는 «표지» 가 아니다: 누가 앱을 고쳐 권한을 넓혀도 관리자의 승인 없이 모두에게 퍼지지 않게.
+ */
+export function mergeOrgGrant<T extends EffectiveGrant>(appId: string, memberId: string, mine: T | null, org: OrgGrant | null): T | EffectiveGrant | null {
+  if (!org) return mine;
+  if (!mine) {
+    return { app_id: appId, member_id: memberId, scopes: [...org.scopes], tools: [...org.tools],
+      granted_at: org.granted_at, granted_by: org.granted_by, revoked_at: null, org_granted: true };
+  }
+  return { ...mine, scopes: [...new Set([...mine.scopes, ...org.scopes])], tools: [...new Set([...mine.tools, ...org.tools])], org_granted: true };
+}
+
+/** org_app.org_grant 칸(JSONB)을 읽는다 — 모양이 어긋나면 null(없는 것으로 — 잘못 적힌 칸이 동의를 만들어 내지 않는다). */
+export function parseOrgGrant(v: unknown): OrgGrant | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const strs = (x: unknown): string[] | null => (Array.isArray(x) && x.every((s) => typeof s === "string") ? [...(x as string[])] : null);
+  const scopes = strs(o.scopes), tools = strs(o.tools);
+  if (!scopes || !tools || typeof o.granted_at !== "string" || !o.granted_at) return null;
+  return { scopes, tools, granted_at: o.granted_at, granted_by: typeof o.granted_by === "string" && o.granted_by ? o.granted_by : null };
+}
+
 /**
  * 멤버 grant 를 해소한다.
  *  - requested 미지정(undefined) → 매니페스트 전체(상한)를 그대로 부여.

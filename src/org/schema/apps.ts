@@ -569,6 +569,11 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   지금 걸려 있는 값은 아래 사용량 행(limit_gb)이 말한다.
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS folder_limit_gb INT;`);
 
+  //  조직 동의 — 관리자가 워크스페이스 구성원 모두를 대신해 한 앱 동의({scopes, tools, granted_at, granted_by} · 그때의 공개 판 선언). NULL = 없음(기본 —
+  //   사람마다 동의한다). 동의를 읽는 자리(store/apps getActiveGrant)가 본인 동의(org_app_grant)에 이것을 합친다. 앱 행에 두는 까닭: 앱마다 하나뿐이고,
+  //   앱이 지워지면 같이 사라지며, 설치 · 업데이트는 이 칸을 건드리지 않아(적어 둔 선언이 그대로 남아) «앱이 그 뒤에 넓어졌나» 를 견줄 수 있다.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS org_grant JSONB;`);
+
   // ── org_app_folder_usage — 앱 폴더 사용량(#4785) ──
   //  CP 가 5분마다 JuiceFS 쿼터 목록에서 읽어 보낸다(app_folder_usage_report). limit_gb = 잰 때 걸려 있던 상한(NULL = 무제한).
   //  warned_level = 알린 단계(0 · 80 · 100) — 같은 단계는 거듭 알리지 않는다. 붙든 단계는 10%p 아래로 내려가야 놓는다(100 은 90%,
