@@ -1,35 +1,34 @@
 // #5712 — «로그인 토큰이 구성원의 비위험 권한을 따를지» 를 정하는 순수 판정들. DB 불요.
-//  여기가 틀리면 둘 중 하나가 난다: (가) 좁게 구워 준 토큰으로 승인 · 재발급해 구성원 권한 전체를 따르는 토큰을 얻는다(확대),
+//  여기가 틀리면 둘 중 하나가 난다: (가) 범위가 고정된 자격(좁게 구운 토큰 · OAuth · 앱 토큰)으로 승인 · 재발급해 구성원 권한 전체를 따르는 토큰을 얻는다(확대),
 //  (나) 정상 로그인 토큰이 따르지 않아 권한을 올릴 때마다 다시 로그인해야 한다(이 변경이 없애려는 일).
 import assert from "node:assert/strict";
 import { SCOPES, SAFE_SCOPES, DANGEROUS_SCOPES } from "../../auth/scopes.js";
-import { holdsMemberSafeScopes, ceilingWithSafeFollow, ceilingFollowsSafe, grantableScopes } from "./grant-util.js";
+import { credentialFollowsMember, ceilingWithSafeFollow, ceilingFollowsSafe, grantableScopes } from "./grant-util.js";
 
 // ── SAFE_SCOPES = SCOPES − 위험 ──
 assert.deepEqual([...SAFE_SCOPES].sort(), [...SCOPES].filter((s) => !DANGEROUS_SCOPES.has(s)).sort(), "비위험 = 전체 − 위험");
 assert.ok(!SAFE_SCOPES.includes("admin") && !SAFE_SCOPES.includes("runtime"), "admin · runtime 은 비위험이 아니다");
 assert.ok(SAFE_SCOPES.includes("items") && SAFE_SCOPES.includes("db") && SAFE_SCOPES.includes("code"), "평소 권한이 든다");
 
-// ── holdsMemberSafeScopes ──
-const holds = (memberScopes: unknown, presented: string[], session = false) => holdsMemberSafeScopes({ memberScopes, presented, session });
-// [H1] 웹 세션은 언제나 참 — 세션 scope 가 구성원 라이브 scope 그 자체다.
-assert.equal(holds(["items", "context"], [], true), true, "H1 세션");
-assert.equal(holds([], [], true), true, "H1 세션 — 권한이 없는 구성원도");
-// [H2] 토큰이 구성원의 비위험 권한을 전부 쥐고 있으면 참(이미 따르는 토큰 = 데스크톱 앱 안에서 다시 로그인).
-assert.equal(holds(["items", "context", "db"], ["items", "context", "db"]), true, "H2 전부 쥠");
-// [H3] ★ 하나라도 빠지면 거짓 — 좁게 구워 준 토큰은 구성원 권한을 따르는 토큰을 낳지 못한다(확대 불가).
-assert.equal(holds(["items", "context", "db"], ["items", "context"]), false, "H3 좁은 토큰");
-assert.equal(holds(["items", "context"], ["context"]), false, "H3 좁은 토큰 2");
-// [H4] 위험 scope 는 견주지 않는다 — 관리자인 구성원의 «관리자 기능 없는» 토큰도 비위험을 전부 쥐면 참.
-assert.equal(holds(["items", "context", "admin", "runtime"], ["items", "context"]), true, "H4 위험 scope 는 무관");
-// [H5] 구성원에게 비위험 권한이 하나도 없으면(견줄 것이 없다) 토큰 자격은 거짓 — 닫힌 쪽.
-assert.equal(holds([], ["items"]), false, "H5 빈 구성원");
-assert.equal(holds(["admin"], ["admin"]), false, "H5 위험 scope 만 가진 구성원");
-// [H6] 손상된 구성원 scope(비배열 · 알 수 없는 값)는 없는 것으로 본다.
-assert.equal(holds(null, ["items"]), false, "H6 비배열");
-assert.equal(holds(["items", "root"], ["items"]), true, "H6 알 수 없는 값은 견주지 않는다");
-// [H7] 토큰이 더 많이 쥐고 있어도(구성원이 그 사이 잃은 권한) 참 — 구성원이 가진 것을 전부 쥐었는가만 본다.
-assert.equal(holds(["items"], ["items", "context", "db"]), true, "H7 넘치는 토큰");
+// ── credentialFollowsMember — 이 자격으로 굽는 로그인 토큰이 구성원을 따라도 되나 ──
+// [H1] 웹 세션은 참 — 세션 scope 가 구성원 라이브 scope 그 자체다.
+assert.equal(credentialFollowsMember({ tokenSource: "session" }), true, "H1 세션");
+// [H2] 구성원을 따르는 DB 토큰은 참(데스크톱 앱 안에서 다시 로그인할 때의 승인 자격).
+assert.equal(credentialFollowsMember({ tokenSource: "db", followsMemberSafe: true }), true, "H2 따르는 토큰");
+// [H3] ★ 범위가 고정된 DB 토큰은 거짓 — 관리자가 scope 를 골라 구운 토큰은 그때 구성원 권한과 같았더라도 따르는 토큰을 낳지 못한다.
+assert.equal(credentialFollowsMember({ tokenSource: "db" }), false, "H3 고정 범위 토큰");
+assert.equal(credentialFollowsMember({ tokenSource: "db", followsMemberSafe: false }), false, "H3 명시적 false");
+// [H4] ★ OAuth 발급분은 따르는 표시가 있어도 거짓 — 동의 화면에서 본 범위가 계약이다.
+assert.equal(credentialFollowsMember({ tokenSource: "db", followsMemberSafe: true, oauthClientId: "client-1" }), false, "H4 OAuth");
+// [H5] ★ 앱 토큰 · 앱 서버가 실어 온 신원 · 도구 상한이 걸린 토큰도 거짓 — 앱 동의가 범위를 정한다.
+assert.equal(credentialFollowsMember({ tokenSource: "db", followsMemberSafe: true, appId: "notes" }), false, "H5 앱 토큰");
+assert.equal(credentialFollowsMember({ tokenSource: "db", followsMemberSafe: true, appServer: true }), false, "H5 앱 서버 신원");
+assert.equal(credentialFollowsMember({ tokenSource: "db", followsMemberSafe: true, toolCeiling: [] }), false, "H5 도구 상한");
+assert.equal(credentialFollowsMember({ tokenSource: "session", appId: "notes" }), false, "H5 앱 표시가 붙은 신원은 세션이어도 거짓");
+// [H6] 정적 토큰 · 출처를 모르는 자격 · 자격 없음은 거짓(닫힌 쪽).
+assert.equal(credentialFollowsMember({ tokenSource: "static", followsMemberSafe: true }), false, "H6 정적 토큰");
+assert.equal(credentialFollowsMember({ followsMemberSafe: true }), false, "H6 출처 없음");
+assert.equal(credentialFollowsMember(undefined), false, "H6 자격 없음");
 
 // ── 상한에 «비위험은 구성원을 따른다» 싣기 · 읽기 ──
 // [C1] 실으면 비위험 전부가 들고, 승인자의 위험 scope 는 그대로 남는다(늘지 않는다).

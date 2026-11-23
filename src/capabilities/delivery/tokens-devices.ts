@@ -13,7 +13,7 @@ import {
   listClients as listOAuthClients, saveClient as saveOAuthClient, disableClient as disableOAuthClient,
 } from "../../org/store/oauth.js";
 import { isAcceptableRedirectUri } from "../../org/auth/oauth-clients.js";
-import { sha256Hex, holdsMemberSafeScopes } from "../../org/auth/grant-util.js";
+import { sha256Hex, credentialFollowsMember } from "../../org/auth/grant-util.js";
 import { actorOf, restOnly, restRead, slug, str } from "./shared.js";
 
 export const tokensReadCapabilities: Capability[] = [
@@ -117,10 +117,11 @@ export const tokenMintCapabilities: Capability[] = [
       const scopes = base.filter((s) => SCOPES_ALLOWED.has(s) && presented.includes(s)
         && (includeControlPlane || !DANGEROUS_SCOPES.has(s as Scope)));
       const withControlPlane = scopes.some((s) => DANGEROUS_SCOPES.has(s as Scope));
-      //  #5712 — 본인이 자기 컴퓨터에 깔 토큰이다. 제시한 자격이 내 비위험 권한을 전부 쥐고 있으면(웹 세션은 언제나) 그 범위에서 내 지금 권한을
-      //   따르게 굽는다 — 관리자가 권한을 바꿔도 다시 발급받지 않는다. 위험 scope 는 위에서 고른 것(includeControlPlane)만 남는다.
-      //   좁은 토큰으로 부른 자가발급은 종전처럼 그 토큰 범위에 묶인다(확대 불가). 구성원 행이 없으면 따를 대상이 없다.
-      const followSafeScopes = !!mem && holdsMemberSafeScopes({ memberScopes: mem.scopes, presented, session: user.tokenSource === "session" });
+      //  #5712 — 본인이 자기 컴퓨터에 깔 토큰이다. 부른 자격이 구성원을 따라도 되는 자격이면(웹 세션 · 이미 구성원을 따르는 토큰 —
+      //   grant-util.credentialFollowsMember) 비위험 권한에서 내 지금 권한을 따르게 굽는다 — 관리자가 권한을 바꿔도 다시 발급받지 않는다.
+      //   위험 scope 는 위에서 고른 것(includeControlPlane)만 남는다. 범위가 고정된 토큰(관리자가 scope 를 골라 구운 것 · OAuth · 앱 토큰)으로
+      //   부른 자가발급은 종전처럼 그 범위에 묶인다(확대 불가). 구성원 행이 없으면 따를 대상이 없다.
+      const followSafeScopes = !!mem && credentialFollowsMember(user);
       const { token } = await mintToken(
         { userId, scopes, label: (mem?.display_name || userId) + (withControlPlane ? " (self +admin)" : " (self)"), memberId: userId,
           ...(followSafeScopes ? { followSafeScopes: true } : {}) },
@@ -165,11 +166,10 @@ export const deviceAuthCapabilities: Capability[] = [
           throw new HttpError(403, "관리 권한 포함 승인은 비밀번호 재확인이 필요합니다.");
         }
       }
-      //  #5712 — 이 승인 자격이 내 비위험 권한을 전부 쥐고 있으면(웹 세션 · 이미 나를 따르는 토큰 = 데스크톱 앱 안에서 다시 로그인) 새 토큰은
-      //   그 범위에서 내 지금 권한을 따른다. 좁은 토큰으로 한 승인은 종전처럼 그 토큰 범위에 묶인다(확대 불가).
-      const live = (await getMember(user.userId))?.scopes ?? [];
-      const followSafe = holdsMemberSafeScopes({ memberScopes: live, presented: memberScopes, session: user.tokenSource === "session" });
-      const ok = await approveDeviceAuth(userCode, user.userId, memberScopes, includeControlPlane, followSafe);
+      //  #5712 — 이 승인 자격이 구성원을 따라도 되는 자격이면(웹 세션 · 이미 나를 따르는 토큰 = 데스크톱 앱 안에서 다시 로그인 —
+      //   grant-util.credentialFollowsMember) 새 토큰은 비위험 권한에서 내 지금 권한을 따른다. 범위가 고정된 토큰(관리자가 scope 를 골라 구운 것 ·
+      //   OAuth · 앱 토큰)으로 한 승인은 종전처럼 그 토큰 범위에 묶인다(확대 불가).
+      const ok = await approveDeviceAuth(userCode, user.userId, memberScopes, includeControlPlane, credentialFollowsMember(user));
       if (!ok) throw new HttpError(410, "이미 처리됐거나 만료된 코드입니다.");
       return { ok: true };
     }),

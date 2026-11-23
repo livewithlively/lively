@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
-import { isScope, DANGEROUS_SCOPES } from "../../auth/scopes.js";
+import { isScope, DANGEROUS_SCOPES, SAFE_SCOPES } from "../../auth/scopes.js";
 import { audit, sha256 } from "./audit.js";
 
 // ── auth_token (DB 기반 bearer) ──
@@ -85,7 +85,9 @@ export async function mintToken(input: {
       r = await insert(true);
       if (client) await client.query(`RELEASE SAVEPOINT ${SP}`);
     } catch (e) {
-      if ((e as { code?: string })?.code !== "42703") throw e;
+      //  없는 칸이 **이 칸**일 때만 물러선다 — 다른 칸(tool_ceiling 등)이 없어서 난 42703 을 이 칸 탓으로 읽지 않는다.
+      const err = e as { code?: string; message?: string };
+      if (err?.code !== "42703" || !/follow_safe_scopes/.test(String(err.message ?? ""))) throw e;
       if (client) await client.query(`ROLLBACK TO SAVEPOINT ${SP}`);
       followSafe = false;
       r = await insert(false);
@@ -265,7 +267,7 @@ export function computeEffectiveScopes(opts: {
   if (opts.followMemberScopes) return memberScopes;
   // 비위험 권한 추종(#5712) — 사람이 자기 컴퓨터를 연결해 받은 로그인 토큰(lively login · 데스크톱 앱 · 설치 탭 본인 발급).
   //  위험 scope 를 뺀 나머지는 **멤버 라이브 scope 그대로**, 위험 scope(admin · runtime)는 **토큰에 실린 것만**(멤버가 지금도 가질 때).
-  //  왜 필요한가(2026-11-23 상민님): 관리자가 구성원 권한을 바꿔도 그 사람 컴퓨터의 토큰은 발급 때 권한에 묶여 있어, 올린 권한을 쓰려면
+  //  왜 필요한가(2026-11-23): 관리자가 구성원 권한을 바꿔도 그 사람 컴퓨터의 토큰은 발급 때 권한에 묶여 있어, 올린 권한을 쓰려면
   //   `lively login` 을 다시 해야 했다. 세션 시작 훅은 키트를 새로 받지만 토큰은 새로 받지 않는다 — 사람은 왜 안 되는지 알 길이 없다.
   //   구성원 편집 화면은 «변경 시 활성 토큰에도 즉시 반영» 이라고 말하는데, 그 말이 내릴 때만 참이었다.
   //  왜 위험 scope 는 따르지 않나: 연결 승인 화면의 «AI 에게 관리자 기능 허용» 은 기본이 끔이고 켤 때 비밀번호를 다시 확인한다.
@@ -294,6 +296,13 @@ export interface DbTokenIdentity {
   appServer?: true;
   /** 도구 상한(auth_token.tool_ceiling). 걸린 토큰만 싣는다 — LivelyUser.toolCeiling 으로 그대로 간다(bearer.ts). */
   toolCeiling?: string[];
+  /**
+   * 이 토큰이 구성원의 비위험 권한을 따르는 토큰인가(#5712) — 그런 토큰만 싣는다. LivelyUser.followsMemberSafe 로 그대로 간다(bearer.ts).
+   *  판정은 **그때의 권한 견주기가 아니라 토큰의 성질**이다: 추종 표시(follow_member_scopes · follow_safe_scopes)가 켜졌거나, 발급 상한에
+   *  비위험 scope 가 전부 들어 있다(그 토큰은 교집합만으로 이미 구성원의 비위험 권한을 그대로 따른다 — 컨트롤플레인이 굽는 꼴).
+   *  관리자가 scope 를 골라 구운 토큰은 그때 구성원 권한과 우연히 같았더라도 여기 들지 않는다. OAuth 발급분 · 앱 토큰도 들지 않는다.
+   */
+  followsMemberSafe?: true;
 }
 
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
@@ -337,17 +346,19 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const strArr = (v: unknown, fb: string[]): string[] =>
       Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : fb;
     // 유효 권한 = intersection(토큰 scope, 멤버 scope). 멤버가 '라이브 상한' — 비활성/삭제면 거부.
+    const tokenScopes = strArr(row.token_scopes, []);
+    //  OAuth 발급분(client_id)과 앱 토큰(app_id)에는 켜져 있어도 듣지 않는다 — 그 둘의 범위는 동의 화면 · 앱 동의가 정한다
+    //   (발급부가 켜지 않지만, 칸이 잘못 켜진 행이 범위를 넓히지 못하게 여기서도 막는다).
+    const followSafeScopes = row.follow_safe_scopes === true && !row.client_id && !row.app_id;
     const scopes = computeEffectiveScopes({
       memberId: row.member_id,
       memberState: row.member_state,
-      tokenScopes: strArr(row.token_scopes, []),
+      tokenScopes,
       memberScopes: strArr(row.member_scopes, []),
       appId: row.app_id,
       appLive: row.app_live,
       followMemberScopes: row.follow_member_scopes === true,
-      //  OAuth 발급분(client_id)과 앱 토큰(app_id)에는 켜져 있어도 듣지 않는다 — 그 둘의 범위는 동의 화면 · 앱 동의가 정한다
-      //   (발급부가 켜지 않지만, 칸이 잘못 켜진 행이 범위를 넓히지 못하게 여기서도 막는다).
-      followSafeScopes: row.follow_safe_scopes === true && !row.client_id && !row.app_id,
+      followSafeScopes,
     });
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
     //  #4891 — 앱 서버 급 표시는 앱 토큰에만 뜻이 있다. 앱 없이 켜져 있으면(있어선 안 되는 행) 받지 않는다 — 앱 도구 게이트가 안 걸린다.
@@ -359,6 +370,10 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const toolCeiling = ceilingRaw == null ? null
       : Array.isArray(ceilingRaw) && ceilingRaw.every((x) => typeof x === "string") ? (ceilingRaw as string[]) : [];
     if (toolCeiling != null && !row.app_id) return null;
+    //  구성원의 비위험 권한을 따르는 토큰인가(DbTokenIdentity.followsMemberSafe 머리말) — 구성원 토큰이고 OAuth · 앱 토큰이 아닐 때만.
+    const held = new Set(tokenScopes);
+    const followsMemberSafe = !!row.member_id && !row.client_id && !row.app_id
+      && (row.follow_member_scopes === true || followSafeScopes || SAFE_SCOPES.every((s) => held.has(s)));
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
     return {
@@ -368,6 +383,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       appId: row.app_id ?? null,
       ...(appServer ? { appServer: true as const } : {}),
       ...(toolCeiling != null ? { toolCeiling } : {}),
+      ...(followsMemberSafe ? { followsMemberSafe: true as const } : {}),
       // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
       expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
     };

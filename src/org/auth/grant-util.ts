@@ -4,6 +4,7 @@
 //  복제하면 한쪽만 고쳐지는 날이 온다 — 그래서 헬퍼로 뽑았다.
 import crypto from "node:crypto";
 import { DANGEROUS_SCOPES, SAFE_SCOPES, isScope, type Scope } from "../../auth/scopes.js";
+import type { LivelyUser } from "../../context.js";
 
 // 저장용 해시 — 토큰·코드·요청 id 전부 이 형태로만 DB 에 남는다(auth_token 과 동일 계약).
 export const sha256Hex = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
@@ -33,26 +34,28 @@ export function grantableScopes(opts: {
 }
 
 /**
- * 제시한 자격이 그 구성원의 **비위험 권한을 전부** 쥐고 있나(#5712) — 쥐고 있을 때만 그 자격으로 굽는 로그인 토큰이 구성원의 지금 권한을
- *  따른다(auth_token.follow_safe_scopes). 이 판정이 «확대 불가» 를 지킨다: 관리자가 일부러 좁게 구워 준 토큰으로 디바이스 로그인을
- *  승인하거나 본인 토큰을 다시 구워도, 구성원 권한 전체를 따르는 토큰으로 바뀌지 않는다(종전처럼 교집합에 묶인다).
- *   · 웹 로그인 세션은 scope 가 구성원 라이브 scope 그 자체다(auth/sessions.ts) → 언제나 참.
- *   · 토큰 자격은 구성원이 지금 가진 비위험 scope 를 **하나도 빠짐없이** 쥐고 있을 때 참 — 이미 구성원을 따르는 토큰(데스크톱 앱 안에서
- *     다시 로그인할 때의 승인 자격)이 여기 든다. 구성원에게 비위험 scope 가 하나도 없으면 견줄 것이 없어 거짓이다(닫힌 쪽).
+ * 이 자격으로 굽는 로그인 토큰이 **구성원의 지금 권한을 따라도 되나**(#5712 — auth_token.follow_safe_scopes 를 켤지).
+ *  디바이스 로그인 승인(device_approve)과 본인 발급(org_token_mint_self)이 같은 판정을 쓴다 — 한 곳에서만 고친다.
+ *  이 판정이 «확대 불가» 를 지킨다. 범위가 고정된 자격이 구성원 권한 전체를 따르는 토큰을 낳으면, 그 자격을 좁혀 둔 뜻이 사라진다
+ *  (그 토큰은 시간이 지나며 구성원을 따라 넓어지고, 원래 자격을 회수해도 남는다).
+ *   · 웹 로그인 세션 — 참. 세션의 scope 는 구성원 라이브 scope 그 자체다(auth/sessions.ts).
+ *   · DB 토큰 — **그 토큰이 구성원을 따르는 토큰일 때만** 참(LivelyUser.followsMemberSafe — 토큰의 성질이지 그때의 권한 견주기가 아니다).
+ *     관리자가 scope 를 골라 구운 토큰은 그때 구성원 권한과 같았더라도 거짓이다. 데스크톱 앱 안에서 다시 로그인할 때의 승인 자격
+ *     (이미 구성원을 따르는 로그인 토큰)이 참인 쪽이다.
+ *   · OAuth 발급분 · 앱 토큰 · 앱 서버가 실어 온 신원 · 도구 상한이 걸린 토큰 · 정적 토큰 — 거짓. 그 범위는 동의 화면 · 앱 동의가 정한 계약이다.
  */
-export function holdsMemberSafeScopes(opts: { memberScopes: unknown; presented: readonly string[]; session: boolean }): boolean {
-  if (opts.session) return true;
-  const safe = new Set<string>(SAFE_SCOPES);
-  const live = (Array.isArray(opts.memberScopes) ? opts.memberScopes : []).filter((s): s is Scope => isScope(s) && safe.has(s));
-  if (!live.length) return false;
-  const held = new Set(opts.presented);
-  return live.every((s) => held.has(s));
+export function credentialFollowsMember(user: Pick<LivelyUser, "tokenSource" | "followsMemberSafe" | "oauthClientId" | "appId" | "appServer" | "toolCeiling"> | undefined): boolean {
+  if (!user) return false;
+  if (user.oauthClientId || user.appId || user.appServer === true || user.toolCeiling != null) return false;
+  if (user.tokenSource === "session") return true;
+  return user.tokenSource === "db" && user.followsMemberSafe === true;
 }
 
 /**
  * 디바이스 로그인의 «승인자가 허용한 상한»(pending_device_auth.approver_scopes)에 «비위험 권한은 구성원을 따른다» 를 싣고 읽는다(#5712).
- *  상한에 비위험 scope 가 **전부** 들어 있으면 그 뜻이다 — 승인자가 구성원의 비위험 권한을 전부 쥐고 있을 때(holdsMemberSafeScopes)만
- *  그렇게 적는다. 칸을 따로 두지 않는 까닭: 승인과 수령 사이(최대 15분)에 게이트웨이 판이 바뀌어도 양쪽이 같은 값을 읽는다 —
+ *  상한에 비위험 scope 가 **전부** 들어 있으면 그 뜻이다 — 승인 자격이 구성원을 따라도 되는 자격일 때(credentialFollowsMember)만
+ *  그렇게 적는다. 승인 때 권한 그대로인 상한이 비위험을 전부 가진 경우도 같은 뜻으로 읽힌다 — 그 승인자는 세션이거나 상한이 비위험 전부인
+ *  토큰이고, 비위험 scope 가 이미 다 들어 있어 더 넓어질 것이 없다. 칸을 따로 두지 않는 까닭: 승인과 수령 사이(최대 15분)에 게이트웨이 판이 바뀌어도 양쪽이 같은 값을 읽는다 —
  *  옛 판은 «구성원 라이브 ∩ 상한» 으로 종전 그대로 굽고, 새 판은 옛 판이 적은 상한(승인 때 권한 그대로)을 종전 뜻으로 읽는다.
  *  발급 scope 계산(grantableScopes)은 그대로다: 구성원 라이브와 교집합하므로 넓힌 상한이 발급 기록을 넓히지 않는다.
  */
