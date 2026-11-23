@@ -25,22 +25,20 @@
 // fail-first(2026-10-16): 고치기 전 트리(SRC_ROOT)로 돌리면 F1 의 초점 · F2 · F3 · F4 · F5 가 빨갛다 — 초점이 터미널에 남아 Esc 와 친 글자가
 //  터미널 문서로 가고 덮개가 남는다. T0 와 F1 의 테두리 단언은 종전에도 초록이다(테두리 단언은 CSS 한 줄을 지킨다 — 그 줄만 빼면 빨갛다).
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { findChrome } from "./headless-chrome.mjs";
+import { findChrome, launchCdp } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 //  SRC_ROOT — 다른 트리로 묶어 본다(fail-first). 그 폴더엔 web/ 와 public/styles/ 만 있으면 된다(node_modules 불필요 —
 //   예: git archive <커밋> web public/styles | tar -x -C <폴더>).
 const SRC_ROOT = process.env.SRC_ROOT ? path.resolve(process.env.SRC_ROOT) : ROOT;
 const chrome = findChrome();
-if (!chrome || typeof WebSocket === "undefined") {
-  console.log("skip  크롬(또는 WebSocket 전역)이 없어 건너뜁니다(CHROME_BIN 으로 지정) — 크게 보기 초점 런타임 검증 미실행");
+if (!chrome) {
+  console.log("skip  크롬이 없어 건너뜁니다(CHROME_BIN 으로 지정) — 크게 보기 초점 런타임 검증 미실행");
   process.exit(0);
 }
 
@@ -71,36 +69,15 @@ const srv = http.createServer((q, r) => {
 await new Promise((res) => srv.listen(0, "127.0.0.1", res));
 const origin = "http://127.0.0.1:" + srv.address().port;
 
-const dir = mkdtempSync(path.join(tmpdir(), "appui-focus-"));
-const child = spawn(chrome, [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-  // ⚠ 맥에서 새 프로필 크롬이 «키체인» 모달을 사람 화면에 띄우지 않게(headless-chrome.mjs 와 같은 이유)
-  "--use-mock-keychain", "--password-store=basic", "--disable-background-networking", "--disable-component-update",
-  "--disable-sync", "--disable-default-apps", "--disable-extensions", "--mute-audio", "--disable-breakpad",
-  `--user-data-dir=${path.join(dir, "profile")}`, "--remote-debugging-port=0", "--window-size=1000,800", "about:blank",
-], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "ignore", "ignore"] });
-
 let pass = 0, fail = 0;
 //  장면 단언은 멈추지 않고 센다 — fail-first 에서 빨간 줄이 다 보이게. 관측 장치(assert)는 곧바로 멈춘다.
 const ok = (cond, name, info) => { if (cond) { pass++; console.log(`ok  ${name}  ${JSON.stringify(info)}`); } else { fail++; console.error(`FAIL  ${name}  ${JSON.stringify(info)}`); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let ws = null;
+let browser = null;
 try {
-  const pf = path.join(dir, "profile", "DevToolsActivePort");
-  //  기동 대기는 넉넉히(30초) — 병렬 러너에서 다른 크롬 시험과 겹치면 늦게 뜬다(frame-scroll-keep 과 같은 까닭).
-  for (let i = 0; i < 600 && !existsSync(pf); i++) await sleep(50);
-  assert.ok(existsSync(pf), "크롬 디버깅 포트가 30초 안에 안 열렸다");
-  const port = readFileSync(pf, "utf8").split("\n")[0];
-  let targets = [];
-  for (let i = 0; i < 150 && !targets.some((t) => t.type === "page"); i++) {
-    targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
-    if (!targets.some((t) => t.type === "page")) await sleep(100);
-  }
-  ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let seq = 0; const pend = new Map();
-  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pend.has(d.id)) { pend.get(d.id)(d); pend.delete(d.id); } };
-  const cdp = (method, params = {}) => new Promise((res) => { const i = ++seq; pend.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
+  //  기동 상한(45초)은 launchCdp 가 쥔다 — 병렬 러너에서 다른 크롬 시험과 겹치면 늦게 뜬다(#1331 · 2026-11-09 실측).
+  browser = await launchCdp(chrome, { prefix: "appui-focus-", windowSize: "1000,800", args: ["--no-sandbox"] });
+  const { cdp } = browser;
   const ev = async (expression) => (await cdp("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })).result?.result?.value;
   /** 조건이 설 때까지(상한 ms) — 선 값 또는 마지막 값을 돌려준다. */
   const until = async (fn, pred, ms = 5000) => { const t0 = Date.now(); let v; do { v = await fn(); if (pred(v)) return v; await sleep(60); } while (Date.now() - t0 < ms); return v; };
@@ -180,13 +157,8 @@ try {
   const s7 = await until(st, (s) => !s.overlay, 1500);
   ok(s6.active === "overlay" && !s7.overlay && s7.closed === 2, "F5 다시 열어도 초점은 덮개 · 닫기 단추로도 닫힌다(뒷일 두 번째)", { opened: s6.active, overlay: s7.overlay, closed: s7.closed });
 } finally {
-  try { ws?.close(); } catch (_) { /* noop */ }
-  child.kill("SIGKILL");
   srv.close();
-  await new Promise((r) => (child.exitCode !== null || child.signalCode !== null ? r() : child.once("close", r)));
-  //  크롬 본체만 죽이면 남은 보조 프로세스가 지운 프로필 폴더를 다시 만드는 판이 있었다(빈 폴더 · 격리 리뷰 실측 5회 중 2회) — 잠깐 쉬고 지운다.
-  await sleep(300);
-  for (let i = 0; i < 5; i++) { try { rmSync(dir, { recursive: true, force: true }); break; } catch (_) { await sleep(200); } }
+  await browser?.close();   // 크롬을 죽이고 임시 디렉터리를 지운다(launchCdp)
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

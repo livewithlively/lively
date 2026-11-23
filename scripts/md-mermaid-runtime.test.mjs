@@ -25,22 +25,20 @@
 //  B1~B6 본문 칸 폭 정책(경계): 칸이 넓으면 원래 폭 · 0.7배~원래 폭 사이면 칸에 맞춤 · 칸=ceil(0.7배)이면 그 값 ·
 //        더 좁으면 0.7배(가로로 민다) — 단 0.7배가 칸의 두 배를 넘으면(조각만 보인다) 칸에 맞춰 통째로 줄인다(경계: 정확히 두 배는 민다)
 //  E1  블록 에디터 — 그림이 서서 코드 칸이 접힌 채로도 저장 마크다운 = 원문(코드 칸을 숨기는 방식이 innerText 를 바꾸면 여기서 깨진다)
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildSync } from "esbuild";
-import { findChrome } from "./headless-chrome.mjs";
+import { findChrome, launchCdp } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC_ROOT = process.env.SRC_ROOT ? path.resolve(process.env.SRC_ROOT) : ROOT;
 const VENDOR = path.join(ROOT, "node_modules/mermaid/dist/mermaid.min.js");
 
 const chrome = findChrome();
-if (!chrome || typeof WebSocket === "undefined") {
-  console.log("skip  크롬(또는 WebSocket 전역)이 없어 건너뜁니다(CHROME_BIN 으로 지정) — mermaid 렌더 런타임 검증 미실행");
+if (!chrome) {
+  console.log("skip  크롬이 없어 건너뜁니다(CHROME_BIN 으로 지정) — mermaid 렌더 런타임 검증 미실행");
   process.exit(0);
 }
 if (!existsSync(VENDOR)) {
@@ -333,36 +331,12 @@ const page = (main, url) => `<!doctype html><html><meta charset="utf-8"><style>$
 <script>(${main.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
 
 let R, B, F1, F2, runErr = null;
-const dir = mkdtempSync(path.join(tmpdir(), "md-mermaid-"));
-const child = spawn(chrome, [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-  // ⚠ 맥에서 새 프로필 크롬이 «키체인» 모달을 사람 화면에 띄우지 않게(headless-chrome.mjs 와 같은 이유)
-  "--use-mock-keychain", "--password-store=basic", "--disable-background-networking", "--disable-component-update",
-  "--disable-sync", "--disable-default-apps", "--disable-extensions", "--mute-audio", "--disable-breakpad",
-  `--user-data-dir=${path.join(dir, "profile")}`, "--remote-debugging-port=0", "--window-size=1280,900", "about:blank",
-], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "ignore", "ignore"] });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let ws = null;
+let browser = null;
 try {
-  const pf = path.join(dir, "profile", "DevToolsActivePort");
-  //  기동 대기 30초 · 페이지 대상 대기 15초 — 크롬을 여럿 함께 띄우는 부하(병렬 시험)에선 4초 안에 페이지 대상이 안 서
-  //   `undefined.webSocketDebuggerUrl` 로 떨어졌다(2026-11-09 실측, 4개 동시 20회 중 1회). frame-scroll-keep(#1331)과 같은 상한이다.
-  for (let i = 0; i < 600 && !existsSync(pf); i++) await sleep(50);
-  if (!existsSync(pf)) throw new Error("크롬 디버깅 포트가 안 열렸다");
-  const port = readFileSync(pf, "utf8").split("\n")[0];
-  let targets = [];
-  for (let i = 0; i < 150 && !targets.some((t) => t.type === "page"); i++) {
-    targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => []);
-    if (!targets.some((t) => t.type === "page")) await sleep(100);
-  }
-  const pageTarget = targets.find((t) => t.type === "page");
-  if (!pageTarget) throw new Error("크롬 페이지 대상이 15초 안에 안 섰다");
-  ws = new WebSocket(pageTarget.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let seq = 0;
-  const pend = new Map();
-  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && pend.has(d.id)) { pend.get(d.id)(d); pend.delete(d.id); } };
-  const cdp = (method, params = {}) => new Promise((res) => { const i = ++seq; pend.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
+  //  기동 상한(45초)은 launchCdp 가 쥔다 — 병렬 러너에서 다른 크롬 시험과 겹치면 늦게 뜬다(#1331 · 2026-11-09 실측).
+  browser = await launchCdp(chrome, { prefix: "md-mermaid-", windowSize: "1280,900", args: ["--no-sandbox"] });
+  const { cdp } = browser;
   const ev = async (expression) => (await cdp("Runtime.evaluate", { expression, returnByValue: true })).result?.result?.value;
   await cdp("Page.enable");
   //  결과 표지(ENDRESULT)가 설 때까지 실제 시간으로 기다린다 — 장면 하나에 상한 120초.
@@ -385,11 +359,8 @@ try {
 } catch (e) {
   runErr = e;
 } finally {
-  try { ws?.close(); } catch (_) { /* 이미 닫혔다 */ }
-  child.kill("SIGKILL");
   srv.close();
-  await new Promise((r) => (child.exitCode !== null || child.signalCode !== null ? r() : child.once("close", r)));
-  for (let i = 0; i < 5; i++) { try { rmSync(dir, { recursive: true, force: true }); break; } catch (_) { await sleep(200); } }
+  await browser?.close();   // 크롬을 죽이고 임시 디렉터리를 지운다(launchCdp)
 }
 if (runErr) { console.error("FAIL  " + String(runErr && runErr.stack || runErr)); process.exit(1); }
 if (process.env.DEBUG) console.log(JSON.stringify({ R, B, served }, null, 1));
