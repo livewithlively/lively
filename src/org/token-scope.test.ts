@@ -179,3 +179,63 @@ assert.deepStrictEqual(
 );
 
 console.log("token-scope.test ok");
+
+// ── #5712 비위험 권한 추종(followSafeScopes) ───────────────────────────────────
+//  정책: 사람이 자기 컴퓨터를 연결해 받은 로그인 토큰(lively login · 데스크톱 앱 · 설치 탭 본인 발급)은
+//   위험 scope(admin · runtime)를 뺀 나머지에서 **멤버의 지금 권한**을 따른다. 위험 scope 는 토큰에 실린 것만.
+//   왜 필요했나 — 관리자가 구성원 권한을 올려도 그 사람 컴퓨터의 토큰은 발급 때 권한에 묶여 있어 다시 로그인해야 했다.
+//  아래 행들은 사양 엣지 표와 1:1 이다.
+{
+  const safe = (o: { tokenScopes: string[]; memberScopes: string[]; memberId?: string | null; memberState?: string | null; followMemberScopes?: boolean; appId?: string | null; appLive?: boolean | null }) =>
+    computeEffectiveScopes({ memberId: "kim", memberState: "active", ...o, followSafeScopes: true });
+
+  // [S1] 올린 비위험 권한이 재발급 없이 닿는다 — 이 변경의 목적. 발급 때는 db · code 가 없었다.
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "context"], memberScopes: ["items", "context", "db", "code"] }),
+    ["items", "context", "db", "code"], "S1 올린 비위험 권한");
+
+  // [S2] 내린 권한은 종전 그대로 곧바로 빠진다.
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "context", "memory"], memberScopes: ["items"] }), ["items"], "S2 내린 권한");
+
+  // [S3] ★ 위험 scope 는 따르지 않는다 — «관리자 기능 허용» 을 켜지 않고 받은 토큰은 관리자로 승격돼도 관리자 기능이 없다.
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "context"], memberScopes: ["items", "context", "admin", "runtime"] }),
+    ["items", "context"], "S3 승격된 admin · runtime 은 안 실린다");
+
+  // [S4] 토큰에 실린 위험 scope 는 멤버가 지금도 가질 때 유효하다(켜고 받은 토큰).
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "admin"], memberScopes: ["items", "context", "admin"] }),
+    ["items", "context", "admin"], "S4 실린 admin 유지 + 비위험은 멤버 그대로");
+
+  // [S5] 실린 위험 scope 라도 멤버가 잃으면 빠진다(강등 즉시).
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "admin"], memberScopes: ["items", "context"] }), ["items", "context"], "S5 강등");
+
+  // [S6] 위험 scope 는 scope 마다 따로 본다 — admin 만 실은 토큰은 멤버가 runtime 을 얻어도 runtime 이 없다.
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "admin"], memberScopes: ["items", "admin", "runtime"] }),
+    ["items", "admin"], "S6 runtime 은 실리지 않았다");
+
+  // [S7] 발급 때 비위험 권한이 하나도 없던 토큰도 멤버가 얻으면 따른다(토큰 scope 는 기록일 뿐이다).
+  assert.deepStrictEqual(safe({ tokenScopes: [], memberScopes: ["items", "context"] }), ["items", "context"], "S7 빈 기록");
+
+  // [S8][S9] 비활성 · 삭제 멤버는 거부.
+  for (const state of ["inactive", null] as const) {
+    assert.strictEqual(safe({ tokenScopes: ["items"], memberScopes: ["items"], memberState: state }), null, `S8/S9 memberState=${String(state)} 면 거부`);
+  }
+
+  // [S10] member_id 가 없으면 따를 대상이 없다 → 토큰 scope 그대로(잘못 켜진 서비스 토큰이 권한 0 이 되지 않는다).
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "context"], memberScopes: [], memberId: null, memberState: null }),
+    ["items", "context"], "S10 멤버 없는 토큰");
+
+  // [S11] 멤버 없는 앱 토큰은 앱이 상한이다 — 이 표시가 그 규칙을 앞지르지 않는다.
+  assert.deepStrictEqual(safe({ tokenScopes: ["items"], memberScopes: [], memberId: null, memberState: null, appId: "bot", appLive: true }), ["items"], "S11 앱 켜짐");
+  assert.strictEqual(safe({ tokenScopes: ["items"], memberScopes: [], memberId: null, memberState: null, appId: "bot", appLive: false }), null, "S11 앱 꺼짐");
+
+  // [S12] 전부 추종(followMemberScopes)이 같이 켜져 있으면 그쪽이 이긴다(세션 · 박스 토큰 — 위험 scope 도 멤버 그대로).
+  assert.deepStrictEqual(safe({ tokenScopes: ["items"], memberScopes: ["items", "admin"], followMemberScopes: true }), ["items", "admin"], "S12 전부 추종 우선");
+
+  // [S13] 손상된 scope 값은 여전히 걸러진다(B4) — 멤버 쪽에 든 알 수 없는 값이 나오지 않는다.
+  assert.deepStrictEqual(safe({ tokenScopes: ["items", "root"], memberScopes: ["items", "root", "db"] }), ["items", "db"], "S13 알 수 없는 scope");
+
+  // [S14] 표시가 꺼진 토큰은 종전 그대로 교집합이다(무회귀) — 올린 권한이 닿지 않는다.
+  assert.deepStrictEqual(
+    computeEffectiveScopes({ memberId: "kim", memberState: "active", tokenScopes: ["items", "context"], memberScopes: ["items", "context", "db"] }),
+    ["items", "context"], "S14 표시 없는 토큰");
+}
+console.log("token-scope: followSafeScopes 14 rows passed");

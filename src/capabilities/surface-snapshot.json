@@ -433,7 +433,7 @@
   "rest": [
    "POST /api/ui/org/token"
   ],
-  "input_hash": "fb87b54b720db2ca"
+  "input_hash": "68ad3047692135f0"
  },
  {
   "name": "org_session_mint",

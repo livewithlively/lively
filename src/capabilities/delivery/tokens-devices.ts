@@ -13,7 +13,7 @@ import {
   listClients as listOAuthClients, saveClient as saveOAuthClient, disableClient as disableOAuthClient,
 } from "../../org/store/oauth.js";
 import { isAcceptableRedirectUri } from "../../org/auth/oauth-clients.js";
-import { sha256Hex } from "../../org/auth/grant-util.js";
+import { sha256Hex, holdsMemberSafeScopes } from "../../org/auth/grant-util.js";
 import { actorOf, restOnly, restRead, slug, str } from "./shared.js";
 
 export const tokensReadCapabilities: Capability[] = [
@@ -27,31 +27,43 @@ export const tokensReadCapabilities: Capability[] = [
 export const tokenMintCapabilities: Capability[] = [
   // ── 토큰 발급/회수 ──
   restOnly("org_token_mint", "구성원 토큰 발급",
-    "구성원용 bearer 토큰을 발급한다(평문은 1회만 반환). curl 설치 한 줄에 이 토큰을 박는다.",
+    "구성원용 bearer 토큰을 발급한다(평문은 1회만 반환). curl 설치 한 줄에 이 토큰을 박는다. scopes 를 생략하면 그 구성원의 권한으로 굽고, " +
+    "이 토큰은 admin·runtime 을 뺀 나머지에서 구성원의 지금 권한을 따른다(나중에 구성원 권한을 바꾸면 다시 굽지 않아도 반영된다 — 응답 followsMember). " +
+    "scopes 를 직접 주면 그 범위가 상한으로 고정된다.",
     [{ method: "POST", paths: ["/api/ui/org/token"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = slug(input.userId ?? input.memberId, "userId");
       const memberId = input.memberId === undefined ? userId : slug(input.memberId, "memberId");
       // scope 미지정 시 구성원에 설정된 권한을 기본값으로(구성원 메뉴의 권한이 토큰 권한의 진실원천).
+      //  #5712 — scope 를 고르지 않았다면 «이 구성원의 권한으로» 라는 뜻이라, 비위험 권한은 구성원의 지금 권한을 따르게 굽는다
+      //   (위험 scope 는 지금 실린 것만 — computeEffectiveScopes). scope 를 직접 고른 토큰은 그 범위가 상한으로 남는다(일부러 좁힌 토큰).
+      //   구성원 행이 없으면(따를 대상이 없다) 종전대로 굽는다 — 그 토큰은 어차피 구성원이 생기기 전엔 통하지 않는다.
       let rawScopes: unknown[];
+      let followSafeScopes = false;
       if (Array.isArray(input.scopes) && input.scopes.length) rawScopes = input.scopes;
-      else { const mem = await getMember(memberId); rawScopes = mem?.scopes?.length ? mem.scopes : ["items", "context", "memory"]; }
+      else {
+        const mem = await getMember(memberId);
+        rawScopes = mem?.scopes?.length ? mem.scopes : ["items", "context", "memory"];
+        followSafeScopes = !!mem;
+      }
       const scopes = rawScopes.map((s) => str(s, "scopes[]", 20));
       for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
-      const { token, tokenHash } = await mintToken({
+      const minted = await mintToken({
         userId,
         scopes,
         label: input.label === undefined ? null : str(input.label, "label", 200).trim(),
         memberId,
+        ...(followSafeScopes ? { followSafeScopes: true } : {}),
       }, actorOf(user), "web");
+      const { token, tokenHash } = minted;
       // tokenHash 는 **자르지 않는다**(#2646) — 이 값이 org_token_revoke 의 회수 핸들이고, 이름이 같으면
       //  값도 호환돼야 한다. 종전엔 12자로 잘라 줬는데 회수는 64자 exact match 라, 발급이 준 값을 그대로
       //  넣는 가장 자연스러운 사용이 **정확히 안 되는 조합**이었다. 해시는 비밀이 아니다(org_tokens 도 전량 노출).
-      return { token, tokenHash, userId, scopes }; // 평문 token 은 이 응답에서만
+      return { token, tokenHash, userId, scopes, followsMember: minted.followSafeScopes }; // 평문 token 은 이 응답에서만
     }, {
       userId: z.string().optional().describe("토큰 주인 멤버 id(생략 시 memberId)"),
       memberId: z.string().optional().describe("연결할 멤버 id — 유효권한=intersection(토큰scope, 멤버 LIVE scope)"),
-      scopes: z.array(z.string()).optional().describe("토큰 scope(생략 시 멤버 scope): items|context|memory|db|code|admin|runtime"),
+      scopes: z.array(z.string()).optional().describe("토큰 scope: items|context|memory|db|code|admin|runtime. 생략하면 멤버 scope 로 굽고 admin·runtime 밖의 권한은 멤버의 지금 권한을 따른다. 주면 그 범위가 상한으로 고정된다"),
       label: z.string().optional().describe("토큰 라벨(용도 메모)"),
     }),
 
@@ -105,8 +117,13 @@ export const tokenMintCapabilities: Capability[] = [
       const scopes = base.filter((s) => SCOPES_ALLOWED.has(s) && presented.includes(s)
         && (includeControlPlane || !DANGEROUS_SCOPES.has(s as Scope)));
       const withControlPlane = scopes.some((s) => DANGEROUS_SCOPES.has(s as Scope));
+      //  #5712 — 본인이 자기 컴퓨터에 깔 토큰이다. 제시한 자격이 내 비위험 권한을 전부 쥐고 있으면(웹 세션은 언제나) 그 범위에서 내 지금 권한을
+      //   따르게 굽는다 — 관리자가 권한을 바꿔도 다시 발급받지 않는다. 위험 scope 는 위에서 고른 것(includeControlPlane)만 남는다.
+      //   좁은 토큰으로 부른 자가발급은 종전처럼 그 토큰 범위에 묶인다(확대 불가). 구성원 행이 없으면 따를 대상이 없다.
+      const followSafeScopes = !!mem && holdsMemberSafeScopes({ memberScopes: mem.scopes, presented, session: user.tokenSource === "session" });
       const { token } = await mintToken(
-        { userId, scopes, label: (mem?.display_name || userId) + (withControlPlane ? " (self +admin)" : " (self)"), memberId: userId },
+        { userId, scopes, label: (mem?.display_name || userId) + (withControlPlane ? " (self +admin)" : " (self)"), memberId: userId,
+          ...(followSafeScopes ? { followSafeScopes: true } : {}) },
         actorOf(user), "web-self");
       return { token, scopes, userId };
     }),
@@ -148,7 +165,11 @@ export const deviceAuthCapabilities: Capability[] = [
           throw new HttpError(403, "관리 권한 포함 승인은 비밀번호 재확인이 필요합니다.");
         }
       }
-      const ok = await approveDeviceAuth(userCode, user.userId, memberScopes, includeControlPlane);
+      //  #5712 — 이 승인 자격이 내 비위험 권한을 전부 쥐고 있으면(웹 세션 · 이미 나를 따르는 토큰 = 데스크톱 앱 안에서 다시 로그인) 새 토큰은
+      //   그 범위에서 내 지금 권한을 따른다. 좁은 토큰으로 한 승인은 종전처럼 그 토큰 범위에 묶인다(확대 불가).
+      const live = (await getMember(user.userId))?.scopes ?? [];
+      const followSafe = holdsMemberSafeScopes({ memberScopes: live, presented: memberScopes, session: user.tokenSource === "session" });
+      const ok = await approveDeviceAuth(userCode, user.userId, memberScopes, includeControlPlane, followSafe);
       if (!ok) throw new HttpError(410, "이미 처리됐거나 만료된 코드입니다.");
       return { ok: true };
     }),

@@ -197,6 +197,27 @@ export async function initOrgCore(pool: Pool): Promise<void> {
            AND (label LIKE 'central-box:%' OR label LIKE 'session-mcp:%');
       END IF;
     END $$;
+    -- #5712 비위험 권한 추종 — 사람이 자기 컴퓨터를 연결해 받은 로그인 토큰은 위험 scope(admin · runtime)를 뺀 나머지에서
+    --  **구성원의 지금 권한**을 따른다(위험 scope 는 토큰에 실린 것만). 규칙 본문은 store/tokens.ts computeEffectiveScopes.
+    --  종전엔 내린 권한만 곧바로 듣고 올린 권한은 다시 로그인해야 닿았다(lively login 을 다시 해야 했다).
+    --  ⚠ 백필은 위 #2174 와 같은 까닭으로 **칸을 새로 만드는 그 순간에만** 한다.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_schema = current_schema() AND table_name = 'auth_token'
+                        AND column_name = 'follow_safe_scopes') THEN
+        ALTER TABLE auth_token ADD COLUMN follow_safe_scopes BOOLEAN NOT NULL DEFAULT false;
+        -- 이미 사람들 컴퓨터에 심겨 있는 로그인 토큰들. 이 백필이 없으면 모두가 한 번씩 다시 로그인해야 하는데,
+        --  그것이 바로 이 변경이 없애려는 일이다.
+        --   device-cli        = lively login · 데스크톱 앱의 디바이스 로그인(org/auth/device-auth.ts)
+        --   … (self) / (self +admin) = 설치 탭의 본인 발급(capabilities/delivery/tokens-devices.ts org_token_mint_self)
+        --  관리자가 구워 준 토큰(org_token_mint)은 라벨이 자유라 여기서 가려낼 수 없다 — 새로 굽는 것부터 따른다.
+        --  위험 scope 는 이 표시로 넓어지지 않는다(토큰에 실린 것만) — «관리자 기능 허용» 을 켜지 않고 받은 토큰은 그대로 관리자 기능이 없다.
+        UPDATE auth_token SET follow_safe_scopes = true
+         WHERE member_id IS NOT NULL AND revoked_at IS NULL AND follow_member_scopes = false
+           AND (label = 'device-cli' OR label LIKE '% (self)' OR label LIKE '% (self +admin)');
+      END IF;
+    END $$;
   `);
 }
 
