@@ -290,73 +290,6 @@ export interface LivDecision { at: string; what: string; why?: string; by?: stri
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
 /**
- * 리브가 **지금 사람에게 받아야 하는 자격 하나**(#1631).
- *
- * ⚠ 여기 담기는 것은 "무엇이 필요한가"뿐이다 — **값은 절대 담기지 않는다.** 값은 화면이 받아
- *  곧바로 금고(수집기 secrets 또는 본인 개인 금고)로 보내고, 이 요청은 지워진다. 리브는 값을 보지 못한다.
- *
- * 왜 프로필에 얹었나: 이건 지식이 아니라 **일시 상태**라 원래는 남의 자리다. 그럼에도 여기 둔 이유는
- *  ① 사람 축으로 정확히 하나이고 ② 새로고침을 견뎌야 하며(사람이 창을 다시 열 수 있다)
- *  ③ 리브 화면이 이미 이 레코드를 읽고 있어서다. 테이블을 하나 더 만들 값어치가 없다.
- */
-export interface LivSecretAsk {
-  at: string;
-  kind?: "secret";
-  /**
-   * 어디에 넣을 것인가 — 수집기(collector.id + 그 프리셋의 시크릿 필드 key) 또는 요청자 본인 금고 칸(kind + scope).
-   *  ⚠ target 이 없으면 수집기다 — 금고 대상이 생기기 전에 저장된 요청이 그 모양이고, 읽는 쪽은 askTargetOf 로 가른다.
-   */
-  target?: "collector" | "vault";
-  collector_id?: number;
-  field?: string;
-  vault_kind?: string;
-  vault_scope?: string;
-  /** 사람에게 보일 것. label = 칸 이름, why = 왜 필요한지 한 줄. */
-  label: string;
-  why?: string;
-  /** 값이 어떻게 생겼는지(예: `ntn_` 로 시작하는 긴 문자열). 사람이 맞게 복사했는지 스스로 확인한다. */
-  hint?: string;
-  /**
-   * 저장 위치 — **서버가 만든 문장**(본인 금고 대상만 · liv-secret.ts vaultAskDest). 카드는 label 과 다른 칸으로 보여 준다.
-   *  label·why·hint 는 리브가 쓴 말이라 값이 갈 곳을 사람에게 말해 줄 수 없다 — 리브가 고른 칸을 리브의 말로 설명하면 검증이 안 된다.
-   */
-  dest?: string;
-}
-
-/**
- * **객관식 질문**(#1631) — 리브가 묻고 사람은 고르기만 한다.
- *
- * 왜 객관식인가: 실측에서 사람이 가장 오래 멈춘 자리가 **자유서술**이었다("어디에 쌓고 계셨나요?").
- *  없는 말을 지어내야 하니 어렵고, 답이 제각각이라 우리도 통계를 못 낸다. 고르게 하면 둘 다 풀린다 —
- *  사람은 쉽고, **답이 저절로 구조화된다**(아래 LivAnswer). 그게 이 둘을 한 기능으로 묶은 이유다.
- */
-export interface LivChoiceAsk {
-  at: string;
-  kind: "choice";
-  /** 통계의 축이 되는 안정된 key(예: `context_sources`). 문구가 바뀌어도 이건 안 바뀐다. */
-  key: string;
-  question: string;
-  why?: string;
-  options: Array<{ id: string; label: string; hint?: string }>;
-  /** 복수 선택 허용(예: 쓰는 도구를 다 고르기). */
-  multi?: boolean;
-  /** '그 외' 자유입력 허용 — 목록에 없는 소스를 놓치지 않기 위한 탈출구. */
-  allow_other?: boolean;
-}
-
-/** **파일 올리기**(#1631) — 로컬 폴더를 뒤지는 대신 사람이 끌어다 놓는다. */
-export interface LivUploadAsk {
-  at: string;
-  kind: "upload";
-  label: string;
-  why?: string;
-  /** 사람에게 보여줄 허용 형식 안내(실제 차단은 화면이 한다). */
-  accept_hint?: string;
-}
-
-export type LivAsk = LivSecretAsk | LivChoiceAsk | LivUploadAsk;
-
-/**
  * 사람이 고른 답 — **통계의 원재료**.
  *
  * `key` 가 축이고 `choices` 가 값이라, 워크스페이스 전체에서 SQL 한 줄로 집계된다
@@ -424,8 +357,8 @@ export interface LivProfile {
    *  ⚠ 워크스페이스 층이다 — 같은 사람도 A 는 만들었고 B 에는 초대로 들어왔다.
    */
   join?: LivJoin | null;
-  /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
-  secret_ask?: LivAsk | null;
+  /** (옛 자리 — 쓰지 않는다) 대기 중인 요청 한 칸. 요청은 세션 요청 표(org_session_ask — src/asks/store.ts)로 옮겼다(#5713). 옛 행에 값이 남아 있을 수 있어 이름만 둔다. */
+  secret_ask?: unknown;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
   answers?: LivAnswer[];
   /**
@@ -436,13 +369,6 @@ export interface LivProfile {
 }
 
 const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
-
-/** 요청을 걸거나(ask) 지운다(null). 시크릿 값은 절대 지나가지 않는다. */
-export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
-  const cur = await getLivProfile(id);
-  const next: LivProfile = { ...cur, secret_ask: ask };
-  return await writeLivProfile(id, next as unknown as Record<string, unknown>);
-}
 
 /**
  * 처음 설정을 하다 만 자리를 남긴다(null = 지운다 — 끝났거나 처음부터 다시 하기로 했을 때) (#2207).
@@ -467,7 +393,7 @@ export async function setLivSession(id: string, ref: LivSessionRef | null): Prom
 }
 
 /**
- * 고른 답을 남기고 그 요청을 내린다(한 트랜잭션의 뜻 — 답했으면 질문은 사라져야 한다).
+ * 고른 답을 남긴다(질문을 닫는 일은 세션 요청이 한다 — capabilities/session-ask.ts submit).
  *
  * ⚠ **같은 key 는 갈아끼운다.** 다시 물어 다시 답했으면 최신 하나만 의미가 있고,
  *  두 줄이 남으면 집계가 사람 수보다 커진다(통계가 틀어지는 가장 흔한 경로).
@@ -475,7 +401,7 @@ export async function setLivSession(id: string, ref: LivSessionRef | null): Prom
 export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const { mergeAnswer } = await import("../delivery/liv-secret.js");
-  const next: LivProfile = { ...cur, answers: mergeAnswer(cur.answers ?? [], answer, LIV_LIST_CAP) as LivAnswer[], secret_ask: null };
+  const next: LivProfile = { ...cur, answers: mergeAnswer(cur.answers ?? [], answer, LIV_LIST_CAP) as LivAnswer[] };
   return await writeLivProfile(id, next as unknown as Record<string, unknown>);
 }
 

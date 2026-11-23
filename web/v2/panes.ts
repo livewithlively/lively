@@ -53,6 +53,8 @@ import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배
 import { hasBrowserSurface } from './browser-surface.js';
 import { onTabEvent, slotOfKey, tabsOfSession } from './browser-tabs.js';   // #4993 AI 가 쓰는 탭 → 그 세션의 웹 칸
 import { onBrowserEvent } from './live-sync.js';
+import { ASK_FOCUS_EVT, SESSASK_TAB, pendingAskFocus, sessAskTabTitle } from './session-ask-pane.js';   // #5713 요청 = 곁칸의 파생 탭
+import { watchAsks } from '../asks/api.js';
 import { browserRevealSlot } from '../lib/browser-reveal.js';
 import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
@@ -151,7 +153,7 @@ const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
  *  이미 그렇게 저장된 배치는 여기서 되돌린다 — 갇힌 사람은 새로고침 한 번으로 풀린다. */
 /** #4225 — **배치에 저장하지 않는 탭**. 붙은 앱 탭은 지금 보는 세션에서 나온다(session-app-pane.ts 머리말) —
  *  저장하면 앱이 안 붙은 세션을 열 때 빈 탭이 한 번 떴다 사라진다. 읽을 때도 쓸 때도 걷는다. */
-const DERIVED_TABS: ReadonlySet<string> = new Set([SESSAPP_TAB]);
+const DERIVED_TABS: ReadonlySet<string> = new Set([SESSAPP_TAB, SESSASK_TAB]);   // #5713 — 요청 탭도 지금 보는 세션에서 나온다(같은 까닭)
 function stripDerived(lay: Layout): Layout {
   const keep = (k: TabKey | null): boolean => !!k && !DERIVED_TABS.has(tabBase(k));
   const out: Layout = { ...lay, main: lay.main.filter(keep), side: lay.side.filter(keep), bottom: lay.bottom.filter(keep), act: { ...lay.act }, pin: (lay.pin || []).filter(keep) };
@@ -544,6 +546,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   세션이 바뀌는 길이 생기는 순간 TDZ 로 화면이 통째로 죽는다 — panes 선언 머리말과 같은 함정).
   let sessAppOff: (() => void) | null = null;
   let sessAppSid: string | null = null;
+  //  #5713 요청 탭의 구독(syncSessAsks) — 같은 까닭으로 여기 선언한다.
+  let sessAskOff: (() => void) | null = null;
+  let sessAskSid: string | null = null;
+  let sessAskIds: ReadonlySet<string> = new Set();   // 지금 세션의 열린 요청 id — 주소에서 짚으러 왔을 때 «내 세션 것인가» 를 가른다
   function curSession(): string | null {
     const sp = panes.get('main')?.parts.get('sessions');
     return sp && sp.currentSession ? sp.currentSession() : (opts.sessionId || null);
@@ -551,6 +557,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function announceSession(sid: string | null): void {
     for (const fn of [...sessSubs]) { try { fn(sid); } catch (_) { /* 한 칸이 넘어져도 나머지는 간다 */ } }
     syncSessApps();
+    syncSessAsks();
   }
 
   const ctx: PartCtx = {
@@ -1513,7 +1520,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  × 는 아이콘 자리에 겹쳐 선다(CSS: 마우스를 올리면 아이콘이 × 로 바뀐다). 고정 탭은 × 가 없다(크롬) — 메뉴로 닫는다.
     //  tabindex -1: 키보드는 탭 위에서 Delete 로 닫는다(× 마다 초점이 서면 탭 사이를 옮겨 다니기가 두 배로 길어진다).
     //  붙은 앱 탭은 **켜졌을 때만** × — 떼기는 그 앱 화면이 서 있어야 어느 앱인지 안다(removeTab 머리의 같은 사정).
-    const x = pinned || (detachX && !on) ? null : el('button', {
+    //  #5713 요청 탭은 × 가 없다 — 닫는 탭이 아니라 요청을 다 하면(또는 «나중에» 로 접으면) 사라지는 탭이다.
+    const x = pinned || tabBase(key) === SESSASK_TAB || (detachX && !on) ? null : el('button', {
       class: 'pn-tab-x', type: 'button', tabindex: '-1',
       title: detachX ? `${nm} 을(를) 이 세션에서 뗍니다 — 앱의 데이터는 그대로 남아요` : `${nm} 탭 닫기`,
       'aria-label': detachX ? `${nm} 떼기` : `${nm} 닫기`,
@@ -2082,6 +2090,44 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       } else paintTabs(z);
     });
   }
+  // ── 요청 탭(#5713) — 지금 보는 세션의 AI 가 나에게 걸어 둔 요청이 있으면 곁칸에 세우고, 다 끝나면 걷는다 ──────────────
+  //  붙은 앱 탭과 같은 결이되 **켜는 때가 다르다**: 요청은 AI 가 사람을 기다리며 멈춰 있는 것이라, 새로 걸렸을 때(added)뿐 아니라
+  //   이 세션을 막 열었는데 열린 요청이 있을 때(탭이 처음 선다)도 곁칸을 펴고 그 탭을 켠다 — 안 켜면 사람은 AI 가 왜 멈췄는지 모른다.
+  //   이미 서 있는 탭은 목록이 바뀌어도(하나를 답해 줄었다) 사람이 보던 탭을 뺏지 않는다.
+  function syncSessAsks(): void {
+    if (dead) return;
+    const sid = curSession();
+    if (sid === sessAskSid && sessAskOff) return;
+    sessAskOff?.(); sessAskOff = null; sessAskSid = sid; sessAskIds = new Set();
+    //  세션이 바뀌면 옛 세션의 탭부터 걷는다 — 새 세션에 열린 요청이 있으면 아래 구독이 다시 세운다.
+    { const z = zoneOf(SESSASK_TAB); if (z) dropTab(z, SESSASK_TAB); }
+    if (!sid) return;
+    sessAskOff = watchAsks(sid, (asks, added) => {
+      if (dead || sid !== sessAskSid) return;
+      sessAskIds = new Set(asks.map((a) => a.id));
+      const had = zoneOf(SESSASK_TAB);
+      if (!asks.length) { if (had) dropTab(had, SESSASK_TAB); return; }
+      if (!had) lay.side.unshift(SESSASK_TAB);   // 맨 앞 — 사람을 기다리는 것이 곁칸의 첫 탭이다
+      const z = zoneOf(SESSASK_TAB)!;
+      tabTitles.set(SESSASK_TAB, sessAskTabTitle(asks.length));
+      //  주소(#/ask/<id>)에서 그 요청을 짚으러 왔으면 탭이 이미 서 있어도 켠다.
+      const wanted = pendingAskFocus();
+      if (added.length || !had || (wanted && asks.some((a) => a.id === wanted))) { bringUp(z, SESSASK_TAB); return; }
+      paintTabs(z);
+    });
+  }
+
+  //  주소(#/ask/<id>)에서 짚으러 왔다 — 그 요청이 이 세션 것이고 탭이 이미 서 있으면 켠다. 목록이 그대로면 위 구독은 다시 불리지 않으므로
+  //   (바뀐 만큼만 알린다) 신호를 따로 듣는다. 다른 세션 탭의 셸은 제 목록에 그 id 가 없어 움직이지 않는다.
+  const onAskFocus = (ev: Event): void => {
+    if (dead) return;
+    const id = String((ev as CustomEvent).detail?.id || '');
+    if (!id || !sessAskIds.has(id)) return;
+    const z = zoneOf(SESSASK_TAB);
+    if (z) bringUp(z, SESSASK_TAB);
+  };
+  window.addEventListener(ASK_FOCUS_EVT, onAskFocus);
+
   //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다. 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다). 세션 머리줄 [붙은 앱](#4443)도 이 함수를 부른다.
   function openSessAppTab(): void {
     const z = zoneOf(SESSAPP_TAB);
@@ -2158,6 +2204,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
   syncSessApps();       // #4225 — 이 세션에 붙은 앱이 있으면 곁칸에 그 탭을 세운다(목록이 오면)
+  syncSessAsks();       // #5713 — 이 세션의 AI 가 걸어 둔 요청이 있으면 곁칸에 «요청» 탭을 세우고 켠다
   if (!loose && !detail) void refreshDetail();
 
   // [보관한 세션]에서 [탭에 꺼내기]를 누르면 이 줄을 그 자리에서 다시 그린다(8초 틱을 기다리지 않게).
@@ -2197,6 +2244,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
       sessAppOff?.(); sessAppOff = null;
+      sessAskOff?.(); sessAskOff = null;   // #5713
+      window.removeEventListener(ASK_FOCUS_EVT, onAskFocus);
       cancelTabDrag(); thawAll();   // #3870 — 끄는 중이던 탭 · 얼림 감시(window pointermove)를 걷는다
       dock?.destroy(); dock = null;   // #4443
       card?.destroy();

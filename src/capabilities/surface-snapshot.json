@@ -1546,46 +1546,6 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "me_liv_ask_secret",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-secret-ask"
-  ],
-  "input_hash": "4dd74cb8d1f7d3ab"
- },
- {
-  "name": "me_liv_put_secret",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-secret"
-  ],
-  "input_hash": "d88e2cad56f58113"
- },
- {
-  "name": "me_liv_ask_choice",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-choice-ask"
-  ],
-  "input_hash": "075764db659fd915"
- },
- {
-  "name": "me_liv_answer",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-answer"
-  ],
-  "input_hash": "9e7578dfd73f3b4a"
- },
- {
   "name": "me_liv_record_answer",
   "scope": null,
   "mcp": true,
@@ -1606,16 +1566,6 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "me_liv_ask_upload",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-upload-ask"
-  ],
-  "input_hash": "8e55d1d5c440991e"
- },
- {
   "name": "me_liv_session",
   "scope": null,
   "mcp": false,
@@ -1634,16 +1584,6 @@
    "POST /api/ui/me/liv/open"
   ],
   "input_hash": "1964b38072182cb5"
- },
- {
-  "name": "me_liv_ask_dismiss",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv/ask-dismiss"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "me_welcome_get",
@@ -4143,6 +4083,126 @@
    "POST /api/ui/terminal/sessions/:id/task"
   ],
   "input_hash": "27ed2a5e56e475a4"
+ },
+ {
+  "name": "session_ask_secret",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/open/secret"
+  ],
+  "input_hash": "05ba00360ed1908b"
+ },
+ {
+  "name": "me_liv_ask_secret",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-secret-ask"
+  ],
+  "input_hash": "05ba00360ed1908b"
+ },
+ {
+  "name": "session_ask_choice",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/open/choice"
+  ],
+  "input_hash": "8f4b37d57a0ce7dd"
+ },
+ {
+  "name": "me_liv_ask_choice",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-choice-ask"
+  ],
+  "input_hash": "8f4b37d57a0ce7dd"
+ },
+ {
+  "name": "session_ask_upload",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/open/upload"
+  ],
+  "input_hash": "fa45298594876612"
+ },
+ {
+  "name": "me_liv_ask_upload",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-upload-ask"
+  ],
+  "input_hash": "fa45298594876612"
+ },
+ {
+  "name": "session_ask_status",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/asks/status"
+  ],
+  "input_hash": "bc57d88769a0a0bb"
+ },
+ {
+  "name": "session_ask_list",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/asks"
+  ],
+  "input_hash": "be2e912f84c38c6c"
+ },
+ {
+  "name": "session_ask_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/asks/item/:id"
+  ],
+  "input_hash": "4784247d7c2b2dd6"
+ },
+ {
+  "name": "session_ask_submit",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/item/:id/submit"
+  ],
+  "input_hash": "74d0ba67a7bab74b"
+ },
+ {
+  "name": "session_ask_dismiss",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/item/:id/dismiss"
+  ],
+  "input_hash": "4784247d7c2b2dd6"
+ },
+ {
+  "name": "session_ask_tell",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/item/:id/tell"
+  ],
+  "input_hash": "0b8e3033ef0e8277"
  },
  {
   "name": "collect_claude_run",

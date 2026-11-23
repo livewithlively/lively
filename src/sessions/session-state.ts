@@ -780,6 +780,9 @@ export async function markSessionSuperseded(id: string, newId: string): Promise<
   if (onNode()) return false;   // #1791 — 노드엔 DB 가 없다(복원은 게이트웨이가 하므로 노드에선 안 불린다)
   if (!id || !newId || id === newId) return false;   // 자기 자신을 가리키면 이정표가 아니라 무한고리다
   const r = await itemsPool.query("UPDATE org_session_state SET superseded_by=$2, updated_at=now() WHERE id=$1", [id, newId]);
+  //  #5713 — 옛 세션에서 AI 가 걸어 둔 **열린 요청**(값 입력 · 고르기 …)도 새 id 로 넘긴다. 안 넘기면 되살린 세션의 곁칸에서
+  //   그 요청이 사라진다(요청은 세션 id 로 고른다). 복원이 확정된 이 자리에서만 옮긴다 — 실패한 복원은 옛 id 에 그대로 둔다. 비치명.
+  await import("../asks/store.js").then((m) => m.carrySessionAsks(id, newId)).catch(() => { /* 요청 칸에서만 빠진다 — 주소(#/ask/<id>)로는 여전히 열린다 */ });
   return (r.rowCount ?? 0) > 0;
 }
 

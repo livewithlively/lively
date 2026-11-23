@@ -61,6 +61,7 @@ import { managedSessionCapabilities } from "./managed-session.js";
 import { sessionProjectCapabilities } from "./session-project.js";
 import { sessionRenameCapabilities } from "./session-rename.js";
 import { sessionTaskCapabilities } from "./session-task.js";
+import { sessionAskCapabilities } from "./session-ask.js";
 import { collectRunCapabilities } from "./collect-run.js";
 import { collectUnitCapabilities } from "./collect-units.js";
 import { memberAiConnectorCapabilities } from "./member-ai-connectors.js";
@@ -145,6 +146,7 @@ const all: Capability[] = [
   ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
   ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
   ...sessionTaskCapabilities,    // #4084 세션 = 태스크 — 이 세션이 맡은 태스크 조회·완료 처리(id 없이).
+  ...sessionAskCapabilities,     // #5713 세션 요청 — 세션의 AI 가 사람에게 화면으로 받는 것(값 입력 · 고르기 · 파일 올리기). 종류는 등록부(asks/kinds).
   ...collectRunCapabilities,     // #4213 T11 수집 실행 — 내 Claude 커넥터를 읽는 `claude -p` 한 판(작은 세션 컨테이너) · 상태.
   ...collectUnitCapabilities,    // #4213 T10 수집 단위 표 — 단위·볼 수 있는 구성원(담당 후보)·지금 담당·읽은 위치 · 고치기·쪼개기·내 목록 반영 · 수집기 이관.
   ...memberAiConnectorCapabilities, // #4213 T6 구성원 Claude 커넥터 — 누가 무엇을 연결했나(보기) · 내 것 새로 확인 · 워크스페이스 정책(관리자).

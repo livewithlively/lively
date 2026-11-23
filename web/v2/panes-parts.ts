@@ -32,6 +32,7 @@ import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바
 import { composerAttach } from './compose-attach.js';
 import { consolePart } from './panes-console.js';   // #4876 곁칸 «콘솔»
 import { livDeskPart } from './panes-liv.js';   // #4970 리브 세션의 오른쪽 «리브» 칸
+import { sessAskPart } from './session-ask-pane.js';   // #5713 곁칸의 «요청» 칸 — 이 세션의 AI 가 사람에게 건 요청
 import type { TlItem } from '../timeline.js';
 import { composerMention } from './compose-mention.js';
 import { composerTasks } from './compose-tasks.js';   // #4135 [담기]한 태스크 = 글칸의 번호 배지
@@ -60,7 +61,7 @@ function handIsElsewhere(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
 }
 
-export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'livdesk' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
+export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'livdesk' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp' | 'sessask';
 
 export interface PartCtx {
   id: number;
@@ -170,6 +171,9 @@ export const PART_DEFS: PartDef[] = [
   { type: 'apps', name: '앱', icon: 'apps', pickable: false, hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
   // #4225 — 이 세션에 붙은 앱. [+] 로 넣지 않는다 — 앱을 붙이면 셸이 세우고 떼면 걷는다(배치에 저장하지 않는 탭, panes.ts DERIVED_TABS).
   { type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false, hint: '이 세션에 붙은 앱이에요 — AI 도 같은 화면을 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
+  // #5713 — 이 세션의 AI 가 사람에게 건 요청(값 입력 · 고르기 · 파일 올리기). [+] 로 넣지 않는다 — 요청이 걸리면 셸이 세우고 다 끝나면 걷는다
+  //  (배치에 저장하지 않는 탭, panes.ts DERIVED_TABS). 종전엔 리브 세션 대화창의 입력칸 위 · 리브 화면에서만 그렸다.
+  { type: 'sessask', name: '요청', icon: 'ask', pickable: false, hint: '이 세션의 AI 가 진행하려면 받아야 하는 것들이에요 — 값 입력 · 고르기 · 파일 올리기. 다 하면 탭이 사라져요.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -1804,6 +1808,7 @@ export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'timeline') return timelinePart(ctx);
   if (type === 'apps') return appsPart(ctx);
   if (type === 'sessapp') return sessAppPart(ctx);
+  if (type === 'sessask') return sessAskPart(ctx);
   if (type === 'livdesk') return livDeskPart(ctx);
   return livPart(ctx);
 }
