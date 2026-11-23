@@ -164,3 +164,21 @@ test("regrantMessage — 앱 화면 다리(#4225)의 글과 같은 꼴 · 웹 �
   assert.equal(regrantMessage("crm", regrantToolPhrase("store_query")), "앱 'crm' 의 사용 동의가 예전 범위라 'store_query' 을 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다");
   assert.match(regrantMessage("crm", regrantScopePhrase("db")), /'db' 권한을 쓸 수 없습니다 — 다시 동의\(grant\)/);
 });
+
+//  앱 v2 #124 — 도구도 scope 와 같은 까닭으로: 그 도구가 요구하는 scope 를 그 사람이 갖지 않았으면 다시 동의해도 못 쓰니 빈칸으로 세지 않는다.
+//   T1 code 없는 사람 → code 도구는 빈칸 아님 · T2 code 있는 사람 → 빈칸 · T3 등록부에 없는 도구(요구 scope 모름)는 종전대로 빈칸
+//   T4 memberScopes 를 주지 않은 판정(설명용)은 종전대로 전부 · T5 도구를 알려 주기 전(기본)은 종전과 같다
+test("T1~T5 grantGap — 그 사람이 쓸 수 없는 도구(요구 scope 없음)는 다시 동의 빈칸으로 세지 않는다", async () => {
+  const { grantGap, setToolScopeResolver } = await import("./grant.js");
+  const declared = { scopes: ["memory", "code"], tools: ["store_query", "repo_file", "my_app_tool"] };
+  const grant = { scopes: ["memory"], tools: ["store_query"] };
+  try {
+    assert.deepEqual(grantGap(grant, declared, ["memory"]), { scopes: [], tools: ["repo_file", "my_app_tool"] }, "T5 알려 주기 전은 종전과 같다");
+    setToolScopeResolver((name) => (name === "repo_file" ? "code" : name === "store_query" ? "memory" : null));
+    assert.deepEqual(grantGap(grant, declared, ["memory"]), { scopes: [], tools: ["my_app_tool"] }, "T1 · T3");
+    assert.deepEqual(grantGap(grant, declared, ["memory", "code"]), { scopes: ["code"], tools: ["repo_file", "my_app_tool"] }, "T2");
+    assert.deepEqual(grantGap(grant, declared), { scopes: ["code"], tools: ["repo_file", "my_app_tool"] }, "T4");
+  } finally {
+    setToolScopeResolver(() => null);
+  }
+});
