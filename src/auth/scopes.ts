@@ -15,3 +15,8 @@ export function isScope(s: unknown): s is Scope {
 // fleet 제어·정책 변경 scope — 멤버 머신에서 도는 코드(훅)나 조직 정책을 바꾼다.
 // 회수 불가한 정적 토큰(AUTH_TOKENS_JSON)으로는 이 scope 의 행위를 금지한다(B5: kill-switch 보장).
 export const DANGEROUS_SCOPES: ReadonlySet<Scope> = new Set<Scope>(["admin", "runtime"]);
+
+// 위험 scope 를 뺀 나머지 — 구성원의 «평소 권한». 사람이 자기 컴퓨터를 연결해 받는 로그인 토큰은 이 범위에서
+//  구성원의 지금 권한을 따른다(org/store/tokens.ts computeEffectiveScopes 의 followSafeScopes). SCOPES 에서 파생하므로
+//  새 scope 를 더하면 위험 목록에 넣지 않는 한 여기에 저절로 든다.
+export const SAFE_SCOPES: readonly Scope[] = SCOPES.filter((s) => !DANGEROUS_SCOPES.has(s));

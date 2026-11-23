@@ -197,6 +197,38 @@ export async function initOrgCore(pool: Pool): Promise<void> {
            AND (label LIKE 'central-box:%' OR label LIKE 'session-mcp:%');
       END IF;
     END $$;
+    -- #5712 비위험 권한 추종 — 사람이 자기 컴퓨터를 연결해 받은 로그인 토큰은 위험 scope(admin · runtime)를 뺀 나머지에서
+    --  **구성원의 지금 권한**을 따른다(위험 scope 는 토큰에 실린 것만). 규칙 본문은 store/tokens.ts computeEffectiveScopes.
+    --  종전엔 내린 권한만 곧바로 듣고 올린 권한은 다시 로그인해야 닿았다(lively login 을 다시 해야 했다).
+    --  ⚠ 백필은 위 #2174 와 같은 까닭으로 **칸을 새로 만드는 그 순간에만** 한다.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_schema = current_schema() AND table_name = 'auth_token'
+                        AND column_name = 'follow_safe_scopes') THEN
+        ALTER TABLE auth_token ADD COLUMN follow_safe_scopes BOOLEAN NOT NULL DEFAULT false;
+        -- 이미 사람들 컴퓨터에 심겨 있는 로그인 토큰들. 이 백필이 없으면 모두가 한 번씩 다시 로그인해야 하는데,
+        --  그것이 바로 이 변경이 없애려는 일이다.
+        --   device-cli        = lively login · 데스크톱 앱의 디바이스 로그인(org/auth/device-auth.ts)
+        --   … (self) / (self +admin) = 설치 탭의 본인 발급(capabilities/delivery/tokens-devices.ts org_token_mint_self)
+        --  관리자가 구워 준 토큰(org_token_mint)은 라벨이 자유라 여기서 가려낼 수 없다 — 새로 굽는 것부터 따른다.
+        --  라벨만 믿지 않는다: 두 길 모두 **본인이 구운** 토큰이라 created_by 가 그 구성원이다. 관리자가 남에게 같은 라벨을 달아 구운
+        --   토큰(scope 를 일부러 좁혔을 수 있다)은 여기 걸리지 않는다. OAuth 발급분(client_id) · 앱 토큰(app_id)도 뺀다 — 그 칸들은
+        --   뒤 스키마 조각이 만들기 때문에(새 설치에서는 이 시점에 아직 없다) 칸 이름으로 고르지 않고 행에서 꺼낸다.
+        --  위험 scope 는 이 표시로 넓어지지 않는다(토큰에 실린 것만) — «관리자 기능 허용» 을 켜지 않고 받은 토큰은 그대로 관리자 기능이 없다.
+        --  ⚠ 남는 틈(알고 둔다): 이 변경 전에 **범위가 좁은 토큰으로 승인 · 재발급해** 받은 device-cli · (self) 토큰은 발급 때 좁은 범위에
+        --   묶여 있었는데, 기록만으로는 웹 세션으로 승인한 토큰과 가려낼 수 없어 함께 넓어진다(비위험 권한까지). 새로 굽는 토큰은
+        --   org/auth/grant-util.credentialFollowsMember 가 정확히 가른다.
+        UPDATE auth_token t SET follow_safe_scopes = true
+         WHERE t.member_id IS NOT NULL AND t.revoked_at IS NULL AND t.follow_member_scopes = false
+           AND t.created_by = t.member_id
+           AND (to_jsonb(t) ->> 'client_id') IS NULL AND (to_jsonb(t) ->> 'app_id') IS NULL
+           AND (t.label = 'device-cli' OR t.label LIKE '% (self)' OR t.label LIKE '% (self +admin)');
+      END IF;
+    EXCEPTION WHEN duplicate_column THEN
+      -- 게이트웨이 둘이 같은 순간에 부팅해 다른 쪽이 먼저 칸을 만들었다 — 백필도 그쪽이 했다. 부팅을 깨지 않는다.
+      NULL;
+    END $$;
   `);
 }
 
