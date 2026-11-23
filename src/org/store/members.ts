@@ -3,6 +3,7 @@
 import { itemsPool } from "../../db/client.js";
 import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
+import { DEFAULT_MEMBER_SCOPES } from "../../auth/scopes.js";
 import { logger } from "../../log.js";
 import {
   parseScopePref, defaultScopePref, applyLocalScopeChange as applyScopeChange, defaultOrgRecordScope,
@@ -865,7 +866,7 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   const before = await getMember(m.id);
   const kind = m.kind ?? before?.kind ?? "human";
   const identities = m.identities ?? before?.identities ?? [];
-  const scopes = m.scopes ?? before?.scopes ?? ["items", "context", "memory"];
+  const scopes = m.scopes ?? before?.scopes ?? [...DEFAULT_MEMBER_SCOPES];
   // avatar: undefined=보존, 그 외(null/''/문자열)=그대로 적용(빈값이면 null 로 정규화 → 이니셜 폴백).
   const avatar = m.avatar === undefined ? (before?.avatar ?? null) : (m.avatar || null);
   // 커스텀 글자(최대 3자)·배경색 — undefined=보존, 그 외=정규화. 색은 클라이언트 style 에 주입되므로 #rrggbb 형식만 허용(그 외 무시=null).
