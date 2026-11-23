@@ -5385,6 +5385,16 @@
   "input_hash": "eeaa30c0ba805f7f"
  },
  {
+  "name": "org_app_grant_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/org-grant"
+  ],
+  "input_hash": "f97044cfafbaa7be"
+ },
+ {
   "name": "org_app_install",
   "scope": "admin",
   "mcp": true,

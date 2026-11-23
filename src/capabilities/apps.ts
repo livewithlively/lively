@@ -7,7 +7,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import * as store from "../org/store/apps.js";
 import { parseAppManifest } from "../apps/manifest.js";
-import { resolveGrant } from "../apps/grant.js";
+import { resolveGrant, grantableOf, grantGap, grantGapEmpty, describeGrantGap, type GrantGap, type OrgGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
 import { declaresAiInstructions } from "../apps/app-job-instructions.js";   // #5082 지시 파일을 선언한 앱은 판 묶음을 남긴다
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
@@ -80,6 +80,37 @@ async function requireVisibleApp(id: string, who: Viewer): Promise<store.OrgApp>
 
 const viewApp = viewAppFor;
 
+// ── 조직 동의 — 관리자가 구성원 모두를 대신해 한 앱 동의(org_app.org_grant · apps/grant.mergeOrgGrant) ──
+/** 모두가 쓰는 판(공개 판)의 앱 행 — 조직 동의는 이 판의 선언으로 적고 이 판에 견준다. 공개 앱에 초안이 걸려 있어도 초안이 아니라 공개 판이다. */
+async function publishedAppOf(app: store.OrgApp, who: Viewer): Promise<store.OrgApp> {
+  return (await viewApp(app, { ...who, address: "pub" })).app;
+}
+
+/** 조직 동의가 공개 판의 지금 선언을 덮나 — 앱이 넓어져 덮지 못하면 covers:false 와 빠진 것(관리자가 org_app_grant_set 을 다시 부르면 풀린다). */
+export interface OrgGrantStatus extends OrgGrant { covers: boolean; missing: GrantGap; hint?: string }
+function orgGrantStatusOf(app: store.OrgApp, published: store.OrgApp): OrgGrantStatus | null {
+  const g = app.org_grant;
+  if (!g) return null;
+  const declared = grantableOf(published.manifest);
+  //  이 코어가 못 읽는 매니페스트면 견줄 수 없다 — 덮는다고도 못 덮는다고도 말하지 않고 적힌 것만 보인다(covers 는 보수적으로 false).
+  const missing = declared ? grantGap(g, declared) : { scopes: [], tools: [] };
+  const covers = !!declared && grantGapEmpty(missing);
+  return {
+    ...g, covers, missing,
+    ...(covers ? {} : { hint: declared
+      ? `조직 동의가 이 앱의 지금 선언을 덮지 못합니다(빠진 것: ${describeGrantGap(missing)}) — 구성원이 각자 다시 동의하지 않게 하려면 관리자가 org_app_grant_set {app_id:'${app.id}'} 를 다시 부릅니다`
+      : "이 앱의 매니페스트를 읽지 못해 조직 동의를 견주지 못했습니다" }),
+  };
+}
+/** 앱을 바꾸는 도구(설치 · 저장 · 공개)의 답에 싣는 조직 동의 상태 — 조직 동의가 없는 앱은 null(답에 칸을 넣지 않는다). 읽기 실패는 삼킨다(본 일은 끝났다). */
+async function orgGrantStatus(id: string, who: Viewer): Promise<OrgGrantStatus | null> {
+  try {
+    const app = await store.getApp(id);
+    if (!app?.org_grant) return null;
+    return orgGrantStatusOf(app, await publishedAppOf(app, who));
+  } catch (err) { logger.warn({ err, id }, "조직 동의 상태를 읽지 못했다(비치명)"); return null; }
+}
+
 /**
  * 목록·상세가 함께 싣는 공개 상태 칸 — 화면(앱 찾기 · 앱빌더 · 앱 만들기)은 **이 칸을** 읽는다(매니페스트 studio 칸이 아니라).
  *  초안(그 판 번호·만든 사람)과 만들기 세션은 책임자·초안을 만든 사람(·관리자)에게만 — 나머지에겐 공개 판이 전부다.
@@ -109,7 +140,8 @@ function stateFields(app: store.OrgApp, who: Viewer, view: AppView, origin: stor
 
 /** 응답에 실을 앱 한 줄 — 보는 판으로 갈아 끼우되 초안 표식·만들기 세션 같은 칸은 stateFields 가 정한 만큼만. */
 function appRow(installed: store.OrgApp, shown: store.OrgApp, who: Viewer, view: AppView, origin: store.OrgApp | null): Record<string, unknown> {
-  const { draft_by: _d, build_session: _b, ...rest } = shown;
+  //  org_grant(조직 동의의 적힌 값 — 누가 동의했나까지)는 목록 · 상세의 앱 행에 그대로 싣지 않는다. 상세(org_app_get)가 관리자 · 책임자에게 상태 꼴로 싣는다.
+  const { draft_by: _d, build_session: _b, org_grant: _g, ...rest } = shown;
   const edit = editDenial(installed, who, safeManifest(installed));
   return { ...rest, can_edit: edit === null, ...stateFields(installed, who, view, origin, edit) };
 }
@@ -543,7 +575,10 @@ const appGet: Capability = {
     const { view, app: shown } = await viewApp(app, who);
     const origin = app.origin_app_id ? await store.getApp(app.origin_app_id) : null;
     const usage = (await appFolderUsageForView([id])).get(id);   // #4785
-    return { app: { ...appRow(app, shown, who, view, origin), folder: folderFields(app, usage, isAppOwner(app, who) || isAdminViewer(who)) },
+    //  조직 동의 — 있으면 공개 판의 지금 선언을 덮나(covers · missing)까지. 다시 동의할 수 있는 관리자와 그 앱의 책임자에게만 싣는다(누가 동의했나 ·
+    //   «org_app_grant_set 을 다시 부르라» 는 안내는 그 밖의 구성원에게 쓸모가 없다 — 그 사람들에겐 null).
+    const orgGrant = app.org_grant && (isAdminViewer(who) || isAppOwner(app, who)) ? orgGrantStatusOf(app, await publishedAppOf(app, who)) : null;
+    return { app: { ...appRow(app, shown, who, view, origin), org_grant: orgGrant, folder: folderFields(app, usage, isAppOwner(app, who) || isAdminViewer(who)) },
       components: await store.listComponents(id) };
   },
 };
@@ -609,7 +644,8 @@ const appGrant: Capability = {
       ? { scopes: input.scopes as string[] | undefined, tools: input.tools as string[] | undefined, optional_scopes: input.optional_scopes as string[] | undefined }
       : undefined;
     //  앱 v2 #124 — 선택 권한을 주지 않은 동의(동의 창 · 다시 동의)는 이 사람이 이미 준 선택 권한을 그대로 둔다(resolveGrant prior).
-    const prior = await store.getActiveGrant(id, actorOf(user));
+    //   본인 동의 행만 본다(조직 동의를 합친 것이 아니라) — 이어 가는 것은 «이 사람이 스스로 준» 선택 권한이다.
+    const prior = await store.getMemberGrant(id, actorOf(user));
     const g = resolveGrant(m, requested, prior);
     const row = await store.upsertGrant(id, actorOf(user), g.scopes, g.tools, wctx(user, ctx));
     //  #4684 — 동의를 거둬 떨어졌던 앱 폴더가, 이 사람이 붙여 둔 세션에 다시 붙는다(기다리지 않는다).
@@ -622,7 +658,8 @@ const appRevoke: Capability = {
   name: "me_app_revoke",
   title: "앱 사용 동의 철회",
   description: "이 앱에 준 내 동의를 철회한다. 이후 이 앱으로는 내 자격의 새 세션이 열리지 않는다. " +
-    "revoked=true 면 이번 호출이 살아있던 동의를 껐다는 뜻이고, false 면 애초에 없었거나 이미 꺼져 있었다. 그런 앱이 없으면 404.",
+    "revoked=true 면 이번 호출이 살아있던 동의를 껐다는 뜻이고, false 면 애초에 없었거나 이미 꺼져 있었다. 그런 앱이 없으면 404. " +
+    "관리자가 조직 동의(org_app_grant_set)를 해 둔 앱이면 내 동의를 거둬도 조직 동의가 남는다 — 그때 답에 org_granted:true 가 실린다.",
   scope: null,
   input: { app_id: z.string() },
   expose: {
@@ -645,7 +682,67 @@ const appRevoke: Capability = {
     //  성립하므로 성공이되 그 사실을 구분해 답한다.
     //  #4667 남의 나만 보는 앱도 «그런 앱이 없다» 로 — 있는지 없는지를 답으로 가르지 않는다(격리 리뷰 NB-4).
     if (!revoked) { const a = await store.getApp(id); if (!a || !canSeeApp(a, viewerOf(user))) throw new HttpError(404, `그런 앱이 없습니다: ${id}`); }
-    return { ok: true, app_id: id, revoked };
+    //  조직 동의가 있는 앱은 본인 동의를 거둬도 앱이 계속 이 사람 이름으로 돈다 — «껐다» 고 믿고 자리를 뜨지 않게 그 사실을 답에 싣는다(#2646 과 같은 까닭).
+    const still = await store.getActiveGrant(id, owner);
+    return { ok: true, app_id: id, revoked, ...(still?.org_granted ? { org_granted: true,
+      note: "이 앱은 관리자가 워크스페이스 구성원 모두를 대신해 동의해 둔 앱입니다(조직 동의) — 내 동의를 거둬도 조직 동의는 남아 앱을 계속 쓸 수 있습니다. 조직 동의는 관리자가 거둡니다(org_app_grant_set {granted:false})." } : {}) };
+  },
+};
+
+// ── 조직 동의(관리자) — 구성원 모두를 대신해 이 앱에 동의한다 ──
+//  왜: 앱이 권한을 넓힐 때마다(예: scope db · 새 도구) 그 전에 동의한 구성원 모두가 한 번씩 막히고 각자 다시 동의해야 했다(#1644 일 시작 전 거절).
+//   관리자가 설치하고 · 범위를 정하고 · 구성원에게 그 권한을 준 사내 앱에서는 그 물음에 고를 것이 없다. 관리자가 한 번 동의하면 모두에게 닿게 한다.
+//  무엇을 적나: 부른 그때의 **공개 판 선언**(필수 scope · 도구 전부 — 동의 창이 주는 것과 같다). 선택 권한(optional_scopes)은 넣지 않는다.
+//   켜 두면 앞으로 무엇이 늘든 따라가는 표지가 아니다 — 앱이 다시 넓어지면 조직 동의가 새 선언을 덮지 못하고(org_app_get 의 org_grant.covers:false),
+//   관리자(또는 관리자가 시킨 AI)가 이 도구를 한 번 더 부르면 모두가 풀린다. 구성원이 앱을 고쳐 권한을 넓혀도 관리자 승인 없이는 퍼지지 않는다.
+//  경계는 그대로다: 앱이 그 사람 이름으로 얻는 것 = (본인 동의 ∪ 조직 동의) ∩ 그 사람의 권한. 그 사람에게 없는 scope 는 조직 동의로도 생기지 않는다.
+const orgAppGrantSet: Capability = {
+  name: "org_app_grant_set",
+  title: "앱 조직 동의",
+  description: "관리자가 워크스페이스 구성원 모두를 대신해 이 앱에 동의한다(조직 동의) — 구성원은 동의 창을 보지 않고 앱을 쓴다" +
+    "(이 앱이 보이는 활성 구성원은 앱을 연 적이 없어도 동의한 사람과 같다 — 앱 선언 MCP 도구가 목록에 서고 그 앱의 앱 폴더를 읽는다). " +
+    "적히는 것은 부른 그때의 공개 판 선언(필수 scope 전부 · 도구 전부). 선택 권한(optional_scopes)은 넣지 않는다 — 필요한 사람이 me_app_grant 로 따로 준다. " +
+    "앱이 그 뒤 업데이트로 권한을 넓히면 조직 동의가 새 선언을 덮지 못하고(org_app_get 의 app.org_grant.covers:false · 앱 설치 · 저장 · 공개 답의 org_grant), " +
+    "이 도구를 한 번 더 부르면 구성원 모두가 다시 동의하지 않고 풀린다 — 앱을 업데이트한 직후 이어서 부르면 된다. " +
+    "앱이 구성원 이름으로 얻는 것은 여전히 그 구성원의 권한 안이다(없는 scope 는 생기지 않는다). granted:false 면 조직 동의를 거둔다(각자 한 동의는 그대로 남는다). " +
+    "공개 앱(visibility 'all')에만 — 앱을 「나만」 으로 되돌리면 조직 동의도 함께 거둬진다. 사람 구성원에게만 닿는다(에이전트 · 시스템 계정은 종전대로 스스로 동의한다). 관리자.",
+  scope: "admin",
+  input: {
+    app_id: z.string(),
+    granted: z.boolean().optional().describe("true(기본) = 지금 공개 판의 선언으로 조직 동의를 적는다(다시 부르면 새 선언으로 고쳐 적는다) · false = 조직 동의를 거둔다"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/org-grant"],
+      parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, granted: (req.body as Record<string, unknown>)?.granted === false ? false : undefined }) }],
+  },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const id = appId(input.app_id);
+    const who = viewerOf(user);
+    const app = await requireVisibleApp(id, who);
+    if (input.granted === false) {
+      const had = !!app.org_grant;
+      if (had) {
+        //  이미 나간 앱 토큰은 그대로 살아 있다(최대 12시간 — principal.APP_TOKEN_TTL_SEC). 도구 관문이 호출마다 동의를 다시 읽어(5초 기억) 조직 동의만으로
+        //   쓰던 사람은 곧 막히고, 본인 동의가 있는 사람은 본인이 준 도구만 남는다 — 본인 동의를 거둘 때(me_app_revoke)와 같은 방식이다. 워커는 멈추지 않는다:
+        //   stopWorkersForApp 은 각자 동의한 사람의 워커까지 멈춘다.
+        await store.setOrgGrant(id, null, wctx(user, ctx));
+        //  조직 동의만으로 붙어 있던 앱 폴더는 떨어진다(각자 동의한 사람의 것은 남는다 — 판정은 folderAppsFor).
+        resyncSessionsWithApp(id, "조직 동의 회수");
+      }
+      return { ok: true, app_id: id, org_grant: null, revoked: had };
+    }
+    //  모두를 대신하는 동의라 모두가 보는 앱에만 — 나만 보는 앱(공개 전)은 책임자 한 사람의 것이다.
+    if (app.visibility !== "all" || isEmptyDraftApp(app)) throw new HttpError(409, `앱 '${id}' 은 아직 공개되지 않았습니다 — 조직 동의는 공개 앱(visibility 'all')에만 합니다`);
+    if (!app.enabled || app.status !== "active") throw new HttpError(409, `앱 '${id}' 이 활성 상태가 아닙니다(${app.status})`);
+    const published = await publishedAppOf(app, who);
+    //  요청 없는 resolveGrant = 선언 전체(필수 scope · 도구 · 함의 도구). prior 를 주지 않아 선택 권한은 들지 않는다.
+    const g = resolveGrant(parseAppManifest(published.manifest));
+    const after = await store.setOrgGrant(id, g, wctx(user, ctx));
+    if (!after) throw new HttpError(404, `앱 없음: ${id}`);
+    //  동의가 없어 떨어져 있던 앱 폴더가 붙여 둔 세션에 붙는다(기다리지 않는다).
+    resyncSessionsWithApp(id, "조직 동의");
+    return { ok: true, app_id: id, org_grant: orgGrantStatusOf(after, published) };
   },
 };
 
@@ -717,7 +814,9 @@ const appInstall: Capability = {
       //   설치한 관리자(= 저장한 사람)가 이어서 app_server_deploy 로 올린다(그 전에는 화면만 돌고 서버 호출은 «아직 없음»).
       if (outcome.created && actor !== "unknown") await store.stampAppCreatorIfMissing(outcome.id, actor).catch((err) => logger.warn({ err, id: outcome.id }, "만든 사람 기록 실패(비치명)"));
       const app = await store.getApp(outcome.id);
-      return { app, created: outcome.created, components: outcome.components, tables: outcome.tables ?? null, worker_restart: workerRestart };
+      //  조직 동의가 있는 앱이면 이 판이 그 동의 안인가를 답에 싣는다 — 넓어졌으면 org_app_grant_set 을 이어서 부르라는 안내까지.
+      const orgGrant = await orgGrantStatus(outcome.id, viewerOf(user));
+      return { app, created: outcome.created, components: outcome.components, tables: outcome.tables ?? null, worker_restart: workerRestart, ...(orgGrant ? { org_grant: orgGrant } : {}) };
     } finally {
       await staged.cleanup();
     }
@@ -886,9 +985,12 @@ const appSave: Capability = {
       //  #4724 publish:true — 설치가 미뤄 둔 변경은 이어진 공개가 바로 적용했다(그 일을 보고서에 합치고 «미룸» 은 비운다).
       const tables = r.outcome.tables ?? null;
       if (tables && r.pub?.tables) { mergeReport(tables, r.pub.tables); tables.deferred = []; }
+      //  조직 동의가 있는 앱이면 공개 판이 그 동의 안인가를 답에 싣는다(공개 판이 바뀐 저장일 때만 달라진다).
+      const orgGrant = await orgGrantStatus(id, who);
       return {
         app, created: r.created, tables, version_no: versionNo,
         visibility: app?.visibility ?? null, state, ...(skipped.length ? { skipped } : {}),
+        ...(orgGrant ? { org_grant: orgGrant } : {}),
         ...(server ? { server } : serverNote ? { server: serverNote } : {}),
         hint: state === "me" ? `나만 보는 앱으로 저장했습니다(책임자에게만 보임) — 워크스페이스 모두가 쓰게 하려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
           : state === "draft" ? `초안으로 저장했습니다 — ${versionNo}판은 저장한 사람에게만 보이고 다른 구성원은 공개 판을 계속 씁니다. 모두에게 내보내려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
@@ -1249,7 +1351,8 @@ const appVisibilitySet: Capability = {
       //  #4484 서버 앱 — 공개 판의 서버 빌드를 함수의 pub · cur 로(설치 락 밖에서 · 실패해도 공개는 됐다).
       const server = out.changed ? await serverAfterPublish(id) : null;
       //  tables — 공개하며 적용한 표 변경(초안이 미뤄 둔 칸 지우기 · 이름 · 형 바꾸기 · 조이기 — 지운 칸의 값은 dropped_columns.archived_as 에 보관).
-      return { ok: true, app_id: id, visibility: app?.visibility ?? "all", version_no: out.version_no, changed: out.changed, published_at: app?.published_at ?? null, tables: out.tables ?? null, ...(server ? { server } : {}) };
+      const orgGrant = await orgGrantStatus(id, who);   // 조직 동의가 있는 앱이면 새 공개 판이 그 동의 안인가
+      return { ok: true, app_id: id, visibility: app?.visibility ?? "all", version_no: out.version_no, changed: out.changed, published_at: app?.published_at ?? null, tables: out.tables ?? null, ...(server ? { server } : {}), ...(orgGrant ? { org_grant: orgGrant } : {}) };
     }
     const changed = await store.withAppInstallLock(id, async () => {
       const app = await requireVisibleApp(id, who);
@@ -1263,6 +1366,8 @@ const appVisibilitySet: Capability = {
         throw new HttpError(409, `「${app.title || id}」 에 ${app.draft_by === who.userId ? "내" : `${app.draft_by} 님의`} 초안이 걸려 있어 「나만」 으로 바꿀 수 없습니다 — 초안을 공개하거나, 판 목록에서 공개 판(${app.published_version_no ?? "?"}판)으로 되돌린 뒤 바꾸세요`);
       }
       await store.markAppPrivate(id, wctx(user, ctx));
+      //  조직 동의는 모두가 보는 앱에 한 것이다 — 「나만」 으로 되돌리면 함께 거둔다. 남겨 두면 다시 공개하는 순간 관리자가 모르는 사이에 예전 동의가 되살아난다(격리 리뷰).
+      if (app.org_grant) await store.setOrgGrant(id, null, wctx(user, ctx));
       return true;
     });
     //  붙여 둔 다른 사람들의 앱 칸이 곧바로 다시 읽게 — 그 사람들에겐 이제 없는 앱이다(격리 리뷰 2-5).
@@ -1776,6 +1881,6 @@ const appFolderOrphansArchive: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appSpec, appRevert,
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, orgAppGrantSet, appInstall, appSave, appPull, appVersions, appSpec, appRevert,
   appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore,
   appArchivesList, appArchiveClear, appFolderArchivesList, appFolderArchiveClear, appFolderRestore, appFolderOrphansArchive];
