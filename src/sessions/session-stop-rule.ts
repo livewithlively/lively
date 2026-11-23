@@ -97,7 +97,7 @@ export type KeepWhy =
 export type HoldWhy =
   | "jobs" | "jobs-unknown" | "turn-now" | "answered" | "asking-now" | "viewing-now" | "capped" | "failed" | "busy-sweep"
   | "limit-wait" | "limit-unknown"
-  | "reminded" | "remind-wait" | "remind-failed" | "remind-off";
+  | "reminded" | "remind-wait" | "remind-failed" | "remind-off" | "remind-screen";
 /** stop 의 `net` = #5043 상태 모름 안전망이 끈다(StopMinutes.unknownMin) — 그 밖의 끄기에는 이 칸이 아예 없다. */
 export type StopVerdict =
   | { act: "keep"; why: KeepWhy; state?: StopState; dueAt?: number }
@@ -531,6 +531,18 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       if (reminded.length >= MAX_REMINDS_PER_SWEEP) { count("capped"); noteOldest("capped", s.id, nowSec - since); capped = true; return; }
       const v = d.view(s.id);
       if (v.viewing || v.unknown) { count("viewing-now"); noteOldest("viewing-now", s.id, nowSec - since); return; }
+      //  화면을 먼저 본다 — 입력칸에 쓰다 만 글이 있으면 확인 글이 그 뒤에 붙어 **사람의 글과 한 메시지로 나간다**(2026-11-23 실측: 14일 쉰
+      //   세션의 입력칸에 쓰다 만 글이 있었다). 도는 턴 · 떠 있는 질문도 같다. 그런 세션은 건드리지 않고 남긴다 — 화면을 못 읽어도 보내지 않는다.
+      try {
+        const cap = captureOf(await d.capture(s.id));
+        const blocked = screenRunning(cap, harnessIo(s.harness)?.run ?? null) || screenAsks(cap) || !!clampDraft(draftFromScreen(s.harness, cap));
+        if (blocked) { count("remind-screen"); noteOldest("remind-screen", s.id, nowSec - since); remindHold.set(holdKey(s.id), nowMs + REMIND_RETRY_MIN_MS); return; }
+      } catch (e) {
+        count("remind-failed"); noteOldest("remind-failed", s.id, nowSec - since);
+        remindHold.set(holdKey(s.id), nowMs + REMIND_RETRY_MIN_MS);
+        logger.warn({ err: e, id: s.id, why, ...(d.logCtx ?? {}) }, "하네스 종료 규칙: 확인 글 보내기 전 화면을 못 읽었다(보내지 않는다)");
+        return;
+      }
       remindHold.set(holdKey(s.id), nowMs + remindWaitMs);
       try {
         await d.remind(s.id, STALE_REMINDER_TEXT, why);

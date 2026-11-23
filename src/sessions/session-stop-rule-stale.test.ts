@@ -9,6 +9,7 @@
 //   🔴 확인 글을 매 판(1분) 다시 보내면 — 세션마다 모델 턴이 끝없이 돈다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   stopVerdict, sweepSessionStopRule, resetStopRule, MAX_REMINDS_PER_SWEEP, REMIND_RETRY_MIN_MS, STALE_REMINDER_TEXT,
   type StopFacts, type StopRuleDeps,
@@ -202,7 +203,31 @@ test("T10 매니지드 판(staleMin 없음)은 백그라운드 세션을 끄지�
   assert.deepEqual([spy.reaped, spy.reminded], [[], []]);
   assert.equal(r.kept.background, 1);
 });
+test("T12 입력칸에 쓰다 만 글 · 떠 있는 질문 · 도는 턴이 있으면 확인 글을 보내지 않는다 — 그 글이 사람의 글과 한 메시지로 나간다", async () => {
+  const DRAFT = ["────────────────", "❯ 그거 md. 눌렀는데", "────────────────", "  ? for shortcuts"].join("\n");
+  for (const noConvIds of [[], ["box-a-1"]]) {
+    resetStopRule();
+    const { d, spy } = deps([row("box-a-1", noConvIds.length ? { lastReport: undefined } : {})], { jobs: ["box-a-1"], noConv: noConvIds, capture: async () => DRAFT });
+    const r = await sweepSessionStopRule(d);
+    assert.deepEqual(spy.reminded, [], "쓰다 만 글이 있으면 안 보낸다");
+    assert.equal(r.kept["remind-screen"], 1);
+  }
+});
+test("T13 화면을 못 읽으면 보내지 않는다(모르면 안 건드린다)", async () => {
+  const { d, spy } = deps([row("box-a-1")], { jobs: ["box-a-1"], capture: async () => { throw new Error("그 컴퓨터가 응답하지 않는다"); } });
+  const r = await sweepSessionStopRule(d);
+  assert.deepEqual(spy.reminded, []);
+  assert.equal(r.kept["remind-failed"], 1);
+});
 test("T11 확인 글은 새 일을 시키지 않는다 — 확인 · 끄기 · 한 줄 답만 요청한다", () => {
   assert.match(STALE_REMINDER_TEXT, /새 작업을 시작하지 말고/);
   assert.match(STALE_REMINDER_TEXT, /한 줄로 답/);
+});
+
+// ── W. 원격 PC 판의 배선 ─────────────────────────────────────────────────────────────────────────
+test("W1 원격 PC 판은 확인 글을 그 컴퓨터로 릴레이한다 — 아웃박스에 넣지 않는다(첫 판이 넣어서 글이 닿지 않고 행만 쌓였다)", () => {
+  const src = readFileSync("src/sessions/node-stop-rule.ts", "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.match(src, /deliverPrompt\(id, text, \{ owner, nodeId \}\)/);
+  assert.doesNotMatch(src, /enqueuePrompt/);
+  assert.match(src, /await stillAlone\(id\);\s*await d\.remind\(nodeId, id, owner, text\)/, "보내기 직전에 그 PC 터미널에 붙은 사람을 다시 본다");
 });
