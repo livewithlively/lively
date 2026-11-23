@@ -175,8 +175,8 @@ export interface AiRunDeps {
    */
   appServerUnattended(user: Pick<LivelyUser, "appCallId" | "appJobId">): Promise<boolean>;
   /**
-   * #1782 이 앱 서버 호출이 사람이 시키지 않은 작업(슬랙 다리의 run_as)에서 왔나 — 백그라운드 작업의 돌기 신원이면 그 행의 표시(apps/app-jobs-store.appJobAutomation).
-   *  참이면 구독(공용 시트 포함)을 거절한다(plan.AUTOMATION_REFUSAL). 없는 자리(시험의 옛 가짜)는 아니다로 본다.
+   * #1782 이 앱 서버 호출이 사람이 시키지 않은 작업(슬랙 다리의 run_as · 앱 v2 #121 앱 정기 작업)에서 왔나 — 백그라운드 작업의 돌기 신원이면 그 행의 표시(apps/app-jobs-store.appJobAutomation).
+   *  참이면 개인 구독을 거절한다(plan.AUTOMATION_REFUSAL — 공용 시트는 받는다 · 상민 2026-11-22). 없는 자리(시험의 옛 가짜)는 아니다로 본다.
    */
   appServerAutomation?(user: Pick<LivelyUser, "appCallId" | "appJobId">): Promise<boolean>;
   /**

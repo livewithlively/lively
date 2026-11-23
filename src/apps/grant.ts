@@ -48,27 +48,52 @@ export function scopeNeedsRegrant(grantScopes: readonly string[], declaredScopes
  *  (web/v2/app-session ensureAppGrant 가 빈 본문으로 POST /apps/:id/grant).
  *  저장된 매니페스트를 이 코어가 못 읽으면 null — 다시 동의(me_app_grant)도 같은 파서로 막히니 «다시 동의» 로 보내지 않는다(끝없이 도는 안내를 막는다).
  */
-export function grantableOf(manifest: unknown): ResolvedGrant | null {
+export function grantableOf(manifest: unknown): DeclaredGrant | null {
   let m: LivelyAppManifest;
   try { m = parseAppManifest(manifest); } catch { return null; }
-  return resolveGrant(m);
+  const optional = m.permissions.optional_scopes ?? [];
+  return { ...resolveGrant(m), ...(optional.length ? { optional_scopes: [...optional] } : {}) };
 }
+
+/**
+ * 동의 판정이 견줄 앱 선언(grantableOf) — 동의 창이 주는 것(필수 scope · 도구 전부) + 선택 scope(앱 v2 #124 permissions.optional_scopes).
+ *  선택 scope 는 동의 창이 주지 않고 필요한 사람만 따로 받으므로, 받지 않아도 빈칸이 아니다(grantGap).
+ */
+export interface DeclaredGrant extends ResolvedGrant { optional_scopes?: string[] }
 
 /** 동의가 앱의 지금 선언을 덮지 못한 것(#1644) — 다시 동의하면 얻는 scope · 도구. */
 export interface GrantGap { scopes: string[]; tools: string[] }
+
+//  도구 이름 → 그 도구(라이블리 능력)가 요구하는 scope(앱 v2 #124). 능력 등록부(capabilities/index.ts)가 부팅 때 넣는다 — 이 모듈은 순수 잎이라
+//   등록부를 import 하지 않는다(순환). 넣기 전 · 등록부에 없는 이름(앱 선언 도구 · 외부 도구 · 글롭)은 null(종전대로 센다).
+let toolScopeOf: (name: string) => string | null = () => null;
+export function setToolScopeResolver(fn: (name: string) => string | null): void { toolScopeOf = fn; }
 
 /**
  * 동의가 앱의 지금 선언(grantableOf)을 다 덮나 — 덮지 못한 scope · 도구(둘 다 비면 덮는다 · grantGapEmpty).
  *  · 도구: 선언한 이름(글롭 포함)마다 동의 목록이 그 이름을 덮나(toolAllowed — 같은 글롭 · 더 넓은 글롭도 덮는다).
  *  · scope: memberScopes 를 주면 그 사람이 가진 것만 센다(scopeNeedsRegrant 와 같은 까닭 — 구성원에게 없는 scope 는 다시 동의해도 못 얻는다).
  *    그 사람이 나중에 그 권한을 받으면 그때 «다시 동의» 가 된다.
+ *  · 도구도 같은 까닭으로(앱 v2 #124): memberScopes 를 주면, 그 도구가 요구하는 scope 를 그 사람이 갖지 않은 도구는 세지 않는다 — 다시 동의해도
+ *    앱이 그 사람 이름으로 그 도구를 못 부른다(능력 관문 requireCapScope 가 그 사람의 scope 로 막는다). 이게 없으면 앱이 소수만 쓰는 도구
+ *    (예: code scope 의 레포 판 읽기 — 관리자 이름으로 도는 정기 작업만 쓴다)를 더할 때 그 권한이 없는 구성원 모두가 쓰지도 못할 도구 때문에
+ *    다시 동의해야 하고, 그동안 앱의 다른 일까지 막힌다(#1644 — 일 시작 전 거절).
  *  동의 창은 선언 전체로 동의하므로, 이게 비지 않는 것은 «앱이 동의한 뒤에 넓어졌다» 이거나 «사람이 API 로 일부만 동의했다» 둘 중 하나다.
  */
-export function grantGap(grant: { scopes: readonly string[]; tools: readonly string[] }, declared: ResolvedGrant, memberScopes?: readonly string[]): GrantGap {
+export function grantGap(grant: { scopes: readonly string[]; tools: readonly string[] }, declared: DeclaredGrant, memberScopes?: readonly string[]): GrantGap {
   const held = memberScopes ? new Set(memberScopes) : null;
+  const optional = new Set(declared.optional_scopes ?? []);
+  const unusable = (tool: string): boolean => {
+    const need = toolScopeOf(tool);
+    if (need == null) return false;
+    if (held && !held.has(need)) return true;
+    //  앱 v2 #124 선택 권한 — 그 도구가 기대는 scope 가 앱의 선택 권한이고 이 사람이 주지 않았으면, 다시 동의해도 앱이 그 사람 이름으로 못 부른다
+    //   (동의 창은 선택 권한을 주지 않는다). 그 사람이 선택 권한을 준 뒤에는 다시 센다.
+    return optional.has(need) && !grant.scopes.includes(need);
+  };
   return {
     scopes: declared.scopes.filter((s) => !grant.scopes.includes(s) && (!held || held.has(s))),
-    tools: declared.tools.filter((t) => !toolAllowed(grant.tools, t)),
+    tools: declared.tools.filter((t) => !toolAllowed(grant.tools, t) && !unusable(t)),
   };
 }
 
@@ -77,8 +102,14 @@ export function grantGapEmpty(g: GrantGap): boolean {
 }
 
 /** 두 선언 모두에 있는 것만(a 의 이름 순서) — 도구는 b 가 그 이름을 덮나(toolAllowed)로 본다. «다시 동의로 얻을 수 있는 것» 으로 좁힐 때 쓴다. */
-export function intersectGrantable(a: ResolvedGrant, b: ResolvedGrant): ResolvedGrant {
-  return { scopes: a.scopes.filter((s) => b.scopes.includes(s)), tools: a.tools.filter((t) => toolAllowed(b.tools, t)) };
+export function intersectGrantable(a: DeclaredGrant, b: DeclaredGrant): DeclaredGrant {
+  //  선택 scope 는 어느 한쪽에서라도 선택이면 선택으로 본다 — 받지 않아도 되는 것을 «다시 동의» 로 요구하지 않는 쪽(빈칸을 덜 내는 쪽)이다.
+  const optional = [...new Set([...(a.optional_scopes ?? []), ...(b.optional_scopes ?? [])])];
+  return {
+    scopes: a.scopes.filter((s) => b.scopes.includes(s)),
+    tools: a.tools.filter((t) => toolAllowed(b.tools, t)),
+    ...(optional.length ? { optional_scopes: optional } : {}),
+  };
 }
 
 /** 덮지 못한 것을 한 줄로 — «scope db · 도구 db_query, app_ai_run 외 2개». 비면 빈 글. 앱 도구 오류 · 거절 글에 싣는다(사람 · AI 가 읽는다). */
@@ -98,6 +129,36 @@ export function regrantMessage(appId: string, what: string): string {
 export const regrantToolPhrase = (name: string): string => `'${name}' 을`;
 export const regrantScopePhrase = (scope: string): string => `'${scope}' 권한을`;
 
+/** 받지 않은 선택 권한으로 막힌 거절의 표지(body.code) — 다시 동의(consent_required)와 가른다. */
+export const OPTIONAL_SCOPE_REQUIRED = "optional_scope_required";
+
+/**
+ * 앱 v2 #124 — 선택 권한을 그 사람이 주지 않아 막혔다는 글. «동의» · «grant» 낱말을 쓰지 않는다: 웹 호스트(web/v2/app-ui.ts /동의|grant/)가
+ *  그 낱말을 보고 그 자리에서 동의 창을 띄우는데, 동의 창은 선택 권한을 주지 않아 다시 해도 풀리지 않는다(#1644 — 풀리지 않는 안내를 내지 않는다).
+ */
+export function optionalScopeMessage(appId: string, scope: string, tool?: string): string {
+  //  앱 id · 도구 이름 자체에 그 낱말이 들 수 있다(예: 앱 grants-tracker · 도구 me_app_grant) — 걸리는 이름만 빼고 쓴다(scope 이름에는 들지 않는다).
+  const clean = (s: string): boolean => !CONSENT_DIALOG_WORDS.test(s);
+  const app = clean(appId) ? `앱 '${appId}' 의` : "이 앱의";
+  const what = !tool ? "그 권한이 드는 일을 할" : clean(tool) ? `'${tool}' 을 쓸` : "그 도구를 쓸";
+  return `${app} 선택 권한 '${scope}' 을 이 사람이 주지 않아 ${what} 수 없습니다 — 선택 권한은 필요한 사람만 optional_scopes 로 따로 줍니다`;
+}
+/** 웹 호스트가 거절 글에서 «그 자리에서 동의 창» 을 띄우는 낱말(web/v2/app-ui.ts 와 같은 식). */
+const CONSENT_DIALOG_WORDS = /동의|grant/i;
+
+/**
+ * 막힌 까닭이 «그 사람이 주지 않은 선택 권한» 인가 — 그렇다면 그 scope, 아니면 null. 도구면 그 도구가 기대는 scope(능력 등록부)로 본다.
+ *  그 사람(구성원)에게 없는 scope 는 null — 주어도 앱이 그 사람 이름으로 못 얻는다(종전 «권한 밖»). 이미 준 scope 도 null.
+ */
+export function optionalScopeMissing(
+  grantScopes: readonly string[], declared: DeclaredGrant, memberScopes: readonly string[], need: { tool: string } | { scope: string },
+): string | null {
+  const scope = "tool" in need ? toolScopeOf(need.tool) : need.scope;
+  if (!scope || !(declared.optional_scopes ?? []).includes(scope)) return null;
+  if (grantScopes.includes(scope) || !memberScopes.includes(scope)) return null;
+  return scope;
+}
+
 export interface ResolvedGrant { scopes: string[]; tools: string[] }
 
 /**
@@ -110,15 +171,33 @@ export interface ResolvedGrant { scopes: string[]; tools: string[] }
  */
 export function resolveGrant(
   m: LivelyAppManifest,
-  requested?: { scopes?: string[]; tools?: string[] },
+  requested?: { scopes?: string[]; tools?: string[]; optional_scopes?: string[] },
+  prior?: { scopes: readonly string[] } | null,
 ): ResolvedGrant {
   const maniScopes = m.permissions.scopes;
+  const optional = m.permissions.optional_scopes ?? [];
   const maniTools = [...m.permissions.tools, ...m.permissions.ext_tools];
 
-  if (!requested) return { scopes: [...maniScopes], tools: [...maniTools] };
+  //  앱 v2 #124 선택 권한 — optional_scopes 를 주면 그것만(선언한 선택 scope 안 · [] 면 하나도). 주지 않았으면:
+  //   · 범위 없는 동의(동의 창 · me_app_grant {app_id}) — 이 사람이 이미 준 것(prior = 지금 살아 있는 동의) 가운데 이 판에서도 선택으로
+  //     선언된 것을 그대로 둔다. 앱이 갱신돼 동의 창으로 다시 동의해도 정기 작업을 도는 사람의 선택 권한이 조용히 빠지지 않게.
+  //   · 범위를 정해 준 동의(scopes · tools) — 정해 준 그대로다. 선택 권한은 옮기지 않는다(좁히려는 동의에 권한을 몰래 더하지 않는다).
+  const ranged = !!requested && (requested.scopes !== undefined || requested.tools !== undefined);
+  const extra = requested?.optional_scopes !== undefined
+    ? requested.optional_scopes
+    : ranged ? [] : (prior?.scopes ?? []).filter((s) => optional.includes(s));
+  for (const s of extra) {
+    if (!optional.includes(s)) throw new HttpError(400, `grant 오류: '${s}' 는 앱이 선언한 선택 권한(${optional.join(",") || "없음"})이 아닙니다`);
+  }
+  const withOptional = (scopes: readonly string[]): string[] => [...new Set([...scopes, ...extra])];
+
+  if (!ranged || !requested) {
+    return { scopes: withOptional(maniScopes), tools: [...maniTools] };
+  }
 
   const scopes = requested.scopes ?? maniScopes;
   for (const s of scopes) {
+    if (optional.includes(s)) throw new HttpError(400, `grant 오류: scope '${s}' 는 앱의 선택 권한입니다 — optional_scopes 로 줍니다`);
     if (!maniScopes.includes(s)) throw new HttpError(400, `grant 오류: scope '${s}' 는 앱 선언(${maniScopes.join(",") || "없음"}) 밖입니다`);
   }
   const tools = requested.tools ?? maniTools;
@@ -130,5 +209,5 @@ export function resolveGrant(
       throw new HttpError(400, `grant 오류: tool '${t}' 는 앱 선언 밖입니다`);
     }
   }
-  return { scopes: [...scopes], tools: [...tools] };
+  return { scopes: withOptional(scopes), tools: [...tools] };
 }
