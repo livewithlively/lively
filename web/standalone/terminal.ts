@@ -17,7 +17,8 @@ import {                                  // #4406 Claude Code 입력칸 선택 
 } from './app-select.js';
 import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
 import { UploadBook, fmtBytes, upPercent, upStatusText } from './upload-queue.js';   // #5361 올리기 진행 표시 — 같은 파일·이름 예약(순수 판정)
-import { uiPaneLink } from './ui-link.js';   // #5583 우리 화면의 자료 링크(#/f · #/k/)는 새 탭이 아니라 곁칸에서(정본 web/lib/ui-link.ts 의 사본)
+import { uiPaneLink } from './ui-link.js';
+import { pathMatches as pathMatchesPure, pathLinkTarget, isPathLink, knowledgeCandidates, knowledgeMatches } from './path-link.js';   // #5650 경로·지식 이름 판정 — 대화 화면(web/lib/path-link.ts 사본)과 한 규칙   // #5583 우리 화면의 자료 링크(#/f · #/k/)는 새 탭이 아니라 곁칸에서(정본 web/lib/ui-link.ts 의 사본)
 import type { UpJob } from './upload-queue.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
@@ -55,125 +56,18 @@ export function urlAtColumn(lineText: string, col: number): string | null {
   return m ? m.url : null;
 }
 
-// (순수 — 테스트 대상) 글 속 **파일 경로** — AI 가 파일을 만들고 «여기 저장했어요» 하고 찍어 준 자리(#4562 원준님
-//  «정리해서 경로 알려주잖아. 그거 클릭하면 링크 클릭하듯이 … 곁칸에서 자료랑 그거 보는 뷰어 바로»).
-//  두 형태만 링크로 본다 — 눌렀을 때 **열 수 있는 것만** 밑줄을 긋는다(열리지 않는 밑줄은 고장으로 읽힌다):
-//   ① 프로젝트 자료 — `project/<번호>/` 마디가 있는 경로. 절대(`/work/shared/project/12/a.md` · 노드 `/Users/…/project/12/a.md`)
-//      · `~/…` · 공유 루트 기준(`project/12/a.md`). 셸이 같은 프로젝트면 곁칸 뷰어로 연다.
-//   ② 세션 폴더 기준 상대 경로 — `docs/a.md` · `./a.md`. 셸이 세션 파일 API 로 연다(그 API 의 기준이 세션 폴더다).
-//  경로는 **확장자로 끝나야** 한다(`.md` · `.hwp` …, 글자가 하나는 섞인 것) — 한국어 조사가 붙어도(`a.md에`) 확장자에서 끊고,
-//   `1/2.5` 같은 숫자는 안 잡는다.
-//  ★ 이름에 **빈칸**이 든 경로(원준님 10-05 «파일 경로 클릭해도 안되는데?» — `데모데이 발표덱/원준수정/…_B.html` 이 빈칸 뒤
-//   `발표덱/…` 만 링크가 되어 «파일을 읽지 못했어요»). 이 조직의 폴더 이름엔 빈칸이 흔하다. 두 갈래로 잇는다:
-//   · 절대·프로젝트 경로(`/…` · `~/…` · `./…` · `project/<번호>/…`)는 시작이 분명하다 — 빈칸 **한 칸**을 건너 뒤 낱말을 붙여 가다가
-//     처음으로 확장자에서 끝나는 자리에서 멈춘다(최대 5낱말). 밑줄도 경로 전체에 그어진다.
-//   · 상대 경로는 시작을 글만으로 모른다(`파일은 docs/a.md` 와 `데모데이 발표덱/a.md` 가 같은 꼴) — 앞 낱말을 붙인 후보(alts,
-//     긴 것 먼저)를 함께 실어 보내고, **셸이 실제로 있는 것**을 고른다(셸 pathExists).
-//  절대 경로인데 `project/<번호>/` 가 없으면 잡지 않는다 — 게이트웨이가 그 자리를 열 길이 없다.
-//  url 은 **화면에 찍힌 경로 그대로**다(넓은 글자 자리표만 뺀다) — [링크 복사]가 그 경로를 복사하고, 여는 쪽이 판정한다.
+// 글 속 파일 경로(#4562) — 판정은 path-link.ts(대화 화면과 같은 규칙). 여기선 후보(alts)를 여는 쪽이 찾게 기억만 더한다.
 export function pathMatches(text: string): { start: number; end: number; url: string; alts?: string[] }[] {
-  //  덩어리는 **끊기지 않는 글자 줄 전체**다. 괄호는 경로 글자로 치지 않는다 — Claude Code 의 도구 머리 `Write(/…/a.md)` 에서
-  //   `Write(` 를 경로에 붙이지 않게(그래서 `a(1).md` 같은 이름은 괄호에서 끊긴다).
-  const re = /[^\s"'`<>|()[\]{}\u3000\u0001]+/g;
-  const toks: { s: string; at: number }[] = [];
-  for (let m = re.exec(text); m; m = re.exec(text)) toks.push({ s: m[0], at: m.index });
-  //  경로 속 빈칸은 **한 칸**이다 — 두 칸·탭·줄바꿈을 건너 잇지 않는다.
-  const oneSpace = (a: { s: string; at: number }, b: { at: number }): boolean => text[a.at + a.s.length] === ' ' && b.at === a.at + a.s.length + 1;
-  //  확장자 뒤에서 끊는다 — 가장 뒤의 «.확장자»(글자로 시작) 중 뒤에 영숫자가 안 붙는 것(`a.md)` · `a.md에` · `a.md**` → `a.md`).
-  //   그 자리까지가 열 수 있는 경로면 화면 글(넓은 글자 자리표 포함)을 돌려준다.
-  const fileAt = (chunk: string): string | null => {
-    const cut = /^(.*\.[A-Za-z][A-Za-z0-9]{0,9})(?![A-Za-z0-9_])/.exec(chunk);
-    return cut && pathLinkTarget(cut[1].replace(/\u0000/g, '')) ? cut[1] : null;
-  };
-  const clean = (raw: string): string => raw.replace(/\u0000/g, '');
-  const out: { start: number; end: number; url: string; alts?: string[] }[] = [];
-  for (let i = 0; i < toks.length; i++) {
-    let chunk = toks[i].s, at = toks[i].at;
-    //  URL 이 든 덩어리는 URL 의 몫이다 — `url=https://…/a.html` · `→https://…` 처럼 앞에 글자가 붙어도(리뷰 지적: 종전엔 경로가
-    //   먼저 시작해 URL 을 밀어냈다).
-    if (chunk.includes('://')) continue;
-    //  `src/a.ts:12:5` 의 줄·칸 꼬리는 먼저 뗀다 — 코드를 짚는 가장 흔한 꼴이고, 안 떼면 아래 `:` 가르기가 `5` 만 남긴다(리뷰 지적).
-    chunk = chunk.replace(/(?::\d+){1,2}:?$/, '');
-    //  `path=/…` · `저장:/…` · `--out=docs/a.md` — 마지막 `=`·`:` 뒤가 경로다.
-    const eq = Math.max(chunk.lastIndexOf('='), chunk.lastIndexOf(':'));
-    if (eq >= 0) { at += eq + 1; chunk = chunk.slice(eq + 1); }
-    //  꾸밈 글자(`**/…**` · `→/…` · `- `)를 앞에서 뗀다. 셸 변수(`$HOME/…`)는 열 자리를 모르니 버린다.
-    const lead = /^[^A-Za-z0-9_~./\u3131-\u318E\uAC00-\uD7A3\u4E00-\u9FFF]*/.exec(chunk)![0];
-    if (lead.includes('$')) continue;
-    at += lead.length; chunk = chunk.slice(lead.length);
-    const trimmed = at !== toks[i].at;
-    const one = fileAt(chunk);
-    if (one) {
-      const p = clean(one);
-      //  상대 경로면 앞 낱말을 붙인 후보 — 앞에서 아무것도 안 뗀 덩어리일 때만(`path=docs/a.md` 의 앞은 이름표다).
-      const alts: string[] = [];
-      if (!trimmed && pathLinkTarget(p)?.kind === 'session') {
-        let lead2 = '';
-        for (let k = i - 1; k >= 0 && k >= i - 3; k--) {
-          const w = toks[k].s;
-          if (!oneSpace(toks[k], toks[k + 1]) || w.includes('/') || /[:=]$/.test(w) || !/[A-Za-z0-9\u3131-\u318E\uAC00-\uD7A3]/.test(w)) break;   // 목록 표지(`-`·`•`·`├──`)는 이름이 아니다
-          lead2 = clean(w) + ' ' + lead2;
-          const cand = lead2 + p;
-          if (pathLinkTarget(cand)) alts.unshift(cand);
-        }
-      }
-      out.push(alts.length ? { start: at, end: at + one.length, url: p, alts } : { start: at, end: at + one.length, url: p });
-      continue;
-    }
-    //  시작이 분명한 경로만 빈칸 너머로 잇는다.
-    if (!/^(?:\/|~\/|\.\/|project\/\d+\/)/.test(chunk) || /[.,!?;:]$/.test(chunk)) continue;   // 문장부호로 끝난 경로는 거기서 끝났다
-    //  산문을 경로로 삼키지 않게(리뷰 지적: `/…/out then open a.md` 가 한 링크가 됐다) — 이은 끝 낱말에 `/` 가 있거나(빈칸 든
-    //   폴더: `데모데이 발표덱/원준수정/x.html`), 딱 두 낱말일 때(빈칸 하나 든 파일 이름: `사업 계획서.hwp`)만 잇는다. 문장부호로
-    //   끝난 낱말·새 경로의 시작(`project/<번호>/` · `./` · `~/` · `/`)에서 멈춘다.
-    let joined = chunk;
-    for (let j = i + 1; j < toks.length && j <= i + 5; j++) {
-      const w = toks[j].s;
-      if (!oneSpace(toks[j - 1], toks[j]) || w.includes('://') || /^(?:\/|~\/|\.\/|project\/\d+\/)/.test(w)) break;
-      joined += ' ' + w;
-      const hit = fileAt(joined);
-      if (hit) {
-        if (j === i + 1 || w.includes('/')) { out.push({ start: at, end: at + hit.length, url: clean(hit) }); i = j; }
-        break;
-      }
-      if (/[.,!?;:]$/.test(w)) break;
-    }
-  }
+  const out = pathMatchesPure(text);
   //  여는 쪽(openPathFromTerminal)이 후보를 찾을 수 있게 적어 둔다 — 클릭·우클릭·호버는 모두 이 함수를 지난 직후에 연다.
   for (const m of out) if (m.alts) rememberPathAlts(m.url, m.alts); else pathAltsMemo.delete(m.url);   // 낡은 후보를 남기지 않는다
   return out;
 }
+export { pathLinkTarget, isPathLink, knowledgeCandidates, knowledgeMatches };
 const pathAltsMemo = new Map<string, string[]>();
 function rememberPathAlts(p: string, alts: string[]): void {
   if (pathAltsMemo.size > 64) pathAltsMemo.clear();
   pathAltsMemo.set(p, alts);
-}
-
-// (순수 — 테스트 대상) 경로 → 어디서 열까. 프로젝트 자료면 그 번호와 프로젝트 폴더 기준 경로, 세션 폴더 기준이면 그 경로. 못 열면 null.
-//  ⚠ 상대 경로의 `src/project/12/x.ts` 는 프로젝트 12 가 아니다(레포 안의 폴더 이름) — 상대 경로는 **맨 앞**이 `project/<번호>/` 일 때만.
-export function pathLinkTarget(p: string): { kind: 'project'; id: number; rel: string } | { kind: 'session'; rel: string } | null {
-  const s = String(p || '').replace(/\\/g, '/');
-  if (!s || /^[a-z][a-z0-9+.-]*:/i.test(s)) return null;   // 스킴이 붙은 것(URL·윈도우 드라이브)은 경로 링크가 아니다
-  if (!/\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(s)) return null;  // 파일만 — 확장자(글자로 시작)로 끝나야 한다
-  const abs = s.startsWith('/') || s.startsWith('~/');
-  const m = abs ? /^.*?\/project\/(\d+)\/(.+)$/.exec(s) : /^(?:\.\/)?project\/(\d+)\/(.+)$/.exec(s);
-  const safe = (r: string): boolean => !!r && !r.split('/').some((x) => x === '' || x === '..' || x === '.');
-  if (m) {
-    const id = Number(m[1]);
-    return id > 0 && safe(m[2]) ? { kind: 'project', id, rel: m[2] } : null;
-  }
-  if (abs) return null;
-  const rel = s.replace(/^\.\//, '');
-  //  `./` 없는 상대 경로는 `/` 가 하나는 있어야 한다 — 글 속 `package.json` 같은 낱말마다 밑줄이 그어지지 않게.
-  if (!s.startsWith('./') && !rel.includes('/')) return null;
-  //  상대 경로는 열어 보기 전엔 있는지 모르는 짐작이다 — 확장자를 더 좁힌다(소문자 2자 이상): `yes/no.Then` · `e.g./i.e.` ·
-  //   `TCP/IP.Next` 를 링크로 읽지 않게. 프로젝트 경로는 `project/<번호>/` 가 이미 증거라 대문자 확장자(.HWP)도 받는다.
-  if (!/\.[a-z][a-z0-9]{1,9}$/.test(rel)) return null;
-  return safe(rel) ? { kind: 'session', rel } : null;
-}
-
-// 경로 링크인가 — URL 은 늘 스킴이 붙어 온다(urlMatches 가 https:// 를 붙인다). 스킴 없는 것은 pathMatches 가 낸 경로다.
-export function isPathLink(link: string): boolean {
-  return !!link && !/^[a-z][a-z0-9+.-]*:/i.test(link);
 }
 
 // (순수 — 테스트 대상) 한 글 속 링크 전부 — URL 과 경로를 함께, 겹치면 **먼저 시작한 것**(같으면 URL)이 이긴다.
@@ -195,36 +89,6 @@ export function linkMatches(text: string): { start: number; end: number; url: st
 //   (`GET /api/ui/knowledge/<이름>?limit=1` — 없거나 못 보는 지식은 404), 답을 기억해 두고, 클릭·우클릭은 그 기억만 본다.
 //  후보 꼴: 하이픈으로 이은 마디 셋 이상(소문자·숫자·한글), 8자 이상. 경로·URL 속(`/`·`.` 에 붙은 것)은 아니다.
 //   한글 조사가 붙은 이름(`…-4562에`)은 조사를 뗀 꼴도 함께 묻는다.
-const KN_CH = 'a-z0-9\\u0000\\u3131-\\u318E\\uAC00-\\uD7A3';   // \0 = 넓은 글자(한글)의 뒤 칸 자리표(칸 정렬 글)
-export function knowledgeCandidates(text: string): { start: number; names: { name: string; end: number }[] }[] {
-  //  첫 글자는 자리표(\0)가 아니다 — 이모지(넓은 글자) 바로 뒤의 이름이 그 뒤 칸부터 밑줄을 긋지 않게(리뷰 지적).
-  const re = new RegExp(`(?<![A-Za-z0-9_/.\\-\\u3131-\\u318E\\uAC00-\\uD7A3])[a-z0-9\\u3131-\\u318E\\uAC00-\\uD7A3][${KN_CH}]*(?:-[${KN_CH}]+){2,}(?![A-Za-z0-9_/\\-]|\\.[A-Za-z0-9])`, 'g');
-  const out: { start: number; names: { name: string; end: number }[] }[] = [];
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    const raw = m[0], full = raw.replace(/\u0000/g, '');
-    if (full.length < 8 || full.length > 64) continue;
-    //  묻기 전에 거른다(묻는 값이 서버 왕복이다) — UUID · 날짜·번호 줄(`2026-10-05-00`)처럼 글자 든 마디가 둘 못 되는 것은 이름이 아니다.
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(full)) continue;
-    if (full.split('-').filter((x) => /[a-z\u3131-\u318E\uAC00-\uD7A3]/.test(x)).length < 2) continue;
-    const names = [{ name: full, end: m.index + raw.length }];
-    const tail = /[a-z0-9]((?:[\u3131-\u318E\uAC00-\uD7A3]\u0000?){1,3})$/.exec(raw);   // `…-4562에` → `…-4562`
-    if (tail) {
-      const rawBare = raw.slice(0, raw.length - tail[1].length), bare = rawBare.replace(/\u0000/g, '');
-      if (bare.length >= 8) names.push({ name: bare, end: m.index + rawBare.length });
-    }
-    out.push({ start: m.index, names });
-  }
-  return out;
-}
-// (순수 — 테스트 대상) 확인된 지식 이름만 링크로. 조사를 뗀 꼴이 있는 것이면 밑줄도 그 꼴까지만.
-export function knowledgeMatches(text: string, known: (name: string) => boolean): { start: number; end: number; url: string }[] {
-  const out: { start: number; end: number; url: string }[] = [];
-  for (const c of knowledgeCandidates(text)) {
-    const n = c.names.find((x) => known(x.name));
-    if (n) out.push({ start: c.start, end: n.end, url: n.name });
-  }
-  return out;
-}
 //  이름 → 있나(true/false) · 묻는 중(Promise). 못 물었으면(망·5xx·시간 초과) 기억하지 않는다 — 다음 호버에 다시 묻는다.
 //  «없다» 는 60초만 믿는다 — AI 가 이름을 먼저 말하고 문서를 나중에 쓰는 판이 있다(그동안 호버한 이름이 영영 안 그어지면 안 된다).
 const knowledgeKnown = new Map<string, boolean | Promise<boolean>>();
@@ -354,7 +218,7 @@ export function joinRows(rows: string[], soft: boolean[], row: number, cols: num
   //  (#4562) 경로 앞부분으로 끝난 행 — 한 낱말이 폭보다 길어 잘렸으면(한글이 든 긴 경로) 빈칸 없이, 아니면 빈칸에서 끊긴 것.
   const pathJoin = (i: number): 'hard' | 'space' | null => {
     const a = trimEnd(rows[i - 1]);
-    const head = /(?:^|[\s:=(*→])((?:\/|~\/|project\/\d+\/)\S*)$/.exec(a)?.[1] || '';
+    const head = /(?:^|[\s:=(*→])((?:\/|~\/|project\/\d+\/|[A-Za-z]:[\\/])\S*)$/.exec(a)?.[1] || '';   // #5650 윈도우 드라이브도
     const nw = /^( {0,8})(\S+)/.exec(rows[i] || '');
     const tok = /\S*$/.exec(a)![0];
     //  URL 이 든 낱말(`https://…` 의 `:` 뒤도 `/` 로 시작한다)은 URL 이음(urlJoin)의 몫이다.
@@ -5014,6 +4878,7 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
+  wireLinkUnderlines();   // #5650 열리는 링크에 늘 옅은 밑줄(색이 아니라 밑줄로 링크를 알린다)
   wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
   try { wireInputSelection(host); } catch (_) { /* noop */ } // 입력줄 선택 표시(#3778) · 입력칸 선택(#4406) · 마우스
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
@@ -5283,6 +5148,70 @@ export function oscLinkAtCell(t: any, absY: number, col: number): string | null 
     if (/^file:\/\//i.test(uri)) { let p = ''; try { p = decodeURIComponent(new URL(uri).pathname); } catch (_) { /* 깨진 주소 */ } return p && pathLinkTarget(p) ? uri : null; }
     return null;
   } catch (_) { return null; }
+}
+// ── 링크에 늘 옅은 밑줄(#5650) ─────────────────────────────────────────────────────────────
+//  원준 2026-11-24 «왜 어떤건 파랗고 어떤건 안파란거야» — 파란 글자는 하네스(Claude Code)가 백틱 코드에 칠한 색이지 링크 표시가 아니다.
+//   종전엔 링크인지가 마우스를 올려야만(호버 밑줄) 보여서, 사람은 색으로 짐작했고 그 짐작은 자주 틀렸다(파란데 링크 아님 · 까만데 링크).
+//   그래서 **열리는 것에만** 옅은 점선 밑줄을 늘 긋는다 — 판정은 클릭·호버와 같은 함수(urlSpansAt · linkMatches)라 «밑줄 = 누르면 열림».
+//  (순수 — 테스트 대상) 보이는 창의 링크 밑줄 조각들. rows/soft = 창(위아래 여유 포함)을 칸 정렬로 편 것, first·count = 보이는 행의
+//   rows 안 자리. 여러 행에 걸친 링크는 행마다 조각 하나(이어진 행은 들여쓰기 뒤부터).
+export function underlineSegs(rows: string[], soft: boolean[], first: number, count: number, cols: number): { row: number; c0: number; c1: number }[] {
+  const out: { row: number; c0: number; c1: number }[] = [];
+  const seen = new Set<string>();
+  for (let i = first; i < first + count && i < rows.length; i++) {
+    for (const sp of urlSpansAt(rows, soft, i, cols)) {
+      if (i < sp.startRow || i > sp.endRow) continue;
+      const lead = (rows[i] || '').length - (rows[i] || '').replace(/^ +/, '').length;
+      const c0 = i === sp.startRow ? sp.startCol : lead;
+      const c1 = i === sp.endRow ? sp.endCol : Math.max(c0, (rows[i] || '').replace(/ +$/, '').length);
+      const k = i + ':' + c0 + ':' + c1;
+      if (c1 <= c0 || seen.has(k)) continue;
+      seen.add(k);
+      out.push({ row: i - first, c0, c1 });
+    }
+  }
+  return out;
+}
+let linkUlEls: HTMLElement[] = [];
+let linkUlTimer = 0, linkUlAt = 0;
+/** 밑줄을 다시 긋는다 — 화면이 자주 다시 그려지므로(답이 흐르는 중) 250ms 에 한 번으로 묶는다(앞·뒤 둘 다). */
+function scheduleLinkUnderlines(): void {
+  if (linkUlTimer) return;
+  const wait = Math.max(0, 250 - (Date.now() - linkUlAt));
+  linkUlTimer = window.setTimeout(() => { linkUlTimer = 0; linkUlAt = Date.now(); try { drawLinkUnderlines(); } catch (_) { /* 밑줄은 편의다 */ } }, wait);
+}
+function drawLinkUnderlines(): void {
+  let scr: HTMLElement | null = null;
+  try { scr = (term && term.element && term.element.querySelector('.xterm-screen')) || null; } catch (_) { /* noop */ }
+  if (!scr || !term) return;
+  const buf = term.buffer.active;
+  const top = buf.viewportY, n = term.rows, cols = term.cols;
+  const from = Math.max(0, top - 12), to = Math.min(buf.length - 1, top + n + 12);
+  const rows: string[] = [], soft: boolean[] = [];
+  for (let i = from; i <= to; i++) { const l = buf.getLine(i); rows.push(l ? cellRow(l, cols) : ''); soft.push(!!(l && l.isWrapped)); }
+  //  보이는 지식 이름 후보도 물어 둔다(호버를 기다리지 않는다) — 확인되면 다시 긋는다. 묻기는 기억·상한(12개·1.5초)이 있다.
+  try {
+    const ask = knowledgeCandidates(rows.join('\n')).flatMap((c) => c.names.map((x) => x.name)).filter(knowledgeNeedsAsk);
+    if (ask.length) void learnKnowledge(ask).then(scheduleLinkUnderlines, () => { /* noop */ });
+  } catch (_) { /* noop */ }
+  const segs = underlineSegs(rows, soft, top - from, n, cols);
+  const w = scr.offsetWidth / cols, h = scr.offsetHeight / n;
+  while (linkUlEls.length > segs.length) { try { linkUlEls.pop()!.remove(); } catch (_) { /* noop */ } }
+  const fg = String((term.options.theme && term.options.theme.foreground) || 'currentColor');
+  segs.forEach((g, i) => {
+    if (!linkUlEls[i]) { linkUlEls[i] = el('div', { class: 'term-link-ul' }); scr!.appendChild(linkUlEls[i]); }
+    const d = linkUlEls[i];
+    d.style.left = (g.c0 * w) + 'px';
+    d.style.top = ((g.row + 1) * h - 2) + 'px';
+    d.style.width = ((g.c1 - g.c0) * w) + 'px';
+    d.style.borderBottomColor = fg;
+  });
+}
+function wireLinkUnderlines(): void {
+  try { term.onRender(scheduleLinkUnderlines); } catch (_) { /* noop */ }
+  try { term.onScroll(scheduleLinkUnderlines); } catch (_) { /* noop */ }
+  try { term.onResize(scheduleLinkUnderlines); } catch (_) { /* noop */ }
+  scheduleLinkUnderlines();
 }
 // 버퍼의 absY 행 둘레(위아래 12행)를 칸 정렬로 편다 — 긴 URL 은 여러 행에 걸친다(이음 규칙은 joinRows 머리말).
 //  클릭 판정(linkAtPoint)과 호버 밑줄(링크 제공자)이 같은 창을 본다.

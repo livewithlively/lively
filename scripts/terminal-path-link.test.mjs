@@ -50,9 +50,26 @@ t("P4 상대 경로 = 세션 폴더 기준 — 맨 앞이 아닌 project/<n>/ �
 t("P5 못 여는 것 = null: project 없는 절대 · 낱말 하나 · .. · 빈 마디 · 폴더 · 번호 0 · 스킴 · 빈 값 · 상대 대문자/1자 확장자", () => {
   for (const p of ["/tmp/a.md", "/etc/hosts.conf", "package.json", "../a.md", "docs/../a.md", "/work/shared/project/1/../2/a.md",
     "docs//a.md", "/work/shared/project/1//a.md", "/work/shared/project/1/", "/work/shared/project/1/out", "project/0/a.md",
-    "https://a.io/project/1/a.md", "C:/x/project/1/a.md", "file:///x/project/1/a.md", "", "docs/A.HWP", "src/a.c"]) {
+    "https://a.io/project/1/a.md", "C:/x/a.md", "file:///x/project/1/a.md", "", "docs/A.HWP", "src/a.c"]) {
     assert.equal(pathLinkTarget(p), null, p);
   }
+});
+
+// ── W. 윈도우 드라이브 경로(#5650 — 윈도우 노드의 세션은 `C:\\Users\\…\\project\\N\\…` 로 찍는다) ──────────────
+t("W1 드라이브 경로도 프로젝트 자료 — 역슬래시·빗금 둘 다, 프로젝트 없으면 null", () => {
+  assert.deepEqual(pathLinkTarget("C:\\Users\\a\\workspace\\project\\12\\docs\\a.md"), { kind: "project", id: 12, rel: "docs/a.md" });
+  assert.deepEqual(pathLinkTarget("d:/w/project/12/a.HWP"), { kind: "project", id: 12, rel: "a.HWP" });
+  assert.equal(pathLinkTarget("C:\\Users\\a\\a.md"), null);
+  assert.equal(isPathLink("C:\\Users\\a\\project\\12\\a.md"), true);
+  assert.equal(isPathLink("https://a.io/x"), false);
+});
+t("W2 글 속 드라이브 경로 — 드라이브 글자를 잃지 않고(종전: `C` 를 떼고 세션 경로로 읽었다) 이름표 뒤에서도", () => {
+  const w = "C:\\Users\\a\\workspace\\project\\12\\보고서.md";
+  assert.deepEqual(linkMatches("저장했습니다: " + w + "에").map((x) => x.url), [w]);
+  assert.deepEqual(linkMatches("path=" + w).map((x) => x.url), [w]);
+  assert.deepEqual(linkMatches("저장:" + w).map((x) => x.url), [w]);
+  const sp = "C:\\Users\\a\\project\\12\\발표 자료\\b.pptx";
+  assert.deepEqual(linkMatches("열기 " + sp + " 끝").map((x) => x.url), [sp]);
 });
 
 // ── F. 글 속에서 찾기 ───────────────────────────────────────────────

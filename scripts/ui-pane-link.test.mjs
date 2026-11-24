@@ -179,20 +179,24 @@ t("W1 대화창 — 목록 링크 맨클릭에서 곁칸에 묻고, 받았을 �
   assert.match(cv, /import \{ PANE_LINK_EVENT, uiPaneLink, webPaneLink \} from '\.\/lib\/ui-link\.js';/);
   const i = cv.indexOf("list.addEventListener('click', (e: MouseEvent) => {\n    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;");
   assert.ok(i > 0, "꾸밈키 클릭은 건드리지 않는다");
-  const body = cv.slice(i, i + 700);
+  const body = cv.slice(i, i + 2600);
   assert.match(body, /const href = a\.getAttribute\('href'\) \|\| '';\n\s+const link = uiPaneLink\(href, location\.href\) \|\| webPaneLink\(href, location\.href\);/);
-  assert.match(body, /a\.dispatchEvent\(new CustomEvent\(PANE_LINK_EVENT, \{ bubbles: true, detail \}\)\);\n\s+if \(detail\.handled\) e\.preventDefault\(\);/);
+  assert.match(body, /a\.dispatchEvent\(new CustomEvent\(PANE_LINK_EVENT, \{ bubbles: true, detail \}\)\);\n\s+if \(detail\.handled\) \{ e\.preventDefault\(\); return; \}/);
+  //  #5650 곁칸이 안 받은 남의 사이트는 새 탭으로(이 탭이 그 사이트로 넘어가지 않게)
+  assert.match(body, /if \(link\.kind === 'web' && isCrossOrigin\(link\.url\)\) \{ e\.preventDefault\(\); window\.open\(link\.url, '_blank', 'noopener'\); \}/);
 });
 t("W2 곁칸 — 자기 wrap 에서 받는다 · 파일은 경로와 같은 길 · 못 열면·그 밖은 웹 칸 · handled 를 켠다", () => {
   const pn = src("web/v2/panes.ts");
   assert.match(pn, /wrap\.addEventListener\(PANE_LINK_EVENT, onPaneLink\);/);
   const i = pn.indexOf("const onPaneLink = (e: Event): void => {");
   assert.ok(i > 0);
-  const body = pn.slice(i, i + 1400);
+  const body = pn.slice(i, i + 2400);
   assert.match(body, /if \(!d \|\| d\.handled \|\| !link\) return;/);
   //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 webview)만 받는다 — handled 를 켜기 **전에** 거른다
-  const gate = body.indexOf("if (cross && !hasBrowserSurface()) return;");
-  assert.ok(gate > 0 && gate < body.indexOf("d.handled = true;"), "못 넣는 남의 사이트는 handled 를 안 켜야 종전 이동이 산다");
+  //   (#5650 경로 갈래는 그 앞에서 따로 끝난다 — 남의 사이트 판정은 그 뒤 몸통에서 본다)
+  const rest = body.slice(body.indexOf("let cross = false;"));
+  const gate = rest.indexOf("if (cross && !hasBrowserSurface()) return;");
+  assert.ok(gate > 0 && gate < rest.indexOf("d.handled = true;"), "못 넣는 남의 사이트는 handled 를 안 켜야 종전 이동이 산다");
   assert.match(body, /planPathOpen\(\{ path: link\.path, target: \{ kind: 'project', id: Number\(m\[1\]\), rel: m\[2\] \} \}\)/);
   assert.match(body, /if \(run\) \{ window\.setTimeout\(run, 0\); return; \}/);
   assert.match(body, /openInWebPart\(ctx, link\.url\); addTab\('side', 'web'\);/);
