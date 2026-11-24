@@ -83,10 +83,10 @@ const argsOf = (ti) => asObj(ti) || asObj(typeof ti === "string" ? tryJson(ti) :
 //  이벤트별 합(BUDGET_MS) + stdin 이 hooks.json timeout(user-install CURSOR_HOOK_EVENTS)보다 작아야 Cursor 가 우리를 죽이기
 //  전에 유효 출력으로 끝난다 — cursor-adapter 시험(P5)이 `node cursor-adapter.mjs --budget` 으로 읽어 그 표와 대조한다.
 // T.runner = harness-registry cursor.runnerCapMs — 러너가 이보다 앞서 끝내도록 예산을 잡는다(#5034). 바꾸면 함께 바꾼다.
-const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, gate: 10000, workFlag: 5000, stdin: 2000 };
+const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, gate: 10000, workFlag: 5000, stdin: 2000, promptCtx: 4000, promptKill: 6000 };
 const BUDGET_MS = {
   sessionStart: T.preload + T.sync + T.runner + T.workFlag,
-  beforeSubmitPrompt: T.runner + T.workFlag,
+  beforeSubmitPrompt: T.promptKill,       // 맥락 훅만 기다린다(#5675) — 동기화 훅·work-flag 는 뒤에서
   preToolUse: T.runner,
   beforeMCPExecution: T.runner,
   postToolUse: T.runner + T.workFlag,
@@ -104,11 +104,11 @@ const TEST_TIMEBOX_MS = Number(process.env.LIVELY_TEST_CURSOR_TIMEBOX_MS) || 0;
 //  세션 작업 위치가 아니라서(hooks.json 자리·workspace root·~/.cursor) 시작 훅(session-preload — 빈 입력으로 부른다)이 엉뚱한 폴더를
 //  보지 않게 env 로 함께 넘긴다. main 이 입력을 읽자마자 채운다.
 let SESSION_DIR = "";
-function runScript(script, args, stdin, timeout) {
+function runScript(script, args, stdin, timeout, env = {}) {
   try {
     const r = spawnSync(NODE, [join(HOOKS, script), ...args], {
       input: stdin, encoding: "utf8", timeout: TEST_TIMEBOX_MS ? Math.min(timeout, TEST_TIMEBOX_MS) : timeout, killSignal: "SIGKILL",
-      env: { ...process.env, LIVELY_HARNESS: HARNESS, ...(SESSION_DIR ? { LIVELY_SESSION_DIR: SESSION_DIR } : {}) },
+      env: { ...process.env, LIVELY_HARNESS: HARNESS, ...(SESSION_DIR ? { LIVELY_SESSION_DIR: SESSION_DIR } : {}), ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     return (r && typeof r.stdout === "string") ? r.stdout : "";
@@ -148,8 +148,8 @@ const payload = (event, input, extra) => JSON.stringify({
   ...extra,
 });
 
-const runner = (event, input, extra, timeout = T.runner) =>
-  runScript("run-custom.mjs", [event, "--harness", HARNESS], payload(event, input, extra), timeout);
+const runner = (event, input, extra, timeout = T.runner, env = {}) =>
+  runScript("run-custom.mjs", [event, "--harness", HARNESS], payload(event, input, extra), timeout, env);
 const workFlag = (event, input, extra) =>
   runScript("work-flag.mjs", ["--harness", HARNESS], payload(event, input, extra), T.workFlag);
 
@@ -227,22 +227,36 @@ function toolOf(input) {
 
 // ── 뒤로 미루는 이벤트(#5647) ─────────────────────────────────────────────
 // Cursor 가 우리 출력을 **쓰지 않는** 이벤트는 먼저 답하고 일은 뒤에서 한다. 사람의 턴이 우리 훅을 기다리기 때문이다.
-//  · beforeSubmitPrompt — IDE(2.6.13 번들 실측)는 응답의 continue·user_message 만 보고 additional_context 는 버린다. 그런데
-//    모델 호출 전에 이 훅을 await 한다 → 조직 훅(프로젝트 붙이기·당겨오기·밀어올리기 …) 시간이 고스란히 «턴마다 지연» 이 됐다
-//    (원준 맥북 실측 4.4~7.5초/턴 — 위시스트 VOC «턴마다 10초»). 맥락은 sessionStart 가 싣는다(IDE 가 받는 자리).
+//  · beforeSubmitPrompt — 모델 호출 전에 이 훅을 await 한다. 조직 훅 전부(프로젝트 붙이기·당겨오기·밀어올리기 …)를 기다리면
+//    그 시간이 고스란히 «턴마다 지연» 이 된다(실측 4.4~7.5초/턴, #5647). 그래서 **맥락을 내는 훅만 기다려 싣고**(아래 handle 의
+//    beforeSubmitPrompt 절) 맥락이 없는 느린 동기화 훅(PROMPT_BG_HOOKS)과 work-flag 는 뒤에서 돌린다(#5675).
+//    단 additional_context 를 버리는 옛 앱(2.x — 2.6.13 번들 실측)에선 기다릴 이유가 없어 종전처럼 전부 뒤에서 돈다.
 //  · stop — 조직 Stop 훅·work-flag(쉼 보고)는 뒤로 미룬다. 단 **기록 게이트는 여기서 기다린다**(아래 handle 의 stop 절):
 //    게이트의 block 이 followup_message(기록 넛지)가 되는 유일한 자리라서다. #5647 에서 게이트를 껐다가 «재촉이 없으면 남길
 //    지식이 유실된다» 는 판단(원준 2026-11-23, #5675)으로 되살렸다.
 //  · sessionEnd·subagentStop·preCompact — 출력이 없는 부수효과 전용.
 //  뒤 작업은 분리된 프로세스(detached)라 Cursor 가 훅을 끝내도 산다. 시간 상한은 종전과 같은 러너 타임박스(BUDGET_MS)다.
 //  상태 보고 순서: work-flag 를 먼저 — «작업 중» 이 조직 훅 몇 초 뒤로 밀리면 짧은 턴의 stop(쉼)보다 늦게 도착할 수 있다.
-const DEFERRED = new Set(["beforeSubmitPrompt", "sessionEnd", "subagentStop", "preCompact"]);
+const DEFERRED = new Set(["sessionEnd", "subagentStop", "preCompact"]);
 
-function deferredWork(event, input) {
+// 프롬프트 맥락(#5675) — 기다리지 않고 뒤로 보내는 조직 훅. 제품 시드 훅 중 **맥락을 내지 않고 느린 것**: 공유 폴더 내려받기
+//  (sort 5, 실측 ~1.4초)·올리기(sort 20, ~1.3초). 둘은 맥락 훅(지식 회수·AGENTS.md 주입 — sort 10)과 결과를 주고받지 않는다.
+//  맥락 훅은 이 예산(T.promptCtx) 안에서만 기다린다 — run-custom 이 남은 시간으로 훅 상한을 줄이고, 모자라면 다음 묶음을 건너뛴다.
+const PROMPT_BG_HOOKS = ["project-pull-turn", "project-push-turn"];
+// additional_context 를 버리는 Cursor 판인가 — 앱 2.6.13 은 버리고(번들 실측, #5647) 3.31.15 는 <system_reminder> 로 감싸
+//  모델에만 보낸다(번들·실기기 실측, #5675: 숨긴 맥락의 내용을 모델이 답했고, 훅 없는 창은 «모릅니다»). 그 사이 판은 미측정이라
+//  주 버전으로 가른다(2 이하 = 버림). CLI 는 날짜형 판(2026.11.22-…)이고 받는다.
+const promptCtxDropped = () => {
+  const m = /^(\d+)\./.exec(String(process.env.CURSOR_VERSION || ""));
+  return !!m && Number(m[1]) < 3;
+};
+
+function deferredWork(event, input, opts = {}) {
   if (event === "beforeSubmitPrompt") {
     const extra = { prompt: String(input?.prompt || "") };
     workFlag("UserPromptSubmit", input, extra);
-    runner("UserPromptSubmit", input, extra);
+    // only = 맥락 훅은 앞에서 이미 돌았다 — 남은 동기화 훅만. 없으면(옛 앱) 조직 훅 전부.
+    runner("UserPromptSubmit", input, extra, T.runner, opts.only ? { LIVELY_HOOK_ONLY: PROMPT_BG_HOOKS.join(",") } : {});
     return;
   }
   if (event === "stop") {
@@ -280,13 +294,13 @@ function sweepBg() {
     }
   } catch { /* */ }
 }
-function spawnDeferred(event, input) {
+function spawnDeferred(event, input, opts = {}) {
   let f = "";
   try {
     mkdirSync(BG_DIR, { recursive: true, mode: 0o700 });
     sweepBg();
     f = bgFile();
-    writeFileSync(f, JSON.stringify({ input, sessionDir: SESSION_DIR }), { mode: 0o600, flag: "wx" });
+    writeFileSync(f, JSON.stringify({ input, sessionDir: SESSION_DIR, opts }), { mode: 0o600, flag: "wx" });
     const c = spawn(NODE, [SELF, "--deferred", event, f], { detached: true, stdio: "ignore", windowsHide: true, env: process.env });
     c.on("error", () => { try { unlinkSync(f); } catch { /* */ } });
     c.unref();
@@ -318,13 +332,26 @@ function runDeferred(event, file) {
   SESSION_DIR = String(job?.sessionDir || "");
   const input = asObj(job?.input) || {};
   const lock = acquireTurn(sessionIdOf(input));
-  try { deferredWork(event, input); } catch { /* 뒤 작업 실패는 세션과 무관 */ }
+  try { deferredWork(event, input, asObj(job?.opts) || {}); } catch { /* 뒤 작업 실패는 세션과 무관 */ }
   finally { if (lock) { try { unlinkSync(lock); } catch { /* */ } } }
 }
 
 // 이벤트별 처리 → Cursor 에 낼 출력 객체(stdout 쓰기는 main 이 한 번만).
 function handle(input) {
   if (DEFERRED.has(EVENT)) { spawnDeferred(EVENT, input); return fallbackFor(EVENT); }
+
+  if (EVENT === "beforeSubmitPrompt") {
+    // 맥락을 내는 조직 훅(지식 회수·AGENTS.md 주입·라우터 …)만 예산 안에서 기다려 싣는다 — Cursor 는 이것을 <system_reminder> 로
+    //  감싸 모델에만 보낸다(화면엔 안 보인다 — 3.31.15·CLI 2026.11.22 실기기, #5675). 동기화 훅·work-flag 는 그 **뒤에** 띄운다:
+    //  내려받기가 프로젝트 붙이기(첫 지시)보다 앞서지 않게 하려는 것이다(종전 한 러너 안의 sort 순서 0 → 5 와 같은 앞뒤).
+    //  옛 앱(2.x)은 맥락을 버리므로 기다리지 않고 종전처럼 전부 뒤로 보낸다.
+    if (promptCtxDropped()) { spawnDeferred(EVENT, input); return fallbackFor(EVENT); }
+    const extra = { prompt: String(input?.prompt || "") };
+    const text = contextOf(runner("UserPromptSubmit", input, extra, T.promptKill,
+      { LIVELY_HOOK_SKIP: PROMPT_BG_HOOKS.join(","), LIVELY_HOOK_EVENT_BUDGET_MS: String(T.promptCtx) }));
+    spawnDeferred(EVENT, input, { only: true });
+    return text ? { continue: true, additional_context: capCtx(text) } : { continue: true };
+  }
 
   if (EVENT === "stop") {
     // 턴 종료. 상태 보고(쉼)·조직 Stop 훅은 뒤에서(위 «뒤로 미루는 이벤트»). 기록 게이트는 **정상 완료(completed)** 일 때만 —
