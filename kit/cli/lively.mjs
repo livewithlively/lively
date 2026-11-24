@@ -3706,7 +3706,7 @@ async function cmdSetup(opts = {}) {
 const SG_W = 70;   // 상자 안쪽 폭(칸)
 /**
  * (순수 — 테스트 seam) 상자 줄들. color=false 면 ANSI 없이. mode: invite | open | all(워크스페이스의 새 프로젝트 공개 방식).
- *  link 는 «1분 안내» 웹 주소(없으면 그 줄을 뺀다). narrow 면 테두리 없는 꼴.
+ *  link 는 «안내 영상»(라이블리 둘러보기) 웹 주소(없으면 그 줄을 뺀다). narrow 면 테두리 없는 꼴.
  */
 export function shareGuideLines({ color = true, mode = "invite", link = "", narrow = false } = {}) {
   const k = (code) => (t) => (color ? `${ESC}[${code}m${t}${ESC}[0m` : t);
@@ -3730,21 +3730,21 @@ export function shareGuideLines({ color = true, mode = "invite", link = "", narr
     [C.dim("쓰다가 라이블리를 끄려면"), "AI에게 " + C.cmd("/lively-disconnect")],
   ];
   if (narrow) {
-    const out = ["", "  " + C.b("라이블리 / 누가 무엇을 보나요"), ""];
+    const out = ["", "  " + C.b("라이블리 / 접근 권한 안내"), ""];
     for (const [what, tag, main, sub] of rows) {
       out.push(`  ${pad(C.b(what), 10)}${tag} ${main}`);
       if (sub) out.push(`  ${" ".repeat(10)}${C.sub(sub)}`);
     }
     out.push("");
     for (const [a, b] of ways) out.push(`  ${a}: ${b}`);
-    if (link) out.push(`  1분 안내 보기: ${C.link(link)}`);
+    if (link) out.push(`  안내 영상 보기: ${C.link(link)}`);
     out.push("");
     return out;
   }
   const V = C.line("│");
   const row = (t) => `  ${V} ${pad(t, SG_W - 2)} ${V}`;
   const rule = (ch = "─") => `  ${C.line("├" + ch.repeat(SG_W) + "┤")}`;
-  const headL = " 라이블리 / 누가 무엇을 보나요", headR = "처음 한 번만 보여 드려요 ";
+  const headL = " 라이블리 / 접근 권한 안내", headR = "처음 한 번만 보여 드려요 ";
   const out = ["", `  ${C.line("╭" + "─".repeat(SG_W) + "╮")}`,
     `  ${V}${C.head(headL + " ".repeat(SG_W - cols(headL) - cols(headR)))}${C.headDim(headR)}${V}`,
     rule(), row("")];
@@ -3755,7 +3755,7 @@ export function shareGuideLines({ color = true, mode = "invite", link = "", narr
   }
   out.push(rule("╌"));
   for (const [a, b] of ways) out.push(row(pad(a, 26) + b));
-  if (link) { out.push(rule()); out.push(row("1분 안내 보기  " + C.link(link))); }
+  if (link) { out.push(rule()); out.push(row("안내 영상 보기  " + C.link(link))); }
   out.push(`  ${C.line("╰" + "─".repeat(SG_W) + "╯")}`, "");
   return out;
 }
@@ -3767,7 +3767,7 @@ export async function sayShareGuide({ pause = false, out = say } = {}) {
     mode = a?.enforced === false ? "all" : a?.mode === "open" ? "open" : "invite";
   } catch { /* 옛 서버 — 새 프로젝트 기본값(초대제)으로 */ }
   const gw = gateway();
-  const link = gw ? `${gw}/ui/#/share-guide` : "";
+  const link = gw ? `${gw}/ui/#/film/intro` : "";   // 라이블리 둘러보기 영상(web/v2/welcome-film.ts INTRO_FILM) — 상민 2026-11-24 «팝업 말고 우리 영상으로»
   const width = Number(process.stderr.columns) || 80;
   for (const l of shareGuideLines({ color: !!TTY, mode, link, narrow: width < SG_W + 6 })) out(l);
   if (!pause || PROMPTER || !interactive()) return;
@@ -3815,7 +3815,7 @@ ${bold("시작하기")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
-  guide                  누가 무엇을 보나요 — AI 세션 · 프로젝트 · 지식의 공개 범위 다시 보기
+  guide                  접근 권한 안내 — AI 세션 · 프로젝트 · 지식의 공개 범위 다시 보기
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)

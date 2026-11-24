@@ -11,6 +11,7 @@
 import { reviewResumeTarget } from './review-resume.js';   // #4632 ③ 앱 화면 새로고침 복귀
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
 import { SHARE_GUIDE_ROUTE, maybeShowShareGuide, openShareGuide } from './share-guide.js'; // #5598 «누가 무엇을 보나요»
+import { filmOfRoute, openWelcomeFilm } from './welcome-film.js';   // #5598 영상 창 주소(#/film/intro — CLI 설치 끝 상자의 «안내 영상 보기»)
 import { resumeSetupWatch } from './setup-watch.js'; // #5167 처음 설정 뒤 정리 진행 띠
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
@@ -794,6 +795,9 @@ export async function bootV2(): Promise<void> {
   // #5598 — «누가 무엇을 보나요» 다시 보기 주소(CLI 설치 끝 상자의 링크)로 켰으면 탭은 평소대로 되살리고 창만 연다.
   const openShare = !!boot && SHARE_GUIDE_ROUTE.test(boot);
   if (openShare) boot = null;
+  // #5598 — 영상 창 주소(#/film/intro …)로 켰으면 마찬가지로 탭은 평소대로 되살리고 영상 창만 연다.
+  const openFilm = boot ? filmOfRoute(boot) : null;
+  if (openFilm) boot = null;
   // 처음 설정을 아직 안 끝낸 **처음 오는 사람**만 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
   //  ⚠ 판정은 **서버**(me.first_run — src/org/delivery/first-run.ts)다. 종전엔 localStorage 하나로 정해서
   //   몇 달째 쓰던 사람도 새 브라우저·다른 기기·시크릿창이면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26,
@@ -870,6 +874,10 @@ export async function bootV2(): Promise<void> {
     const back = tabsApi.active().route || '#/';
     history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
     openShareGuide({ again: true });
+  } else if (openFilm) {
+    const back = tabsApi.active().route || '#/';
+    history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    openWelcomeFilm(openFilm);
   } else {
     // #5598 — 아직 확인하지 않은 사람에게 한 번. 처음 설정 · 앱 전체 화면 같은 지나가는 자리에선 셸로 돌아올 때까지 미룬다(share-guide.ts).
     void maybeShowShareGuide();
@@ -1548,6 +1556,15 @@ async function onHash(): Promise<void> {
   // #5598 — «누가 무엇을 보나요» 다시 보기 주소(CLI 설치 끝 상자의 링크). 화면이 아니라 창이라 탭을 만들지 않는다(아래 #4051 과 같은 방식).
   if (SHARE_GUIDE_ROUTE.test(hash)) {
     openShareGuide({ again: true });
+    const back = tabsApi.active().route || '#/';
+    suppressHash++;
+    location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    return;
+  }
+  // #5598 — 영상 창 주소(#/film/intro · tour · guide). 창이라 탭을 만들지 않는다.
+  const film = filmOfRoute(hash);
+  if (film) {
+    openWelcomeFilm(film);
     const back = tabsApi.active().route || '#/';
     suppressHash++;
     location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));

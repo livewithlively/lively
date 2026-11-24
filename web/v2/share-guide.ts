@@ -7,8 +7,11 @@
 //   AI 세션(대화창) · 프로젝트 · 자료 · 지식이 무엇이고 어떻게 이어지는지를 설명하고, 마지막 장만 «누가 무엇을 볼 수 있나요» 다.
 //
 //  ── 어디서 뜨나 ─────────────────────────────────────────────────────────────
-//   · 웹 · 앱 첫 진입 — 사람마다 한 번(서버 표식 liv_profile.share_guide_seen_at). 처음 설정(#/welcome) · 앱 전체 화면(#/full)
-//     · 승인(#/activate) 같은 지나가는 자리에서는 띄우지 않고, 그 사람이 셸로 돌아온 뒤에 띄운다.
+//   · 처음 설정의 인사 장면(v2/onboarding.ts) — 처음 오는 사람은 여기서 카드 5장을 넘긴다(상민 2026-11-24: 종전엔 이 자리에 온보딩
+//     영상이 있었다. 개념 설명은 화면을 보기 전에, 화면 둘러보기 영상은 화면이 뒤에 보일 때가 자연스럽다). 넘기면 확인 표식과
+//     «영상 띄울 차례»(welcome_film_due_at)가 남고, 셸에 돌아오면 온보딩 영상(기초)이 창으로 한 번 뜬다(welcomeFilmAutoDue).
+//   · 웹 · 앱 첫 진입 — 처음 설정을 지나지 않는 사람(기존 구성원)에게 사람마다 한 번(서버 표식 liv_profile.share_guide_seen_at).
+//     처음 설정(#/welcome) · 앱 전체 화면(#/full) · 승인(#/activate) 같은 지나가는 자리에서는 띄우지 않고, 셸로 돌아온 뒤에 띄운다.
 //   · 설치 승인 직후(web/activate.ts) — 브라우저 승인 페이지 아래에 그대로 붙인다(CLI · 앱으로 설치하는 사람도 한 번은 보게).
 //   · 다시 보기 — 주소 `#/share-guide`(CLI 설치 끝 상자의 링크가 여기로 온다).
 //   [확인했어요] 를 누르면 표식을 남긴다. 체크박스 동의는 두지 않는다(체크박스는 읽기를 늘리지 않는다 — 대화 기록의 근거 참조).
@@ -27,8 +30,9 @@
 import { api } from '../core.js';
 import { SG_MARKUP, SG_SPRITE } from './share-guide-markup.js';
 import { I, SG_STEPS, projModeOf, type ProjMode } from '../lib/share-guide-rules.js';
-export { SHARE_GUIDE_ROUTE, shareGuideAutoAllowed } from '../lib/share-guide-rules.js';
-import { shareGuideAutoAllowed } from '../lib/share-guide-rules.js';
+export { SHARE_GUIDE_ROUTE, shareGuideAutoAllowed, welcomeFilmAutoDue } from '../lib/share-guide-rules.js';
+import { shareGuideAutoAllowed, welcomeFilmAutoDue, type FilmFacts } from '../lib/share-guide-rules.js';
+import { WELCOME_FILM, openWelcomeFilm } from './welcome-film.js';   // 온보딩 영상(기초) — 처음 설정을 지나 셸에 온 사람에게 한 번
 
 interface Opts {
   /** 마지막 단추 글 — 승인 페이지는 «확인했어요 · 터미널로». */
@@ -164,6 +168,9 @@ export function mountShareGuide(host: HTMLElement, opts: Opts = {}): ShareGuide 
   };
   document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onKey);
+  /** 듣던 것과 카드를 걷는다 — destroy, 그리고 아래에서 세우다 깨졌을 때(부르는 쪽이 다른 그림으로 바꾼다 — 걷지 않으면 떼어진 카드가 화살표 키를 계속 듣는다). */
+  const teardown = (): void => { document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); root.remove(); };
+  try {
   if (opts.closable) {
     const x = document.createElement('button');
     x.type = 'button'; x.className = 'sg-close'; x.setAttribute('aria-label', '닫기'); x.textContent = '×';
@@ -172,17 +179,11 @@ export function mountShareGuide(host: HTMLElement, opts: Opts = {}): ShareGuide 
   }
 
   render();
+  } catch (e) { teardown(); throw e; }
   // 프로젝트 공개 방식은 워크스페이스마다 다르다 — 받는 대로 마지막 장을 다시 그린다(못 받으면 초대제 그대로).
   void api('/api/ui/v6/project-access').then((a: any) => { mode = projModeOf(a); render(); }).catch(() => { /* 옛 서버 — 초대제로 둔다 */ });
 
-  return {
-    el: root,
-    destroy(): void {
-      document.removeEventListener('click', onDocClick);
-      document.removeEventListener('keydown', onKey);
-      root.remove();
-    },
-  };
+  return { el: root, destroy: teardown };
 }
 
 /** 확인 표식 — 실패해도 삼킨다(표식을 못 남겼다고 화면이 막히면 안 된다). */
@@ -217,8 +218,27 @@ export async function maybeShowShareGuide(): Promise<void> {
     return;
   }
   checked = true;
-  let seen: string | null = null;
-  try { seen = ((await api('/api/ui/me/liv-profile')) as { share_guide_seen_at?: string | null })?.share_guide_seen_at ?? null; }
+  let p: FilmFacts | null = null;
+  try { p = (await api('/api/ui/me/liv-profile')) as FilmFacts | null; }
   catch (_) { return; }   // 못 읽었으면 띄우지 않는다(다음 접속에 다시 본다) — 확인한 사람에게 또 뜨는 쪽이 더 나쁘다
-  if (!seen) openShareGuide();
+  if (!p?.share_guide_seen_at) { openShareGuide(); return; }
+  //  안내 카드는 이미 확인했다 — 처음 설정의 인사 장면에서 넘긴 사람이면 온보딩 영상(기초)을 창으로 한 번 띄운다(welcomeFilmAutoDue).
+  if (welcomeFilmAutoDue(p, location.hash)) { markWelcomeFilmSeen(); openWelcomeFilm(WELCOME_FILM, FIRST_FILM_HEAD); }
+}
+
+/** 처음 뜨는 영상 창의 머리말 — 무엇인지와, 닫아도 다시 볼 곳이 있다는 것. */
+export const FIRST_FILM_HEAD = { title: '라이블리 화면은 이렇게 생겼어요', note: '1분 40초 · 소리 없음 · 닫아도 [사용 가이드]에서 다시 볼 수 있어요' };
+/**
+ * 처음 설정 인사 장면의 안내 카드를 끝까지 넘겼다 — 확인 표식과 «셸에서 영상을 띄울 차례» 를 **한 요청으로** 남긴다.
+ *  ⚠ 둘로 나눠 동시에 보내면 안 된다: 서버의 프로필 쓰기는 읽고-합쳐-통째로 쓰기라(appendLivProfile) 겹친 두 요청 중 하나의 칸이 사라진다 —
+ *   확인 표식이 사라지면 방금 넘긴 카드가 셸에서 팝업으로 또 뜨고, 차례 표식이 사라지면 영상이 영영 안 뜬다.
+ *  합친 요청이 거절되면(새 칸을 모르는 서버) 확인 표식만이라도 남긴다. 실패해도 삼킨다 — 영상은 [사용 가이드] 에 있다.
+ */
+export function markIntroGuideDone(): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ share_guide_seen: true, welcome_film_due: true }) })
+    .catch(() => { markShareGuideSeen(); });
+}
+/** 영상 창을 띄웠다(서버 표식) — 자동으로 뜨는 것은 한 번이다. */
+export function markWelcomeFilmSeen(): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_film_seen: true }) }).catch(() => { /* 비치명 */ });
 }

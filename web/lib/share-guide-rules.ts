@@ -58,3 +58,22 @@ export function shareGuideAutoAllowed(hash: string): boolean {
   return !/^#\/(welcome|activate|full|app-grant|app-open|share-guide)(?:[/?]|$)/.test(hash || '');
 }
 
+/** 온보딩 영상(기초)을 창으로 띄울지 정하는 재료 — liv-profile 이 돌려주는 칸. 옛 서버는 새 칸을 주지 않는다(undefined). */
+export interface FilmFacts {
+  share_guide_seen_at?: string | null;
+  welcome_film_due_at?: string | null;
+  welcome_film_seen_at?: string | null;
+}
+/**
+ * (순수) 온보딩 영상(기초)을 지금 창으로 띄울까(#5598, 상민 2026-11-24 — 처음 설정의 영상과 셸의 안내 카드가 자리를 바꿨다).
+ *  · 처음 설정 인사 장면의 안내 카드를 끝까지 넘긴 사람(due)에게, 아직 띄운 적이 없을 때(seen 없음) 한 번.
+ *  · due 가 없는 사람(이 변경 전부터 쓰던 구성원)에게는 띄우지 않는다 — 영상은 [사용 가이드] 에서 본다.
+ *  · 안내 카드를 아직 확인하지 않았으면 그 카드 팝업이 먼저다 — 창은 한 번에 하나.
+ *  · 지나가는 자리(처음 설정 · 앱 전체 화면 · 승인)에서는 띄우지 않는다 — 셸로 돌아온 뒤에.
+ */
+export function welcomeFilmAutoDue(p: FilmFacts | null | undefined, hash: string): boolean {
+  if (!p || !p.welcome_film_due_at || p.welcome_film_seen_at) return false;
+  if (!p.share_guide_seen_at) return false;
+  return shareGuideAutoAllowed(hash);
+}
+

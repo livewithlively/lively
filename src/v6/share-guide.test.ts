@@ -51,6 +51,33 @@ const width = (s: string) => [...strip(s)].reduce((n, ch) => n + (WIDE.test(ch) 
 const boxLines = (ls: string[]) => ls.filter((l) => /[│╭╰├]/.test(l));
 const text = (html: string) => html.replace(/<[^>]+>/g, "");
 
+//  R7 — 온보딩 영상(기초) 창을 자동으로 띄울까(상민 2026-11-24: 처음 설정의 영상 ↔ 셸의 안내 카드 자리 바꿈). 엣지 표:
+//   E1 due 있음 · seen 없음 · 안내 확인함 · #/            → 띄운다
+//   E2 due 없음(이 변경 전부터 쓰던 구성원)                → 안 띄운다
+//   E3 due · seen 둘 다 있음                               → 안 띄운다(한 번만)
+//   E4 지나가는 자리(#/welcome · #/full · #/activate …)    → 안 띄운다
+//   E5 안내 확인 표식 없음(카드 팝업이 뜰 차례)            → 안 띄운다 — 창은 한 번에 하나
+//   E6 프로필 null · 새 칸 undefined(옛 서버) · 빈 문자열  → 안 띄운다
+//   E7 경계 — #/welcomes 는 지나가는 자리가 아니다          → 띄운다
+test("R7 온보딩 영상 창 — 처음 설정을 지난 사람에게 한 번 · 기존 구성원에겐 안 뜬다", async () => {
+  const m = await loadRules();
+  const due = { share_guide_seen_at: "2026-11-24T00:00:00Z", welcome_film_due_at: "2026-11-24T00:00:01Z", welcome_film_seen_at: null };
+  assert.equal(m.welcomeFilmAutoDue(due, "#/"), true, "E1");
+  assert.equal(m.welcomeFilmAutoDue(due, "#/s/abc"), true, "E1 — 세션 화면에서도");
+  assert.equal(m.welcomeFilmAutoDue({ ...due, welcome_film_due_at: null }, "#/"), false, "E2 ★기존 구성원에게 영상이 뜬다");
+  assert.equal(m.welcomeFilmAutoDue({ ...due, welcome_film_seen_at: "2026-11-24T00:01:00Z" }, "#/"), false, "E3 ★본 사람에게 또 뜬다");
+  for (const h of ["#/welcome", "#/welcome?resume=1", "#/full/x", "#/activate?code=AB", "#/share-guide", "#/app-open/2"]) {
+    assert.equal(m.welcomeFilmAutoDue(due, h), false, "E4 " + h);
+  }
+  assert.equal(m.welcomeFilmAutoDue({ ...due, share_guide_seen_at: null }, "#/"), false, "E5 ★카드 팝업과 영상 창이 겹친다");
+  assert.equal(m.welcomeFilmAutoDue(null, "#/"), false, "E6 null");
+  assert.equal(m.welcomeFilmAutoDue(undefined, "#/"), false, "E6 undefined");
+  assert.equal(m.welcomeFilmAutoDue({ share_guide_seen_at: "x" }, "#/"), false, "E6 옛 서버 — 새 칸이 없다");
+  assert.equal(m.welcomeFilmAutoDue({ ...due, welcome_film_due_at: "" }, "#/"), false, "E6 빈 문자열");
+  assert.equal(m.welcomeFilmAutoDue(due, "#/welcomes"), true, "E7");
+  assert.equal(m.welcomeFilmAutoDue(due, ""), true, "E7 — 빈 주소는 홈이다");
+});
+
 test("R1 워크스페이스 설정 → 2장 갈래", async () => {
   const m = await loadRules();
   assert.equal(m.projModeOf(null), "invite");
@@ -134,7 +161,7 @@ test("R5 다시 보기 주소", async () => {
 test("C1 ★CLI 상자 — 모든 갈래 × 링크 유무에서 오른쪽 테두리가 맞는다", async () => {
   const c = await loadCli();
   for (const mode of ["invite", "open", "all"]) {
-    for (const link of ["", "https://acme.app.lvly.io/ui/#/share-guide"]) {
+    for (const link of ["", "https://acme.app.lvly.io/ui/#/film/intro"]) {
       for (const color of [true, false]) {
         const ls = boxLines(c.shareGuideLines({ mode, link, color }));
         assert.ok(ls.length >= 15, `상자 줄이 있어야 한다 ${mode}`);
@@ -148,7 +175,7 @@ test("C1 ★CLI 상자 — 모든 갈래 × 링크 유무에서 오른쪽 테두
 test("C2 CLI 상자 안엔 폭이 애매한 기호가 없다", async () => {
   const c = await loadCli();
   for (const mode of ["invite", "open", "all"]) {
-    for (const l of boxLines(c.shareGuideLines({ mode, link: "https://x/ui/#/share-guide", color: false }))) {
+    for (const l of boxLines(c.shareGuideLines({ mode, link: "https://x/ui/#/film/intro", color: false }))) {
       assert.doesNotMatch(l, /[·—↵]/, l);
     }
   }
@@ -185,10 +212,16 @@ test("C4 색 끄기 · 좁은 창 · 링크 없음", async () => {
   const c = await loadCli();
   assert.ok(!c.shareGuideLines({ color: false }).join("\n").includes("\u001b"));
   assert.ok(c.shareGuideLines({ color: true }).join("\n").includes("\u001b[48;5;62"), "색을 켜면 머리 띠 · 뱃지에 바탕색이 있다");
-  const narrow = c.shareGuideLines({ color: false, narrow: true, link: "https://x/ui/#/share-guide" });
+  const narrow = c.shareGuideLines({ color: false, narrow: true, link: "https://x/ui/#/film/intro" });
   assert.equal(boxLines(narrow).length, 0);
-  assert.ok(narrow.some((l: string) => l.includes("https://x/ui/#/share-guide")));
-  assert.ok(!c.shareGuideLines({ color: false, link: "" }).some((l: string) => l.includes("1분 안내")));
+  assert.ok(narrow.some((l: string) => l.includes("안내 영상 보기: https://x/ui/#/film/intro")), "좁은 창 — 영상 링크 줄");
+  assert.ok(!c.shareGuideLines({ color: false, link: "" }).some((l: string) => l.includes("안내 영상")));
+  // 상민 2026-11-24 — 제목은 «접근 권한 안내», 링크는 팝업이 아니라 둘러보기 영상.
+  const box = c.shareGuideLines({ color: false, link: "https://x/ui/#/film/intro" });
+  assert.ok(box.some((l: string) => /라이블리 \/ 접근 권한 안내/.test(l)), "상자 제목");
+  assert.ok(narrow.some((l: string) => /라이블리 \/ 접근 권한 안내/.test(l)), "좁은 창 제목");
+  assert.ok(!box.concat(narrow).some((l: string) => /누가 무엇을 보나요|1분 안내/.test(l)), "옛 제목 · 옛 링크 글이 남았다");
+  assert.ok(box.some((l: string) => l.includes("안내 영상 보기  https://x/ui/#/film/intro")), "상자 — 영상 링크 줄");
 });
 
 test("W1 배선 — 셸 · 승인 페이지 · 스타일", () => {
@@ -201,7 +234,14 @@ test("W1 배선 — 셸 · 승인 페이지 · 스타일", () => {
   assert.match(act, /cli\/device\/approve[\s\S]{0,600}showShareGuideAfterApprove\(slot\)/, "승인한 뒤에 안내를 붙인다");
   assert.match(act, /share_guide_seen_at\) return/, "이미 확인한 사람에겐 붙이지 않는다");
   assert.match(readFileSync("public/index.html", "utf8"), /styles\/54-share-guide\.css/);
+  assert.match(main, /const openFilm = boot \? filmOfRoute\(boot\) : null;\n\s*if \(openFilm\) boot = null;/, "영상 주소로 켜면 탭은 그대로 두고 창만 연다");
+  assert.match(main, /else if \(openFilm\) \{[\s\S]{0,260}openWelcomeFilm\(openFilm\);/, "켤 때 영상 창을 연다");
+  assert.match(main, /const film = filmOfRoute\(hash\);\n\s*if \(film\) \{\n\s*openWelcomeFilm\(film\);/, "주소가 바뀌어도 영상 창으로 연다");
   const sg = readFileSync("web/v2/share-guide.ts", "utf8");
+  assert.match(sg, /if \(!p\?\.share_guide_seen_at\) \{ openShareGuide\(\); return; \}/, "확인 안 한 사람에겐 카드가 먼저");
+  assert.match(sg, /if \(welcomeFilmAutoDue\(p, location\.hash\)\) \{ markWelcomeFilmSeen\(\); openWelcomeFilm\(WELCOME_FILM, FIRST_FILM_HEAD\); \}/, "★띄우면서 «띄웠다» 를 남긴다 — 안 남기면 켤 때마다 뜬다");
+  assert.match(sg, /JSON\.stringify\(\{ share_guide_seen: true, welcome_film_due: true \}\)/, "★인사 장면의 표식 둘은 한 요청이다");
+  assert.match(sg, /welcome_film_seen: true/);
   assert.match(sg, /share_guide_seen: true/);
   assert.match(sg, /catch \(_\) \{ return; \}/, "표식을 못 읽으면 띄우지 않는다");
 });
@@ -209,12 +249,21 @@ test("W1 배선 — 셸 · 승인 페이지 · 스타일", () => {
 test("W2 배선 — 서버 표식", () => {
   const liv = readFileSync("src/capabilities/delivery/liv.ts", "utf8");
   assert.match(liv, /const shareGuideSeen = input\.share_guide_seen === true/);
-  assert.match(liv, /!desktopSeen && !shareGuideSeen\) throw/, "이 표식만 와도 400 이 아니다");
-  assert.match(liv, /shareGuideSeen,\n\s*\}\);/);
+  assert.match(liv, /!desktopSeen && !shareGuideSeen && /, "이 표식만 와도 400 이 아니다");
+  assert.match(liv, /\n\s*shareGuideSeen,\n/);
   assert.match(liv, /share_guide_seen: z\.boolean\(\)\.optional\(\)/);
   assert.match(liv, /share_guide_seen_at: p\.share_guide_seen_at \?\? null/, "GET 이 돌려준다");
   const mem = readFileSync("src/org/store/members.ts", "utf8");
   assert.match(mem, /if \(patch\.shareGuideSeen && !cur\.share_guide_seen_at\) next\.share_guide_seen_at =/, "처음 시각을 지킨다");
+  // S1~S3 — 온보딩 영상 창 표식 둘(due · seen): 그 표식만 와도 400 이 아니다 · 처음 시각을 지킨다 · GET 이 돌려준다.
+  assert.match(liv, /const welcomeFilmDue = input\.welcome_film_due === true/);
+  assert.match(liv, /const welcomeFilmSeen = input\.welcome_film_seen === true/);
+  assert.match(liv, /!shareGuideSeen && !welcomeFilmDue && !welcomeFilmSeen\) throw/, "S1·S2 이 표식만 와도 400 이 아니다");
+  assert.match(liv, /welcomeFilmDue,\n\s*welcomeFilmSeen,\n\s*\}\);/, "저장으로 넘긴다");
+  assert.match(liv, /welcome_film_due: z\.boolean\(\)\.optional\(\)/); assert.match(liv, /welcome_film_seen: z\.boolean\(\)\.optional\(\)/);
+  assert.match(liv, /welcome_film_due_at: p\.welcome_film_due_at \?\? null, welcome_film_seen_at: p\.welcome_film_seen_at \?\? null/, "S3 GET 이 돌려준다");
+  assert.match(mem, /if \(patch\.welcomeFilmDue && !cur\.welcome_film_due_at\) next\.welcome_film_due_at =/, "S1 처음 시각을 지킨다");
+  assert.match(mem, /if \(patch\.welcomeFilmSeen && !cur\.welcome_film_seen_at\) next\.welcome_film_seen_at =/, "S2 처음 시각을 지킨다");
 });
 
 test("W3 배선 — setup 두 출구 · 멈춤 조건 · lively guide", () => {
@@ -228,5 +277,6 @@ test("W3 배선 — setup 두 출구 · 멈춤 조건 · lively guide", () => {
   assert.match(say, /\["data", "end", "close", "error"\]/, "tty 가 닫히거나 깨져도 기다림이 풀린다");
   assert.match(say, /color: !!TTY/, "★파이프면 isTTY 가 undefined 라 그대로 넘기면 기본값(색 켬)이 끼어든다 — 로그 파일에 색 코드가 섞인다");
   assert.match(src, /case "guide": return cmdGuide\(\);/);
-  assert.match(src, /\n  guide {18}누가 무엇을 보나요/, "도움말에 있다");
+  assert.match(src, /\n  guide {18}접근 권한 안내/, "도움말에 있다");
+  assert.match(say, /const link = gw \? `\$\{gw\}\/ui\/#\/film\/intro` : "";/, "★상자의 링크가 둘러보기 영상을 열지 않는다");
 });
