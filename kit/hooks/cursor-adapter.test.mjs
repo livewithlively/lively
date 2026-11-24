@@ -288,12 +288,12 @@ try {
   {
     resetCaps();
     stub("run-custom.mjs", envelope("UserPromptSubmit", "CTX-" + "다".repeat(500)));
-    slowStub("work-flag.mjs", 3000);
+    slowStub("work-flag.mjs", 1500);
     const t0 = Date.now();
     const r = runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "한 줄 질문" });
     const took = Date.now() - t0;
     eq("R40[E1] 응답 continue:true + 맥락 · 유효 JSON 한 줄", [isOneObject(r), outOf(r)], [true, { continue: true, additional_context: "CTX-" + "다".repeat(500) }]);
-    took < 2500 ? ok(`R40b[E1] work-flag(3초)는 기다리지 않는다(${took}ms)`) : bad("R40b[E1] work-flag 는 기다리지 않는다", `${took}ms`);
+    took < 1200 ? ok(`R40b[E1] work-flag(1.5초)는 기다리지 않는다(${took}ms)`) : bad("R40b[E1] work-flag 는 기다리지 않는다", `${took}ms`);
     eq("R40c[E1] run-custom 2회(앞: 맥락 몫 · 뒤: 동기화 몫) · work-flag 1회", [waitCap("run-custom.mjs", 2), waitCap("work-flag.mjs", 1)], [2, 1]);
     const [front, back] = capOf("run-custom.mjs");
     eq("R40d[E1] 앞 몫 = 동기화 훅 제외 · 예산 4초 · 늦은 맥락 허용(only 없음)", [front?.skip, front?.only, front?.budget], ["project-pull-turn,project-push-turn", "", "4000"]);
@@ -312,12 +312,12 @@ try {
     waitCap("run-custom.mjs", 2); waitCap("work-flag.mjs", 1);
     // 옛 앱(2.6.13 — additional_context 를 버림): 기다리지 않고, 조직 훅 전부를 뒤에서 한 번.
     resetCaps();
-    slowStub("run-custom.mjs", 3000, envelope("UserPromptSubmit", "CTX"));
+    slowStub("run-custom.mjs", 1500, envelope("UserPromptSubmit", "CTX"));
     const t1 = Date.now();
     const r2 = runAdapter("beforeSubmitPrompt", { ...BASE, prompt: "q" }, { CURSOR_VERSION: "2.6.13" });
     const took2 = Date.now() - t1;
     eq("R41c[E2] 옛 앱 → continue:true 만", outOf(r2), { continue: true });
-    took2 < 2500 ? ok(`R41d[E2] 옛 앱은 러너(3초)를 기다리지 않는다(${took2}ms)`) : bad("R41d[E2] 옛 앱은 러너를 기다리지 않는다", `${took2}ms`);
+    took2 < 1200 ? ok(`R41d[E2] 옛 앱은 러너(1.5초)를 기다리지 않는다(${took2}ms)`) : bad("R41d[E2] 옛 앱은 러너를 기다리지 않는다", `${took2}ms`);
     eq("R41e[E2] 옛 앱 — run-custom 1회(뒤에서, 훅 전부)", [waitCap("run-custom.mjs", 1), capOf("run-custom.mjs")[0]?.only, capOf("run-custom.mjs")[0]?.skip], [1, "", ""]);
     waitCap("work-flag.mjs", 1);
     stub("run-custom.mjs"); stub("work-flag.mjs");
@@ -381,13 +381,14 @@ process.stdin.on("end", () => setTimeout(() => {
     eq("R23a[E3] stop 응답은 뒤 작업(work-flag·조직 Stop 훅)을 기다리지 않는다", capOf("work-flag.mjs").length, 0);
     waitCap("work-flag.mjs", 2);
     eq("R45[E12] 같은 세션 — 보고 순서 UserPromptSubmit → Stop", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).hook_event_name), ["UserPromptSubmit", "Stop"]);
-    waitCap("run-custom.mjs", 2);
+    // run-custom 3회 = beforeSubmitPrompt 의 맥락 몫(기다림)·동기화 몫(뒤) + stop 의 조직 훅(뒤). 다 끝날 때까지 기다려야 다음 블록에 새지 않는다.
+    waitCap("run-custom.mjs", 3);
     resetCaps();
     runAdapter("beforeSubmitPrompt", { ...BASE, session_id: "sess-A", prompt: "q" });
     runAdapter("stop", { ...BASE, session_id: "sess-B", status: "completed", loop_count: 0 });
     waitCap("work-flag.mjs", 2);
     eq("R45b[E12] 다른 세션은 기다리지 않는다(B 의 Stop 이 먼저)", capOf("work-flag.mjs").map((c) => JSON.parse(c.stdin).session_id), ["sess-B", "sess-A"]);
-    waitCap("run-custom.mjs", 2);
+    waitCap("run-custom.mjs", 3);
     stub("work-flag.mjs");
   }
   // [E7] 뒤 작업을 못 띄워도(외부 실행 금지) 유효 JSON 한 줄 · 입력파일 누수 없음.
