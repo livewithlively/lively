@@ -923,7 +923,10 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     root.style.setProperty('--tui-fg', face.foreground);
     root.style.setProperty('--tui-cursor', face.cursor);
     root.style.setProperty('--tui-sel', face.selectionBackground);
-    root.style.setProperty('--tui-link', face.blue);   // Claude Code 는 링크를 터미널의 ANSI 파랑으로 찍는다(실측)
+    //  #5650 터미널과 한 규칙 — 링크는 파랑 + 밑줄(standalone/terminal.ts LINK_BLUE), 코드는 파랑이 아닌 색(CODE_COLOR).
+    //   종전 링크 색(ANSI 파랑)은 라이트 판에서 거의 남색이라 링크로 안 읽혔고(원준 2026-11-25 «색이 애매»), 코드가 오히려 파랬다.
+    root.style.setProperty('--tui-link', face.dark ? '#60A5FA' : '#2563EB');
+    root.style.setProperty('--tui-code', face.dark ? '#E7A36B' : '#A04F12');
     root.dataset.tuiScheme = face.dark ? 'dark' : 'light';
     root.dataset.tuiCaret = caretShape(termPrefs.cursorStyle);
     applyCell();

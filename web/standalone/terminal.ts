@@ -590,9 +590,9 @@ export function clearOf(c: string): string {
 }
 /** xterm 에 입힐 테마 — 비침이 켜져 있으면 앱 테마의 색에서 바탕만 비운다. xterm 의 theme 을 바꾸는 자리는 전부 이것을 쓴다. */
 function themeFor(key) {
-  if (!glassOn) return resolveTheme(key);
+  if (!glassOn) return withCodeColor(resolveTheme(key));
   const th = resolveTheme('auto');                 // = 앱 테마(APP_LIGHT/APP_DARK) — 뒤에 비치는 것이 앱이라서
-  return Object.assign({}, th, { background: clearOf(th.background) });
+  return withCodeColor(Object.assign({}, th, { background: clearOf(th.background) }));   // 판정은 색으로(알파 0 이어도 같은 색)
 }
 /** 비침 동안 문서의 color-scheme 을 앱과 같게. 끄면 되돌린다(스타일시트 기본으로). */
 function applyGlassScheme(): void {
@@ -4883,7 +4883,8 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
-  wireLinkUnderlines();   // #5650 열리는 링크에 늘 옅은 밑줄(색이 아니라 밑줄로 링크를 알린다)
+  quietXtermLinkUnderlines(term);   // #5650 xterm 의 OSC 8 점선·호버 밑줄 대신 라이블리 밑줄 하나
+  wireLinkUnderlines();   // #5650 열리는 링크는 파란 글자 + 실선 밑줄
   wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
   try { wireInputSelection(host); } catch (_) { /* noop */ } // 입력줄 선택 표시(#3778) · 입력칸 선택(#4406) · 마우스
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
@@ -5078,14 +5079,68 @@ function startRestore(meta) {
   showRestoringBanner(meta);
   restoreThisSession();
 }
-// (순수 — 테스트 대상) #5650 링크 밑줄 색 — 대화 화면의 링크와 같은 파랑. 바탕이 어두우면 밝은 파랑(원준 2026-11-24 «파란색과 밑줄»).
-//  글자 색은 하네스가 칠한 그대로다 — 대체 화면(Claude Code · Codex)에선 xterm 장식이 그려지지 않아(실측) 밑줄로만 알린다.
-export function linkBlue(bg: string): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(bg || '').trim());
-  if (!m) return '#3b82f6';
-  const n = parseInt(m[1], 16);
-  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
-  return lum < 0.5 ? '#60a5fa' : '#2563eb';
+// ── 링크 색·코드 색(#5650) ─────────────────────────────────────────────────────────────
+//  원준 2026-11-25 «색은 왜 저렇게 애매하지 · 밑줄 이상하고 안 이쁘고 · 파란색이라 눌릴 것 같은데 안 눌림».
+//   실측(tmux capture -e, Claude Code · --settings theme): 백틱 코드는 256색 105번(라이트)·153번(다크) — 둘 다 파랑 계열이라
+//   «파란데 링크 아님» 이 됐다. 링크(URL)는 ANSI 파랑(34)에 OSC 8 을 심어 찍고, xterm 은 OSC 8 칸에 회색 점선 밑줄을 긋는다 —
+//   라이블리 밑줄과 겹쳐 두 줄이 됐다. 경로는 하네스가 아무 색도 안 칠해 까만 글자였다.
+//   규칙을 하나로: **파란 글자 + 밑줄 = 누르면 열림.** 링크 칸은 겹(블렌드)으로 글자를 파랗게 물들이고 실선 밑줄 하나를 긋는다.
+//   하네스의 코드 색(105·153)은 파랑이 아닌 색으로 바꾼다(대화 화면의 --tui-code 와 같은 값).
+/** 바탕색 → [r,g,b]. 읽지 못하면 흰색. `#rgb` · `#rrggbb(aa)` · `rgb(a)(…)`(알파는 버린다 — 비침 판도 같은 색으로 본다). */
+export function bgRgb(bg: string): [number, number, number] {
+  const s = String(bg || '').trim();
+  let m: RegExpExecArray | null;
+  if ((m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(s))) { const n = parseInt(m[1], 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+  if ((m = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(s))) return [parseInt(m[1] + m[1], 16), parseInt(m[2] + m[2], 16), parseInt(m[3] + m[3], 16)];
+  if ((m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(s))) return [+m[1], +m[2], +m[3]];
+  return [255, 255, 255];
+}
+export function bgIsDark(bg: string): boolean {
+  const [r, g, b] = bgRgb(bg);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 < 0.5;
+}
+export const LINK_BLUE = { light: '#2563EB', dark: '#60A5FA' };
+export const CODE_COLOR = { light: '#A04F12', dark: '#E7A36B' };
+/** (순수 — 테스트 대상) 링크 칸에 얹을 겹 — [블렌드, 색] 을 아래에서 위로. **바탕은 그대로 두고 글자만** 파랗게(실측: 헤드리스 크롬
+ *   스크린샷 2026-11-25 — 까만·흰·ANSI 파랑·코드 색·흐린 회색 글자를 각각 깔고 비교).
+ *   밝은 판 = 회색으로 채도를 걷고(saturation) 파랑과 밝은 쪽(lighten) — 흰 바탕은 그대로, 글자는 파랑.
+ *   어두운 판 = 바탕과의 차(difference)로 바탕을 검정으로 → 채도 걷기 → 회색을 흰색까지 끌어올림(color-dodge · 검정은 검정)
+ *    → 파랑을 곱함(multiply · 흰 글자 = 파랑) → 바탕색과 밝은 쪽(lighten · 검정 = 바탕). 더 짧은 길은 실측으로 버렸다:
+ *    color 하나 = 흰 글자가 흰 채 · darken 하나 = 코드 색 글자가 초록 · multiply·color = 바탕에 남색 띠. */
+export function linkTint(bg: string): { dark: boolean; blue: string; layers: Array<[string, string]> } {
+  const dark = bgIsDark(bg);
+  if (!dark) return { dark, blue: LINK_BLUE.light, layers: [['saturation', '#808080'], ['lighten', LINK_BLUE.light]] };
+  const hex = '#' + bgRgb(bg).map((x) => x.toString(16).padStart(2, '0')).join('');
+  return { dark, blue: LINK_BLUE.dark, layers: [['difference', hex], ['saturation', '#808080'], ['color-dodge', '#999999'], ['multiply', LINK_BLUE.dark], ['lighten', hex]] };
+}
+/** (순수 — 테스트 대상) 하네스의 코드 색(256색 105 · 153)을 파랑이 아닌 코드 색으로 바꾼 테마 사본. */
+export function withCodeColor<T extends { background?: string }>(th: T): T & { extendedAnsi: string[] } {
+  const c = bgIsDark(String(th.background || '')) ? CODE_COLOR.dark : CODE_COLOR.light;
+  const ext: string[] = [];
+  ext[105 - 16] = c; ext[153 - 16] = c;
+  return Object.assign({}, th, { extendedAnsi: ext });
+}
+/** xterm 이 스스로 긋는 링크 밑줄을 끈다 — OSC 8 칸의 점선(늘) · 링크 위 호버 실선. 라이블리가 링크마다 실선 하나를 긋는다.
+ *  xterm 5.5(public/vendor/xterm — 판 고정) 내부를 고친다: ExtendedAttrs 의 underlineStyle·ext 가 urlId 면 5(점선)를 돌려주는 것,
+ *  Linkifier 의 _fireUnderlineEvent. 모양이 다르면(판이 바뀜) 손대지 않는다 — 점선이 돌아올 뿐 링크는 그대로 열린다. */
+export function quietXtermLinkUnderlines(t: any): boolean {
+  let ok = false;
+  try {
+    const ex = t && t._core && t._core._inputHandler && t._core._inputHandler._curAttrData && t._core._inputHandler._curAttrData.extended;
+    const p = ex && Object.getPrototypeOf(ex);
+    const us = p && Object.getOwnPropertyDescriptor(p, 'underlineStyle');
+    const xt = p && Object.getOwnPropertyDescriptor(p, 'ext');
+    if (us && xt && us.get && xt.get && /_urlId\?5:\(469762048&this\._ext\)>>26/.test(String(us.get)) && /_urlId/.test(String(xt.get))) {
+      Object.defineProperty(p, 'underlineStyle', { get(this: any) { return (469762048 & this._ext) >> 26; }, set: us.set, configurable: true });
+      Object.defineProperty(p, 'ext', { get(this: any) { return this._ext; }, set: xt.set, configurable: true });
+      ok = true;
+    }
+  } catch (_) { /* 판이 다르다 */ }
+  try {
+    const lk = t && t._core && t._core.linkifier;
+    if (lk && typeof lk._fireUnderlineEvent === 'function') lk._fireUnderlineEvent = (): void => { /* 라이블리 밑줄이 늘 있다 */ };
+  } catch (_) { /* noop */ }
+  return ok;
 }
 
 // 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
@@ -5186,7 +5241,7 @@ export function underlineSegs(rows: string[], soft: boolean[], first: number, co
   }
   return out;
 }
-let linkUlEls: HTMLElement[] = [];
+let linkUlEls: HTMLElement[][] = [];   // 조각마다 [겹…, 밑줄]
 let linkUlTimer = 0, linkUlAt = 0;
 /** 밑줄을 다시 긋는다 — 화면이 자주 다시 그려지므로(답이 흐르는 중) 250ms 에 한 번으로 묶는다(앞·뒤 둘 다). */
 function scheduleLinkUnderlines(): void {
@@ -5211,19 +5266,43 @@ function drawLinkUnderlines(): void {
   } catch (_) { /* noop */ }
   const w = scr.offsetWidth / cols, h = scr.offsetHeight / n;
   //  보이는 글·자리·크기·아는 지식이 그대로면 다시 계산하지 않는다(출력이 쏟아지는 동안 0.25초마다 도는 일 — 리뷰 지적).
-  const sig = top + '|' + w + '|' + h + '|' + knowledgeKnown.size + '|' + rows.join('\n');
+  const sig = top + '|' + w + '|' + h + '|' + knowledgeKnown.size + '|' + String(term.options.theme && term.options.theme.background) + '|' + rows.join('\n');
   if (sig === linkUlSig) return;
   linkUlSig = sig;
   const segs = underlineSegs(rows, soft, top - from, n, cols);
-  while (linkUlEls.length > segs.length) { try { linkUlEls.pop()!.remove(); } catch (_) { /* noop */ } }
-  const fg = linkBlue(String((term.options.theme && term.options.theme.background) || ''));
+  //  OSC 8 링크(Codex 의 «라벨» 링크 · Claude Code 의 URL) — 글자로는 못 찾는 것도 칸에 심긴 주소로 긋는다(열 수 있는 것만).
+  for (let r = 0; r < n; r++) {
+    const line = buf.getLine(top + r);
+    if (!line) continue;
+    let run = -1, runId = 0;
+    for (let c = 0; c <= cols; c++) {
+      let id = 0;
+      if (c < cols) { try { const cell = line.getCell(c); id = cell && cell.hasExtendedAttrs() ? (cell.extended?.urlId || 0) : 0; } catch (_) { id = 0; } }
+      if (id && id === runId) continue;
+      if (run >= 0 && runId && oscLinkAtCell(term, top + r, run)) segs.push({ row: r, c0: run, c1: c });
+      run = id ? c : -1; runId = id;
+    }
+  }
+  const tint = linkTint(String((term.options.theme && term.options.theme.background) || ''));
+  while (linkUlEls.length > segs.length) { for (const d of linkUlEls.pop()!) { try { d.remove(); } catch (_) { /* noop */ } } }
   segs.forEach((g, i) => {
-    if (!linkUlEls[i]) { linkUlEls[i] = el('div', { class: 'term-link-ul' }); scr!.appendChild(linkUlEls[i]); }
-    const d = linkUlEls[i];
-    d.style.left = (g.c0 * w) + 'px';
-    d.style.top = ((g.row + 1) * h - 2) + 'px';
-    d.style.width = ((g.c1 - g.c0) * w) + 'px';
-    d.style.borderBottomColor = fg;
+    if (!linkUlEls[i] || linkUlEls[i].length !== tint.layers.length + 1) {
+      for (const d of linkUlEls[i] || []) { try { d.remove(); } catch (_) { /* noop */ } }
+      linkUlEls[i] = [...tint.layers.map(() => el('div', { class: 'term-link-tint' })), el('div', { class: 'term-link-ul' })];
+      for (const d of linkUlEls[i]) scr!.appendChild(d);
+    }
+    const els = linkUlEls[i];
+    tint.layers.forEach(([mode, color], k) => {
+      const d = els[k];
+      d.style.left = (g.c0 * w) + 'px'; d.style.top = (g.row * h) + 'px';
+      d.style.width = ((g.c1 - g.c0) * w) + 'px'; d.style.height = h + 'px';
+      d.style.background = color; d.style.mixBlendMode = mode;
+    });
+    const u = els[els.length - 1];
+    u.style.left = (g.c0 * w) + 'px';
+    u.style.top = ((g.row + 1) * h - 1) + 'px';
+    u.style.width = ((g.c1 - g.c0) * w) + 'px';
+    u.style.borderBottomColor = tint.blue;
   });
 }
 function wireLinkUnderlines(): void {
