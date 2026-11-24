@@ -120,6 +120,14 @@ const BUDGETED = EVENT === "UserPromptSubmit" || EVENT === "SessionStart";
 const capOf = (h, ev) => { const c = h && h.runnerCapMs; return typeof c === "number" ? c : (c && typeof c[ev] === "number" ? c[ev] : 0); };
 const CAP_MS = BUDGETED ? capOf(harness(HARNESS), EVENT) : 0;
 const EVENT_BUDGET_MS = BUDGETED ? envMs("LIVELY_HOOK_EVENT_BUDGET_MS", CAP_MS > 0 ? CAP_MS - Math.min(5000, Math.floor(CAP_MS / 3)) : 0) : 0;
+// 훅 고르기(#5675) — 한 이벤트의 조직 훅을 «기다릴 몫» 과 «뒤에서 돌 몫» 으로 나눠 부를 때 쓴다(Cursor 어댑터의
+//  beforeSubmitPrompt: 맥락을 내는 훅은 기다려 싣고, 맥락이 없는 느린 동기화 훅은 뒤에서). 쉼표로 나눈 훅 id.
+//  ONLY 가 있으면 그 훅만, SKIP 은 그 훅을 뺀다. ONLY 로 부른 몫은 뒤 작업이라 늦은 조직 맥락(lateOrgContext)을 건드리지
+//  않는다 — 그건 «한 번만 싣고 지우는» 표시라서, 출력을 아무도 안 읽는 쪽이 먼저 지우면 맥락이 사라진다.
+const idSet = (name) => new Set(String(process.env[name] || "").split(",").map((x) => x.trim()).filter(Boolean));
+const HOOK_ONLY = idSet("LIVELY_HOOK_ONLY");
+const HOOK_SKIP = idSet("LIVELY_HOOK_SKIP");
+const picked = (hk) => (!HOOK_ONLY.size || HOOK_ONLY.has(hk.id)) && !HOOK_SKIP.has(hk.id);
 const MIN_WAVE_MS = 300;   // 남은 예산이 이보다 적으면 다음 묶음을 시작하지 않는다
 const MIN_SPAWN_MS = 100;  // 훅 하나를 띄우는 그 순간 남은 예산이 이보다 적으면 띄우지 않는다(묶음 안에서 줄 선 훅·재시도)
 
@@ -771,7 +779,7 @@ async function main() {
     }
     return;
   }
-  const late = EVENT === "UserPromptSubmit" ? await lateOrgContext(input) : "";
+  const late = EVENT === "UserPromptSubmit" && !HOOK_ONLY.size ? await lateOrgContext(input) : "";
 
   // 예산의 기준은 이 프로세스가 뜬 시각이다 — 하네스의 상한도 러너를 띄운 순간부터 센다.
   const deadline = EVENT_BUDGET_MS > 0 ? performance.timeOrigin + EVENT_BUDGET_MS : Infinity;
@@ -783,7 +791,7 @@ async function main() {
     if (fetched !== null) saveCache(fetched, key);                                 // 성공 → 캐시 갱신
   }
   const relay = cfg.relay.filter((d) => RANK[d]); // 잡값 방어
-  const hooks = cfg.hooks.filter((hk) => hk && (hk.event === EVENT) && matches(hk, toolName));
+  const hooks = cfg.hooks.filter((hk) => hk && (hk.event === EVENT) && matches(hk, toolName) && picked(hk));
   if (!hooks.length) { if (late) emitContext(late); return; }
 
   // 하네스가 밀어 넣은 프롬프트(작업 끝 알림·하위 에이전트 보고 등)면 훅 입력에 표시를 싣는다. 걸러 내지는 않는다 —
