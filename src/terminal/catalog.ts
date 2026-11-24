@@ -301,20 +301,16 @@ export const HARNESSES: Harness[] = [
     //  ⚠ 낡은 문자열에 사용자가 묶이는 것은 여전히 막는다 — 화면은 이 값을 **기억에 저장하지 않는다**(사람이
     //   직접 고른 값만 저장). 그래서 codex 가 기본을 올려 이 줄을 고치면, 손대지 않은 사람은 그대로 따라온다.
     flags: [
-      //  #5332 — 2026-11-04 codex-cli 0.166.0 `codex debug models` 실측(visibility=list 만): 6.1-sol · 6-sol · 6-luna 가 새로 생기고
-      //   gpt-5.5 · 5.4 · 5.4-mini 는 목록에서 빠졌다(`/model gpt-5.4` → «Model 'gpt-5.4' is unavailable»). 없어진 모델을 남기면 고르는 즉시 실패한다.
-      //   무인 자동화 기본(AUTOMATION_DEFAULTS)은 비용 결정이라 여기서 따라 바꾸지 않는다.
-      //  ⚠ #5332 2차(2026-11-06 실측) — 목록은 **배포된 codex 판**이 받는 모델만 둔다. 테넌트 이미지·중앙 박스의 codex 는 0.157.1 이고
-      //   그 판엔 gpt-6.1-sol 이 없다(`codex debug models`): `-m gpt-6.1-sol` 로 띄우면 매 턴 «400 The 'gpt-6.1-sol' model is not supported
-      //   when using Codex with a ChatGPT account (model_not_found)» 로 실패했다 — 1차가 기본으로 올린 값이라 새 codex 세션이 첫 지시부터 죽었다.
-      //   기본은 두 판(0.157.1·0.166.0) 모두 맨 윗줄인 gpt-6-sol. 이미지의 codex 를 올리면(≥0.166.0) gpt-6.1-sol 을 다시 넣는다.
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], default: "gpt-6-sol" },
+      // 중앙 세션 이미지와 함께 갱신한다 — codex-cli 0.172.0 `codex debug models` 실측(2026-11-24).
+      // 자동화·새 세션 기본 모델은 유지하고, 지원하는 6.1 두 모델을 명시적으로 고를 수 있게 한다.
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], default: "gpt-6-sol" },
       // Codex CLI는 현재 launch-time reasoning effort를 config로 받는다. 일반 --effort 플래그가 아니라
       // session 생성기에서 별도 argv로 정규화한다. UI 계약은 다른 하네스와 동일하게 유지한다.
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"], default: "medium" },
     ],
-    effortsByModel: {   // `codex debug models` 의 supported_reasoning_levels 그대로(0.166.0 · 0.157.1 도 같다)
-      "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],   // 목록엔 없다(위 ⚠) — 이미 그 모델로 뜬 세션(새 판 노드)의 강도 거르기용
+    effortsByModel: {   // codex-cli 0.172.0 `codex debug models` 의 supported_reasoning_levels
+      "gpt-6.1-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
       "gpt-6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
       "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
       "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
