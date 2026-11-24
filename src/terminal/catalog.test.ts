@@ -14,8 +14,12 @@ test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그�
   assert.ok(!c.effortsByModel?.["gpt-5.6-luna"]?.includes("ultra"));
   //  #5332 — 0.166.0 `codex debug models` 실측: 6.1-sol·6-sol·6-luna 가 생기고 5.5·5.4·5.4-mini 는 빠졌다(고르면 «unavailable»).
   assert.ok(models.includes("gpt-6-sol") && models.includes("gpt-6-luna"));
-  //  #5332 2차 — 배포된 codex(0.157.1)가 못 받는 모델은 목록에 두지 않는다(매 턴 400 model_not_found).
-  assert.ok(!models.includes("gpt-6.1-sol"), "0.157.1 은 gpt-6.1-sol 을 모른다");
+  // 중앙 이미지 0.172.0과 같은 모델·강도 계약을 새 세션 및 기존 세션 선택기에 제공한다.
+  for (const model of ["gpt-6.1-sol", "gpt-6.1-terra"]) {
+    assert.ok(models.includes(model), model);
+    assert.deepEqual(c.effortsByModel?.[model], ["low", "medium", "high", "xhigh", "max", "ultra"]);
+    assert.equal(c.runtimeCmd?.both?.(model, "ultra"), `/model ${model} --reasoning=ultra`);
+  }
   assert.ok(!models.some((m) => m === "gpt-5.5" || m.startsWith("gpt-5.4")));
   assert.ok(!c.effortsByModel?.["gpt-6-luna"]?.includes("ultra"));
   //  모든 모델이 강도 목록을 갖는다 — 없으면 화면이 강도 칸을 못 좁힌다.
