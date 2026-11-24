@@ -16,7 +16,9 @@
 
 export type UiPaneLink =
   | { kind: 'file'; path: string; url: string }
-  | { kind: 'web'; url: string };
+  | { kind: 'web'; url: string }
+  //  #5650 대화창 답 글 속 **파일 경로**(lib/chat-links) — 터미널 경로 알림(lively:open-file-in-pane)과 같은 실림새(path·target·cands·sid).
+  | { kind: 'path'; url: string; path: string; target: unknown; cands: Array<{ path: string; target: unknown }>; sid: string };
 
 /** 대화창 → 곁칸 알림(같은 문서 안 — 터미널은 iframe 이라 postMessage 를 쓴다). detail = { link: UiPaneLink, handled: false } — 받은 곁칸이 handled 를 켠다. */
 export const PANE_LINK_EVENT = 'lively:pane-link';

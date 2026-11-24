@@ -41,7 +41,8 @@ import { listSessionApps } from './app-session.js';
 import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
-import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { KN_OPEN_EVT, VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, knPending, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { knNameOfHref } from '../lib/kn-links.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
@@ -1176,6 +1177,29 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  이미 있던 탭은 이 신호로 그 파일을 편다(같은 파일이라 다시 그리지 않는다 — viewerPart open 의 첫 줄).
     if (path) wrap.dispatchEvent(new CustomEvent(VIEWER_TO_EVT, { detail: { id, path, slot: key, sid: d?.sid || null, node: d?.node || null } }));
   }
+  //  #5650 지식은 **[지식] 칸**에서 편다(원준 2026-11-24 «웹칸에서 띄울게 아니라 지식 칸에서») — 답 글·터미널의 지식 이름과 #/k/ 링크.
+  //   [지식] 칸이 없는 화면(프로젝트 없는 곁칸 — 그 칸을 세우지 않는다)이면 false — 부르는 쪽이 종전대로 웹 칸에 싣는다.
+  function openKnowledgeAt(name: string): boolean {
+    if (!name || loose) return false;
+    const hit = findTab('knowledge');
+    const zone: Zone = hit ? showZone(hit.zone, { bottomOn: lay.bottomOn, narrow: narrow() }) : landZone('side');
+    knPending.set(wrap, name);
+    if (!hit) addPart(zone, 'knowledge');
+    revealZone(zone);
+    activate(zone, hit ? hit.key : findTab('knowledge')!.key);
+    paintAll();
+    wrap.dispatchEvent(new CustomEvent(KN_OPEN_EVT, { detail: { name } }));
+    return true;
+  }
+  /** 우리 화면의 지식 주소(`<같은 출처>/ui/#/k/<이름>` · `#/k/<이름>`)면 그 이름. */
+  function knNameOfUrl(url: string): string | null {
+    try {
+      const u = new URL(url, location.href);
+      const dir = location.pathname.replace(/[^/]*$/, '');
+      if (u.origin !== location.origin || (u.pathname !== dir && u.pathname !== dir + 'index.html')) return null;
+      return knNameOfHref(u.hash);
+    } catch (_) { return null; }
+  }
   const onOpenViewer = (e: Event): void => openViewerAt((e as CustomEvent).detail as ViewerOpen | undefined);
   wrap.addEventListener(VIEWER_EVT, onOpenViewer);
   // 터미널 iframe 이 미리보기 링크를 넘겨 온다 — 새 탭 대신 웹 칸에 싣는다(원준 2026-08-21).
@@ -1286,6 +1310,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     }
     if (!d || d.type !== 'lively:open-in-pane' || typeof d.url !== 'string') return;
     if (!ownsFrame(e.source)) return;           // 남의 탭 터미널이 보낸 것 — 그 탭의 곁칸이 받는다
+    //  #5650 지식 주소는 [지식] 칸으로(답을 먼저 — 칸 세우기는 미룬다).
+    const kn = knNameOfUrl(d.url);
+    if (kn && !loose) {
+      try { (e.source as Window | null)?.postMessage({ type: 'lively:open-in-pane:ok' }, e.origin); } catch (_) { /* 이미 닫힘 */ }
+      window.setTimeout(() => { if (!openKnowledgeAt(kn)) { openInWebPart(ctx, d.url); addTab('side', 'web'); } }, 0);
+      return;
+    }
     // 남의 사이트(claude.ai 아티팩트 등)는 **앱에서만** 칸에 들어간다 — 브라우저 iframe 은 상대가 막는다
     //  (CSP frame-ancestors). 막힐 걸 알면서 칸에 넣으면 빈 화면만 남으므로 그때는 새 탭으로 연다.
     let cross = false;
@@ -1304,6 +1335,19 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const d = (e as CustomEvent).detail as { link?: UiPaneLink; handled?: boolean } | null;
     const link = d && d.link;
     if (!d || d.handled || !link) return;
+    //  #5650 답 글 속 파일 경로 — 터미널 경로와 같은 길(planPathOpen). 못 열면: 프로젝트 자료는 웹 칸에 자료 보기, 세션 폴더 경로는
+    //   받지 않는다(대화창이 안내한다).
+    if (link.kind === 'path') {
+      const run = planPathOpen({ path: link.path, target: link.target, sid: link.sid, cands: link.cands });
+      if (run) { d.handled = true; window.setTimeout(run, 0); return; }
+      if (!link.url) return;
+      d.handled = true;
+      openInWebPart(ctx, link.url); addTab('side', 'web');
+      return;
+    }
+    //  #5650 지식은 [지식] 칸에서.
+    const kn = link.kind === 'web' ? knNameOfUrl(link.url) : null;
+    if (kn && openKnowledgeAt(kn)) { d.handled = true; return; }
     //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 앱의 webview)만 받는다 — 브라우저 iframe 은 상대가 막아 빈 칸만 남는다.
     //   안 받으면 대화창이 기본 이동을 그대로 둔다(종전).
     let cross = false;

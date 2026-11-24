@@ -733,6 +733,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     bar: { right: look === 'tui' ? null : el('span', { class: 'dt-chips' }, chipMode) },
     compose: { chips: attachments.chips, button: attachments.btn, fileInput: attachments.fileIn },
     canSendEmpty: () => !!attachments.tail(),
+    pathSession: () => target.id,                 // #5650 답 글 속 세션 폴더 경로(`docs/a.md`)를 이 세션 폴더에서 연다
     askHost: liveDock,                            // 승인(#2055) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: async (text) => {
       if (attachments.busy()) { toast('파일을 올리는 중이에요 — 다 올라가면 보내주세요.'); return; }

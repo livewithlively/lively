@@ -359,6 +359,7 @@
   }
   /* 우클릭 메뉴(#3784) — 셸의 .pn-ctx 와 같은 겉모습, 이 페이지 팔레트로. */
   /* 입력줄 선택 표시(#3778) — 앱은 선택을 모르므로 웹터미널이 그 위에 칠한다. 글자를 가리지 않게 반투명. */
+  .term-link-ul { position: absolute; pointer-events: none; z-index: 4; height: 0; border-bottom: 1px solid; opacity: .8; }   /* #5650 링크 파란 밑줄 */
   .term-sel { position: absolute; pointer-events: none; z-index: 5; border-radius: 2px;
     background: rgba(88, 150, 255, .34); box-shadow: 0 0 0 1px rgba(88, 150, 255, .5) inset; }
   .tctx { position: fixed; z-index: 120; min-width: 188px; max-width: 320px; padding: 5px; display: flex; flex-direction: column; gap: 1px;
