@@ -17,8 +17,8 @@ import {                                  // #4406 Claude Code 입력칸 선택 
 } from './app-select.js';
 import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
 import { UploadBook, fmtBytes, upPercent, upStatusText } from './upload-queue.js';   // #5361 올리기 진행 표시 — 같은 파일·이름 예약(순수 판정)
-import { uiPaneLink } from './ui-link.js';
-import { pathMatches as pathMatchesPure, pathLinkTarget, isPathLink, knowledgeCandidates, knowledgeMatches } from './path-link.js';   // #5650 경로·지식 이름 판정 — 대화 화면(web/lib/path-link.ts 사본)과 한 규칙   // #5583 우리 화면의 자료 링크(#/f · #/k/)는 새 탭이 아니라 곁칸에서(정본 web/lib/ui-link.ts 의 사본)
+import { uiPaneLink } from './ui-link.js';   // #5583 우리 화면의 자료 링크(#/f · #/k/)는 새 탭이 아니라 곁칸에서(정본 web/lib/ui-link.ts 의 사본)
+import { pathMatches as pathMatchesPure, pathLinkTarget, isPathLink, knowledgeCandidates, knowledgeMatches } from './path-link.js';   // #5650 경로·지식 이름 판정 — 대화 화면(web/lib/path-link.ts 사본)과 한 규칙
 import type { UpJob } from './upload-queue.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
@@ -93,12 +93,16 @@ export function linkMatches(text: string): { start: number; end: number; url: st
 //  «없다» 는 60초만 믿는다 — AI 가 이름을 먼저 말하고 문서를 나중에 쓰는 판이 있다(그동안 호버한 이름이 영영 안 그어지면 안 된다).
 const knowledgeKnown = new Map<string, boolean | Promise<boolean>>();
 const knowledgeNoAt = new Map<string, number>();
-const KN_NO_TTL = 60_000, KN_ASK_MS = 1500;
+//  #5650 못 물은 때 — 늘 긋는 밑줄(drawLinkUnderlines)이 보이는 후보를 스스로 묻는다. 실패를 안 적으면 게이트웨이가 아플 때
+//   다시 긋기마다(0.25초) 같은 이름을 또 묻는 고리가 된다(리뷰 지적). 잠깐만 쉰다 — 기억(«있다/없다»)은 여전히 안 남긴다.
+const knowledgeFailAt = new Map<string, number>();
+const KN_NO_TTL = 60_000, KN_ASK_MS = 1500, KN_FAIL_REST = 20_000;
 export function isKnowledgeLink(s: string): boolean { return knowledgeKnown.get(s) === true; }
 /** 이 이름을 (다시) 물어야 하나 — 모르거나, 묻는 중이거나(기다려야 하므로), «없다» 가 낡았거나. */
 function knowledgeNeedsAsk(n: string): boolean {
   const v = knowledgeKnown.get(n);
-  if (v === undefined || v instanceof Promise) return true;
+  if (v === undefined) return Date.now() - (knowledgeFailAt.get(n) || 0) > KN_FAIL_REST;
+  if (v instanceof Promise) return true;
   return v === false && Date.now() - (knowledgeNoAt.get(n) || 0) > KN_NO_TTL;
 }
 /** 후보 이름들을 물어 기억한다(이미 아는 것은 건너뛴다). **반드시 끝난다** — 묻기마다 1.5초 상한이 있다(리뷰 차단 지적: 멎은
@@ -114,7 +118,8 @@ export async function learnKnowledge(names: string[]): Promise<void> {
       .catch((): null => null);
     const late = new Promise<null>((res) => window.setTimeout(() => { try { ctrl?.abort(); } catch (_) { /* noop */ } res(null); }, KN_ASK_MS));
     const p = Promise.race([req, late]).then((v) => {
-      if (v === null) { knowledgeKnown.delete(n); return false; }   // 답을 못 받았다 — 기억하지 않는다
+      if (v === null) { knowledgeKnown.delete(n); knowledgeFailAt.set(n, Date.now()); return false; }   // 답을 못 받았다 — 기억하지 않는다(잠깐 쉰다)
+      knowledgeFailAt.delete(n);
       knowledgeKnown.set(n, v);
       if (!v) knowledgeNoAt.set(n, Date.now()); else knowledgeNoAt.delete(n);
       return v;
@@ -5189,6 +5194,7 @@ function scheduleLinkUnderlines(): void {
   const wait = Math.max(0, 250 - (Date.now() - linkUlAt));
   linkUlTimer = window.setTimeout(() => { linkUlTimer = 0; linkUlAt = Date.now(); try { drawLinkUnderlines(); } catch (_) { /* 밑줄은 편의다 */ } }, wait);
 }
+let linkUlSig = '';
 function drawLinkUnderlines(): void {
   let scr: HTMLElement | null = null;
   try { scr = (term && term.element && term.element.querySelector('.xterm-screen')) || null; } catch (_) { /* noop */ }
@@ -5201,10 +5207,14 @@ function drawLinkUnderlines(): void {
   //  보이는 지식 이름 후보도 물어 둔다(호버를 기다리지 않는다) — 확인되면 다시 긋는다. 묻기는 기억·상한(12개·1.5초)이 있다.
   try {
     const ask = knowledgeCandidates(rows.join('\n')).flatMap((c) => c.names.map((x) => x.name)).filter(knowledgeNeedsAsk);
-    if (ask.length) void learnKnowledge(ask).then(scheduleLinkUnderlines, () => { /* noop */ });
+    if (ask.length) void learnKnowledge(ask).then(() => { linkUlSig = ''; scheduleLinkUnderlines(); }, () => { /* noop */ });
   } catch (_) { /* noop */ }
-  const segs = underlineSegs(rows, soft, top - from, n, cols);
   const w = scr.offsetWidth / cols, h = scr.offsetHeight / n;
+  //  보이는 글·자리·크기·아는 지식이 그대로면 다시 계산하지 않는다(출력이 쏟아지는 동안 0.25초마다 도는 일 — 리뷰 지적).
+  const sig = top + '|' + w + '|' + h + '|' + knowledgeKnown.size + '|' + rows.join('\n');
+  if (sig === linkUlSig) return;
+  linkUlSig = sig;
+  const segs = underlineSegs(rows, soft, top - from, n, cols);
   while (linkUlEls.length > segs.length) { try { linkUlEls.pop()!.remove(); } catch (_) { /* noop */ } }
   const fg = linkBlue(String((term.options.theme && term.options.theme.background) || ''));
   segs.forEach((g, i) => {

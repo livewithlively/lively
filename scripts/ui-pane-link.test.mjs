@@ -165,10 +165,11 @@ t("T4 다른 우리 화면(#/projects/12)은 종전대로 브라우저 새 탭",
 });
 
 const src = (p) => readFileSync(join(root, p), "utf8");
-t("T5 우클릭 [링크 열기] 힌트도 같은 판정 — 자료 파일은 뷰어 탭, 그 밖 자료는 웹 탭", () => {
+t("T5 우클릭 [링크 열기] 힌트도 같은 판정 — 자료 파일은 뷰어 탭, 지식은 지식 탭, 그 밖 자료는 웹 탭", () => {
   const term = src("web/standalone/terminal.ts");
   assert.match(term, /const paneOf = url \? uiPaneLink\(url, location\.href\) : null;/);
-  assert.match(term, /paneOf \? \(paneOf\.kind === 'file' && pathLinkTarget\(paneOf\.path\) \? 'file' : 'pane'\) : linkTargetHere\(url\)/);
+  //  #5650 지식 주소(#/k/)는 [지식] 탭
+  assert.match(term, /paneOf \? \(paneOf\.kind === 'file' && pathLinkTarget\(paneOf\.path\) \? 'file' : \/#\\\/k\\\/\/\.test\(paneOf\.url\) \? 'kn' : 'pane'\) : linkTargetHere\(url\)/);
   //  열기 쪽 — 자료 링크 판정이 «우리 화면 = 새 탭»(linkTargetHere) 보다 먼저 선다
   const open = term.slice(term.indexOf("export function openLinkFromTerminal"), term.indexOf("export function openLinkFromTerminal") + 3000);
   assert.ok(open.indexOf("uiPaneLink(uri, location.href)") > 0 && open.indexOf("uiPaneLink(uri, location.href)") < open.indexOf("linkTargetHere(uri)"));

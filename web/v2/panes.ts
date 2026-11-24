@@ -1335,8 +1335,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const d = (e as CustomEvent).detail as { link?: UiPaneLink; handled?: boolean } | null;
     const link = d && d.link;
     if (!d || d.handled || !link) return;
-    //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 앱의 webview)만 받는다 — 브라우저 iframe 은 상대가 막아 빈 칸만 남는다.
-    //   안 받으면 대화창이 기본 이동을 그대로 둔다(종전).
     //  #5650 답 글 속 파일 경로 — 터미널 경로와 같은 길(planPathOpen). 못 열면: 프로젝트 자료는 웹 칸에 자료 보기, 세션 폴더 경로는
     //   받지 않는다(대화창이 안내한다).
     if (link.kind === 'path') {
@@ -1350,6 +1348,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  #5650 지식은 [지식] 칸에서.
     const kn = link.kind === 'web' ? knNameOfUrl(link.url) : null;
     if (kn && openKnowledgeAt(kn)) { d.handled = true; return; }
+    //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 앱의 webview)만 받는다 — 브라우저 iframe 은 상대가 막아 빈 칸만 남는다.
+    //   안 받으면 대화창이 기본 이동을 그대로 둔다(종전).
     let cross = false;
     try { cross = new URL(link.url, location.href).origin !== location.origin; } catch (_) { /* 파싱 실패 — 같은 곳으로 본다 */ }
     if (cross && !hasBrowserSurface()) return;

@@ -43,11 +43,11 @@ t("W1 대화창 — 답 글(renderBody)과 다시 그린 표 둘 다 linkifyChat
   assert.match(cv, /const renderBody = \(s: string\): HTMLElement => linkifyChat\(renderBodyRaw\(s\), !!opts\.pathSession\);/);
   assert.match(cv, /const next = linkifyChat\(tuiMarkdown\(src, cols\), !!opts\.pathSession\);/);
 });
-t("W2 대화창 클릭 — 경로 링크는 곁칸에 kind 'path' 로 묻고, 받거나 href 가 없으면 기본 이동을 막는다", () => {
+t("W2 대화창 클릭 — 경로 링크는 곁칸에 kind 'path' 로 묻고, 기본 이동은 늘 막고, 곁칸이 없으면 자료 보기를 새 탭으로", () => {
   const cv = src("web/chat-view.ts");
   assert.match(cv, /closest\?\.\('a\[data-path\]'\)/);
   assert.match(cv, /kind: 'path' as const/);
-  assert.match(cv, /if \(detail\.handled \|\| !pa\.getAttribute\('href'\)\) e\.preventDefault\(\);/);
+  assert.match(cv, /e\.preventDefault\(\);\n\s+if \(detail\.handled\) return;\n[^\n]*\n\s+if \(pa\.getAttribute\('href'\)\) window\.open\(pa\.href, '_blank', 'noopener'\);/);
 });
 t("W3 세션 화면은 세션 id 를 준다 · 곁칸은 경로를 planPathOpen 으로", () => {
   assert.match(src("web/session-chat.ts"), /pathSession: \(\) => target\.id,/);
@@ -100,6 +100,13 @@ t("W6 답 글 링크 우클릭 — 경로·파일 이름·지식 이름·링크 
   const cv = src("web/chat-view.ts");
   assert.match(cv, /registerCtx\('chat-link',/);
   for (const l of ["경로 복사", "파일 이름 복사", "지식 이름 복사", "링크 복사"]) assert.ok(cv.includes(`label: '${l}'`), l);
+});
+
+t("W7 늘 긋는 밑줄이 실패한 지식 확인을 0.25초마다 다시 묻지 않는다(실패 뒤 잠깐 쉼) · 글이 그대로면 다시 계산하지 않는다", () => {
+  const tm = src("web/standalone/terminal.ts");
+  assert.match(tm, /if \(v === undefined\) return Date\.now\(\) - \(knowledgeFailAt\.get\(n\) \|\| 0\) > KN_FAIL_REST;/);
+  assert.match(tm, /if \(v === null\) \{ knowledgeKnown\.delete\(n\); knowledgeFailAt\.set\(n, Date\.now\(\)\);/);
+  assert.match(tm, /if \(sig === linkUlSig\) return;/);
 });
 
 // ── C 대화 화면(크롬) ─────────────────────────────────────────────────

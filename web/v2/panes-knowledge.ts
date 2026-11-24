@@ -239,7 +239,8 @@ export function knowledgePart(ctx: PartCtx): Part {
   const onKnOpen = (e: Event): void => { knPending.delete(ctx.paneRoot()); openNamed(String((e as CustomEvent).detail?.name || '')); };
   ctx.paneRoot().addEventListener(KN_OPEN_EVT, onKnOpen);
   const pending = knPending.get(ctx.paneRoot());
-  if (pending) { knPending.delete(ctx.paneRoot()); window.setTimeout(() => openNamed(pending), 0); }
+  //   칸이 막 생겼다 — 셸은 곧바로 KN_OPEN_EVT 도 쏜다. 그 신호가 왔으면(onKnOpen 이 적힌 것을 지웠다) 여기선 열지 않는다(두 번 열기 · 리뷰 지적).
+  if (pending) window.setTimeout(() => { if (knPending.get(ctx.paneRoot()) !== pending) return; knPending.delete(ctx.paneRoot()); openNamed(pending); }, 0);
 
   paint();
   return {

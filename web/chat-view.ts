@@ -695,13 +695,15 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     //  #5650 파일 경로(답 글 속 — lib/chat-links)는 터미널 경로와 같은 길: 곁칸 [자료] + 뷰어. 곁칸이 없으면 프로젝트 경로는 href(#/f)로,
     //   세션 폴더 경로는 열 자리가 없다고 알린다.
     const pa = (e.target as HTMLElement | null)?.closest?.('a[data-path]') as HTMLAnchorElement | null;
-    if (pa && list.contains(pa)) {
-      const pl = pathLinkOf(pa);
-      if (!pl) return;
+    const pl = pa && list.contains(pa) ? pathLinkOf(pa) : null;   // 못 읽는 경로면 아래 일반 링크 길로
+    if (pa && pl) {
       const detail = { link: { kind: 'path' as const, url: pa.getAttribute('href') ? pa.href : '', ...pl, sid: opts.pathSession ? opts.pathSession() : '' }, handled: false };
       pa.dispatchEvent(new CustomEvent(PANE_LINK_EVENT, { bubbles: true, detail }));
-      if (detail.handled || !pa.getAttribute('href')) e.preventDefault();
-      if (!detail.handled && !pa.getAttribute('href')) toast('세션 화면에서 열 수 있습니다. 이 경로는 세션 폴더 기준입니다.');
+      e.preventDefault();
+      if (detail.handled) return;
+      //  곁칸이 없는 화면 — 보던 화면을 떠나지 않게 자료 보기는 새 탭으로(리뷰 지적: 기본 이동이 이 탭을 #/f 로 넘겼다).
+      if (pa.getAttribute('href')) window.open(pa.href, '_blank', 'noopener');
+      else toast('세션 화면에서 열 수 있습니다. 이 경로는 세션 폴더 기준입니다.');
       return;
     }
     const a = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
