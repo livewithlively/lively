@@ -350,6 +350,11 @@ export interface LivProfile {
   desktop_seen_at?: string | null;
   /** #5598 — «누가 무엇을 보나요» 첫 안내를 확인했다(웹 카드 · 설치 승인 직후). 처음 시각을 지킨다 — 이 값이 있으면 다시 자동으로 뜨지 않는다. */
   share_guide_seen_at?: string | null;
+  /** #5598 — 처음 설정 인사 장면의 안내 카드를 끝까지 넘겼다 = 셸에 돌아오면 온보딩 영상(기초)을 창으로 한 번 띄울 차례. 처음 시각을 지킨다.
+   *  이 값이 없는 사람(이 변경 전부터 쓰던 구성원)에게는 영상이 자동으로 뜨지 않는다. */
+  welcome_film_due_at?: string | null;
+  /** #5598 — 그 영상 창을 띄웠다. 처음 시각을 지킨다 — 있으면 다시 자동으로 뜨지 않는다. */
+  welcome_film_seen_at?: string | null;
   /**
    * 이 워크스페이스에 **어떻게 들어왔나**(#1631, 원준 결정 2026-09-13) — 처음 설정의 갈래(주인 / 초대로 들어온 사람)와
    *  «터미널 → 내 컴퓨터 / 앱 받기» 장면을 보일지의 재료. 매니지드에선 계정 서버만 아는 사실이라, 처음 설정 현황(폴링 자리)이
@@ -626,7 +631,7 @@ export function withUploadDone(welcome: LivWelcome | null | undefined, at: Date)
 }
 
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean; uploadDone?: boolean; desktopSeen?: boolean; shareGuideSeen?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean; uploadDone?: boolean; desktopSeen?: boolean; shareGuideSeen?: boolean; welcomeFilmDue?: boolean; welcomeFilmSeen?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -641,6 +646,9 @@ export async function appendLivProfile(
   if (patch.desktopSeen) next.desktop_seen_at = new Date().toISOString();
   // #5598 — «누가 무엇을 보나요» 첫 안내를 확인했다. 처음 시각을 지킨다(다시 봐도 «처음 본 때» 가 밀리지 않게).
   if (patch.shareGuideSeen && !cur.share_guide_seen_at) next.share_guide_seen_at = new Date().toISOString();
+  // #5598 — 온보딩 영상(기초) 창: «띄울 차례» 와 «띄웠다». 둘 다 처음 시각을 지킨다.
+  if (patch.welcomeFilmDue && !cur.welcome_film_due_at) next.welcome_film_due_at = new Date().toISOString();
+  if (patch.welcomeFilmSeen && !cur.welcome_film_seen_at) next.welcome_film_seen_at = new Date().toISOString();
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).

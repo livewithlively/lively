@@ -132,7 +132,9 @@ export const livCapabilities: Capability[] = [
       const uploadDone = input.upload_done === true;     // #5060 — 화면의 백그라운드 올리기가 다 비었다(2턴이 기다리던 신호)
       const desktopSeen = input.desktop_seen === true;   // #5060 — 처음 설정을 데스크톱 앱 안에서 열었다(브라우저 탭이 접히는 신호)
       const shareGuideSeen = input.share_guide_seen === true;   // #5598 — «누가 무엇을 보나요» 첫 안내를 확인했다(화면이 찍는다)
-      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone && !uploadDone && !desktopSeen && !shareGuideSeen) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done · upload_done · desktop_seen · share_guide_seen 중 하나는 있어야 합니다");
+      const welcomeFilmDue = input.welcome_film_due === true;    // #5598 — 처음 설정의 안내 카드를 넘겼다 → 셸에서 온보딩 영상을 띄울 차례
+      const welcomeFilmSeen = input.welcome_film_seen === true;  // #5598 — 그 영상 창을 띄웠다
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone && !uploadDone && !desktopSeen && !shareGuideSeen && !welcomeFilmDue && !welcomeFilmSeen) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done · upload_done · desktop_seen · share_guide_seen · welcome_film_due · welcome_film_seen 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -148,6 +150,8 @@ export const livCapabilities: Capability[] = [
         uploadDone,
         desktopSeen,
         shareGuideSeen,
+        welcomeFilmDue,
+        welcomeFilmSeen,
       });
       //  (#5167) «다 올렸다» 를 받았다 — 파일 갈래면 리브를 정비 주기까지 기다리게 하지 않고 지금 연다(kickLivSecondTurn 머리말).
       if (uploadDone && profile.welcome?.flow === "files") {
@@ -182,6 +186,11 @@ export const livCapabilities: Capability[] = [
       share_guide_seen: z.boolean().optional()
         .describe("(화면) «누가 무엇을 보나요» 첫 안내(#5598)를 확인했다는 표식. 리브(AI)가 찍는 값이 아니다 — 사람이 안내 카드의 " +
           "[확인했어요] 를 누르면 화면이 찍는다. 찍히면 어느 브라우저 · 앱에서도 그 안내가 다시 자동으로 뜨지 않는다. 처음 찍힌 시각을 지킨다."),
+      welcome_film_due: z.boolean().optional()
+        .describe("(화면) 처음 설정 인사 장면의 안내 카드를 끝까지 넘겼다는 표식(#5598). 리브(AI)가 찍는 값이 아니다. 찍힌 사람이 평소 화면으로 " +
+          "돌아오면 온보딩 영상(기초)이 창으로 한 번 뜬다. 처음 찍힌 시각을 지킨다."),
+      welcome_film_seen: z.boolean().optional()
+        .describe("(화면) 그 온보딩 영상 창을 띄웠다는 표식(#5598). 리브(AI)가 찍는 값이 아니다. 찍히면 다시 자동으로 뜨지 않는다. 처음 찍힌 시각을 지킨다."),
       desktop_seen: z.boolean().optional()
         .describe("(화면) 처음 설정을 데스크톱 앱 안에서 열었다는 표식(#5060). 리브(AI)가 찍는 값이 아니다. 마지막 시각을 남기고, " +
           "브라우저에서 [앱 받기]를 누른 사람의 탭이 그 값을 보고 «앱에서 이어 하고 있어요» 로 접힌다."),
@@ -206,7 +215,7 @@ export const livCapabilities: Capability[] = [
       const { getLivProfile } = await import("../../org/store.js");
       // fail-open — 리브를 한 번도 안 쓴 사람(행 없음)은 빈 프로필이 정답이다. 창이 안 열리면 안 된다.
       const p: LivProfile = await getLivProfile(userId).catch(() => ({}));
-      return { work: p.work ?? null, answers: p.answers ?? [], decisions: p.decisions ?? [], share_guide_seen_at: p.share_guide_seen_at ?? null };
+      return { work: p.work ?? null, answers: p.answers ?? [], decisions: p.decisions ?? [], share_guide_seen_at: p.share_guide_seen_at ?? null, welcome_film_due_at: p.welcome_film_due_at ?? null, welcome_film_seen_at: p.welcome_film_seen_at ?? null };
     }),
 
   //  자격 입력칸 · 객관식 · 파일 올리기(옛 me_liv_ask_secret · me_liv_ask_choice · me_liv_ask_upload · 화면 전용 me_liv_put_secret · me_liv_answer)는
