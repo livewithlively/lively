@@ -259,15 +259,18 @@ if (chrome) {
   function XPAGE(quiet) {
     const t = new Terminal({ cols: 60, rows: 4 }); t.open(document.getElementById("t"));
     const R = { patched: quiet ? TM.quietXtermLinkUnderlines(t) : null };
-    t.write("\x1b]8;;https://a.io/x\x1b\\label\x1b]8;;\x1b\\ \x1b[4mul\x1b[24m \x1b[4:3mcurly\x1b[4:0m");
-    setTimeout(() => {
-      R.row = document.querySelector(".xterm-rows > div").innerHTML;
-      const c = t.buffer.active.getLine(0).getCell(0);
-      R.uri = t._core._oscLinkService.getLinkData(c.extended.urlId)?.uri || null;
+    // 그림(DOM 줄)은 헤드리스에서 그려지지 않을 때가 있어(병합 대기열 실측 — 빈 줄로 실패) 렌더러가 읽는 칸의 밑줄 모양을 직접 잰다.
+    //  write 콜백 = 글이 버퍼에 다 들어간 뒤.
+    t.write("\x1b]8;;https://a.io/x\x1b\\label\x1b]8;;\x1b\\ \x1b[4mul\x1b[24m \x1b[4:3mcurly\x1b[4:0m", () => {
+      const line = t.buffer.active.getLine(0);
+      const us = (x) => { const c = line.getCell(x); return c.isUnderline() ? c.extended.underlineStyle : 0; };
+      const link = line.getCell(0);
+      R.ul = { link: link.extended.underlineStyle, ul: us(6), curly: us(9) };
+      R.uri = t._core._oscLinkService.getLinkData(link.extended.urlId)?.uri || null;
       let fired = 0; try { t._core.linkifier._onShowLinkUnderline.event(() => fired++); t._core.linkifier._fireUnderlineEvent({ range: { start: { x: 1, y: 1 }, end: { x: 5, y: 1 } } }, true); } catch (e) { R.err = String(e); }
       R.fired = fired;
       document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
-    }, 800);
+    });
   }
   const run = async (quiet) => {
     const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="xterm.min.css"><script src="xterm.min.js"></script><script>${tmb.replace(/<\/script/gi, "<\\/script")}</script></head><body><div id="t"></div><pre id="out">P</pre><script>(${XPAGE.toString()})(${quiet});</script></body></html>`;
@@ -276,12 +279,11 @@ if (chrome) {
   };
   const before = await run(false), after = await run(true);
   t("X1 전제 — 고치기 전 xterm 은 OSC 8 칸에 점선(underline-5)을 긋고 호버 밑줄 신호를 낸다", () => {
-    assert.match(before.row, /xterm-underline-5/); assert.equal(before.fired, 1);
+    assert.deepEqual(before.ul, { link: 5, ul: 1, curly: 3 }); assert.equal(before.fired, 1);
   });
   t("X2 quietXtermLinkUnderlines — 점선·호버 밑줄은 없어지고, 링크 주소 · 보통 밑줄 · 물결 밑줄은 그대로", () => {
     assert.equal(after.patched, true);
-    assert.ok(!/xterm-underline-5/.test(after.row), after.row);
-    assert.match(after.row, /xterm-underline-1">ul</); assert.match(after.row, /xterm-underline-3">curly</);
+    assert.deepEqual(after.ul, { link: 0, ul: 1, curly: 3 });
     assert.equal(after.uri, "https://a.io/x"); assert.equal(after.fired, 0);
   });
 }
