@@ -54,8 +54,12 @@ t("W3 세션 화면은 세션 id 를 준다 · 곁칸은 경로를 planPathOpen 
   assert.match(src("web/v2/panes.ts"), /if \(link\.kind === 'path'\) \{\n\s+const run = planPathOpen\(\{ path: link\.path, target: link\.target, sid: link\.sid, cands: link\.cands \}\);/);
 });
 t("W4 터미널 — 열면 밑줄 배선을 건다 · 밑줄 칸 꾸밈이 있다", () => {
-  assert.match(src("web/standalone/terminal.ts"), /term\.open\(host\);\n\s+wireLinkUnderlines\(\);/);
+  assert.match(src("web/standalone/terminal.ts"), /term\.open\(host\);\n\s+quietXtermLinkUnderlines\(term\);[^\n]*\n\s+wireLinkUnderlines\(\);/);
   assert.match(src("public/terminal.html"), /\.term-link-ul \{ position: absolute; pointer-events: none;[^}]*border-bottom: 1px solid;/);
+  assert.match(src("public/terminal.html"), /\.term-link-tint \{ position: absolute; pointer-events: none; z-index: 4; \}/);
+  //  터미널 테마는 모두 코드 색 사본을 지난다
+  assert.match(src("web/standalone/terminal.ts"), /if \(!glassOn\) return withCodeColor\(resolveTheme\(key\)\);/);
+  assert.match(src("web/standalone/terminal.ts"), /const segs = mergeSegs\(found\);/);
 });
 
 // ── U 터미널 밑줄(순수) ───────────────────────────────────────────────
@@ -83,10 +87,31 @@ t("U4 보이는 행만(first·count) — 위 여유 행의 링크는 안 긋는�
   assert.deepEqual(segs, [{ row: 1, c0: 0, c1: "https://b.io/y".length }]);
 });
 
-t("U5 밑줄 색 — 밝은 바탕엔 진한 파랑, 어두운 바탕엔 밝은 파랑", () => {
-  assert.equal(m.linkBlue("#ffffff"), "#2563eb");
-  assert.equal(m.linkBlue("#1e1e1e"), "#60a5fa");
-  assert.equal(m.linkBlue(""), "#3b82f6");
+t("U5 링크 겹 — 밝은 판은 채도 걷기+lighten, 어두운 판은 바탕색을 쓰는 다섯 겹 · 밑줄 색은 판의 파랑", () => {
+  assert.deepEqual(m.linkTint("#FFFFFF"), { dark: false, blue: "#2563EB", layers: [["saturation", "#808080"], ["lighten", "#2563EB"]] });
+  const d = m.linkTint("#111726");
+  assert.equal(d.dark, true); assert.equal(d.blue, "#60A5FA");
+  assert.deepEqual(d.layers.map((x) => x[0]), ["difference", "saturation", "color-dodge", "multiply", "lighten"]);
+  assert.equal(d.layers[0][1], "#111726"); assert.equal(d.layers[4][1], "#111726");
+  assert.equal(m.linkTint("").dark, false);
+});
+t("U7 비침(바탕 알파 0)에선 겹 없이 밑줄만 — 섞일 바탕이 없어 색 상자가 된다", () => {
+  assert.deepEqual(m.linkTint("rgba(255, 255, 255, 0)").layers, []);
+  assert.deepEqual(m.linkTint("rgba(17, 23, 38, 0)"), { dark: true, blue: "#60A5FA", layers: [] });
+  assert.deepEqual(m.linkTint("#11172600").layers, []);
+  assert.equal(m.linkTint("rgba(17, 23, 38, 1)").layers.length, 5);
+});
+t("U8 같은 행의 겹치는 조각은 하나로(글자로 찾은 URL + OSC 8 의 같은 URL) · 다른 행·떨어진 조각은 그대로", () => {
+  assert.deepEqual(m.mergeSegs([{ row: 0, c0: 10, c1: 40 }, { row: 0, c0: 10, c1: 40 }, { row: 0, c0: 35, c1: 50 }, { row: 1, c0: 0, c1: 5 }, { row: 0, c0: 60, c1: 70 }, { row: 2, c0: 3, c1: 3 }]),
+    [{ row: 0, c0: 10, c1: 50 }, { row: 0, c0: 60, c1: 70 }, { row: 1, c0: 0, c1: 5 }]);
+});
+t("U6 하네스 코드 색(256색 105·153) → 파랑이 아닌 코드 색 · 원래 테마는 그대로", () => {
+  const base = { background: "#FFFFFF", foreground: "#000" };
+  const th = m.withCodeColor(base);
+  assert.equal(th.extendedAnsi[105 - 16], "#A04F12"); assert.equal(th.extendedAnsi[153 - 16], "#A04F12");
+  assert.equal(m.withCodeColor({ background: "#111726" }).extendedAnsi[105 - 16], "#E7A36B");
+  assert.equal(base.extendedAnsi, undefined);
+  assert.equal(th.extendedAnsi[69 - 16], undefined);
 });
 t("W5 지식은 [지식] 칸에서 — 곁칸이 답 글·터미널의 지식 주소를 openKnowledgeAt 으로, [지식] 칸이 신호를 듣는다", () => {
   const pn = src("web/v2/panes.ts");
@@ -107,6 +132,16 @@ t("W7 늘 긋는 밑줄이 실패한 지식 확인을 0.25초마다 다시 묻�
   assert.match(tm, /if \(v === undefined\) return Date\.now\(\) - \(knowledgeFailAt\.get\(n\) \|\| 0\) > KN_FAIL_REST;/);
   assert.match(tm, /if \(v === null\) \{ knowledgeKnown\.delete\(n\); knowledgeFailAt\.set\(n, Date\.now\(\)\);/);
   assert.match(tm, /if \(sig === linkUlSig\) return;/);
+});
+
+t("W8 대화 화면(tui) — 링크는 파랑+늘 밑줄 · 인라인 코드는 코드 색(--tui-code) · 판마다 JS 가 같은 값을 준다", () => {
+  const css = src("public/styles/38-chat-tui.css");
+  assert.match(css, /\.livc-tui \.livc-said \.md a, \.livc-tui \.livc-said \.md a code \{ color: var\(--tui-link\); text-decoration: underline;/);
+  assert.match(css, /\.livc-tui \.livc-said \.md code, \.livc-tui \.livc-said \.md \.md-code \{[^}]*color: var\(--tui-code\);/);
+  assert.ok(!/\.md a \{ color: var\(--tui-link\); text-decoration: none; \}/.test(css), "링크 밑줄을 호버로만 두면 안 된다");
+  const cv = src("web/chat-view.ts");
+  assert.match(cv, /setProperty\('--tui-link', face\.dark \? '#60A5FA' : '#2563EB'\)/);
+  assert.match(cv, /setProperty\('--tui-code', face\.dark \? '#E7A36B' : '#A04F12'\)/);
 });
 
 // ── C 대화 화면(크롬) ─────────────────────────────────────────────────
@@ -212,6 +247,44 @@ if (!chrome) {
     assert.equal(R.c7[0].text, "보고서.md");
     assert.equal(R.c7[0].path, "C:\\Users\\a\\workspace\\project\\12\\보고서.md");
     assert.equal(R.c7[0].href, "#/f?root=shared&path=" + enc("project/12/보고서.md"));
+  });
+}
+// ── X 실제 xterm(5.5, public/vendor) 에서 점선 끄기 ────────────────────────────
+if (chrome) {
+  const V = path.join(ROOT, "public/vendor/xterm/");
+  const tmb = buildSync({
+    stdin: { contents: "export { quietXtermLinkUnderlines } from './web/standalone/terminal.ts';", resolveDir: ROOT, loader: "ts" },
+    bundle: true, format: "iife", globalName: "TM", write: false, platform: "browser", target: "es2020", logLevel: "silent", define: { TERMJS_BUILD: '"t"' },
+  }).outputFiles[0].text;
+  function XPAGE(quiet) {
+    const t = new Terminal({ cols: 60, rows: 4 }); t.open(document.getElementById("t"));
+    const R = { patched: quiet ? TM.quietXtermLinkUnderlines(t) : null };
+    // 그림(DOM 줄)은 헤드리스에서 그려지지 않을 때가 있어(병합 대기열 실측 — 빈 줄로 실패) 렌더러가 읽는 칸의 밑줄 모양을 직접 잰다.
+    //  write 콜백 = 글이 버퍼에 다 들어간 뒤.
+    t.write("\x1b]8;;https://a.io/x\x1b\\label\x1b]8;;\x1b\\ \x1b[4mul\x1b[24m \x1b[4:3mcurly\x1b[4:0m", () => {
+      const line = t.buffer.active.getLine(0);
+      const us = (x) => { const c = line.getCell(x); return c.isUnderline() ? c.extended.underlineStyle : 0; };
+      const link = line.getCell(0);
+      R.ul = { link: link.extended.underlineStyle, ul: us(6), curly: us(9) };
+      R.uri = t._core._oscLinkService.getLinkData(link.extended.urlId)?.uri || null;
+      let fired = 0; try { t._core.linkifier._onShowLinkUnderline.event(() => fired++); t._core.linkifier._fireUnderlineEvent({ range: { start: { x: 1, y: 1 }, end: { x: 5, y: 1 } } }, true); } catch (e) { R.err = String(e); }
+      R.fired = fired;
+      document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
+    });
+  }
+  const run = async (quiet) => {
+    const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="xterm.min.css"><script src="xterm.min.js"></script><script>${tmb.replace(/<\/script/gi, "<\\/script")}</script></head><body><div id="t"></div><pre id="out">P</pre><script>(${XPAGE.toString()})(${quiet});</script></body></html>`;
+    const dom = await dumpDom(chrome, { html, copy: [V + "xterm.min.js", V + "xterm.min.css"], prefix: "xq-", serve: true });
+    return JSON.parse(readOut(dom).text || "{}");
+  };
+  const before = await run(false), after = await run(true);
+  t("X1 전제 — 고치기 전 xterm 은 OSC 8 칸에 점선(underline-5)을 긋고 호버 밑줄 신호를 낸다", () => {
+    assert.deepEqual(before.ul, { link: 5, ul: 1, curly: 3 }); assert.equal(before.fired, 1);
+  });
+  t("X2 quietXtermLinkUnderlines — 점선·호버 밑줄은 없어지고, 링크 주소 · 보통 밑줄 · 물결 밑줄은 그대로", () => {
+    assert.equal(after.patched, true);
+    assert.deepEqual(after.ul, { link: 0, ul: 1, curly: 3 });
+    assert.equal(after.uri, "https://a.io/x"); assert.equal(after.fired, 0);
   });
 }
 console.log(`chat-links: ${pass} passed${fail ? `, ${fail} failed` : ""}`);
