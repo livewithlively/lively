@@ -59,6 +59,7 @@ t("W4 터미널 — 열면 밑줄 배선을 건다 · 밑줄 칸 꾸밈이 있�
   assert.match(src("public/terminal.html"), /\.term-link-tint \{ position: absolute; pointer-events: none; z-index: 4; \}/);
   //  터미널 테마는 모두 코드 색 사본을 지난다
   assert.match(src("web/standalone/terminal.ts"), /if \(!glassOn\) return withCodeColor\(resolveTheme\(key\)\);/);
+  assert.match(src("web/standalone/terminal.ts"), /const segs = mergeSegs\(found\);/);
 });
 
 // ── U 터미널 밑줄(순수) ───────────────────────────────────────────────
@@ -88,11 +89,21 @@ t("U4 보이는 행만(first·count) — 위 여유 행의 링크는 안 긋는�
 
 t("U5 링크 겹 — 밝은 판은 채도 걷기+lighten, 어두운 판은 바탕색을 쓰는 다섯 겹 · 밑줄 색은 판의 파랑", () => {
   assert.deepEqual(m.linkTint("#FFFFFF"), { dark: false, blue: "#2563EB", layers: [["saturation", "#808080"], ["lighten", "#2563EB"]] });
-  const d = m.linkTint("rgba(17, 23, 38, 0)");
+  const d = m.linkTint("#111726");
   assert.equal(d.dark, true); assert.equal(d.blue, "#60A5FA");
   assert.deepEqual(d.layers.map((x) => x[0]), ["difference", "saturation", "color-dodge", "multiply", "lighten"]);
   assert.equal(d.layers[0][1], "#111726"); assert.equal(d.layers[4][1], "#111726");
   assert.equal(m.linkTint("").dark, false);
+});
+t("U7 비침(바탕 알파 0)에선 겹 없이 밑줄만 — 섞일 바탕이 없어 색 상자가 된다", () => {
+  assert.deepEqual(m.linkTint("rgba(255, 255, 255, 0)").layers, []);
+  assert.deepEqual(m.linkTint("rgba(17, 23, 38, 0)"), { dark: true, blue: "#60A5FA", layers: [] });
+  assert.deepEqual(m.linkTint("#11172600").layers, []);
+  assert.equal(m.linkTint("rgba(17, 23, 38, 1)").layers.length, 5);
+});
+t("U8 같은 행의 겹치는 조각은 하나로(글자로 찾은 URL + OSC 8 의 같은 URL) · 다른 행·떨어진 조각은 그대로", () => {
+  assert.deepEqual(m.mergeSegs([{ row: 0, c0: 10, c1: 40 }, { row: 0, c0: 10, c1: 40 }, { row: 0, c0: 35, c1: 50 }, { row: 1, c0: 0, c1: 5 }, { row: 0, c0: 60, c1: 70 }, { row: 2, c0: 3, c1: 3 }]),
+    [{ row: 0, c0: 10, c1: 50 }, { row: 0, c0: 60, c1: 70 }, { row: 1, c0: 0, c1: 5 }]);
 });
 t("U6 하네스 코드 색(256색 105·153) → 파랑이 아닌 코드 색 · 원래 테마는 그대로", () => {
   const base = { background: "#FFFFFF", foreground: "#000" };

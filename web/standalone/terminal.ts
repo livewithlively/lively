@@ -5109,9 +5109,25 @@ export const CODE_COLOR = { light: '#A04F12', dark: '#E7A36B' };
  *    color 하나 = 흰 글자가 흰 채 · darken 하나 = 코드 색 글자가 초록 · multiply·color = 바탕에 남색 띠. */
 export function linkTint(bg: string): { dark: boolean; blue: string; layers: Array<[string, string]> } {
   const dark = bgIsDark(bg);
+  //  비침(바탕 알파 0 — 카드 뒤가 비친다): 겹이 섞일 바탕이 없어 겹 색이 그대로 칠해진다(리뷰 지적 — 링크마다 색 상자). 밑줄만.
+  if (/^rgba\([^)]*,\s*0(?:\.0*)?\s*\)$/i.test(String(bg || '').trim()) || /^#[0-9a-f]{6}00$/i.test(String(bg || '').trim())) {
+    return { dark, blue: dark ? LINK_BLUE.dark : LINK_BLUE.light, layers: [] };
+  }
   if (!dark) return { dark, blue: LINK_BLUE.light, layers: [['saturation', '#808080'], ['lighten', LINK_BLUE.light]] };
   const hex = '#' + bgRgb(bg).map((x) => x.toString(16).padStart(2, '0')).join('');
   return { dark, blue: LINK_BLUE.dark, layers: [['difference', hex], ['saturation', '#808080'], ['color-dodge', '#999999'], ['multiply', LINK_BLUE.dark], ['lighten', hex]] };
+}
+/** (순수 — 테스트 대상) 같은 행의 겹치는·맞닿는 조각을 하나로 — 글자로 찾은 URL 과 OSC 8 로 찾은 같은 URL 이 두 번 칠해지지 않게
+ *  (겹이 두 번이면 어두운 판 5겹은 색이 틀어지고 반투명 밑줄은 진해진다 — 리뷰 지적). */
+export function mergeSegs(segs: Array<{ row: number; c0: number; c1: number }>): Array<{ row: number; c0: number; c1: number }> {
+  const sorted = segs.filter((g) => g.c1 > g.c0).slice().sort((a, b) => a.row - b.row || a.c0 - b.c0);
+  const out: Array<{ row: number; c0: number; c1: number }> = [];
+  for (const g of sorted) {
+    const last = out[out.length - 1];
+    if (last && last.row === g.row && g.c0 <= last.c1) last.c1 = Math.max(last.c1, g.c1);
+    else out.push({ row: g.row, c0: g.c0, c1: g.c1 });
+  }
+  return out;
 }
 /** (순수 — 테스트 대상) 하네스의 코드 색(256색 105 · 153)을 파랑이 아닌 코드 색으로 바꾼 테마 사본. */
 export function withCodeColor<T extends { background?: string }>(th: T): T & { extendedAnsi: string[] } {
@@ -5269,7 +5285,9 @@ function drawLinkUnderlines(): void {
   const sig = top + '|' + w + '|' + h + '|' + knowledgeKnown.size + '|' + String(term.options.theme && term.options.theme.background) + '|' + rows.join('\n');
   if (sig === linkUlSig) return;
   linkUlSig = sig;
-  const segs = underlineSegs(rows, soft, top - from, n, cols);
+  const found = underlineSegs(rows, soft, top - from, n, cols);
+  let cellBuf: any = null;
+  try { cellBuf = buf.getNullCell(); } catch (_) { cellBuf = null; }   // 칸마다 새 객체를 만들지 않는다(리뷰 지적)
   //  OSC 8 링크(Codex 의 «라벨» 링크 · Claude Code 의 URL) — 글자로는 못 찾는 것도 칸에 심긴 주소로 긋는다(열 수 있는 것만).
   for (let r = 0; r < n; r++) {
     const line = buf.getLine(top + r);
@@ -5277,12 +5295,13 @@ function drawLinkUnderlines(): void {
     let run = -1, runId = 0;
     for (let c = 0; c <= cols; c++) {
       let id = 0;
-      if (c < cols) { try { const cell = line.getCell(c); id = cell && cell.hasExtendedAttrs() ? (cell.extended?.urlId || 0) : 0; } catch (_) { id = 0; } }
+      if (c < cols) { try { const cell = cellBuf ? line.getCell(c, cellBuf) : line.getCell(c); id = cell && cell.hasExtendedAttrs() ? (cell.extended?.urlId || 0) : 0; } catch (_) { id = 0; } }
       if (id && id === runId) continue;
-      if (run >= 0 && runId && oscLinkAtCell(term, top + r, run)) segs.push({ row: r, c0: run, c1: c });
+      if (run >= 0 && runId && oscLinkAtCell(term, top + r, run)) found.push({ row: r, c0: run, c1: c });
       run = id ? c : -1; runId = id;
     }
   }
+  const segs = mergeSegs(found);
   const tint = linkTint(String((term.options.theme && term.options.theme.background) || ''));
   while (linkUlEls.length > segs.length) { for (const d of linkUlEls.pop()!) { try { d.remove(); } catch (_) { /* noop */ } } }
   segs.forEach((g, i) => {
