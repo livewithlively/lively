@@ -240,7 +240,8 @@ test("W1 배선 — 셸 · 승인 페이지 · 스타일", () => {
   const sg = readFileSync("web/v2/share-guide.ts", "utf8");
   assert.match(sg, /if \(!p\?\.share_guide_seen_at\) \{ openShareGuide\(\); return; \}/, "확인 안 한 사람에겐 카드가 먼저");
   assert.match(sg, /if \(welcomeFilmAutoDue\(p, location\.hash\)\) \{ markWelcomeFilmSeen\(\); openWelcomeFilm\(WELCOME_FILM, FIRST_FILM_HEAD\); \}/, "★띄우면서 «띄웠다» 를 남긴다 — 안 남기면 켤 때마다 뜬다");
-  assert.match(sg, /welcome_film_due: true/); assert.match(sg, /welcome_film_seen: true/);
+  assert.match(sg, /JSON\.stringify\(\{ share_guide_seen: true, welcome_film_due: true \}\)/, "★인사 장면의 표식 둘은 한 요청이다");
+  assert.match(sg, /welcome_film_seen: true/);
   assert.match(sg, /share_guide_seen: true/);
   assert.match(sg, /catch \(_\) \{ return; \}/, "표식을 못 읽으면 띄우지 않는다");
 });

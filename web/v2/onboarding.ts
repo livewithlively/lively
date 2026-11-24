@@ -40,7 +40,7 @@ import { startSetupWatch } from './setup-watch.js';
 //  (#5598, 상민 2026-11-24) 인사 장면의 안내 카드 5장 — 종전엔 이 자리에 소개 영상(#5550)이 있었다. 개념(AI 세션 · 프로젝트 · 자료 ·
 //   지식 · 누가 보나)은 화면을 보기 전인 여기서, 화면 둘러보기 영상은 셸에 돌아온 뒤 창으로 한 번(share-guide.ts maybeShowShareGuide).
 //   카드를 못 세우면 종전 그림(introArt)과 [계속하기]가 선다.
-import { markShareGuideSeen, markWelcomeFilmDue, mountShareGuide } from './share-guide.js';
+import { markIntroGuideDone, mountShareGuide } from './share-guide.js';
 import { upDirSupported, upDropZone, upFromInput, type UpItem } from '../projects/files-upload.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
@@ -609,7 +609,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     sc.bind && sc.bind(col);
     if (key === 'intro') mountIntroGuide(col);
   }
-  /** (#5598) 인사 장면의 안내 카드를 세운다. 마지막 장의 단추 → 확인 표식 + «영상 띄울 차례» 표식 → [계속하기]와 같은 길.
+  /** (#5598) 인사 장면의 안내 카드를 세운다. 마지막 장의 단추 → 확인 표식 + «영상 띄울 차례» 표식(한 요청 — markIntroGuideDone) → [계속하기]와 같은 길.
    *  못 세우면 그 자리에 종전 그림(introArt)을 세우고 [계속하기]를 되살린다. 떠날 때는 sceneCleanup 이 걷는다. */
   function mountIntroGuide(col: HTMLElement) {
     const slot = $('#introGuide', col);
@@ -617,7 +617,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     try {
       const guide = mountShareGuide(slot, {
         finishLabel: OB_COPY.introGuideGo,
-        onFinish: () => { markShareGuideSeen(); markWelcomeFilmDue(); $<HTMLButtonElement>('#introGo', col)?.click(); },
+        onFinish: () => { markIntroGuideDone(); $<HTMLButtonElement>('#introGo', col)?.click(); },
       });
       col.classList.add('ob-has-guide');
       sceneCleanup = () => guide.destroy();

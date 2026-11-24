@@ -168,6 +168,9 @@ export function mountShareGuide(host: HTMLElement, opts: Opts = {}): ShareGuide 
   };
   document.addEventListener('click', onDocClick);
   document.addEventListener('keydown', onKey);
+  /** 듣던 것과 카드를 걷는다 — destroy, 그리고 아래에서 세우다 깨졌을 때(부르는 쪽이 다른 그림으로 바꾼다 — 걷지 않으면 떼어진 카드가 화살표 키를 계속 듣는다). */
+  const teardown = (): void => { document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onKey); root.remove(); };
+  try {
   if (opts.closable) {
     const x = document.createElement('button');
     x.type = 'button'; x.className = 'sg-close'; x.setAttribute('aria-label', '닫기'); x.textContent = '×';
@@ -176,17 +179,11 @@ export function mountShareGuide(host: HTMLElement, opts: Opts = {}): ShareGuide 
   }
 
   render();
+  } catch (e) { teardown(); throw e; }
   // 프로젝트 공개 방식은 워크스페이스마다 다르다 — 받는 대로 마지막 장을 다시 그린다(못 받으면 초대제 그대로).
   void api('/api/ui/v6/project-access').then((a: any) => { mode = projModeOf(a); render(); }).catch(() => { /* 옛 서버 — 초대제로 둔다 */ });
 
-  return {
-    el: root,
-    destroy(): void {
-      document.removeEventListener('click', onDocClick);
-      document.removeEventListener('keydown', onKey);
-      root.remove();
-    },
-  };
+  return { el: root, destroy: teardown };
 }
 
 /** 확인 표식 — 실패해도 삼킨다(표식을 못 남겼다고 화면이 막히면 안 된다). */
@@ -231,9 +228,15 @@ export async function maybeShowShareGuide(): Promise<void> {
 
 /** 처음 뜨는 영상 창의 머리말 — 무엇인지와, 닫아도 다시 볼 곳이 있다는 것. */
 export const FIRST_FILM_HEAD = { title: '라이블리 화면은 이렇게 생겼어요', note: '1분 40초 · 소리 없음 · 닫아도 [사용 가이드]에서 다시 볼 수 있어요' };
-/** 처음 설정 인사 장면의 안내 카드를 끝까지 넘겼다 → 셸에서 영상을 띄울 차례(서버 표식). 실패해도 삼킨다 — 영상은 [사용 가이드] 에 있다. */
-export function markWelcomeFilmDue(): void {
-  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_film_due: true }) }).catch(() => { /* 비치명 */ });
+/**
+ * 처음 설정 인사 장면의 안내 카드를 끝까지 넘겼다 — 확인 표식과 «셸에서 영상을 띄울 차례» 를 **한 요청으로** 남긴다.
+ *  ⚠ 둘로 나눠 동시에 보내면 안 된다: 서버의 프로필 쓰기는 읽고-합쳐-통째로 쓰기라(appendLivProfile) 겹친 두 요청 중 하나의 칸이 사라진다 —
+ *   확인 표식이 사라지면 방금 넘긴 카드가 셸에서 팝업으로 또 뜨고, 차례 표식이 사라지면 영상이 영영 안 뜬다.
+ *  합친 요청이 거절되면(새 칸을 모르는 서버) 확인 표식만이라도 남긴다. 실패해도 삼킨다 — 영상은 [사용 가이드] 에 있다.
+ */
+export function markIntroGuideDone(): void {
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ share_guide_seen: true, welcome_film_due: true }) })
+    .catch(() => { markShareGuideSeen(); });
 }
 /** 영상 창을 띄웠다(서버 표식) — 자동으로 뜨는 것은 한 번이다. */
 export function markWelcomeFilmSeen(): void {
