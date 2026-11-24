@@ -22,7 +22,7 @@ import { el, renderInline, renderMarkdown, toast } from './core.js';
 import { toolGroupSummary } from './chat-tool-group.js';
 import { scanDiff, type DiffScan } from './chat-diff.js';
 import { CHAT_FONT_KEY, fontScale, parseFontStep } from './chat-font.js';
-import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
+import { bindCtx, registerCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
 import { copyText } from './v2/ctx-menu.js';
 import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 // #4707 tui 문법 — 글자 규칙(chat-tui.ts)과 웹 터미널 설정(lib/term-prefs.ts)은 DOM 없는 모듈이 쥔다. 여기는 칠하기만 한다.
@@ -31,7 +31,28 @@ import { caretShape, ccWheelRows, isWheelNotch, newCcWheel, newWheelTickAcc, par
 import { routeKey, type FocusSpot } from './lib/chat-keys.js';   // #4797 터미널처럼 — 이 화면이 보이면 글쇠가 입력칸으로
 import { isDark } from './theme.js';
 import { PANE_LINK_EVENT, uiPaneLink, webPaneLink } from './lib/ui-link.js';   // #5583 자료 링크는 곁칸에서(셸 탭을 하나 더 열지 않게)
-import { linkifyChat, pathLinkOf } from './lib/chat-links.js';   // #5650 답 글의 파일 경로·지식 이름도 링크로(터미널과 같은 판정)
+import { fileNameOf, linkifyChat, pathLinkOf } from './lib/chat-links.js';   // #5650 답 글의 파일 경로·지식 이름도 링크로(터미널과 같은 판정)
+
+//  #5650 답 글 속 링크 우클릭(원준 2026-11-24 «호버하고 우클릭하면 그부분 복사나 붙여넣기가 편하게 · 우클릭하면 링크 뜨고»).
+//   보이는 글은 파일 이름·지식 이름뿐이라 실제 경로·주소는 여기서 꺼내 준다. 열기는 맨클릭과 같은 길(a.click()).
+const copied = (what: string) => (ok: boolean): void => { if (ok) toast(what + ' 복사했습니다'); };
+const shortHint = (s: string): string => (s.length > 26 ? '…' + s.slice(-25) : s);
+registerCtx('chat-link', (hit) => {
+  const a = hit.el as HTMLAnchorElement;
+  const path = a.getAttribute('data-path') || '';
+  const kn = a.getAttribute('data-kn') || '';
+  const href = a.getAttribute('href') ? a.href : '';
+  const rows: Array<{ label: string; icon?: string; hint?: string; run: () => void }> = [
+    { label: '열기', icon: 'eye', hint: path ? '뷰어 탭' : kn ? '지식 탭' : '', run: () => a.click() },
+  ];
+  if (path) {
+    rows.push({ label: '경로 복사', icon: 'copy', hint: shortHint(path), run: () => void copyText(path).then(copied('경로를')) });
+    rows.push({ label: '파일 이름 복사', icon: 'copy', hint: fileNameOf(path), run: () => void copyText(fileNameOf(path)).then(copied('파일 이름을')) });
+  }
+  if (kn) rows.push({ label: '지식 이름 복사', icon: 'copy', hint: shortHint(kn), run: () => void copyText(kn).then(copied('지식 이름을')) });
+  if (href) rows.push({ label: '링크 복사', icon: 'link', hint: shortHint(href.replace(/^https?:\/\//, '')), run: () => void copyText(href).then(copied('링크를')) });
+  return { title: path ? fileNameOf(path) : kn || (a.textContent || '').trim().slice(0, 40), sub: path || (kn ? '지식' : href), rows };
+});
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }

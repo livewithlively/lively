@@ -5073,6 +5073,15 @@ function startRestore(meta) {
   showRestoringBanner(meta);
   restoreThisSession();
 }
+// (순수 — 테스트 대상) #5650 링크 밑줄 색 — 대화 화면의 링크와 같은 파랑. 바탕이 어두우면 밝은 파랑(원준 2026-11-24 «파란색과 밑줄»).
+//  글자 색은 하네스가 칠한 그대로다 — 대체 화면(Claude Code · Codex)에선 xterm 장식이 그려지지 않아(실측) 밑줄로만 알린다.
+export function linkBlue(bg: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(bg || '').trim());
+  if (!m) return '#3b82f6';
+  const n = parseInt(m[1], 16);
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum < 0.5 ? '#60a5fa' : '#2563eb';
+}
 
 // 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
 let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecting = false, attempts = 0;
@@ -5197,7 +5206,7 @@ function drawLinkUnderlines(): void {
   const segs = underlineSegs(rows, soft, top - from, n, cols);
   const w = scr.offsetWidth / cols, h = scr.offsetHeight / n;
   while (linkUlEls.length > segs.length) { try { linkUlEls.pop()!.remove(); } catch (_) { /* noop */ } }
-  const fg = String((term.options.theme && term.options.theme.foreground) || 'currentColor');
+  const fg = linkBlue(String((term.options.theme && term.options.theme.background) || ''));
   segs.forEach((g, i) => {
     if (!linkUlEls[i]) { linkUlEls[i] = el('div', { class: 'term-link-ul' }); scr!.appendChild(linkUlEls[i]); }
     const d = linkUlEls[i];
@@ -5297,7 +5306,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
     //  파일 경로(#4562)는 셸의 [뷰어] 탭으로 간다 — 웹 칸과 같은 이유로 자리 대신 탭 이름.
     //  #5583 우리 화면의 자료 링크는 열기(openLinkFromTerminal)와 같은 판정 — 프로젝트 자료 파일은 뷰어 탭, 그 밖의 자료·지식은 웹 탭.
     const paneOf = url ? uiPaneLink(url, location.href) : null;
-    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭' }[!url ? 'tab' : isKnowledgeLink(url) ? 'pane' : isPathLink(url) ? 'file' : paneOf ? (paneOf.kind === 'file' && pathLinkTarget(paneOf.path) ? 'file' : 'pane') : linkTargetHere(url)];
+    const openHint = { shell: '이 창', pane: '웹 탭', tab: inDesktopApp() ? '새 창' : '새 탭', file: '뷰어 탭', kn: '지식 탭' }[!url ? 'tab' : isKnowledgeLink(url) ? 'kn' : isPathLink(url) ? 'file' : paneOf ? (paneOf.kind === 'file' && pathLinkTarget(paneOf.path) ? 'file' : /#\/k\//.test(paneOf.url) ? 'kn' : 'pane') : linkTargetHere(url)];
     const secure = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
     const fs = Number(term.options.fontSize) || 14;
     const setFont = (n: number): void => {

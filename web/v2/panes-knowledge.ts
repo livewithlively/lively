@@ -10,7 +10,7 @@
 //   · 정독 · 고치기는 [위키에서 열기] — 그때만 화면을 떠난다.
 import { api, el, relTime, renderMarkdown, replaceKids, toast } from '../core.js';
 import { dropTitleH1, knHref, knNameOfHref, plainMd, wikiLinksToMd } from '../lib/kn-links.js';
-import { knTitle, pnIcon, pnNote } from './panes-kit.js';
+import { KN_OPEN_EVT, knPending, knTitle, pnIcon, pnNote } from './panes-kit.js';
 import { bindCtx, requestOpenRoute } from './ctx-registry.js';
 import { copyText } from './ctx-menu.js';
 import type { Part, PartCtx } from './panes-parts.js';
@@ -229,12 +229,24 @@ export function knowledgePart(ctx: PartCtx): Part {
   root.addEventListener('mousedown', (e: MouseEvent) => { if (e.button === 3 && reading()) e.preventDefault(); });
   root.addEventListener('mouseup', (e: MouseEvent) => { if (e.button === 3 && reading()) { e.preventDefault(); back(); } });
 
+  //  #5650 셸이 «이 지식을 펴라»(답 글·터미널의 지식 이름·#/k/ 링크) — 목록에서 연 것과 같은 읽기 화면으로.
+  const openNamed = (name: string): void => {
+    if (!name) return;
+    const cur = trail[trail.length - 1];
+    if (cur && cur.row.name === name) { if (curScroll) curScroll.scrollTop = 0; return; }
+    openFromList({ name, title: '', rel: '' } as KnRow);
+  };
+  const onKnOpen = (e: Event): void => { knPending.delete(ctx.paneRoot()); openNamed(String((e as CustomEvent).detail?.name || '')); };
+  ctx.paneRoot().addEventListener(KN_OPEN_EVT, onKnOpen);
+  const pending = knPending.get(ctx.paneRoot());
+  if (pending) { knPending.delete(ctx.paneRoot()); window.setTimeout(() => openNamed(pending), 0); }
+
   paint();
   return {
     root,
     tick: () => { paint(); if (reading()) void recheck(); },
     //  켜진 탭을 또 눌렀다 — 읽던 중이면 목록으로, 목록이면 맨 위로(iOS 탭 막대 · 자료 칸의 «처음으로»).
     reselect: () => { if (reading()) { trail = []; setMode(false); } else list.scrollTop = 0; },
-    destroy: () => { seq++; },
+    destroy: () => { seq++; ctx.paneRoot().removeEventListener(KN_OPEN_EVT, onKnOpen); },
   };
 }

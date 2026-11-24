@@ -72,6 +72,13 @@ t("W2 글 속 드라이브 경로 — 드라이브 글자를 잃지 않고(종�
   assert.deepEqual(linkMatches("열기 " + sp + " 끝").map((x) => x.url), [sp]);
 });
 
+t("W3 빈칸 든 폴더 뒤 빈칸 하나 든 파일 이름(#5650) — 잇되, 산문(`docs 와 a.md`)은 안 잇는다", () => {
+  const p = "/work/shared/project/12/데모 데이/발표 자료.html";
+  assert.deepEqual(linkMatches("보세요 " + p + " 그리고").map((x) => x.url), [p]);
+  assert.deepEqual(linkMatches("/work/shared/project/12/docs 와 a.md").map((x) => x.url), []);
+  assert.deepEqual(linkMatches("/work/shared/project/12/out then open a.md").map((x) => x.url), []);
+});
+
 // ── F. 글 속에서 찾기 ───────────────────────────────────────────────
 const urls = (line) => linkMatches(line).map((x) => x.url);
 t("F1 문장 속 경로 — 한국어 조사·문장부호 꼬리는 떼고 확장자에서 끊는다", () => {

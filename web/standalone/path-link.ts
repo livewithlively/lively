@@ -75,16 +75,19 @@ export function pathMatches(text: string): { start: number; end: number; url: st
     //  산문을 경로로 삼키지 않게(리뷰 지적: `/…/out then open a.md` 가 한 링크가 됐다) — 이은 끝 낱말에 `/` 가 있거나(빈칸 든
     //   폴더: `데모데이 발표덱/원준수정/x.html`), 딱 두 낱말일 때(빈칸 하나 든 파일 이름: `사업 계획서.hwp`)만 잇는다. 문장부호로
     //   끝난 낱말·새 경로의 시작(`project/<번호>/` · `./` · `~/` · `/`)에서 멈춘다.
+    //   #5650 빈칸 든 폴더 **뒤의** 빈칸 하나 든 파일 이름(`데모 데이/발표 자료.html`)도 — 마지막 `/` 뒤 파일 이름에 빈칸이 하나일 때.
     let joined = chunk;
+    let slashAt = -1;                                 // `/` 가 든 마지막 이은 낱말
     for (let j = i + 1; j < toks.length && j <= i + 5; j++) {
       const w = toks[j].s;
       if (!oneSpace(toks[j - 1], toks[j]) || w.includes('://') || /^(?:\/|~\/|\.\/|project\/\d+\/|[A-Za-z]:[\\/])/.test(w)) break;
       joined += ' ' + w;
       const hit = fileAt(joined);
       if (hit) {
-        if (j === i + 1 || w.includes('/')) { out.push({ start: at, end: at + hit.length, url: clean(hit) }); i = j; }
+        if (j === i + 1 || w.includes('/') || (slashAt > 0 && j === slashAt + 1)) { out.push({ start: at, end: at + hit.length, url: clean(hit) }); i = j; }
         break;
       }
+      if (w.includes('/')) slashAt = j;
       if (/[.,!?;:]$/.test(w)) break;
     }
   }

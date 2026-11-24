@@ -10,10 +10,15 @@
 //    세션 폴더 기준 경로(`docs/a.md`)는 그 세션을 아는 화면(sid)에서만 단다 — 남의 화면에선 열 자리가 없다.
 //  · 지식 이름 → 서버에 있다고 확인된 이름만 `<a class="md-link" href="#/k/<이름>">`(터미널과 같은 확인 — 슬러그는 흔한 낱말과 생김새가 같다).
 //    확인은 비동기라 글이 그려진 뒤에 감싼다. 그 사이 글이 다시 그려졌으면(스트리밍) 다음 그리기가 다시 한다.
+//  · 보이는 글(원준 2026-11-24 «실제 경로를 그냥 파일 이름으로 감싸서 picture.png 이렇게 · 우클릭하면 링크»): 경로는 **파일 이름만**,
+//    우리 화면의 지식 주소(`…/ui/#/k/<이름>`)는 **지식 이름만**, 자료 주소(`…/ui/#/f?…project/N/…`)는 파일 이름만 보인다. 실제 경로·주소는
+//    마우스를 올리면(title) 보이고, 우클릭 메뉴(data-ctx="chat-link")가 복사해 준다.
 //  · 건드리지 않는 곳: 이미 링크인 것(a) · 단추 · 코드 블록(pre)의 문법 색 조각 사이(한 글 마디 안에서만 찾는다).
 
 import { pathMatches, pathLinkTarget, knowledgeCandidates } from './path-link.js';
 import { apiUrl, TOKEN_KEY } from './net.js';
+import { uiPaneLink } from './ui-link.js';
+import { knNameOfHref } from './kn-links.js';
 
 export type PathLinkData = {
   path: string;
@@ -76,12 +81,13 @@ export function linkifyPaths(root: HTMLElement, hasSession: boolean): void {
       make: (text: string): HTMLElement => {
         const a = document.createElement('a');
         a.className = 'md-link md-path';
-        a.textContent = text;
+        a.textContent = fileNameOf(text);
         a.setAttribute('data-path', m.url);
+        a.setAttribute('data-ctx', 'chat-link');
         if (m.alts && m.alts.length) a.setAttribute('data-alts', JSON.stringify(m.alts));
         const href = pathHref(pathLinkTarget(m.url)!);
         if (href) a.setAttribute('href', href); else { a.setAttribute('role', 'link'); a.tabIndex = 0; }
-        a.title = '눌러서 뷰어에서 열기';
+        a.title = m.url;
         return a;
       },
     })));
@@ -132,9 +138,12 @@ export async function linkifyKnowledge(root: HTMLElement): Promise<void> {
     const list = byNode.get(h.node) || [];
     list.push({ start: h.start, end: n.end, make: (text: string) => {
       const a = document.createElement('a');
-      a.className = 'md-link';
+      a.className = 'md-link md-kn';
       a.textContent = text;
       a.setAttribute('href', '#/k/' + encodeURIComponent(n.name));
+      a.setAttribute('data-kn', n.name);
+      a.setAttribute('data-ctx', 'chat-link');
+      a.title = '지식 ' + n.name;
       return a;
     } });
     byNode.set(h.node, list);
@@ -142,8 +151,56 @@ export async function linkifyKnowledge(root: HTMLElement): Promise<void> {
   for (const [node, list] of byNode) wrapRanges(node, list.sort((a, b) => a.start - b.start));
 }
 
+/** 경로의 파일 이름(마지막 마디) — `/`·`\\` 둘 다 가른다. 없으면 그대로. */
+export function fileNameOf(p: string): string {
+  const t = String(p || '').replace(/[\\/]+$/, '');
+  const i = Math.max(t.lastIndexOf('/'), t.lastIndexOf('\\'));
+  return i >= 0 && i < t.length - 1 ? t.slice(i + 1) : t;
+}
+/** 글자가 주소 그대로인가(마크다운 autolink · `[주소](주소)`) — 사람이 붙인 라벨(`[보고서](…)`)은 그대로 둔다. */
+function looksLikeUrl(text: string, href: string): boolean {
+  const t = String(text || '').trim();
+  return !!t && (t === href || /^https?:\/\//i.test(t) || t.startsWith('#/'));
+}
+/** 이미 링크인 것 중 **우리 화면의 지식·자료 주소**를 이름으로 보이게 하고, 모든 링크에 우클릭 메뉴 표지를 단다. */
+export function relabelLinks(root: HTMLElement): void {
+  for (const a of Array.from(root.querySelectorAll('a[href]')) as HTMLAnchorElement[]) {
+    if (a.hasAttribute('data-path') || a.hasAttribute('data-kn')) continue;
+    a.setAttribute('data-ctx', 'chat-link');
+    const href = a.getAttribute('href') || '';
+    //  `#/…` 는 **우리 화면(같은 폴더의 첫 페이지)** 의 주소다 — 지금 문서 이름(`index.html` 등)에 붙이면 우리 화면으로 안 읽힌다.
+    const base = href.startsWith('#') ? location.origin + location.pathname.replace(/[^/]*$/, '') : location.href;
+    let url = href;
+    try { url = new URL(href, base).href; } catch (_) { /* 그대로 */ }
+    const pane = uiPaneLink(url, location.href);
+    if (pane && pane.kind === 'file') {
+      const t = pathLinkTarget(pane.path);
+      if (t) {
+        a.setAttribute('data-path', pane.path);
+        a.classList.add('md-path');
+        if (looksLikeUrl(a.textContent || '', href)) a.textContent = fileNameOf(pane.path);
+        a.title = pane.path;
+        continue;
+      }
+    }
+    if (pane && pane.kind === 'web') {
+      let name: string | null = null;
+      try { name = knNameOfHref(new URL(url).hash); } catch (_) { name = null; }
+      if (name) {
+        a.setAttribute('data-kn', name);
+        a.classList.add('md-kn');
+        if (looksLikeUrl(a.textContent || '', href)) a.textContent = name;
+        a.title = '지식 ' + name;
+        continue;
+      }
+    }
+    if (!a.title) a.title = url;
+  }
+}
+
 /** 답 글 한 덩이에 링크를 단다(경로는 곧바로, 지식 이름은 확인 뒤). */
 export function linkifyChat(root: HTMLElement, hasSession: boolean): HTMLElement {
+  try { relabelLinks(root); } catch (_) { /* noop */ }
   try { linkifyPaths(root, hasSession); } catch (_) { /* 링크는 편의다 — 글은 그대로 보인다 */ }
   void linkifyKnowledge(root).catch(() => { /* noop */ });
   return root;

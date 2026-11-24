@@ -1,5 +1,6 @@
 // #5650 — 대화 화면(chat-view)의 답 글에도 터미널과 **같은 규칙**으로 파일 경로·지식 이름 링크를 단다 · 터미널은 링크에 늘 옅은 밑줄.
-//  원준 2026-11-24: 회수·오류로 끝난 세션은 세션 화면이 터미널을 걷고 대화 화면으로 내려앉는데, 거기선 경로가 그냥 글자였다.
+//  2026-11-24 «경로를 파일 이름으로 감싸서 picture.png 이렇게 · 우클릭하면 링크 · 지식은 이름만».
+//  2026-11-24: 회수·오류로 끝난 세션은 세션 화면이 터미널을 걷고 대화 화면으로 내려앉는데, 거기선 경로가 그냥 글자였다.
 //   «왜 어떤건 파랗고 어떤건 안파란거야» — 파란 글자는 하네스가 칠한 코드 색이라 링크 표시가 아니다 → 밑줄로 알린다.
 //
 //  | #   | 입력                                                     | 기대                                                      |
@@ -11,6 +12,9 @@
 //  | C5  | 지식 이름 후보 — 서버 200 / 404                              | 200 만 <a href="#/k/이름"> · 404 는 글자 그대로            |
 //  | C6  | 링크 요소 → 곁칸이 받을 모양(pathLinkOf)                     | path · target · cands(앞 낱말 후보 먼저, 화면 경로 끝)      |
 //  | C7  | 윈도우 드라이브 경로                                        | 프로젝트 경로로 링크                                       |
+//  | C8  | 우리 화면 지식 주소를 그대로 적은 링크(autolink)               | 지식 이름만 보이고 data-kn                                  |
+//  | C9  | 자료 주소 링크 — 주소 그대로 / 사람이 붙인 라벨               | 주소면 파일 이름만 · 라벨이면 라벨 그대로 · 둘 다 data-path  |
+//  | C10 | 모든 링크에 우클릭 표지(data-ctx=chat-link) · 마우스를 올리면 실제 경로(title) |                                 |
 //  | D1  | 판정 사본 둘(standalone/path-link.ts · lib/path-link.ts)    | 글자까지 같다                                              |
 //  | U1~U4 | 터미널 밑줄 조각(underlineSegs)                           | 링크에만 · 여러 행 링크는 행마다 · 링크 없는 파란 코드는 없음 |
 import assert from "node:assert/strict";
@@ -51,7 +55,7 @@ t("W3 세션 화면은 세션 id 를 준다 · 곁칸은 경로를 planPathOpen 
 });
 t("W4 터미널 — 열면 밑줄 배선을 건다 · 밑줄 칸 꾸밈이 있다", () => {
   assert.match(src("web/standalone/terminal.ts"), /term\.open\(host\);\n\s+wireLinkUnderlines\(\);/);
-  assert.match(src("public/terminal.html"), /\.term-link-ul \{ position: absolute; pointer-events: none;[^}]*border-bottom: 1px dotted;/);
+  assert.match(src("public/terminal.html"), /\.term-link-ul \{ position: absolute; pointer-events: none;[^}]*border-bottom: 1px solid;/);
 });
 
 // ── U 터미널 밑줄(순수) ───────────────────────────────────────────────
@@ -77,6 +81,25 @@ t("U4 보이는 행만(first·count) — 위 여유 행의 링크는 안 긋는�
   const rows = ["https://a.io/x", "글", "https://b.io/y"];
   const segs = m.underlineSegs(rows, [false, false, false], 1, 2, 80);
   assert.deepEqual(segs, [{ row: 1, c0: 0, c1: "https://b.io/y".length }]);
+});
+
+t("U5 밑줄 색 — 밝은 바탕엔 진한 파랑, 어두운 바탕엔 밝은 파랑", () => {
+  assert.equal(m.linkBlue("#ffffff"), "#2563eb");
+  assert.equal(m.linkBlue("#1e1e1e"), "#60a5fa");
+  assert.equal(m.linkBlue(""), "#3b82f6");
+});
+t("W5 지식은 [지식] 칸에서 — 곁칸이 답 글·터미널의 지식 주소를 openKnowledgeAt 으로, [지식] 칸이 신호를 듣는다", () => {
+  const pn = src("web/v2/panes.ts");
+  assert.match(pn, /const kn = link\.kind === 'web' \? knNameOfUrl\(link\.url\) : null;\n\s+if \(kn && openKnowledgeAt\(kn\)\) \{ d\.handled = true; return; \}/);
+  assert.match(pn, /const kn = knNameOfUrl\(d\.url\);\n\s+if \(kn && !loose\) \{/);
+  const pk = src("web/v2/panes-knowledge.ts");
+  assert.match(pk, /ctx\.paneRoot\(\)\.addEventListener\(KN_OPEN_EVT, onKnOpen\);/);
+  assert.match(pk, /const pending = knPending\.get\(ctx\.paneRoot\(\)\);/);
+});
+t("W6 답 글 링크 우클릭 — 경로·파일 이름·지식 이름·링크 복사", () => {
+  const cv = src("web/chat-view.ts");
+  assert.match(cv, /registerCtx\('chat-link',/);
+  for (const l of ["경로 복사", "파일 이름 복사", "지식 이름 복사", "링크 복사"]) assert.ok(cv.includes(`label: '${l}'`), l);
 });
 
 // ── C 대화 화면(크롬) ─────────────────────────────────────────────────
@@ -119,6 +142,13 @@ if (!chrome) {
     R.c6 = a6 ? CL.pathLinkOf(a6) : null;
     d = box("저장: C:\\Users\\a\\workspace\\project\\12\\보고서.md");
     CL.linkifyPaths(d, false); R.c7 = links(d);
+    const ui = location.href.replace(/[^/]*$/, "");
+    d = box('<a href="' + ui + '#/k/terminal-path-link-4562">' + ui + '#/k/terminal-path-link-4562</a>');
+    CL.linkifyChat(d, false); R.c8 = Array.from(d.querySelectorAll("a")).map((a) => ({ text: a.textContent, kn: a.getAttribute("data-kn"), ctx: a.getAttribute("data-ctx") }));
+    d = box('<a href="#/f?root=shared&amp;path=project/12/out/picture.png">#/f?root=shared&amp;path=project/12/out/picture.png</a> · <a href="#/f?root=shared&amp;path=project/12/r.md">보고서</a>');
+    CL.linkifyChat(d, false); R.c9 = Array.from(d.querySelectorAll("a")).map((a) => ({ text: a.textContent, path: a.getAttribute("data-path"), title: a.title }));
+    d = box('보세요 /work/shared/project/12/데모 데이/발표 자료.html 그리고 <a href="https://example.com/x">https://example.com/x</a>');
+    CL.linkifyChat(d, false); R.c10 = Array.from(d.querySelectorAll("a")).map((a) => ({ text: a.textContent, ctx: a.getAttribute("data-ctx"), title: a.title }));
     document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
   }
   const page = `<!doctype html><html><meta charset="utf-8"><body><pre id="out" style="position:fixed;left:-9999px">PENDING</pre>
@@ -129,19 +159,19 @@ if (!chrome) {
   const res = readOut(dom);
   assert.ok(res.text !== null, `결과를 못 받았다 — ${res.out}`);
   const R = JSON.parse(res.text);
-  assert.ok(!R.fatal, R.fatal);
+  assert.ok(!R.fatal, R.fatal); if (process.env.DUMP) console.log(JSON.stringify({ c9: R.c9, c10: R.c10 }, null, 1));
   const enc = encodeURIComponent;
 
-  t("C1 문장 속 프로젝트 경로 — 조사를 뗀 경로만 링크 · href 는 자료 보기 · 글은 그대로", () => {
-    assert.deepEqual(R.c1.links, [{ text: "/work/shared/project/12/보고서.md", path: "/work/shared/project/12/보고서.md", href: "#/f?root=shared&path=" + enc("project/12/보고서.md"), role: null, inCode: false }]);
-    assert.equal(R.c1.text, "파일은 /work/shared/project/12/보고서.md에 저장했습니다.");
+  t("C1 문장 속 프로젝트 경로 — 조사를 뗀 경로만 링크 · 보이는 글은 파일 이름 · href 는 자료 보기", () => {
+    assert.deepEqual(R.c1.links, [{ text: "보고서.md", path: "/work/shared/project/12/보고서.md", href: "#/f?root=shared&path=" + enc("project/12/보고서.md"), role: null, inCode: false }]);
+    assert.equal(R.c1.text, "파일은 보고서.md에 저장했습니다.");
   });
   t("C2 인라인 코드 속 경로도 링크(Claude 가 백틱으로 준 경로)", () => {
     assert.equal(R.c2.length, 1); assert.equal(R.c2[0].inCode, true); assert.equal(R.c2[0].path, "/Users/a/workspace/project/12/out/a.png");
   });
   t("C3 세션 폴더 경로는 세션 화면에서만 · href 없이 role=link", () => {
     assert.deepEqual(R.c3no, []);
-    assert.deepEqual(R.c3yes, [{ text: "docs/report.md", path: "docs/report.md", href: null, role: "link", inCode: false }]);
+    assert.deepEqual(R.c3yes, [{ text: "report.md", path: "docs/report.md", href: null, role: "link", inCode: false }]);
   });
   t("C4 이미 링크인 것 · 프로젝트 밖 경로 · 파일 이름만은 그대로", () => {
     assert.equal(R.c4.length, 1); assert.equal(R.c4[0].path, null);
@@ -155,8 +185,24 @@ if (!chrome) {
     assert.deepEqual(R.c6.target, { kind: "session", rel: "발표덱/x.html" });
     assert.deepEqual(R.c6.cands.map((c) => c.path), ["데모데이 발표덱/x.html", "발표덱/x.html"]);
   });
+  t("C8 지식 주소 그대로인 링크 — 지식 이름만 보인다", () => {
+    assert.deepEqual(R.c8, [{ text: "terminal-path-link-4562", kn: "terminal-path-link-4562", ctx: "chat-link" }]);
+  });
+  t("C9 자료 주소 링크 — 주소 그대로면 파일 이름만, 사람이 붙인 라벨은 그대로 · 둘 다 경로 링크", () => {
+    assert.deepEqual(R.c9, [
+      { text: "picture.png", path: "project/12/out/picture.png", title: "project/12/out/picture.png" },
+      { text: "보고서", path: "project/12/r.md", title: "project/12/r.md" },
+    ]);
+  });
+  t("C10 빈칸 든 폴더의 경로도 파일 이름만 · 모든 링크에 우클릭 표지와 실제 주소(title)", () => {
+    assert.deepEqual(R.c10, [
+      { text: "발표 자료.html", ctx: "chat-link", title: "/work/shared/project/12/데모 데이/발표 자료.html" },
+      { text: "https://example.com/x", ctx: "chat-link", title: "https://example.com/x" },
+    ]);
+  });
   t("C7 윈도우 드라이브 경로 — 프로젝트 자료로", () => {
     assert.equal(R.c7.length, 1);
+    assert.equal(R.c7[0].text, "보고서.md");
     assert.equal(R.c7[0].path, "C:\\Users\\a\\workspace\\project\\12\\보고서.md");
     assert.equal(R.c7[0].href, "#/f?root=shared&path=" + enc("project/12/보고서.md"));
   });
