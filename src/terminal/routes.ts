@@ -79,6 +79,7 @@ import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 �
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
+import { sweepSessionOutputs } from "../ingest/session-outputs.js";
 import { launchReply, launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
@@ -2324,6 +2325,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
       //  이름은 desired 행의 라벨을 준다 — 종전엔 전이마다 tmux 로 @box_label 을 다시 읽었다(같은 계수 1.1/분).
       if (change) void notifyPhaseChange(id, me, change, st.label || undefined, { dir: st.dir });   // 응답을 막지 않는다 — 훅은 핫패스다
+      //  #5790 — 턴이 끝났다(idle) → 이 세션이 프로젝트 폴더에 만든 결과물을 자료로. 중앙 세션은 공유 저장소에 직접 써서
+      //   업로드(=자료 등록)가 없다(노드 세션은 project-push 훅이 올린다). 판정·상한·한 번에 하나는 그 모듈이 쥔다 — 응답을 막지 않는다.
+      if (phase === "idle") void sweepSessionOutputs(st);
       res.json({ ok: true });
       return;
     }
