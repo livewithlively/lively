@@ -12,6 +12,7 @@ import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
 import { canSeeProjectRowVis, projectVisFor, type ProjectVis, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
+import { permits } from "../auth/permissions.js";
 import { INJECTED_DOC_ADMIN_ONLY } from "./knowledge/shared.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
 
@@ -184,7 +185,8 @@ const contentRestore: Capability = {
       throw new HttpError(403, "복원은 사람(웹)만 가능합니다 — 에이전트는 거부됩니다(큐레이션)");
     }
     // 카테고리는 context scope 자원 — memory 만으론 복원 불가(엔티티별 권한 정합).
-    if (input.entity === "category" && !((user?.scopes ?? []) as string[]).includes("context")) {
+    //  #5799 — 새 권한이 실린 주체에게는 분류체계도 «맥락» 이라 이 기능의 관문(맥락 고치기)과 같은 판정이 된다.
+    if (input.entity === "category" && !permits(user, "context", { perm: "content", level: "write" })) {
       throw new HttpError(403, "카테고리 복원은 context 권한이 필요합니다");
     }
     const before = await getDeleteSnapshot(input.entity, input.key);

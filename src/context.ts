@@ -2,11 +2,15 @@
 // 모든 툴 핸들러는 첫 줄에서 resolveUser() → requireScope() 를 통과해야 한다.
 
 import { SELF_SOURCE } from "./db/self-source.js"; // 값 상수만(런타임 의존 없음 — self-source.ts 는 무-import)
+import { permits, type Grants, type Need } from "./auth/permissions.js";
 
 export interface LivelyUser {
   userId: string;
   email: string;
   scopes: string[]; // 접근 가능 capability: items | context | admin | runtime | db | memory | code (단일 출처: capabilities/scopes.ts)
+  // 새 권한(#5799 auth/permissions.ts) — 영역마다 보기 · 고치기. **실려 있으면 판정은 이것만 본다**(grantsOf): scopes 는 옛 코드 ·
+  //  되돌리기용 사본이 된다. 없으면(undefined) scopes 를 번역해 쓴다 — 지금은 어느 인증 경로도 이 칸을 채우지 않는다(역할 저장 단계에서 채운다).
+  grants?: Grants;
   projects: string[]; // 접근 가능 프로젝트 슬러그, "*" = 전체
   // 인증 출처 — 'static'=AUTH_TOKENS_JSON(회수 불가), 'db'=auth_token(즉시 회수 가능),
   //  'session'=웹 로그인 세션(사람 본인, scope=멤버 LIVE). 정적 토큰만 admin/runtime 행위가 거부된다
@@ -66,6 +70,16 @@ export function resolveUser(extra: unknown): LivelyUser {
 export function requireScope(user: LivelyUser, scope: string): void {
   if (!user.scopes.includes(scope)) {
     throw new Error(`Forbidden: user '${user.userId}' lacks scope '${scope}'`);
+  }
+}
+
+/**
+ * 권한 판정(#5799) — 등록부 밖의 호출 경로(외부 앱 도구)가 쓴다. 새 권한이 실린 주체는 need 로, 옛 scope 만 가진 주체는 종전 그대로
+ *  legacyScope 로 잰다(auth/permissions.ts permits). 거절 문구는 종전 꼴을 잇는다(사람이 읽을 문구는 화면 단계에서 바꾼다).
+ */
+export function requireNeed(user: LivelyUser, need: Need | null, legacyScope: string): void {
+  if (!permits(user, legacyScope, need)) {
+    throw new Error(`Forbidden: user '${user.userId}' lacks scope '${legacyScope}'`);
   }
 }
 

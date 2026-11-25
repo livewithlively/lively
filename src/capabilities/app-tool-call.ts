@@ -11,7 +11,8 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { requireScope, type LivelyUser } from "../context.js";
+import type { LivelyUser } from "../context.js";
+import { capAllowed } from "./cap-permission.js";
 import { viewerOf } from "./principal.js";
 import { requireAppTool } from "../apps/principal.js";
 import {
@@ -138,15 +139,18 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
   // #1644 — scope 도 같은 판정: 앱이 새로 선언한 scope(예 db)를 예전 동의가 덮지 못해 막힌 것이면 «다시 동의»(위 도구 판정과 같은 글 · 표지).
   //  종전엔 아래 requireScope 의 «Forbidden» 으로 끝나 앱이 scope 만 새로 얻으면 화면이 동의 창을 띄우지 못했다. 그 사람(호출자)에게 없는 scope 는
   //  다시 동의해도 못 얻으므로 종전 그대로 막힌다(grant.ts scopeNeedsRegrant).
-  const optionalByScope = cap.scope && !appUser.scopes.includes(cap.scope) ? optionalScopeMissing(grant.scopes, declared, memberScopes, { scope: cap.scope }) : null;
+  //  #5799 — «막혔나» 는 capAllowed 가 정한다(옛 scope 만 가진 주체에겐 종전의 `!appUser.scopes.includes(cap.scope)` 와 같은 값).
+  //   아래 두 안내(선택 scope · 다시 동의)는 막힌 까닭을 옛 scope 말로 풀어 주는 것이라 막혔을 때만 본다.
+  const blocked = !capAllowed(appUser, cap);
+  const optionalByScope = cap.scope && blocked ? optionalScopeMissing(grant.scopes, declared, memberScopes, { scope: cap.scope }) : null;
   if (optionalByScope) {
     throw new HttpError(403, optionalScopeMessage(appId, optionalByScope, name), { body: { code: OPTIONAL_SCOPE_REQUIRED, scope: optionalByScope } });
   }
-  if (cap.scope && !appUser.scopes.includes(cap.scope) && scopeNeedsRegrant(grant.scopes, declared.scopes, cap.scope, memberScopes)) {
+  if (cap.scope && blocked && scopeNeedsRegrant(grant.scopes, declared.scopes, cap.scope, memberScopes)) {
     throw new HttpError(403, regrantMessage(appId, regrantScopePhrase(cap.scope)), { body: { code: CONSENT_REQUIRED, missing: grantGap(grant, declared, memberScopes) } });
   }
   // 집행 — 앱 세션 MCP 경로와 동일: 스코프 → 앱 도구 allowlist.
-  if (cap.scope) requireScope(appUser, cap.scope);
+  if (blocked) throw new Error(`Forbidden: user '${appUser.userId}' lacks scope '${cap.scope}'`);
   await requireAppTool(appUser, name);
 
   // 입력 검증(MCP 표면과 동일 zod 셰이프). 실패 = 400.
