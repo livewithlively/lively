@@ -384,4 +384,5 @@ async function renderUnmaskGrantPanel(panel, source, data) {
 
 export {
   dbSourceEditor,
+  renderDbAccessPanel,   // #5799 — 소스가 하나도 등록되지 않은 워크스페이스에서도 이 패널을 따로 그려 확인할 수 있게(시험 · 미리보기)
 };
