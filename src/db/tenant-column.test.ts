@@ -333,7 +333,12 @@ test("★★ 신원 판정 조회가 테넌트로 좁혀져 있다 — 남은 �
   for (const [f, re] of IDENTITY_READS) {
     const m = re.exec(readFileSync(f, "utf8"));
     if (!m) { bad.push(`${f}: 쿼리를 못 찾았다 — 이 가드를 따라 옮길 것`); continue; }
-    if (!/tenant_id\s*=/.test(m[0])) bad.push(`${f}: ${m[0].replace(/\s+/g, " ").slice(0, 70)}`);
+    //  getMember 만 `IN (맥락식, 전역 자리)` + 맥락 행 우선 정렬을 허용한다(그 함수 주석). 로그인 조회는 정렬 없는 LIMIT 1 이라
+    //   같은 꼴로 넓히면 남은 짝의 active 행이 primary 의 inactive 행을 이길 수 있다 — 그 셋은 `=` 로 남는다.
+    const fallback = f === "src/org/store/members.ts"
+      && /tenant_id\s+IN\s*\(\s*\$\{TENANT_DEFAULT_EXPR\},\s*\$\{IDENTITY_GLOBAL_DEFAULT_EXPR\}\s*\)/.test(m[0])
+      && /ORDER BY \(tenant_id = \$\{TENANT_DEFAULT_EXPR\}\) DESC LIMIT 1\b/.test(m[0]);
+    if (!fallback && !/tenant_id\s*=/.test(m[0].replace(/ORDER BY[\s\S]*/, ""))) bad.push(`${f}: ${m[0].replace(/\s+/g, " ").slice(0, 70)}`);
   }
   assert.deepEqual(bad, [], `테넌트로 좁혀지지 않은 신원 판정 조회:\n  ${bad.join("\n  ")}`);
 });

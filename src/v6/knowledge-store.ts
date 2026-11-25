@@ -372,7 +372,9 @@ export function applyKnowledgeEdits(base: string, edits: KnowledgeEdit[]): strin
       const head = oldText.slice(0, 60).replace(/\n/g, "⏎");
       throw new Error(`${at}: 본문에 ${count}곳 있어 어디를 바꿀지 모호합니다 — "${head}${oldText.length > 60 ? "…" : ""}". 앞뒤를 더 붙여 유일하게 만들거나, 전부 바꾸려면 replace_all: true 로 명시하세요.`);
     }
-    out = e.replace_all ? out.split(oldText).join(newText) : out.replace(oldText, newText);
+    // 함수로 넘겨 new 를 글자 그대로 넣는다 — 문자열로 넘기면 $&·$'·$`·$$ 를 치환 패턴으로 해석해
+    //  셸 예시·정규식·가격 표기가 든 문단이 조용히 바뀐다.
+    out = e.replace_all ? out.split(oldText).join(newText) : out.replace(oldText, () => newText);
   });
   return out;
 }

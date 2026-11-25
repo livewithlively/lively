@@ -3,6 +3,7 @@
   "dist/apps/worker-host.js",
   "dist/apps/worker-policy.js",
   "dist/auth/oidc-config.js",
+  "dist/auth/permissions.js",
   "dist/auth/scopes.js",
   "dist/db/client.js",
   "dist/domainmap/core/changelog.js",

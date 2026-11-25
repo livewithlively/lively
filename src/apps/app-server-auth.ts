@@ -23,6 +23,7 @@ import { canSeeApp } from "./visibility.js";
 import { getMember } from "../org/store/members.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope } from "../auth/scopes.js";
+import { cappedGrantsField, memberGrants } from "../auth/permissions.js";
 import { isBuiltinSource } from "./store-ddl.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import { verifyAppIdentity, type VerifyAppIdentityOpts } from "./app-identity.js";
@@ -127,6 +128,7 @@ export async function resolveAppServerPrincipal(user: LivelyUser, header: string
     userId: member.id,
     email: member.email ?? "",
     scopes: grant.scopes.filter((s) => isScope(s) && allowed.has(s)),
+    ...cappedGrantsField(memberGrants(member), grant.scopes),   // #5799 — 역할을 받은 구성원이면 새 권한 ∩ 앱 동의
     projects: ["*"],
     tokenSource: "db",
     tokenHashPrefix: user.tokenHashPrefix,
