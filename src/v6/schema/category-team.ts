@@ -179,6 +179,10 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now());
     ${ensureCheck("team", { team_state_chk: "state IN ('active','archived')" })}
+    -- 팀 종류(#5799) — team = 소속 팀(조직도 · 프로필에 보인다) / group = 권한 그룹(접근을 묶으려고 만든 것 · 권한 화면에만 보인다).
+    --  접근 판정에서는 둘이 같다(team_member 로 푼다). 다른 것은 «어디에 보이는가» 뿐이다. 읽을 때는 to_jsonb(행) ->> 'kind' 로 꺼낸다(롤 창).
+    ALTER TABLE team ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'team';
+    ${ensureCheck("team", { team_kind_chk: "kind IN ('team','group')" })}
     CREATE UNIQUE INDEX IF NOT EXISTS team_key_uq ON team(key) WHERE state <> 'archived';
   `);
 

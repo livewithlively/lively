@@ -13,6 +13,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { capAllowed } from "./cap-permission.js";
+import { cappedGrantsField } from "../auth/permissions.js";
 import { viewerOf } from "./principal.js";
 import { requireAppTool } from "../apps/principal.js";
 import {
@@ -122,13 +123,7 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
     throw new HttpError(403, regrantMessage(appId, regrantToolPhrase(name)), { body: { code: CONSENT_REQUIRED, missing: grantGap(grant, declared, memberScopes) } });
   }
 
-  // 앱-principal 유저 — 스코프는 멤버 ∩ grant 로 축소, appId 를 실어 requireAppTool 이 grant 도구로 판정하게 한다.
-  const appUser: LivelyUser = {
-    ...member,
-    appId,
-    scopes: (member.scopes ?? []).filter((s) => grant.scopes.includes(s)),
-    ...(opts.address ? { appAddress: opts.address } : {}),
-  };
+  const appUser = appPrincipalOf(member, appId, grant.scopes, opts.address);
 
   // 대상 능력 조회(registry) — 동적 import 로 순환 회피(index → 이 파일 → index).
   const { registry } = await import("./index.js");
@@ -175,3 +170,18 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
 }
 
 export const appToolCallCapabilities: Capability[] = [appToolCall];
+
+/**
+ * 앱-principal 유저(순수 — 시험 대상) — 스코프는 멤버 ∩ 앱 동의로 축소, appId 를 실어 requireAppTool 이 동의한 도구로 판정하게 한다.
+ *  #5799 — `...member` 가 그 사람의 새 권한(grants)을 통째로 실어 온다. **앱 동의가 상한**이므로 반드시 덮는다:
+ *   역할을 받은 구성원이면 새 권한 ∩ 앱 동의(옛 이름을 번역), 옛 구성원이면 칸을 비운다(scopes 가 판정한다).
+ */
+export function appPrincipalOf(member: LivelyUser, appId: string, grantScopes: readonly string[], address?: LivelyUser["appAddress"]): LivelyUser {
+  return {
+    ...member,
+    appId,
+    scopes: (member.scopes ?? []).filter((s) => grantScopes.includes(s)),
+    grants: undefined, ...cappedGrantsField(member.grants, grantScopes),
+    ...(address ? { appAddress: address } : {}),
+  };
+}

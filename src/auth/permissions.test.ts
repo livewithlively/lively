@@ -13,14 +13,23 @@
 //   P9 주체의 권한: 새 값이 실려 있으면 그것만 본다(옛 scope 사본과 합치지 않는다) · 없으면 옛 scope 번역 · 주체가 없으면 빈 것
 //   P10 can: 수준을 안 주면 고치기를 묻는다 · 보기만 가진 사람에게 보기는 통하고 고치기는 안 통한다
 //   P11 위험 권한은 관리 · 자격 · 하네스 설정이고, 옛 위험 scope 가 주는 것과 정확히 같다
+//
+//  역할 저장(구성원 행 ↔ 권한):
+//   Q1 저장된 값 읽기 — 모르는 권한 · 모르는 수준 · 객체가 아닌 값 · 객체 내장 이름은 버린다
+//   Q2 구성원 행의 권한 — 역할이 없거나 모르는 역할이면 «옛 구성원»(undefined · 개별 권한만 있어도) · 개별 권한은 올리기만 한다
+//   Q3 옛 이름 사본 — 게스트 없음 · 구성원 = 기본 다섯 · 관리자 + admin · 소유자 일곱 · 보기만 가진 영역은 비치지 않는다(코드 · DB 는 비친다)
+//   Q4 주체의 권한 — 따르기 all / safe / none · 어느 경우에도 구성원을 넘지 않는다(역할 4 × scope 부분집합 128 × 방식 3)
+//   Q5 앱 주체의 칸 — 옛 구성원이면 칸이 없다 · 역할 구성원이면 상한들과 교집합 · **빈 상한이면 «권한 0개» 로 실린다(칸이 빠지지 않는다)**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SCOPES, DANGEROUS_SCOPES, SAFE_SCOPES } from "./scopes.js";
 import {
   PERMISSIONS, PERMISSION_INFO, isPermission, allows, mergeGrants, legacyScopesToGrants, LEGACY_SCOPE_GRANTS,
   ROLES, ROLE_INFO, ROLE_GRANTS, isRole, intersectGrants, grantsOf, can, DANGEROUS_PERMISSIONS,
+  sanitizeGrants, memberGrants, grantsToLegacyScopes, principalGrants, grantsField, cappedGrantsField,
   type Grants, type Level, type Permission,
 } from "./permissions.js";
+import { DEFAULT_MEMBER_SCOPES } from "./scopes.js";
 
 const RANK: Record<Level, number> = { read: 1, write: 2 };
 const rank = (g: Grants, p: Permission): number => { const lv = g[p]; return lv ? RANK[lv] : 0; };
@@ -165,3 +174,111 @@ test("P11 위험 권한은 관리 · 자격 · 하네스 설정이다", () => {
     for (const p of Object.keys(LEGACY_SCOPE_GRANTS[s])) assert.ok(!DANGEROUS_PERMISSIONS.has(p as Permission), `${s} → ${p}`);
   }
 });
+
+const subsetsOf = <T>(xs: readonly T[]): T[][] => xs.reduce<T[][]>((acc, x) => acc.concat(acc.map((s) => [...s, x])), [[]]);
+
+test("Q1 저장된 값 읽기 — 모르는 것은 버린다", () => {
+  assert.deepEqual(sanitizeGrants({ content: "read", code: "write" }), { content: "read", code: "write" });
+  assert.deepEqual(sanitizeGrants({ content: "admin", memory: "write", nope: "read", db: "READ", run: true, session: null }), {});
+  for (const x of [null, undefined, "content", 7, true, ["content"], [{ content: "write" }]]) assert.deepEqual(sanitizeGrants(x), {}, String(x));
+  // JSON 으로 들어온 __proto__ · constructor 는 권한 이름이 아니다
+  const evil = JSON.parse('{"__proto__":{"admin":"write"},"constructor":"write","content":"read"}');
+  assert.deepEqual(sanitizeGrants(evil), { content: "read" });
+  assert.equal(sanitizeGrants(evil).admin, undefined);
+  // 물려받은 속성은 읽지 않는다
+  assert.deepEqual(sanitizeGrants(Object.create({ admin: "write" })), {});
+});
+
+test("Q2 구성원 행의 권한 — 역할이 없으면 옛 구성원이다", () => {
+  for (const role of [null, undefined, "", "viewer", "MEMBER", 1, {}]) {
+    assert.equal(memberGrants({ role, grants: { admin: "write" } }), undefined, `role=${String(role)}`);
+  }
+  assert.equal(memberGrants(null), undefined);
+  assert.equal(memberGrants(undefined), undefined);
+  assert.deepEqual(memberGrants({ role: "member" }), ROLE_GRANTS.member);
+  assert.deepEqual(memberGrants({ role: "guest", grants: null }), { content: "read" });
+  // 개별 권한은 얹는다 — 코드 보기 → 고치기, 하네스 설정 보기 → 고치기
+  assert.deepEqual(memberGrants({ role: "member", grants: { code: "write", harness: "write" } }), { ...ROLE_GRANTS.member, code: "write", harness: "write" });
+  // 낮추지는 못한다 — 구성원의 맥락 고치기에 «보기» 를 얹어도 고치기다
+  assert.equal(memberGrants({ role: "member", grants: { content: "read" } })?.content, "write");
+  // 손상된 개별 권한은 버리고 역할만 남는다
+  assert.deepEqual(memberGrants({ role: "guest", grants: "admin" }), { content: "read" });
+  assert.deepEqual(memberGrants({ role: "guest", grants: { admin: "everything" } }), { content: "read" });
+});
+
+test("Q3 옛 이름 사본", () => {
+  const sorted = (a: readonly string[]): string[] => [...a].sort();
+  assert.deepEqual(grantsToLegacyScopes(ROLE_GRANTS.guest), []);
+  assert.deepEqual(sorted(grantsToLegacyScopes(ROLE_GRANTS.member)), sorted(DEFAULT_MEMBER_SCOPES), "구성원 = 기본 구성원 scope 다섯");
+  assert.deepEqual(sorted(grantsToLegacyScopes(ROLE_GRANTS.admin)), sorted([...DEFAULT_MEMBER_SCOPES, "admin"]));
+  assert.deepEqual(sorted(grantsToLegacyScopes(ROLE_GRANTS.owner)), sorted([...SCOPES]));
+  assert.deepEqual(grantsToLegacyScopes({}), []);
+  // 보기만 가진 영역은 비치지 않는다 — 옛 이름은 «고칠 수 있다» 는 뜻이었다
+  assert.deepEqual(grantsToLegacyScopes({ content: "read", pipeline: "read", external: "read", admin: "read", harness: "read", secrets: "write" }), []);
+  // 코드 · DB 는 원래 보기다
+  assert.deepEqual(grantsToLegacyScopes({ code: "read", db: "read" }), ["db", "code"]);
+  // 순서는 SCOPES 순서(저장 값이 흔들리지 않게)
+  assert.deepEqual(grantsToLegacyScopes(ROLE_GRANTS.owner), [...SCOPES]);
+  // 관리자 판정을 scopes 로 하는 옛 자리가 역할과 어긋나지 않는다
+  for (const r of ROLES) assert.equal(grantsToLegacyScopes(ROLE_GRANTS[r]).includes("admin"), r === "admin" || r === "owner", r);
+  for (const r of ROLES) assert.equal(grantsToLegacyScopes(ROLE_GRANTS[r]).includes("runtime"), r === "owner", r);
+});
+
+test("Q4 주체의 권한 — 구성원 ∩ 발급된 상한", () => {
+  const { guest, member, admin, owner } = ROLE_GRANTS;
+  assert.deepEqual(principalGrants(member, { follow: "all" }), member);
+  // 옛 이름으로 적힌 상한 안에서만
+  assert.deepEqual(principalGrants(member, { follow: "none", scopes: ["memory"] }), { content: "write", pipeline: "write", session: "write" });
+  assert.deepEqual(principalGrants(member, { follow: "none", scopes: [] }), {});
+  assert.deepEqual(principalGrants(member, { follow: "none", scopes: null }), {});
+  assert.deepEqual(principalGrants(guest, { follow: "none", scopes: ["memory", "admin"] }), { content: "read" }, "게스트의 토큰은 게스트를 넘지 못한다");
+  assert.deepEqual(principalGrants(owner, { follow: "none", scopes: ["db"] }), { db: "read" });
+  // 로그인 토큰 — 위험 권한은 토큰에 실린 만큼만
+  assert.deepEqual(principalGrants(member, { follow: "safe", scopes: [] }), member, "구성원은 위험 권한이 없다 — 하네스 설정 보기는 따른다");
+  assert.deepEqual(principalGrants(admin, { follow: "safe", scopes: [] }), { ...member, code: "write" },
+    "관리자 기능을 허용하지 않은 연결 — 관리 · 자격이 빠진다(코드 고치기는 위험 권한이 아니라 따른다)");
+  assert.deepEqual(principalGrants(admin, { follow: "safe", scopes: ["admin"] }), admin, "허용한 연결은 관리자 역할 그대로(자격은 구성원이 가진 보기까지)");
+  assert.deepEqual(principalGrants(owner, { follow: "safe", scopes: ["admin"] }), { ...owner, harness: "read" }, "runtime 을 싣지 않은 연결은 하네스 설정을 고치지 못한다");
+  assert.deepEqual(principalGrants(owner, { follow: "safe", scopes: ["admin", "runtime"] }), owner);
+  assert.deepEqual(principalGrants(guest, { follow: "safe", scopes: ["admin", "runtime"] }), guest, "게스트는 토큰에 무엇이 실려도 게스트다");
+  // 어느 경우에도 구성원을 넘지 않는다
+  let checked = 0;
+  for (const r of ROLES) {
+    for (const set of subsetsOf(SCOPES)) {
+      for (const follow of ["safe", "none"] as const) {
+        const g = principalGrants(ROLE_GRANTS[r], { follow, scopes: set });
+        for (const p of PERMISSIONS) assert.ok(rank(g, p) <= rank(ROLE_GRANTS[r], p), `${r} ${follow} [${set.join(" ")}] ${p}`);
+        // 위험 권한의 고치기는 그 옛 scope 가 실렸을 때만
+        if (!set.includes("admin")) assert.ok(rank(g, "admin") === 0 && rank(g, "secrets") === 0, `${r} ${follow} admin 없이 관리 · 자격`);
+        if (!set.includes("runtime")) assert.ok(rank(g, "harness") <= 1, `${r} ${follow} runtime 없이 하네스 설정 고치기`);
+        checked++;
+      }
+    }
+  }
+  assert.equal(checked, 4 * 128 * 2);
+});
+
+test("Q5 주체에 펼쳐 넣는 칸", () => {
+  assert.deepEqual(grantsField({ role: null, grants: { admin: "write" } }), {}, "옛 구성원이면 칸이 없다");
+  assert.deepEqual(grantsField(null), {});
+  assert.deepEqual(grantsField({ role: "guest" }), { grants: { content: "read" } });
+  assert.equal("grants" in grantsField({ role: null }), false);
+  // 앱 주체
+  assert.deepEqual(cappedGrantsField(undefined, ["memory"]), {}, "옛 구성원이면 칸이 없다");
+  assert.deepEqual(cappedGrantsField(null, ["memory"]), {});
+  assert.deepEqual(cappedGrantsField(ROLE_GRANTS.member, ["memory", "context"]), { grants: { content: "write", pipeline: "write", session: "write", code: "read", run: "write" } });
+  assert.deepEqual(cappedGrantsField(ROLE_GRANTS.owner, ["memory", "admin"], ["memory"]), { grants: { content: "write", pipeline: "write", session: "write" } }, "상한을 차례로 좁힌다");
+  // 빈 상한 — 칸이 빠지면 scopes 사본이 판정하게 된다. 반드시 «권한 0개» 로 실려야 한다.
+  const empty = cappedGrantsField(ROLE_GRANTS.owner, []);
+  assert.deepEqual(empty, { grants: {} });
+  assert.equal("grants" in empty, true);
+  assert.equal(permitsLike(empty.grants, ["admin", "memory"]), false);
+  assert.deepEqual(cappedGrantsField(ROLE_GRANTS.owner, ["memory"], null), { grants: {} }, "상한 하나가 비면 전부 닫힌다");
+  // 상한이 하나도 없으면 구성원 그대로(사람 본인)
+  assert.deepEqual(cappedGrantsField(ROLE_GRANTS.guest), { grants: { content: "read" } });
+});
+
+/** 권한 0개로 실린 주체는 사본 scopes 가 무엇이든 관리 고치기를 얻지 못한다(Q5 의 뜻을 판정으로 확인). */
+function permitsLike(grants: Grants | undefined, scopes: string[]): boolean {
+  return can({ scopes, grants }, "admin");
+}

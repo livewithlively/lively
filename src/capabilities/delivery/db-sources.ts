@@ -15,6 +15,9 @@ import { forgetDbSecret } from "../../db/secret-store.js";
 import { invalidatePool } from "../../db/pool.js";
 import { listTableNames, listColumnsMeta } from "../../db/catalog.js";
 import { refreshSources, listSourceConfigs } from "../../db/sources.js";
+import { listDbSourceGrants, setDbSourceGrants, clearDbSourceGrants } from "../../org/store/db-source-grants.js";
+import { activeMemberIdsAmong } from "../../org/store/members.js";
+import { existingTeamIds } from "../../v6/team-store.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../../db/policy.js";
 import { isSystemDeniedTable } from "../../db/firewall.js";
 import { actorOf, restOnly, slug, str } from "./shared.js";
@@ -161,6 +164,60 @@ export const dbSourcesCapabilities: Capability[] = [
       enabled: z.boolean().optional().describe("활성 여부"),
       sort: z.number().optional().describe("정렬 순서"),
     }),
+  // ── DB 소스 지정(#5799) — 이 소스를 조회할 수 있는 사람 · 팀. 기본 불가: 역할을 받은 구성원은 여기 적혀야 조회한다. ──
+  restOnly("org_db_source_access", "DB 소스 조회 대상 보기",
+    "DB 소스마다 조회할 수 있게 지정된 구성원 · 팀을 준다(name 을 주면 그 소스만). 역할을 받은 구성원은 «DB» 조회 권한과 이 지정이 **둘 다** 있어야 "
+    + "그 소스를 조회한다(기본 불가 — 소스를 등록한 관리자도 지정돼야 본다). 역할이 없는 옛 구성원은 이 지정과 무관하게 db scope 로 전 소스를 조회한다. 바꾸기는 org_db_source_access_set.",
+    [{ method: "GET", paths: ["/api/ui/org/db-source/access"], parse: (req) => ({ name: req.query?.name == null ? undefined : String(req.query.name) }) }],
+    async (input: Record<string, unknown>) => {
+      const name = input.name == null || input.name === "" ? undefined : slug(input.name, "name");
+      const rows = await listDbSourceGrants(name);
+      const by = new Map<string, { source: string; members: string[]; teams: number[] }>();
+      if (name) by.set(name, { source: name, members: [], teams: [] });
+      for (const r of rows) {
+        const e = by.get(r.source) ?? { source: r.source, members: [], teams: [] };
+        if (r.subject_kind === "member") e.members.push(r.subject_id); else e.teams.push(Number(r.subject_id));
+        by.set(r.source, e);
+      }
+      return { access: [...by.values()] };
+    }, {
+      name: z.string().optional().describe("DB 소스 이름 — 생략하면 지정이 있는 소스 전부"),
+    }),
+  restOnly("org_db_source_access_set", "DB 소스 조회 대상 바꾸기",
+    "한 DB 소스를 조회할 수 있는 구성원 · 팀을 **통째로** 바꾼다(빠진 대상은 지워지고 새 대상이 더해진다 · 둘 다 빈 배열이면 아무도 조회하지 못한다). "
+    + "팀으로 지정하면 그 팀의 구성원 변경이 곧 접근권한 변경이라, 팀 편집이 관리자 전용이 된다.",
+    [{ method: "POST", paths: ["/api/ui/org/db-source/access"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const name = slug(input.name, "name");
+      await refreshSources(true);
+      if (!listSourceConfigs().some((s) => s.name === name)) throw new HttpError(404, `DB 소스 없음: ${name}`);
+      const arr = (v: unknown, what: string): unknown[] => {
+        if (v === undefined || v === null) return [];
+        if (!Array.isArray(v)) throw new HttpError(400, `${what} 는 배열이어야 합니다`);
+        return v;
+      };
+      const members = [...new Set(arr(input.members, "members").map((m) => str(m, "members[]", 200).trim()).filter(Boolean))];
+      const teams = [...new Set(arr(input.teams, "teams").map((t) => parsePosInt(t, "teams[]")))];
+      const known = new Set(await activeMemberIdsAmong(members));
+      const unknownMembers = members.filter((m) => !known.has(m));
+      if (unknownMembers.length) throw new HttpError(400, `활성 구성원이 아닙니다: ${unknownMembers.join(", ")}`);
+      const knownTeams = new Set(await existingTeamIds(teams));
+      const unknownTeams = teams.filter((t) => !knownTeams.has(t));
+      if (unknownTeams.length) throw new HttpError(400, `없는 팀입니다: ${unknownTeams.join(", ")}`);
+      const rows = await setDbSourceGrants(name, [
+        ...members.map((id) => ({ kind: "member" as const, id })),
+        ...teams.map((id) => ({ kind: "team" as const, id: String(id) })),
+      ], actorOf(user));
+      return {
+        source: name,
+        members: rows.filter((r) => r.subject_kind === "member").map((r) => r.subject_id),
+        teams: rows.filter((r) => r.subject_kind === "team").map((r) => Number(r.subject_id)),
+      };
+    }, {
+      name: z.string().describe("DB 소스 이름(db_sources · org_db_sources 의 name)"),
+      members: z.array(z.string()).optional().describe("조회할 수 있는 구성원 id 목록(전체 교체 · 생략 = 빈 목록)"),
+      teams: z.array(z.number().int().positive()).optional().describe("조회할 수 있는 팀 id 목록(전체 교체 · 생략 = 빈 목록) — 소속 팀 · 권한 그룹 모두"),
+    }),
   restOnly("org_db_source_remove", "DB 데이터소스 제거",
     "DB 데이터소스를 제거한다(db_query 즉시 반영 — 연결 풀 재생성).",
     [{ method: "POST", paths: ["/api/ui/org/db-source/remove"], parse: (req) => req.body ?? {} }],
@@ -168,6 +225,7 @@ export const dbSourcesCapabilities: Capability[] = [
       const name = slug(input.name, "name");
       const before = await getDbSource(name);
       await removeDbSource(name, actorOf(user), "web");
+      await clearDbSourceGrants(name);   // #5799 — 같은 이름으로 다시 등록한 소스가 옛 조회 대상을 물려받지 않게
       forgetDbSecret(before?.auth_ref); // 지운 소스의 기억한 시크릿도 버린다(#1764)
       invalidatePool(name);
       await refreshSources(true);

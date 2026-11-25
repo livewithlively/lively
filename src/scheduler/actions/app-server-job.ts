@@ -14,6 +14,7 @@
 //   run_as 만 params 에서 읽는다 — 그 값은 관리자 도구(org_app_job_set)만 쓴다.
 //  무거운 의존(앱 작업 · 저장소)은 실행 때 동적으로 읽는다 — 등록부(registry.ts)의 정적 로드가 부팅 비용 · 순환 의존을 만들지 않게(registry.ts 머리말).
 import type { CronJob } from "../registry.js";
+import { grantsField } from "../../auth/permissions.js";
 import type { LivelyUser } from "../../context.js";
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
@@ -74,7 +75,7 @@ export async function runAppServerJob(params: Record<string, unknown>, job: Cron
   const open = await openAppJobWithLabel(appId, label, SCHEDULE_JOB_SOURCE).catch(() => null);
   if (open) return { status: "skipped", summary: { reason: `앞 실행(작업 #${open})이 아직 끝나지 않았습니다`, job: open } };
   const m = await getMember(who.member);
-  const user: LivelyUser = { userId: who.member, email: m?.email ?? "", scopes: m?.scopes ?? [], projects: ["*"] };
+  const user: LivelyUser = { userId: who.member, email: m?.email ?? "", scopes: m?.scopes ?? [], ...grantsField(m), projects: ["*"] };
   try {
     const out = await startAppJob({ app_id: appId, route: decl.route, body: decl.body, label }, user, { source: SCHEDULE_JOB_SOURCE, unattended: true, automation: true });
     return { status: "ok", summary: { job: out.id ?? null, run_as: who.member, via: who.via } };
