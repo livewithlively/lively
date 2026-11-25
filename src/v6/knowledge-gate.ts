@@ -45,6 +45,9 @@ export interface GateBefore {
   /** 외부 좌표(미러 표식) — 있으면 재싱크가 제목·본문을 원본으로 덮는다(capabilities/knowledge/mirror-guard.ts). */
   external_system: string | null;
   external_url: string | null;
+  /** 형식 정리 저장의 사람 편집 보호 창(save-guard) — 마지막 편집 시각·편집자. */
+  updated_at?: string | Date | null;
+  updated_by?: string | null;
 }
 
 export interface KnowledgeGate {
@@ -59,14 +62,18 @@ export interface KnowledgeGate {
 }
 
 // 저장 1건에 대한 게이트 결정. 정책 규칙 0개(디폴트)면 create=auto·update=auto → 현행과 100% 동일.
-export async function resolveKnowledgeGate(input: GateSaveInput, ctx?: { source?: string; agent?: string }): Promise<KnowledgeGate> {
+//  opts.nameResolved — 호출부가 이미 resolveKnowledgeName 으로 해석한 이름이면 다시 해석하지 않는다(저장 1건에 조회 한 번 덜).
+//   공개범위 검사와 게이트가 **같은 이름**을 보는 것도 그래서 보장된다 — 해석을 두 번 하면 그 사이 생긴 행이 둘을 가를 수 있다.
+export async function resolveKnowledgeGate(
+  input: GateSaveInput, ctx?: { source?: string; agent?: string }, opts: { nameResolved?: boolean } = {},
+): Promise<KnowledgeGate> {
   const actor_kind = actorKindOf(ctx?.source ?? null);
   const agent = ctx?.agent ?? null;
-  const name = input.name ? await resolveKnowledgeName(input.name) : null;
+  const name = input.name ? (opts.nameResolved ? input.name : await resolveKnowledgeName(input.name)) : null;
 
   const before = name
     ? (await one(itemsPool,
-      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url
+      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url, updated_at, updated_by
          FROM knowledge WHERE name=$1`, [name])) as GateBefore | undefined
     : undefined;
   const isCreate = !before;

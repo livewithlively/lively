@@ -166,6 +166,19 @@ t("tableRows: 행 사이 값이 바뀌면 탈락이다", () => {
   const b = "표다.\n\n| A | 5 |\n| B | 3 |\n";
   assert.ok(checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt).violations.some((v) => v.kind === "invariant:tableRows"));
 });
+t("tableRows: 앞 파이프 없는 GFM 표도 행으로 본다 — 행 사이 값 맞교환은 탈락", () => {
+  const a = "표다.\n\n항목 | 값\n--- | ---\nA | 3\nB | 5\n";
+  const b = "표다.\n\n항목 | 값\n--- | ---\nA | 5\nB | 3\n";
+  assert.deepEqual(bag(inv(CLEAN_TITLE, a).tableRows), ["A | 3", "B | 5", "항목 | 값"].sort());
+  assert.ok(checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt).violations.some((v) => v.kind === "invariant:tableRows"));
+});
+t("tableRows: 앞 파이프를 붙이거나 떼는 표기 변화는 보존이다", () => {
+  const a = "표다.\n\n항목 | 값\n--- | ---\nA | 3\n";
+  const b = "표다.\n\n| 항목 | 값 |\n|---|---|\n| A | 3 |\n";
+  assert.ok(!checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt).violations.some((v) => v.kind === "invariant:tableRows"));
+});
+t("tableRows: 구분선이 없는 파이프 줄(서술 속 a | b, 파이프 없는 --- 아래 줄)은 표 행이 아니다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "명령은 a | b 로 잇는다.\n다음 줄 c | d 도 서술이다.\n\n제목 | 부제\n---\n본문이다.").tableRows), []));
 t("numbers: 부호가 사라지면 탈락이다(-5 → 5)", () =>
   assert.ok(checkRewrite(doc(CLEAN_TITLE, "기준은 -5도다."), doc(CLEAN_TITLE, "기준은 5도다."), fmt).violations.some((v) => v.kind === "invariant:numbers")));
 t("numbers: 날짜·범위의 하이픈은 부호가 아니다", () =>
@@ -178,6 +191,35 @@ t("numbers: 줄머리 네 자리 연도는 목록 표지가 아니다", () =>
   assert.deepEqual(bag(inv(CLEAN_TITLE, "결론이다.\n2024. 그 해에 바꿨다.").numbers), ["2024"]));
 t("urls: 마크다운 상대 링크 대상이 바뀌면 탈락이다", () =>
   assert.ok(checkRewrite(doc(CLEAN_TITLE, "자세한 건 [문서](docs/a.md) 에 있다."), doc(CLEAN_TITLE, "자세한 건 [문서](docs/b.md) 에 있다."), fmt).violations.some((v) => v.kind === "invariant:urls")));
+t("linkPairs: 두 링크의 대상을 맞바꾸면 탈락이다(대상 집합은 그대로여도)", () => {
+  const a = "설치는 [설치 안내](docs/install.md) 를, 운영은 [운영 안내](docs/ops.md) 를 본다.";
+  const b = "설치는 [설치 안내](docs/ops.md) 를, 운영은 [운영 안내](docs/install.md) 를 본다.";
+  const r = checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt);
+  assert.ok(!hasKind(r, "invariant:urls"), kinds(r).join(","));
+  assert.ok(hasKind(r, "invariant:linkPairs"), kinds(r).join(","));
+});
+t("linkPairs: 라벨의 볼드·그림 문자만 걷은 재작성은 보존이다", () => {
+  const a = "자세한 건 [**설치 안내** 🔧](docs/install.md) 에 있다.";
+  const b = "자세한 건 [설치 안내](docs/install.md) 에 있다.";
+  assert.deepEqual(bag(inv(CLEAN_TITLE, a).linkPairs), ["설치 안내 → docs/install.md"]);
+  assert.ok(!hasKind(checkRewrite(doc(CLEAN_TITLE, a), doc(CLEAN_TITLE, b), fmt), "invariant:linkPairs"));
+});
+
+t("templateVars: 항상 주입 섹션의 자리표를 코드 안팎에서 집합으로 뽑는다", () =>
+  assert.deepEqual(bag(inv(CLEAN_TITLE, "팀 규칙은 ${team} 에 둔다.\n\n${categories}\n\n${wiki}\n\n다시 ${team} 을 본다. `${member_ai_connectors}`").templateVars),
+    ["${categories}", "${member_ai_connectors}", "${team}", "${wiki}"]));
+t("templateVars: 자리표 한 줄을 지운 재작성은 탈락이다(매 세션 실리던 블록이 사라진다)", () => {
+  const before = doc(CLEAN_TITLE, "팀 규칙을 따른다.\n\n${team}\n\n분류는 아래와 같다.\n\n${categories}\n\n${wiki}");
+  const after = doc(CLEAN_TITLE, "팀 규칙을 따른다.\n\n분류는 아래와 같다.\n\n${categories}\n\n${wiki}");
+  const r = checkRewrite(before, after, fmt);
+  assert.ok(hasKind(r, "invariant:templateVars"), kinds(r).join(","));
+  assert.deepEqual(r.violations.find((v) => v.kind === "invariant:templateVars")?.missing, ["${team}"]);
+});
+t("templateVars: 같은 자리표가 두 번에서 한 번으로 줄어도 보존이다(집합)", () => {
+  const before = doc(CLEAN_TITLE, "팀 규칙을 따른다.\n\n${team}\n\n팀 소개는 ${team} 에 있다.");
+  const after = doc(CLEAN_TITLE, "팀 규칙을 따른다.\n\n팀 소개는 ${team} 에 있다.");
+  assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:templateVars"));
+});
 
 // ───────────────────────── proseChars ─────────────────────────
 
@@ -342,8 +384,8 @@ t("inlineCode: 조사가 바로 붙은 평문으로 백틱만 벗기거나 씌�
   assert.ok(!hasKind(checkRewrite(plain, coded, fmt), "invariant:inlineCode"));
 });
 t("numbers: 식별자 안의 숫자(EC2)를 결론에 한 번 더 써도 violation 없음", () => {
-  const before = doc(CLEAN_TITLE, `${LEAD}\n\nSCF EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
-  const after = doc(CLEAN_TITLE, `EC2 태그 drift 는 무시한다.\n\n${LEAD}\n\nSCF EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
+  const before = doc(CLEAN_TITLE, `${LEAD}\n\n운영 EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
+  const after = doc(CLEAN_TITLE, `EC2 태그 drift 는 무시한다.\n\n${LEAD}\n\n운영 EC2 태그가 뒤바뀐다.\n\n${FILLER}`);
   assert.ok(!hasKind(checkRewrite(before, after, fmt), "invariant:numbers"));
 });
 t("urls 는 집합: 같은 URL 두 번이 한 번으로 줄어도 violation 없음", () => {
@@ -468,6 +510,20 @@ t("provenance 가 authored 아니면 provenance", () => {
 });
 t("lifecycle 이 active 아니면 lifecycle", () => assert.equal(elig({ lifecycle: "archived" }).reason, "lifecycle"));
 t("폴더면 folder", () => assert.equal(elig({ is_folder: true }).reason, "folder"));
+t("항상 주입 섹션(injection=always)은 always_injected — 매 세션 전문이 실리는 조직 규칙을 형식 정리가 고쳐 쓰지 않는다", () => {
+  const r = elig({ injection: "always" });
+  assert.equal(r.eligible, false);
+  assert.equal(r.reason, "always_injected");
+});
+t("injection 이 always 가 아니거나 없으면 그대로 대상이다", () => {
+  assert.equal(elig({ injection: "recalled" }).eligible, true);
+  assert.equal(elig({ injection: null }).eligible, true);
+  assert.equal(elig().eligible, true);
+});
+t("always_injected 는 최근 수정보다 먼저 가른다(배치 자신의 반영이어도 대상이 아니다)", () => {
+  assert.equal(elig({ injection: "always", updated_at: ago(0) }).reason, "always_injected");
+  assert.equal(isEligible(k({ injection: "always", updated_at: ago(1 * H) }) as any, fmt, NOW as any, { lastEditIsOwn: true }).reason, "always_injected");
+});
 t("본문이 REWRITE_BODY_MAX_CHARS 초과면 대상이되 섹션 단위(mode=sections)", () => {
   const r = elig({ body_md: `${LEAD}\n\n${"가".repeat(REWRITE_BODY_MAX_CHARS)}` });
   assert.equal(r.eligible, true);

@@ -154,13 +154,25 @@ t("링크 해석도 저장과 같은 이름에 닿는다(긴 제목으로 새로
   const raw = "a".repeat(63) + " b", saved = pickKnowledgeName(raw, has());
   assert.deepEqual(resolveWikiLinkTargets("from", [raw], K(saved)), { linked: [saved], unmatched: [] });
 });
-// 핸들러가 해석한 이름을 게이트·store 가 다시 해석한다 — 갈리면 공개범위 검사와 실제 쓰기 대상이 달라진다.
+// 해석한 이름을 다시 해석해도 같아야 한다 — knowledge_save 는 핸들러가 해석한 이름을 게이트·store 에 넘기지만(다시 안 한다),
+//  다른 저장 경로(리비전 승인·이관)는 이미 정해진 이름을 store 에 넣어 store 가 한 번 더 해석한다. 갈리면 엉뚱한 행을 고친다.
 t("저장 이름: 다시 해석해도 같다(존재 여부와 무관)", () => {
   const raws = ["a".repeat(63) + " b", "Some Title", "가".repeat(70), "abc-", "2026-06-11-PM툴-설계결정"];
   for (const raw of raws) {
     for (const exists of [has(), has(raw), has(slugify(raw)), has("a".repeat(63))]) {
       const once = pickKnowledgeName(raw, exists);
       assert.equal(pickKnowledgeName(once, exists), once, `${raw} → ${once}`);
+    }
+  }
+});
+// resolveKnowledgeName 이 정규형 이름(slugify(x) === x)이면 조회하지 않고 그대로 돌려주는 근거 — 정규형이면 어느 DB 상태에서도
+//  해석 결과가 원문 그대로라 조회가 결과를 바꿀 수 없다(slugify 가 꼬리 '-' 를 떼므로 정규형은 '-' 로 끝나지 않는다).
+t("저장 이름: 정규형(slugify(x) === x)이면 존재 여부와 무관하게 그대로다", () => {
+  const raws = ["some-title", "가".repeat(64), "a".repeat(63), "2026-06-11-pm툴-설계결정", "untitled", "a-b-c"];
+  for (const raw of raws) {
+    assert.equal(slugify(raw), raw, raw);
+    for (const exists of [has(), has(raw), has(raw + "-"), has(raw.toUpperCase()), has("a".repeat(63))]) {
+      assert.equal(pickKnowledgeName(raw, exists), raw, raw);
     }
   }
 });

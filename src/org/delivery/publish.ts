@@ -254,6 +254,7 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
     const rc = await getRuntimeConfig();
     guideOn = rc.inject_ontology_guide;
     // 서술 형식 — 켠 조직만. 저장 때 422 로 알게 하는 것보다 쓰기 전에 알게 하는 쪽이 싸다(저장 한 번이 버려지지 않는다).
+    //  표면은 안 준다 — 한 세션이 지식·작업기록·프로젝트를 다 쓰므로, 적용 표면이 하나라도 있으면 싣는다(apply_to: [] 면 빈 글).
     writingBlock = buildWritingGuideBlock(rc.writing_format);
   } catch { /* fail-open */ }
   //  #4427 — 외부 서비스 MCP 줄(${member_ai_connectors})은 워크스페이스 정책으로 두 벌 중 하나다. 조회 실패는 허용(그 함수 머리말).
@@ -285,6 +286,8 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
       "웹사이트 열기·검색·읽기·화면 확인·양식 입력 등 브라우저 작업을 받으면 먼저 라이블리 MCP의 `browser_status`로 이 세션의 데스크톱 앱 브라우저 연결을 확인한다. 연결돼 있으면 곁칸 [웹]에 나타나는 `browser_*` 도구로 작업한다. 사용자가 다른 브라우저를 명시하거나 곁칸 브라우저로 할 수 없는 경우에만 다른 경로를 쓴다. 연결되지 않았으면 그 상태를 사실대로 알린다.",
     ].join("\n"));
   }
+  //  ⚠ 빈 글이면 넣지 않는다 — 넣으면 형식을 켜지 않은 조직의 주입 끝에 빈 블록("\n\n")이 붙는다(바이트 동일 계약 ·
+  //   회귀: org/store/runtime-config-writing-format.pg-test.mjs W1).
   if (writingBlock) out.push(redactString(writingBlock));
   if (opts.team.trim() && !consumedTeam.v) out.push(opts.team.trim()); // ${team} 미사용 시 폴백(마이그레이션으로 org-defaults 에 ${team} 시드 시 in-position)
   return out.join("\n\n");

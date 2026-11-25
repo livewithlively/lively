@@ -18,6 +18,7 @@ export interface CapabilityCtx {
   ip?: string;              // 요청 IP
   readOnly?: boolean;       // 읽기전용 세션(#1007+) — 이 요청이 read-only 모드인가(x-lively-mode=readonly 파생). 쓰기 capability 의 강제는 어댑터가 한다. 쓰기 아닌 capability 의 쓰기 갈래는 핸들러가 이 값으로 막는다(file_url PUT #4673). me 가 반환.
   incognito?: boolean;      // 인코그니토 세션(#1007+) — 이 요청이 incognito 모드인가(x-lively-mode=incognito 파생). incognito = lively 툴 0개+전체 차단(읽기·쓰기 모두). 관측용.
+  client?: string;          // 요청을 보낸 화면 — REST 어댑터만 채운다(x-lively-client 헤더, 웹 화면 api() 는 'web-ui'). 자기주장이라 권한 판정에 쓰지 않는다 — 서술 형식의 사람 판정(writing-style.ts isHumanWriter)처럼 «거부 대신 안내» 를 가르는 데만.
   // 맥락 가시성(#1291) — 이 요청의 **열람 신원**. 문자열=그 멤버로 필터, null=특권(admin·내부 경로, 필터 없음).
   //  actor 와 값은 같지만 의미가 다르다: actor 는 '누가 썼나'(감사), viewer 는 '누가 보나'(접근통제).
   //  admin 은 어댑터에서 null 로 정규화된다 — 그래서 핸들러는 admin 분기를 따로 쓰지 않는다.
