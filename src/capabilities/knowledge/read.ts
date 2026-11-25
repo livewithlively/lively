@@ -16,9 +16,12 @@ import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
 import type { SearchRouteDiag } from "../../v6/knowledge-search.js";
 import type { SimilarDiag } from "../../v6/knowledge-similar.js";
 import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   // #5201 세션의 지식 찾기 기록
-import { canSeeKnowledge } from "../../v6/visibility.js";
+import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
+import { contradictsWarning } from "../../v6/knowledge-links.js";
+import { openReviewHints } from "../../org/store/managers.js";
 import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC, knowledgeWritable } from "./shared.js";
 import { isAdmin } from "../principal.js";
+import { logger } from "../../log.js";
 import { readStyleHint, type ReadStyleEditBlock } from "../writing-style.js";
 import type { KnowledgeRow } from "../../v6/knowledge-store.js";
 import type { WritingFormat } from "../../org/policies/writing-format.js";
@@ -412,6 +415,9 @@ const getDeps = {
   writable: knowledgeWritable,
   loadFormat: getWritingFormat,
   now: (): number => Date.now(),
+  //  모순 경고 · 검토 힌트 조회(knowledgeGetFlags) — 핸들러 시험이 DB 없이 돌게 같은 자리에서 갈아 끼운다.
+  contradicts: contradictsWarning,
+  reviewHints: openReviewHints,
 };
 
 /** 시험 전용 — 조회를 갈아 끼우고, 되돌리는 함수를 돌려준다. */
@@ -425,7 +431,8 @@ export const knowledgeGet: Capability = {
   name: "knowledge_get",
   title: "지식 상세",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(grep→get 루프 왕복 0)
-  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악. 조직 서술 형식에 어긋난 지식이면 style(count·findings·note — 지금 고치면 안 되는 글이면 edit_blocked 도)이 함께 오고, 다음 행동은 note 를 따른다.",
+  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악. 조직 서술 형식에 어긋난 지식이면 style(count·findings·note — 지금 고치면 안 되는 글이면 edit_blocked 도)이 함께 오고, 다음 행동은 note 를 따른다. " +
+    "links.superseded 는 대체된 이웃(후속 superseded_by 포함)이다. 응답에 contradicts_warning(이 지식과 모순으로 이어진 지식)이나 review_hint(근거·코드가 바뀌어 다시 읽어 볼 발견)가 있으면 근거로 쓰기 전에 확인하라.",
   scope: "memory",
   input: knowledgeGetInput,
   expose: {
@@ -460,12 +467,40 @@ export const knowledgeGet: Capability = {
         },
       }
       : {};
-    return knowledgeGetResult(knowledge, input, revInfo, {
+    //  모순 경고 · 검토 힌트는 조립(knowledgeGetResult — DB 를 다시 읽지 않는다)과 따로 조회해 응답 끝에 붙인다.
+    const flags = await knowledgeGetFlags(input.name, ctx?.viewer ?? null);
+    const result = await knowledgeGetResult(knowledge, input, revInfo, {
       staged: pendingRev?.mode === "staged",
       editBlock: () => readEditBlock(knowledge, user, ctx),
     }, getDeps.loadFormat);
+    return { ...result, ...flags };
   },
 };
+
+/**
+ * knowledge_get 에만 싣는 주의 표시 두 가지 — 검색 결과에는 싣지 않는다(검색은 후보를 훑는 단계고, 근거로 삼는 단계가 get 이다).
+ *  · contradicts_warning: 이 지식과 contradicts 로 이어진 active 이웃(해제된 관리기 링크 제외). recheck=링크 이후 두 문서가 모두 고쳐짐.
+ *  · review_hint: 이 지식에 열린 outdated · code_drift 발견.
+ *  없으면 키를 싣지 않는다 — knowledge_get 은 세션마다 상시 불리므로 빈 키도 소음이다.
+ */
+//  조회 실패는 표시를 빼고 넘어간다 — 부가 표시 때문에 지식 본문을 못 읽게 되면 안 된다.
+//  두 조회는 서로 기대지 않으므로 함께 띄운다 — 상시 로드 도구라 조회 하나만큼의 지연도 세션마다 쌓인다. 각자 catch 하므로 한쪽
+//   실패가 다른 쪽을 버리지 않는다.
+async function knowledgeGetFlags(name: string, viewer: Viewer | null): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const [contra, hints] = await Promise.all([
+    getDeps.contradicts(name, viewer).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "contradicts 경고 조회 실패 — 표시 없이 진행"); return []; }),
+    getDeps.reviewHints(name).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "review_hint 조회 실패 — 표시 없이 진행"); return []; }),
+  ]);
+  if (contra.length) {
+    out.contradicts_warning = {
+      note: "이 지식과 모순으로 이어진 지식이 있다 — 근거로 쓰기 전에 양쪽을 대조하라. 모순이 아니면 links 의 각 링크를 그 from·to 그대로 knowledge_link(unlink, relation=contradicts) 로 해제하거나, 관리기 발견이면 반려한다. recheck=true 는 연결 뒤 두 문서가 모두 고쳐져 이미 풀렸을 수 있다는 뜻이다.",
+      with: contra,
+    };
+  }
+  if (hints.length) out.review_hint = hints;
+  return out;
+}
 
 /**
  * 다른 편집자가 보호 창(24시간) 안에 고친 글인가. 마지막 저장이 같은 계정의 에이전트(MCP) 저장이면 아니다 — 자기가 방금 저장한

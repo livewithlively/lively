@@ -266,7 +266,7 @@ export async function loadNotionLedger(db: PgRunner, instance: string, claimKey?
      FROM knowledge_link l
      JOIN knowledge fk ON fk.name = l.from_name AND fk.external_system='notion' AND fk.external_instance=$1 AND fk.external_id IS NOT NULL
      JOIN knowledge tk ON tk.name = l.to_name AND tk.external_system='notion' AND tk.external_instance=$1 AND tk.external_id IS NOT NULL
-     WHERE l.origin = 'connector:notion'`, [instance]);
+     WHERE l.origin = 'connector:notion' AND l.dismissed_at IS NULL`, [instance]);
   for (const row of bl.rows as Array<{ target_ext: string; from_ext: string }>) {
     const arr = backlinks.get(row.target_ext);
     if (arr) arr.push(row.from_ext); else backlinks.set(row.target_ext, [row.from_ext]);

@@ -73,6 +73,29 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
     UPDATE knowledge SET created_at = updated_at WHERE created_at IS NULL;
     ALTER TABLE knowledge ALTER COLUMN created_at SET DEFAULT now();
+    -- body_updated_at: 본문(body_md)이 마지막으로 바뀐 시각. updated_at 은 제목·분류·속성·렌더링 갱신에도 오르므로
+    --  «근거가 바뀌었는데 본문은 그대로» 를 재는 관리기(outdated)가 본문 수정과 메타 수정을 가르지 못했다.
+    --  앱 코드가 아니라 트리거로 채운다 — 본문을 쓰는 길이 upsert 말고도 미러·세션 되돌리기·섹션·시드로 여럿이고,
+    --  무중단 배포 중 아직 도는 옛 버전은 이 칸을 모른다. 기존 행은 아래 별도 쿼리가 updated_at 으로 채운다(읽는 쪽은 COALESCE(body_updated_at, updated_at)).
+    --  INSERT 는 값이 없을 때만 now() — 가져오기·되살리기가 실은 값을 덮지 않는다. 트리거는 CREATE TRIGGER 에 IF NOT EXISTS 가 없어
+    --  pg_trigger 로 있는지 보고 만든다(db-access.ts 와 같은 멱등 방식).
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS body_updated_at TIMESTAMPTZ;
+    CREATE OR REPLACE FUNCTION knowledge_touch_body_updated_at() RETURNS trigger AS $fn$
+      BEGIN
+        IF TG_OP = 'INSERT' THEN
+          IF NEW.body_updated_at IS NULL THEN NEW.body_updated_at := now(); END IF;
+        ELSIF NEW.body_md IS DISTINCT FROM OLD.body_md THEN
+          NEW.body_updated_at := now();
+        END IF;
+        RETURN NEW;
+      END
+    $fn$ LANGUAGE plpgsql;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='knowledge_body_updated_at_trg' AND tgrelid='knowledge'::regclass) THEN
+        CREATE TRIGGER knowledge_body_updated_at_trg BEFORE INSERT OR UPDATE OF body_md ON knowledge
+          FOR EACH ROW EXECUTE FUNCTION knowledge_touch_body_updated_at();
+      END IF;
+    END $$;
     -- sync_state(#4059): 수집기 표식(seen_by)·비게 된 시각(unclaimed_since) — 노션 전체 점검 스윕이 자기 몫만 정리하는 근거.
     --  위 CREATE 에 원래 있던 칸이지만, 그 줄이 들어가기 전에 만든 DB 에선 미러 쓰기가 통째로 실패하므로 멱등 보강(값 없는 추가 = 재작성 없음).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS sync_state JSONB NOT NULL DEFAULT '{}'::jsonb;
@@ -84,6 +107,9 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS knowledge_lifecycle_idx ON knowledge(lifecycle);
     CREATE INDEX IF NOT EXISTS knowledge_parent_idx ON knowledge(parent_name);
   `);
+  //  body_updated_at 백필은 위 블록과 떼어 둔다 — 한 번에 보내는 여러 문장은 한 트랜잭션이라, 같이 두면 ALTER 의 배타 잠금을 쥔 채
+  //   전 행 UPDATE 를 돈다. 트리거가 새 행·본문 변경을 채우므로 두 번째 부팅부터는 바꿀 행이 없다(WHERE 가 NULL 만 본다).
+  await pool.query(`UPDATE knowledge SET body_updated_at = updated_at WHERE body_updated_at IS NULL`);
 
   // ── knowledge_lex_doc · knowledge_lex_posting — 지식 낱말 색인(BM25 · #5201). 언제든 knowledge 에서 다시 만들 수 있는 파생 표다. ──
   //  규칙은 v6/knowledge-lex.ts, 쓰기는 v6/knowledge-lex-store.ts(정비 스윕 · 저장 뒤 그 문서)가 맡는다. 활성 · 검색 대상 지식만 들어간다.

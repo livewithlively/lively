@@ -137,7 +137,8 @@ export const knowledgeLink: Capability = {
   title: "지식↔지식 링크",
   description:
     "지식을 다른 지식과 연결한다(또는 unlink=true 로 해제). relation=related(대칭 관련)|refines(이 지식이 to 를 구체화)|contradicts(모순)|depends_on(의존). " +
-    "단일 카테고리(#290)라 **교차주제는 카테고리 복수태깅이 아니라 이 링크로** 표현한다 — 백링크·그래프뷰·검색 그래프의 SoT(MediaWiki/Obsidian 모델). 양쪽 지식이 존재해야 한다.",
+    "단일 카테고리(#290)라 **교차주제는 카테고리 복수태깅이 아니라 이 링크로** 표현한다 — 백링크·그래프뷰·검색 그래프의 SoT(MediaWiki/Obsidian 모델). 양쪽 지식이 존재해야 한다. " +
+    "관리기가 건 링크(origin manager:…)를 해제하면 지우지 않고 해제 표시만 남겨 관리기가 다시 걸지 않는다 — 같은 쌍을 다시 링크하면 사람 링크로 되살아난다.",
   scope: "memory",
   input: knowledgeLinkInput,
   expose: {

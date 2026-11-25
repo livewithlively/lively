@@ -59,13 +59,13 @@ export async function detectMismatch(m: ManagerRow, limit: number): Promise<Find
       SELECT k.name, k.title, c.id AS cat_id, c.key AS cat_key, c.name AS cat_name,
              (k.embedding_vector <=> c.embedding_vector) AS own_dist,
              (SELECT oc.key FROM category oc
-               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id
+               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
                ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) AS near_key,
              (SELECT oc.id FROM category oc
-               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id
+               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
                ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) AS near_id,
              (SELECT (k.embedding_vector <=> oc.embedding_vector) FROM category oc
-               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id
+               WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
                ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) AS near_dist
         FROM knowledge_category kc
         JOIN knowledge k ON k.name = kc.name
@@ -108,6 +108,15 @@ export async function detectMismatch(m: ManagerRow, limit: number): Promise<Find
 //   진짜 신호(ⓐ)가 묻힌다 — 거짓 경보가 반복되면 배지 자체가 무시된다(#1153 이 이미 배운 것).
 export const OUTDATED_DEFAULT_DAYS = 30;
 
+//  시각 두 개를 «내용이 바뀐 때» 로 잰다. 행의 updated_at 은 내용과 무관하게 오른다 — 지식은 제목·분류·속성 저장에,
+//   자료는 커넥터의 다시 그리기(렌더링 변경)에. 그대로 쓰면 메타 수정만으로 발견이 사라지거나, 렌더링 일괄 갱신으로 발견이 쏟아진다.
+//   자료의 원본 수정 시각은 저장되지 않아 원본 시각(occurred_at)으로 대신한다. 둘 다 없는 자료만 행 시각이다.
+//  인용 관계는 derived_from(이 자료에서 나온 지식)만 본다 — cites(참고로 건 자료)가 새로워졌다고 결론이 낡은 것은 아니다.
+//  탐지(detectOutdated)와 재판정(reevaluateOpenFindings)이 같은 식을 쓴다 — 갈리면 재판정이 방금 연 발견을 닫는다.
+const OUTDATED_K_TIME = "COALESCE(k.body_updated_at, k.updated_at)";
+const OUTDATED_S_TIME = "COALESCE(s.occurred_at, s.updated_at)";
+const OUTDATED_JOIN = "JOIN knowledge_source ks ON ks.name = k.name AND ks.relation = 'derived_from' JOIN source s ON s.id = ks.source_id";
+
 export async function detectOutdated(m: ManagerRow, limit: number): Promise<Finding[]> {
   const params: unknown[] = [];
   const conds = scopeConds(m, params);
@@ -117,17 +126,16 @@ export async function detectOutdated(m: ManagerRow, limit: number): Promise<Find
   const limP = `$${params.length}`;
 
   const rows = await q(itemsPool, `
-    SELECT k.name, k.title, k.updated_at,
-           max(s.updated_at) AS src_updated,
+    SELECT k.name, k.title, ${OUTDATED_K_TIME} AS k_time,
+           max(${OUTDATED_S_TIME}) AS src_updated,
            count(*)::int AS src_count,
-           (array_agg(s.title ORDER BY s.updated_at DESC))[1] AS newest_src_title,
-           EXTRACT(EPOCH FROM (max(s.updated_at) - k.updated_at)) / 86400 AS days_behind
+           (array_agg(s.title ORDER BY ${OUTDATED_S_TIME} DESC))[1] AS newest_src_title,
+           EXTRACT(EPOCH FROM (max(${OUTDATED_S_TIME}) - ${OUTDATED_K_TIME})) / 86400 AS days_behind
       FROM knowledge k
-      JOIN knowledge_source ks ON ks.name = k.name
-      JOIN source s ON s.id = ks.source_id
+      ${OUTDATED_JOIN}
      WHERE ${conds.join(" AND ")}
-     GROUP BY k.name, k.title, k.updated_at
-    HAVING max(s.updated_at) > k.updated_at + (${daysP} || ' days')::interval
+     GROUP BY k.name, k.title, k.body_updated_at, k.updated_at
+    HAVING max(${OUTDATED_S_TIME}) > ${OUTDATED_K_TIME} + (${daysP} || ' days')::interval
      ORDER BY days_behind DESC
      LIMIT ${limP}`, params);
 
@@ -139,7 +147,7 @@ export async function detectOutdated(m: ManagerRow, limit: number): Promise<Find
       dedup_key: "",
       severity: (days > 90 ? "warn" : "note") as Finding["severity"],
       summary: `‘${r.title || r.name}’ 의 근거 자료가 ${days}일 더 최신입니다 — 내용이 낡았을 수 있습니다`,
-      evidence: `이 지식 갱신 ${new Date(String(r.updated_at)).toISOString().slice(0, 10)} · ` +
+      evidence: `이 지식 본문 갱신 ${new Date(String(r.k_time)).toISOString().slice(0, 10)} · ` +
         `인용 자료 ${r.src_count}건 중 최신 ${new Date(String(r.src_updated)).toISOString().slice(0, 10)}` +
         (r.newest_src_title ? ` (‘${String(r.newest_src_title).slice(0, 60)}’)` : "") +
         `. 근거가 바뀌었는데 결론이 안 바뀐 상태입니다.`,
@@ -147,6 +155,58 @@ export async function detectOutdated(m: ManagerRow, limit: number): Promise<Find
       proposed_action: { op: "review_knowledge", name: String(r.name), reason: "source_newer", days_behind: days },
     };
   });
+}
+
+// ════════ 열린 발견 재판정(결정적 종류) ════════
+//  탐지는 «지금 성립하는 것» 을 새로 열거나 다시 세기만 하고, 조건이 사라진 발견은 닫지 않았다 — 본문을 고쳐도 발견이 열린 채 쌓였다.
+//  여기서 이 관리기의 열린 발견 **전부**를 탐지와 같은 술어로 다시 본다. 스코프 조건(lookback·match_categories 등)과 배치 크기는
+//   걸지 않는다 — 범위에서 밀려났거나 이번 배치에 안 뽑혔다고 «해소» 로 닫으면 안 된다. 닫을 것과 사유만 돌려준다(닫기는 호출자가
+//   id 마다 state='open' 조건으로 — 재판정 도중 사람이 반려한 발견을 덮지 않게).
+export interface ReevalClose { id: number; resolution: string }
+export async function reevaluateOpenFindings(m: ManagerRow): Promise<ReevalClose[]> {
+  if (m.kind === "outdated") {
+    const rows = await q(itemsPool, `
+      SELECT f.id, k.name IS NOT NULL AND k.lifecycle = 'active' AS alive,
+             COALESCE(${OUTDATED_K_TIME} > f.last_seen_at, false) AS body_changed,
+             EXISTS (SELECT 1 FROM knowledge_source ks JOIN source s ON s.id = ks.source_id
+                      WHERE ks.name = k.name AND ks.relation = 'derived_from'
+                        AND ${OUTDATED_S_TIME} > ${OUTDATED_K_TIME} + ($2 || ' days')::interval) AS holds
+        FROM org_manager_finding f
+        LEFT JOIN knowledge k ON k.name = f.target_ref
+       WHERE f.manager_id = $1 AND f.state = 'open' AND f.target_kind = 'knowledge'`,
+      [m.id, m.stale_days ?? OUTDATED_DEFAULT_DAYS]);
+    return rows.filter((r) => !(r.alive && r.holds)).map((r) => ({
+      id: Number(r.id),
+      //  last_seen_at 은 술어가 마지막으로 성립한 시각이다. 그 뒤에 본문이 바뀌었으면 본문 수정으로 풀린 것이고,
+      //   아니면 판정식이 바뀌어(인용 관계·자료 시각) 더는 걸리지 않는 것이다. first_seen_at 은 재개된 발견에서 옛 수정을 잡아 쓰지 않는다.
+      resolution: !r.alive ? "대상 지식이 없거나 활성이 아니어서 해소" : r.body_changed ? "본문 갱신으로 해소" : "판정 기준 변경으로 해소",
+    }));
+  }
+  if (m.kind === "mismatch") {
+    //  dedup_key 는 탐지가 만든 «지금 분류 key -> 더 가까운 분류 key». 지금도 그 분류에 있고, 가장 가까운 다른 활성 분류가 같고,
+    //   거리차가 임계를 넘을 때만 성립한다. 키를 쪼개지 않고 탐지와 같은 식으로 다시 붙여 비교한다 — 분류 key 규칙이 도구 입력에서만
+    //   걸려(categories.ts KEY_RE) 다른 생성 경로의 key 에 '->' 가 없다고 보장할 수 없다.
+    const rows = await q(itemsPool, `
+      SELECT f.id,
+             EXISTS (
+               SELECT 1 FROM knowledge k
+                 JOIN knowledge_category kc ON kc.name = k.name AND kc.state <> 'rejected'
+                 JOIN category c ON c.id = kc.category_id
+                 CROSS JOIN LATERAL (
+                   SELECT oc.key, (k.embedding_vector <=> oc.embedding_vector) AS dist FROM category oc
+                    WHERE oc.embedding_vector IS NOT NULL AND oc.id <> c.id AND oc.state = 'active'
+                    ORDER BY (k.embedding_vector <=> oc.embedding_vector) LIMIT 1) near
+                WHERE k.name = f.target_ref AND k.lifecycle = 'active'
+                  AND k.embedding_vector IS NOT NULL AND c.embedding_vector IS NOT NULL
+                  AND COALESCE(k.is_folder, false) = false AND k.name <> ('category-home-' || c.key)
+                  AND (c.key || '->' || near.key) = f.dedup_key
+                  AND ((k.embedding_vector <=> c.embedding_vector) - near.dist) > $2) AS holds
+        FROM org_manager_finding f
+       WHERE f.manager_id = $1 AND f.state = 'open' AND f.target_kind = 'knowledge'`,
+      [m.id, m.threshold ?? MISMATCH_DEFAULT_MARGIN]);
+    return rows.filter((r) => !r.holds).map((r) => ({ id: Number(r.id), resolution: "분류 변경으로 해소" }));
+  }
+  return [];
 }
 
 // ════════ ③ 지식 간 모순 — 2단(후보 SQL → LLM) ════════
