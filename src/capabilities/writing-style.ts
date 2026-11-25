@@ -114,25 +114,82 @@ export async function checkWriting(
 // 읽기 신호는 위반 목록 앞부분만 싣는다. 가이드 전문은 세션 주입으로 이미 받았고, 상세 조회마다 실으면 응답이 불어난다.
 const READ_FINDINGS_MAX = 10;
 
+/** 읽은 자리에서 형식을 고치지 말아야 하는 까닭. no_write: 이 요청으로는 고칠 수 없다(쓰기 게이트·읽기전용 세션·앱 도구 범위) ·
+ *  injected: 세션 주입 문구(injection='always') · recently_edited: 다른 사람이 보호 창(24시간) 안에 고쳤다. */
+export type ReadStyleEditBlock = "no_write" | "injected" | "recently_edited";
+
 export interface ReadStyleHint {
   /** 위반 전체 건수 — findings 는 앞부분만 싣는다. */
   count: number;
   /** ask_human — 자동 정리에서 뺀 규칙이다(writing-rewrite-gate AUTO_FIX_RULES 밖). 고치는 데 «그날이 언제였나» 같은
    *  사실 판단이 필요해, 에이전트가 혼자 고치면 그럴듯한 값을 지어낸다. */
   findings: Array<WritingFinding & { ask_human?: true }>;
+  /** 있으면 지금 고치지 않는다 — note 도 고치라고 하지 않는다. */
+  edit_blocked?: ReadStyleEditBlock;
   note: string;
+}
+
+export interface ReadStyleOpts {
+  /** 지금 고치면 안 되는 까닭(없으면 null). 위반이 있을 때만 부른다 — 쓰기 게이트 조회를 깨끗한 글의 읽기에 물리지 않으려고. */
+  editBlock?: () => Promise<ReadStyleEditBlock | null>;
+  /** 부분읽기(offset·limit)로 읽었다 — 판정은 전문 기준이라, 고치기 전에 전문을 읽으라고 덧붙인다. */
+  partial?: boolean;
+}
+
+// 고치지 말아야 하는 까닭 — note 의 첫머리(위반 묶음) 뒤에 그대로 싣는다.
+const EDIT_BLOCK_WHY: Record<ReadStyleEditBlock, string> = {
+  no_write: "이 요청으로는 이 지식을 고칠 수 없다(쓰기 권한·읽기전용 세션·도구 범위).",
+  injected: "모든 AI 세션에 지시문으로 들어가는 세션 주입 문구(injection='always')라 읽은 자리에서 고치는 글이 아니다.",
+  recently_edited: "다른 사람이 최근 24시간 안에 고친 글이라 그 사람이 아직 손보는 중일 수 있다.",
+};
+// 사람 확인 항목을 고치는 데 필요한 사실 — 자동 정리에서 뺀 까닭(writing-rewrite-gate AUTO_FIX_RULES 머리말)과 같다.
+const ASK_HUMAN_WHY = "날짜·현행 여부·경로·나눌 자리처럼 글에 없는 사실이 있어야 고칠 수 있다";
+
+/**
+ * 읽기 신호의 다음 행동. 직접 고칠 항목(자동 정리 규칙)과 사람 확인이 필요한 항목(ask_human)을 나눠 적고, 반복은 직접 고칠
+ *  항목에만 건다 — «위반 0건까지 반복» 이면 ask_human 이 남은 글에서 안내를 따르는 에이전트가 같은 저장을 되풀이하거나 날짜·경로를
+ *  지어낸다. 같은 규칙은 한 번 더까지만 고친다(고쳐지지 않는 규칙에서 돌지 않게). 묶음은 잘라 싣기 전 전체 위반으로 센다 — 저장
+ *  응답에 남은 규칙이 어느 묶음인지 알아보려면 전부 있어야 한다. 저장 응답의 안내(checkWriting)는 ask_human 을 가르지 않으므로
+ *  «그래도 멈춘다» 를 여기서 말해 둔다.
+ */
+function readStyleNote(findings: WritingFinding[], blocked: ReadStyleEditBlock | null, partial: boolean): string {
+  const self = findings.filter((f) => !needsHumanJudgment(f.rule));
+  const ask = findings.filter((f) => needsHumanJudgment(f.rule));
+  const rules = (fs: WritingFinding[]): string => fs.map((f) => f.rule).join(", ");
+  const groups = [
+    self.length ? `직접 고칠 항목 ${self.length}건(${rules(self)})` : "",
+    ask.length ? `사람 확인이 필요한 항목 ${ask.length}건(${rules(ask)})` : "",
+  ].filter(Boolean).join(", ");
+  const head = `이 지식은 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있다 — ${groups}.`
+    + (partial ? " 판정은 받은 줄 범위가 아니라 본문 전체 기준이다." : "");
+  if (blocked) return `${head} ${EDIT_BLOCK_WHY[blocked]} 지금 고치지 않는다 — 형식 위반은 그대로 두고 내용만 근거로 쓴다.`;
+  const readFull = partial ? " 고치기 전에 offset·limit 없이 전문을 읽는다(edit 의 앵커는 전문에서 찾는다)." : "";
+  if (!self.length) {
+    return `${head} 모두 ${ASK_HUMAN_WHY}(findings 의 ask_human). 혼자 고치지 않는다 — 이 지식을 작업 근거로 쓰고 있다면 그 사실을 사람에게 묻고, 답을 받은 뒤에만 knowledge_save mode='edit' 로 고친다.${readFull} 사실을 지어내지 않는다.`;
+  }
+  // 제목이 마지막인 까닭: knowledge_set_title 은 편집자(updated_by)·시각은 바꾸고 confidence 는 그대로 둔다. 사람이 마지막으로 저장한 글의
+  //  제목부터 고치면 «내 마지막 저장»(updated_by 가 같고 confidence='ai')이 아니게 되어, 본문 고치기가 최근 편집 보호에 막힌다.
+  //  MCP 본문 저장(confidence='ai')이 먼저면 그 뒤 제목 변경도 내 마지막 저장으로 남는다.
+  const title = self.some((f) => f.rule.startsWith("title_")) ? " 제목은 본문을 고친 뒤 마지막에 knowledge_set_title 로 고친다." : "";
+  const askLine = ask.length
+    ? ` 사람 확인이 필요한 항목(findings 의 ask_human)은 ${ASK_HUMAN_WHY} — 지어내지 말고 사람에게 묻고, 답을 받은 뒤에만 고친다. 저장 응답의 안내가 한 번 더 고치라고 해도 사람 확인이 필요한 항목만 남으면 멈추고 사람에게 묻는다.`
+    : "";
+  return `${head} 이 지식을 작업 근거로 쓰고 있다면 직접 고칠 항목을 지금 고친다.${readFull} 본문은 knowledge_save mode='edit' 로 그 부분만 고친다.${title} 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고친다. 저장 응답의 style 에 직접 고칠 항목이 남아 있으면 한 번 더 고치고, 같은 규칙이 그래도 남으면 더 고치지 않고 멈춘다.${askLine}`;
 }
 
 /**
  * 지식 상세 조회에 싣는 서술 형식 신호({} 또는 { style }). 조직 지시가 «읽은 지식이 형식에 어긋나면 고쳐라» 라서,
  *  에이전트가 어긋났는지를 문서마다 알 수 있어야 한다. 면제·fail-open 은 checkWriting 과 같다 — 신호 때문에 읽기가 실패하면 안 된다.
+ *  지금 고치면 안 되는 글(edit_blocked)이면 위반은 싣되 note 가 고치라고 하지 않는다 — 주입 문구는 행으로, 권한·최근 편집은
+ *  호출부의 opts.editBlock 으로 가린다. 부분읽기(opts.partial)면 판정이 전문 기준이라는 것과 고치기 전에 전문을 읽으라는 말을 더한다.
  */
 export async function readStyleHint(
   k: {
     title: string | null | undefined; body_md: string | null | undefined;
-    provenance?: string | null; is_folder?: boolean | null; lifecycle?: string | null;
+    provenance?: string | null; is_folder?: boolean | null; lifecycle?: string | null; injection?: string | null;
   },
   loadFormat: () => Promise<WritingFormat> = getWritingFormat,
+  opts: ReadStyleOpts = {},
 ): Promise<{ style?: ReadStyleHint }> {
   if (isWritingExempt({ observed: k.provenance === "observed", folder: k.is_folder === true })) return {};
   // 보관·대체된 지식은 더 이상 근거로 쓰지 않는 글이라 고치라고 안내하지 않는다.
@@ -140,11 +197,23 @@ export async function readStyleHint(
   try {
     const findings = lintWriting({ title: k.title, body_md: k.body_md }, await loadFormat(), "knowledge");
     if (!findings.length) return {};
+    // 고쳐도 되는지는 위반이 있을 때만 가린다 — 쓰기 게이트 조회를 깨끗한 글의 읽기에 물리지 않는다.
+    //  주입 문구는 행만 보고 가른다: 모든 AI 세션에 지시문으로 들어가는 글이라 관리자가 읽어도 읽은 자리에서 고치지 않는다.
+    //  권한·최근 편집은 요청마다 달라 호출부가 가린다. 그 판정이 터지면 고치라고 하지 않는다(신호는 싣고 안내만 닫는다).
+    let blocked: ReadStyleEditBlock | null = k.injection === "always" ? "injected" : null;
+    if (!blocked && opts.editBlock) {
+      try {
+        blocked = await opts.editBlock();
+      } catch {
+        blocked = "no_write";
+      }
+    }
     return {
       style: {
         count: findings.length,
         findings: findings.slice(0, READ_FINDINGS_MAX).map((f) => (needsHumanJudgment(f.rule) ? { ...f, ask_human: true as const } : f)),
-        note: `이 지식은 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있다. 이 지식을 작업 근거로 쓰고 있다면 지금 knowledge_save mode='edit' 로 그 부분을 고친다. 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고치며, 저장 응답에 style 이 더는 실리지 않을 때까지(위반 0건) 반복한다. 제목은 knowledge_set_title 로 고친다. ask_human 이 붙은 항목은 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있으니 지어내지 말고 사람에게 확인한 뒤 고친다.`,
+        ...(blocked ? { edit_blocked: blocked } : {}),
+        note: readStyleNote(findings, blocked, opts.partial === true),
       },
     };
   } catch {

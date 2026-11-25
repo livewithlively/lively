@@ -65,6 +65,20 @@ export async function assertKnowledgeWritable(name: unknown, viewer: Viewer, use
 }
 
 /**
+ * 쓰기 게이트를 통과하나 — assertKnowledgeWritable 과 같은 판정을 던지지 않고 답한다. 읽기 응답이 «이 글을 고쳐라» 를 실어도
+ *  되는지 가를 때 쓴다(knowledge_get 의 형식 신호). 판정이 터지면(조회 장애 포함) 고칠 수 없는 것으로 본다 — 안내를 닫는 쪽이다.
+ *  ⚠ 쓰기 op 의 게이트로 쓰지 마라 — 그쪽은 assertKnowledgeWritable 로 던져야 거절 문구(없음 · 관리자 전용)가 그대로 나간다.
+ */
+export async function knowledgeWritable(name: unknown, viewer: Viewer, user: { scopes?: string[] } | undefined): Promise<boolean> {
+  try {
+    await assertKnowledgeWritable(name, viewer, user);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 문서 **곁에 붙이는** 쓰기(댓글 · 다른 문서에서 이 문서로 거는 링크)의 게이트 — 공개범위 판정만 한다(종전 쓰기 게이트 그대로).
  *  주입되는 글 · 주입 여부 · 순서를 바꾸지 않는 op 만 이쪽을 쓴다. 주입 문구에 댓글을 다는 것까지 관리자로 묶을 까닭이 없다.
  *  ⚠ 문서 자신의 본문 · 제목 · 상태 · 위치 · 속성을 바꾸는 op 은 반드시 assertKnowledgeWritable 이다.
