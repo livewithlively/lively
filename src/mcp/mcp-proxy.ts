@@ -11,7 +11,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { listProxyServers, getMcpServer, setMcpToolsSnapshot, getRuntimeConfig, getOrgProfile, type McpServer as McpServerRow } from "../org/store.js";
 import { resolveMemberSecret, GATEWAY_OWNER, getMemberSecret } from "../org/credentials/member-secret-store.js";
 import { makeSsrfFetch } from "../net/mcp-ssrf-fetch.js";
@@ -112,7 +112,9 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     const gw = await getMemberSecret(GATEWAY_OWNER, server.auth_kind, server.auth_scope_key ?? "");
     if (gw?.secret) { gwSecret = gw.secret; Object.assign(headers, buildProxyAuthHeaders(gw.meta, gw.secret).headers); }
   }
-  const client = await connectUpstream(server.url, { headers, authProvider, sigv4 });
+  let client: Client;
+  try { client = await connectUpstream(server.url, { headers, authProvider, sigv4 }); }
+  catch (err) { throw upstreamCallError(err, gwSecret); }
   try {
     const { tools } = await client.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
     const snap: ProxyTool[] = tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
@@ -219,7 +221,9 @@ async function callUpstream(server: McpServerRow, toolName: string, args: Record
     injectedSecret = resolved.secret;
     Object.assign(headers, buildProxyAuthHeaders(resolved.meta, resolved.secret).headers);
   }
-  const client = await connectUpstream(server.url, { headers, authProvider, sigv4 });
+  let client: Client;
+  try { client = await connectUpstream(server.url, { headers, authProvider, sigv4 }); }
+  catch (err) { throw upstreamCallError(err, injectedSecret); }
   try {
     const res = await client.callTool({ name: toolName, arguments: args ?? {} }, undefined, { timeout: CALL_TIMEOUT_MS });
     let content = (res.content as unknown[]) ?? [];
@@ -235,12 +239,35 @@ async function callUpstream(server: McpServerRow, toolName: string, args: Record
     });
     return { content, isError: res.isError === true };
   } catch (err) {
-    const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
-    const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
-    throw new Error(redactSecret(pfx + (err as Error).message, injectedSecret)); // 상류 에러 본문에 주입 자격 에코 방지(SDK 는 응답 body 를 에러메시지에 그대로 실음)
+    throw upstreamCallError(err, injectedSecret);
   } finally {
     await client.close().catch(() => { /* */ });
   }
+}
+
+/**
+ * 상류 호출(initialize·tools/call) 예외를 다시 던질 형태로 바꾼다. 상류 에러 본문에 주입 자격이 에코되지 않게 스크럽하고
+ *  (SDK 는 응답 body 를 에러메시지에 그대로 싣는다) 상류 HTTP status 를 `[HTTP n]` 으로 붙인다. UnauthorizedError 는 감싸지 않고
+ *  메시지만 스크럽한 새 인스턴스로 바꾼다 — 일반 Error 로 감싸면 타입이 사라져 [proxyCallFailureText] 가 재연결 안내를 못 붙인다.
+ */
+export function upstreamCallError(err: unknown, injectedSecret: string | null): Error {
+  if (err instanceof UnauthorizedError) return new UnauthorizedError(redactSecret(err.message, injectedSecret));
+  const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
+  const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
+  return new Error(redactSecret(pfx + (err instanceof Error ? err.message : String(err)), injectedSecret));
+}
+
+/**
+ * 프록시 툴 호출 실패 문구. oauth 서버의 인증 실패면 다시 연결하는 법을 붙인다(SDK 는 갱신 거절에 "Unauthorized" 만 싣는다).
+ *  callUpstream 은 [upstreamCallError] 를 거친 형태로 던지고, 그 밖의 호출자는 SDK 예외(StreamableHTTPError 는 code 에 status)를
+ *  그대로 줄 수 있어 타입·code·`[HTTP 401]` 접두를 모두 본다.
+ */
+export function proxyCallFailureText(server: Pick<McpServerRow, "name" | "auth_mode">, err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const text = `프록시 호출 실패: ${msg}`;
+  const authFailed = err instanceof UnauthorizedError || (err as { code?: unknown })?.code === 401 || /^\[HTTP 401\]/.test(msg);
+  if (server.auth_mode !== "oauth" || !authFailed) return text;
+  return `${text}\n${server.name} 인증이 거절됐습니다. 연결이 만료됐을 수 있으니 me_oauth_connect {server: "${server.name}"} 로 다시 연결한 뒤 같은 요청을 다시 하세요. 이미 연결됨으로 나오면 me_oauth_disconnect 로 끊고 다시 연결하세요. 그래도 같으면 관리자에게 알려 주세요.`;
 }
 
 // 이름으로 프록시 호출(등록 핸들러·테스트 공용) — getMcpServer + callUpstream. scope 게이트는 등록 핸들러가 담당.
@@ -289,7 +316,7 @@ export async function registerProxiedMcpTools(server: McpServer): Promise<void> 
             } catch (err) {
               const msg = (err as Error).message; // callUpstream 에서 주입 자격은 이미 스크럽됨
               logger.warn({ tool: toolName, err: msg }, "프록시 MCP 호출 실패");
-              return { content: [{ type: "text" as const, text: `프록시 호출 실패: ${msg}` }], isError: true };
+              return { content: [{ type: "text" as const, text: proxyCallFailureText(srv, err) }], isError: true };
             }
           },
         );

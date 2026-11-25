@@ -2,7 +2,8 @@
 // 실행: npm run build && node dist/mcp/mcp-proxy.test.js
 //  커버: scope fail-closed(P2) / 툴이름 위생·절단 / 주입자격 리터럴 스크럽(응답·에러 유출 차단) / SSRF 가드(사설·메타데이터·self·scheme).
 import assert from "node:assert/strict";
-import { proxyScopeAllowed, proxyToolName, redactSecret, classifyToolLevel } from "./mcp-proxy.js";
+import { proxyScopeAllowed, proxyToolName, redactSecret, classifyToolLevel, proxyCallFailureText, upstreamCallError } from "./mcp-proxy.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { makeSsrfFetch } from "../net/mcp-ssrf-fetch.js";
 
 let pass = 0;
@@ -27,6 +28,33 @@ t("proxyScopeAllowed: 미지정/무효/fleet제어 scope → false(fail-closed)"
   assert.equal(proxyScopeAllowed("admin"), false);   // 관리 표면 자가호출 차단
   assert.equal(proxyScopeAllowed("runtime"), false);
   assert.equal(proxyScopeAllowed("bogus"), false);
+});
+
+// ── 호출 실패 문구 — oauth 인증 실패에만 다시 연결하는 법을 붙인다 ──
+t("proxyCallFailureText: oauth 서버의 인증 실패(UnauthorizedError·[HTTP 401])면 재연결 안내를 붙인다", () => {
+  const oauth = { name: "example-docs", auth_mode: "oauth" as const };
+  const initialize401 = Object.assign(new Error("Streamable HTTP error: Server returned 401 after successful authentication"), { code: 401 });
+  const callPhaseUnauthorized = upstreamCallError(new UnauthorizedError(), null); // tools/call 단계 예외가 다시 던져지는 형태
+  const callPhase401 = upstreamCallError(Object.assign(new Error("Server returned 401 after successful authentication"), { code: 401 }), null);
+  for (const err of [new UnauthorizedError(), callPhaseUnauthorized, initialize401, callPhase401]) {
+    const text = proxyCallFailureText(oauth, err);
+    assert.ok(text.startsWith(`프록시 호출 실패: ${err.message}\n`), text);
+    assert.match(text, /me_oauth_connect \{server: "example-docs"\}/);
+    assert.match(text, /me_oauth_disconnect/);
+  }
+});
+t("upstreamCallError: 주입 자격을 스크럽하고, UnauthorizedError 는 타입을 지킨 채 메시지만 스크럽한다", () => {
+  const secret = "tok-SECRETVALUE-123";
+  const unauthorized = upstreamCallError(new UnauthorizedError(`refresh rejected for ${secret}`), secret);
+  assert.ok(unauthorized instanceof UnauthorizedError);
+  assert.equal(unauthorized.message, "refresh rejected for [REDACTED]");
+  const http = upstreamCallError(Object.assign(new Error(`Error POSTing to endpoint: bad token ${secret}`), { code: 500 }), secret);
+  assert.equal(http.message, "[HTTP 500] Error POSTing to endpoint: bad token [REDACTED]");
+});
+t("proxyCallFailureText: 인증 실패가 아니거나 oauth 서버가 아니면 종전 문구 그대로", () => {
+  const oauth = { name: "example-docs", auth_mode: "oauth" as const };
+  assert.equal(proxyCallFailureText(oauth, new Error("[HTTP 503] Service Unavailable")), "프록시 호출 실패: [HTTP 503] Service Unavailable");
+  assert.equal(proxyCallFailureText({ name: "x", auth_mode: "sigv4" as const }, new UnauthorizedError()), "프록시 호출 실패: Unauthorized");
 });
 
 // ── 툴 이름 위생 — MCP 허용 문자만·128자 상한(빌트인/http_proxy 이름과 네임스페이스 격리) ──
