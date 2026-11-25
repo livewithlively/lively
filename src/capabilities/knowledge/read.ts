@@ -484,16 +484,20 @@ export const knowledgeGet: Capability = {
  *  없으면 키를 싣지 않는다 — knowledge_get 은 세션마다 상시 불리므로 빈 키도 소음이다.
  */
 //  조회 실패는 표시를 빼고 넘어간다 — 부가 표시 때문에 지식 본문을 못 읽게 되면 안 된다.
+//  두 조회는 서로 기대지 않으므로 함께 띄운다 — 상시 로드 도구라 조회 하나만큼의 지연도 세션마다 쌓인다. 각자 catch 하므로 한쪽
+//   실패가 다른 쪽을 버리지 않는다.
 async function knowledgeGetFlags(name: string, viewer: Viewer | null): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
-  const contra = await getDeps.contradicts(name, viewer).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "contradicts 경고 조회 실패 — 표시 없이 진행"); return []; });
+  const [contra, hints] = await Promise.all([
+    getDeps.contradicts(name, viewer).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "contradicts 경고 조회 실패 — 표시 없이 진행"); return []; }),
+    getDeps.reviewHints(name).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "review_hint 조회 실패 — 표시 없이 진행"); return []; }),
+  ]);
   if (contra.length) {
     out.contradicts_warning = {
       note: "이 지식과 모순으로 이어진 지식이 있다 — 근거로 쓰기 전에 양쪽을 대조하라. 모순이 아니면 links 의 각 링크를 그 from·to 그대로 knowledge_link(unlink, relation=contradicts) 로 해제하거나, 관리기 발견이면 반려한다. recheck=true 는 연결 뒤 두 문서가 모두 고쳐져 이미 풀렸을 수 있다는 뜻이다.",
       with: contra,
     };
   }
-  const hints = await getDeps.reviewHints(name).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "review_hint 조회 실패 — 표시 없이 진행"); return []; });
   if (hints.length) out.review_hint = hints;
   return out;
 }

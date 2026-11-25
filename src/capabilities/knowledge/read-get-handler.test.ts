@@ -6,6 +6,8 @@
 //  회귀 대상 ②: 쓰기 게이트 · 읽기전용 세션 · 앱 도구 범위를 안 보고, 고칠 수 없는 사람에게 «고쳐라» 가 실리는 것.
 //  회귀 대상 ③: 다른 사람이 방금 고친 글을 고치게 하는 것 — 보호 창(isRecentlyEdited)과 «내 마지막 저장» 판정
 //   (updated_by 가 같고 confidence='ai'). 같은 계정이라도 사람의 웹 편집은 남의 편집으로 본다.
+//  회귀 대상 ④: 모순 경고(contradicts_warning) · 검토 힌트(review_hint)가 응답에서 빠지거나, 한쪽 조회의 실패가 다른 쪽·본문을
+//   가리는 것. 두 조회는 서로 기다리지 않고 함께 띄운다(상시 로드 도구라 조회 하나만큼의 지연도 세션마다 쌓인다).
 import assert from "node:assert/strict";
 import { knowledgeGet, editedByOtherRecently, _setKnowledgeGetDepsForTest } from "./read.js";
 import type { ReadStyleHint } from "../writing-style.js";
@@ -184,6 +186,47 @@ await ta("부분읽기도 전문으로 판정하고, 고치기 전에 전문을 
   assert.equal(r.body_range?.returned, 1);
   assert.ok(r.style, JSON.stringify(r));
   assert.match(r.style.note, /offset·limit 없이 전문을 읽는다/);
+});
+type FlagResp = Resp & { contradicts_warning?: { with?: Array<{ name: string }> }; review_hint?: Array<{ kind: string }> };
+await ta("모순 경고 · 검토 힌트는 응답에 실리고, 한쪽 조회가 실패해도 다른 쪽과 본문은 그대로다", async () => {
+  reset();
+  const undo = _setKnowledgeGetDepsForTest({
+    contradicts: async () => { throw new Error("조회 장애"); },
+    reviewHints: async () => [{ kind: "outdated", finding_id: 7, detected_at: iso(NOW - HOUR) }],
+  });
+  try {
+    const r = (await get()) as FlagResp;
+    assert.equal(r.knowledge?.name, "deploy-note", "본문은 그대로 돌려준다");
+    assert.ok(!("contradicts_warning" in r), `실패한 조회의 키는 싣지 않는다: ${JSON.stringify(r.contradicts_warning)}`);
+    assert.deepEqual(r.review_hint?.map((h) => h.kind), ["outdated"], JSON.stringify(r));
+    assert.ok(r.style, "형식 신호(main 의 조립)도 함께 실린다");
+  } finally { undo(); }
+  const undo2 = _setKnowledgeGetDepsForTest({
+    contradicts: async () => [{ name: "other-note", title: null, linked_at: iso(NOW), recheck: false, links: [{ from: "deploy-note", to: "other-note", origin: "user" }] }],
+  });
+  try {
+    const r = (await get({ offset: 1, limit: 1 })) as FlagResp;
+    assert.deepEqual(r.contradicts_warning?.with?.map((w) => w.name), ["other-note"], "부분읽기에도 실린다");
+    assert.ok(!("review_hint" in r), "힌트가 없으면 키가 없다");
+  } finally { undo2(); }
+});
+await ta("모순 경고와 검토 힌트 조회는 함께 띄운다 — 한쪽이 끝나기를 기다리지 않는다", async () => {
+  reset();
+  const started: string[] = [];
+  let open: () => void = () => {};
+  const gate = new Promise<void>((r) => { open = r; });
+  const undo = _setKnowledgeGetDepsForTest({
+    contradicts: async () => { started.push("contradicts"); await gate; return []; },
+    reviewHints: async () => { started.push("review_hint"); await gate; return []; },
+  });
+  try {
+    const inflight = get();
+    await new Promise((r) => setTimeout(r, 30));
+    const seen = [...started].sort();
+    open();
+    await inflight;
+    assert.deepEqual(seen, ["contradicts", "review_hint"], `둘 다 시작돼 있어야 한다(먼저 띄운 쪽이 끝나기 전): ${JSON.stringify(seen)}`);
+  } finally { open(); undo(); }
 });
 restore();
 console.log(`read-get-handler: ${pass} passed${failed.length ? `, ${failed.length} failed` : ""}`);
