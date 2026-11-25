@@ -252,6 +252,27 @@ async function applyActionIn(client: PoolClient, action: unknown, actor: string)
 }
 
 /**
+ * 발견 없이 조치 하나만 적용한다 — 자기 트랜잭션. 옮겼으면 true, 낡았거나(stale) 기계가 적용할 조치가 아니거나 실패하면 false.
+ *  발견을 닫는 적용은 applyFinding 이 한다. 이 함수는 종전 표면(applyAction)을 쓰는 시험·통합 시험을 위해 남긴다
+ *  (category-classification-tx.pg-test · manager-finding.itest). 판정은 applyActionIn 하나다.
+ */
+export async function applyAction(action: unknown, actor: string): Promise<boolean> {
+  if (!isApplicableAction(action)) return false;
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await applyActionIn(client, action, actor);
+    if (r !== "applied") { await client.query("ROLLBACK"); return false; }
+    await client.query("COMMIT");
+    return true;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    logger.warn({ err: (e as Error)?.message }, "관리기 조치 적용 실패");
+    return false;
+  } finally { client.release(); }
+}
+
+/**
  * 발견 하나의 조치를 적용하고 발견을 닫는다 — 한 트랜잭션. 발견 행을 FOR UPDATE 로 잠그고 열려 있을 때만 진행한다.
  *  종전엔 적용과 accepted 전환이 따로 커밋돼, 그 사이 사람이 반려한 발견이 accepted 로 덮였다(다음 탐지가 다시 연다).
  *  applied → accepted · stale(발견 이후 분류가 바뀜) → resolved「분류 변경으로 해소」 · 열려 있지 않음·적용할 조치 없음 → skipped(그대로).
