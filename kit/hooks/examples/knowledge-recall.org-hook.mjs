@@ -93,6 +93,8 @@ const writePrev = (file, text) => {
     }
     return;
   }
+  // lively_prompt_injected: 작업 끝 알림·하위 에이전트 보고 같은 하네스 주입 메시지(러너가 kit/hooks/prompt-origin.mjs 로 판정) — 사람의 질문이 아니다.
+  if (input.lively_prompt_injected) return;
   const prompt = String(input.prompt || "").trim();
   if (prompt.startsWith("/") || prompt.startsWith("!")) return; // 슬래시·뱅 커맨드 → 스킵
   if (NOT_HUMAN.test(prompt)) return;                           // 알림·메시지 → 스킵

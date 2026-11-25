@@ -7,6 +7,7 @@
 import { readFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { INJECTED_PROMPT_RE, isInjectedPrompt } from "./prompt-origin.mjs";
@@ -186,6 +187,29 @@ const ups = (prompt, extra = {}) => ({ session_id: `prompt-origin-${process.pid}
   plain.code === 0 && guided(plain.stdout) && flagged.code === 0 && !guided(flagged.stdout)
     ? ok("S2 session-name-ask — 같은 말이라도 lively_prompt_injected:true 면 이름짓기 안내가 없다(대조군은 안내)")
     : bad("S2 session-name-ask 침묵", `plain code=${plain.code} out=${JSON.stringify(plain.stdout.slice(0, 200))} | flagged code=${flagged.code} out=${JSON.stringify(flagged.stdout.slice(0, 200))}`);
+}
+
+// ── §S3 knowledge-recall: 표시가 있으면 게이트웨이를 부르지 않고 무출력 ──
+//  토큰 없는 환경에선 원래도 안 부르니 관측이 안 된다 → 127.0.0.1 가짜 게이트웨이를 세워 호출 여부를 센다.
+//  대조군(표시 없음)이 실제로 호출해야 이 시험이 의미가 있다.
+{
+  let hits = 0;
+  const server = createServer((req, res) => {
+    hits++;
+    req.resume();
+    req.on("end", () => { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const env = { LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: `http://127.0.0.1:${server.address().port}` };
+  const prompt = "대출 심사에서 연체 이력은 어떻게 반영돼? 관련 지식 찾아줘";
+  const plain = await runSeed("knowledge-recall", ups(prompt), env);
+  const plainHits = hits;
+  const flagged = await runSeed("knowledge-recall", ups(prompt, { lively_prompt_injected: true }), env);
+  const flaggedHits = hits - plainHits;
+  await new Promise((r) => server.close(r));
+  plainHits > 0 && flaggedHits === 0 && flagged.code === 0 && flagged.stdout.trim() === ""
+    ? ok(`S3 knowledge-recall — lively_prompt_injected:true 면 게이트웨이 호출 0회·무출력(대조군 호출 ${plainHits}회)`)
+    : bad("S3 knowledge-recall 침묵", `대조군 호출=${plainHits}(code=${plain.code} err=${JSON.stringify(plain.stderr.slice(0, 200))}) 표시 호출=${flaggedHits} flagged code=${flagged.code} out=${JSON.stringify(flagged.stdout.slice(0, 200))}`);
 }
 
 finish("prompt-origin");
