@@ -4,7 +4,7 @@
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt, squeezeExcerpt, normalizeProgress, PROGRESS_MAX_BYTES, welcomeFlowMarks } from "./welcome.js";
+import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt, squeezeExcerpt, normalizeProgress, PROGRESS_MAX_BYTES, welcomeFlowMarks, isSourceDrawer } from "./welcome.js";
 
 let pass = 0, fail = 0;
 // 실패해도 멈추지 않는다 — 어느 행이 빨간불인지 **전부** 봐야 red 입증이 된다.
@@ -533,6 +533,40 @@ t("F6 모르는 값은 없는 것으로 친다", () => {
     { flow: null, upload_started_at: null, upload_done_at: null });
 });
 
+
+// ── 출처·형식 갈래는 카테고리가 아니다 ─────────────────────────────────────────
+//  S1 출처(슬랙·메일 …)·형식(이미지·문서 …)·나머지 칸(그 밖의 자료) → 출처 갈래
+//  S2 회의 기록(회의록·회의 전사록)과 내용 이름 → 아니다(분석 프롬프트가 권하는 서랍이다)
+//  S3 집계가 내는 이름은 회의 기록 말고 전부 출처 갈래다 — 자료 종류가 늘어도 집계 폴백이 카테고리를 만들지 않는다
+//  S4 반영은 출처 갈래로 카테고리도 레인도 만들지 않는다(DB 가 필요해 소스 구조로 못박는다 — 위 W 행과 같은 선례)
+t("S1 출처·형식·나머지 칸 이름은 출처 갈래다 — 앞뒤 공백도 같다", () => {
+  for (const n of ["슬랙", "메일", "노션 문서", "드라이브 파일", "이미지", "문서", "표·수치", "그 밖의 자료", "  슬랙 "]) {
+    assert.ok(isSourceDrawer(n), `${n} 을 내용 갈래로 봤다`);
+  }
+});
+t("S2 회의 기록과 내용 이름은 출처 갈래가 아니다", () => {
+  for (const n of ["회의록", "회의 전사록", "월간 보고", "계약·견적", "", "슬랙 운영 정책"]) {
+    assert.ok(!isSourceDrawer(n), `${n} 을 출처 갈래로 봤다`);
+  }
+});
+t("S3 집계가 붙이는 이름은 회의 기록 말고 전부 출처 갈래다", () => {
+  const kinds = ["slack", "email", "discord", "notion_doc", "clickup_doc", "drive_file", "transcript", "minutes", "local_file", "other"];
+  const exts = ["a.docx", "a.csv", "a.pptx", "a.png", "a.zip", "a.json", "a.qqqq", "README"];
+  const names = tallySources([...kinds.map((kind) => ({ kind })), ...exts.map((title) => ({ kind: "local_file", title }))]).map((x) => x.name);
+  for (const n of names) assert.equal(isSourceDrawer(n), n !== "회의록" && n !== "회의 전사록", n);
+});
+t("S4 반영은 출처 갈래로 카테고리도 레인도 만들지 않는다", () => {
+  const apply = SRC.slice(SRC.indexOf('restRead("me_welcome_apply"'));
+  const loop = apply.slice(apply.indexOf("for (const d of wanted)"), apply.indexOf("createCategory("));
+  assert.match(loop, /if \(isSourceDrawer\(name\)\) \{ excluded\.push\(name\); continue; \}/, "카테고리를 만들기 전에 출처 갈래를 거르지 않는다");
+  const lanes = apply.slice(apply.indexOf("const skeletonDrawers"), apply.indexOf("applyLaneSkeleton("));
+  assert.match(lanes, /!isSourceDrawer\(n\)/, "레인 뼈대에 출처 갈래가 들어간다");
+});
+t("S5 분석 프롬프트가 출처 서랍과 나머지 칸 서랍을 만들지 말라고 한다", () => {
+  const p = analyzePrompt([{ title: "a.md" }], null);
+  assert.match(p, /'슬랙'·'메일' 같은 이름을 쓰지 마세요/);
+  assert.match(p, /그 밖의 자료\)은 만들지 않습니다/);
+});
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
