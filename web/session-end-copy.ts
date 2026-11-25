@@ -28,6 +28,15 @@ export function sessLikeOfFacts(f: EndFactsMsg | null | undefined): SessLike {
 }
 
 /**
+ * 고장으로 끝났나(순수, #5580 후속) — 크래시 · 기동 실패 · 사라짐(lost) · 메모리 부족 · 일하던 중 꺼짐(lastRun working).
+ *  대화창이 «끝나지 않은 마지막 턴» 을 **끊긴 턴** 으로 표시할지 가르는 데 쓴다 — 사람이 끝냈거나(user) 시스템이 쉬는 세션을 끈 것(system)은
+ *  끊긴 게 아니다. 사유를 모르면(unknown) 끊겼다고 단정하지 않는다.
+ */
+export function endedInError(s: SessLike | null | undefined): boolean {
+  return !!s && sessEndKind(s) === 'error';
+}
+
+/**
  * 꺼진 세션의 이름(«…세션») — 사유를 모르면 '' (부르는 쪽이 종전 말로 떨어진다 — 모르는 것을 지어내지 않는다).
  *  문장 끝(«이에요. 아래에 말을 걸면 이어서 열려요.»)은 부르는 쪽이 붙인다.
  */

@@ -124,10 +124,15 @@ export function injectionStatus(data): Record<InjectionMoment, { on: boolean | n
 // ════════════════════════════════════════════════════════════════════
 function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: () => void } = {}) {
   //  #4135(원준 2026-09-25) — 워크스페이스 안에서는 모두 같은 권한. 주입 설정은 구성원 누구나(org_injection_update · injectionConfig),
-  //   관리자 몫은 구성원 컴퓨터에 닿는 둘뿐이다: 키트 자동 업데이트(self_update) · work_roots(디렉터리 경로).
+  //   관리자 몫은 구성원 컴퓨터에 닿는 둘(키트 자동 업데이트 self_update · work_roots 디렉터리 경로)과 AI 에 주입되는 글(아래 canText)이다.
   const isAdmin = !!data.canEdit;                // org_overview: canEdit = admin
   const rc = data.runtimeConfig || data.injectionConfig;   // admin 은 전량, 구성원은 주입 축만. 둘 다 없으면 보기 전용.
   const canEdit = !!(data.canManage ?? data.canEdit) && !!rc;
+  //  #5801(상민 2026-11-25) — AI 에 **글로** 주입되는 것(주입 문서 본문 · 순서 · 삭제, 기록 요청 문구)은 관리자만 고친다.
+  //   모든 구성원의 AI 세션에 지시문으로 들어가는 글이기 때문이다. 켜고 끄는 스위치 · 툴 목록은 그대로 구성원 몫(canEdit).
+  //   서버가 같은 판정을 한다(org_update_section 등 admin · org_injection_update 의 writeback_notice) — 여기는 안내일 뿐이다.
+  const canText = isAdmin && !!rc;
+  const adminOnlyNote = () => (canText ? null : el('p', { class: 'dlv-note' }, ...uiText('모든 AI 세션에 주입되는 글이라 관리자만 바꿉니다.')));
   const hooks = (rc && rc.hooks) || {};
   const orgHooks = data.orgHooks || [];
   const locked = new Set<string>(data.lockedHookIds || []);
@@ -244,10 +249,10 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
   function writebackEditor() {
     const def = (data.writebackNoticeDefault || '').trim();
     const cur = (rc && rc.writeback_notice) || '';
-    const ta = el('textarea', { class: 'dlv-ta-tall', rows: '14', placeholder: def, 'aria-label': '기록을 권하는 문구' }); ta.value = cur || def; ta.disabled = !canEdit;
+    const ta = el('textarea', { class: 'dlv-ta-tall', rows: '14', placeholder: def, 'aria-label': '기록을 권하는 문구' }); ta.value = cur || def; ta.disabled = !canText;
     const tag = el('span', { class: 'dlv-n', text: cur ? '직접 쓴 문구' : '기본 문구' });
-    let row: any = null;
-    if (canEdit) {
+    let row: any = adminOnlyNote();
+    if (canText) {
       const resetBtn = el('button', { class: 'btn btn-text', type: 'button', text: '기본 문구로 되돌리기' });
       const sr = saveRow(async () => {
         const v = ta.value.trim();
@@ -289,11 +294,21 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
     });
   }
 
+  // #5801 — 관리자가 아닌 구성원이 주입 문서 본문을 읽는 창(편집기 대신). 무엇이 주입되는지는 누구나 본다.
+  function openSectionViewer(name) {
+    const cur = (data.sections && data.sections[name]) || { body_md: '' };
+    overlay('주입 문서 · ' + name + ' (읽기 전용)', el('div', { class: 'mem-modal' },
+      adminOnlyNote(),
+      el('div', { class: 'md-rendered admin-md-box', style: 'max-height:420px; overflow:auto' }, renderMarkdown(cur.body_md || '')),
+      el('div', { class: 'admin-actions' }, historyBtn(name, cur, false))));
+  }
+
   // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
   function openSectionEditor(name, sopts) {
     sopts = sopts || {};
     const isNew = !!sopts.isNew;
     if (!isNew && name === guideKey) { openGuideViewer(name); return; } // #1245 — 잠금 섹션은 편집기 대신 뷰어(서버도 409 로 차단)
+    if (!canText) { if (!isNew) openSectionViewer(name); return; }
     const cur = (data.sections && data.sections[name]) || { body_md: '' };
     const nameIn = el('input', { type: 'text', value: name || '', placeholder: '문서 키 (소문자·숫자·하이픈, 예: company-policy)' });
     if (!isNew) nameIn.disabled = true;
@@ -306,7 +321,7 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
       isNew ? el('div', { class: 'field' }, label('문서 키'), nameIn) : null,
       el('div', { class: 'field' }, label('본문 (markdown)'), ta),
       // 기존 섹션에만 이력 — 아직 만들지 않은 문서에는 되돌아갈 버전이 없다.
-      el('div', { class: 'admin-actions' }, saveBtn, isNew ? null : historyBtn(name, cur, canEdit), st));
+      el('div', { class: 'admin-actions' }, saveBtn, isNew ? null : historyBtn(name, cur, canText), st));
     const back = overlay(isNew ? '주입 문서 추가' : ('주입 문서 편집 · ' + name), root);
     saveBtn.onclick = async () => {
       const section = (isNew ? nameIn.value : name).trim().toLowerCase();
@@ -355,15 +370,17 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
       const isGuide = s.name === guideKey;
       const acts: any[] = [];
       //  재정렬(▲▼) — 가이드는 실제 DB 행이 있을 때만 의미가 있다(행 없으면 말미 렌더라 sort 대상이 없다).
-      if (canEdit && (!isGuide || (s.version || 0) > 0)) {
+      if (canText && (!isGuide || (s.version || 0) > 0)) {
         acts.push(ib('↑', '위로', () => moveSection(i, -1), i === 0), ib('↓', '아래로', () => moveSection(i, +1), i === entries.length - 1));
       }
       if (isGuide) {
         // #1245 — 제품 소유(잠금): 편집·삭제 없음. [보기] + 주입 토글만.
         acts.push(el('button', { class: 'btn btn-text', type: 'button', text: '보기', onclick: () => openGuideViewer(s.name) }), guideInjectToggle());
-      } else if (canEdit) {
+      } else if (canText) {
         acts.push(el('button', { class: 'btn btn-text', type: 'button', text: '편집', onclick: () => openSectionEditor(s.name, {}) }),
           el('button', { class: 'btn btn-text btn-text-danger', type: 'button', text: '삭제', onclick: () => deleteSectionUi(s) }));
+      } else {
+        acts.push(el('button', { class: 'btn btn-text', type: 'button', text: '보기', onclick: () => openSectionViewer(s.name) }));
       }
       return el('div', { class: 'dlv-row' },
         el('span', { class: 'dlv-row-n', text: String(i + 1) }),
@@ -391,7 +408,7 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
           dlvBox([el('span', { text: '주입 문서' }), docCount], null, sectionsWrap,
             el('div', { class: 'dlv-box-acts' },
               el('button', { class: 'btn btn-text', type: 'button', text: '실제 주입 전문 보기', onclick: openPreview }),
-              canEdit ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 문서 추가', onclick: () => openSectionEditor('', { isNew: true }) }) : null)),
+              canText ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 문서 추가', onclick: () => openSectionEditor('', { isNew: true }) }) : adminOnlyNote())),
           dlvBox('자동으로 채워지는 값', '문서 본문의 ${ } 자리에 매 세션 실제 데이터가 들어갑니다.',
             el('div', { class: 'dlv-tokens' },
               tokenRow('${team}', '우리 팀', '보는 사람이 속한 팀 이름'),

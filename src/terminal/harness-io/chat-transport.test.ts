@@ -74,6 +74,18 @@ await t("[4] ★ SSE — `data:` 껍질을 벗겨 줄만 올린다(번역기는 
   conn.close();
 });
 
+await t("[4b] ★ SSE — 닫으면 침묵 타이머를 거둔다(읽기가 abort 에 답하지 않아도 닫은 연결이 프로세스를 붙들지 않는다)", async () => {
+  //  읽기가 영영 안 끝나고 abort 에도 답하지 않는 스트림 — 끊긴 소켓과 같은 꼴이다.
+  const fetchFn = (async () => ({ ok: true, body: { getReader: () => ({ read: () => new Promise(() => {}) }) } })) as unknown as typeof fetch;
+  const conn = sseTransport({ eventUrl: "http://x/event", postLine: async () => true, fetchFn, silenceMs: 60_000 });
+  conn.onLine(() => {});
+  await new Promise((r) => setTimeout(r, 20));
+  const armed = (): number => process.getActiveResourcesInfo().filter((x) => x === "Timeout").length;
+  const before = armed();
+  conn.close();
+  assert.equal(armed(), before - 1, "닫은 뒤에도 침묵 타이머가 남았다 — 이 프로세스가 60초를 더 산다");
+});
+
 await t("[5] ★ SSE 쓰기는 **기다리지 않는다** — 기다리면 호출자가 턴 길이만큼 매달린다", async () => {
   let posted = "";
   let resolvePost: (v: boolean) => void = () => {};

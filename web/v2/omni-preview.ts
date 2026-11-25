@@ -56,6 +56,8 @@ export interface PvDeps {
   /** 종류 그림과 이름(목록 줄과 같은 것). */
   icon(h: PvHit, cls: string): SVGElement;
   kindLabel(h: PvHit): string;
+  /** 그 줄의 키 — 프로젝트·태스크·세션은 «#번호», 지식은 key(#5607 — 목록 줄과 같은 글). 없으면 ''. 옛 호출자는 안 줘도 된다. */
+  keyText?(h: PvHit): string;
   /** 상대 시각(«3시간 전» · «9월 25일»). */
   when(ms: number): string;
   open(h: PvHit, mode: PvOpenMode): void;
@@ -161,9 +163,12 @@ export function createPreview(deps: PvDeps): Preview {
 
   // ── 머리 · 단추(답이 오기 전에도 선다) ──
   function headEl(h: PvHit, extra?: HTMLElement | null): HTMLElement {
+    //  키(#5607) — 종류 이름 바로 뒤. 목록 줄은 좁아 지식 key 가 잘릴 수 있다 — 여기서는 끝까지(긴 key 는 줄을 넘겨) 보인다.
+    const k = deps.keyText ? deps.keyText(h) : '';
     return el('header', { class: 'v2-opv-h' },
       el('div', { class: 'v2-opv-kline' },
         el('span', { class: 'v2-opv-kind' }, deps.icon(h, 'v2-opv-kic'), el('span', { text: deps.kindLabel(h) })),
+        k ? el('code', { class: 'v2-opv-key' }, ...deps.hl(k)) : null,
         h.head ? el('span', { class: 'v2-opv-tag', text: h.head }) : null,
         //  상태 — 안을 읽은 뒤에는 그 답이 말한다(extra). 그 전에는 목록 줄이 아는 것.
         extra || (h.status ? pill(h.status, h.status === '완료' ? 'done' : 'off') : null)),

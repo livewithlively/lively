@@ -37,6 +37,10 @@ export interface LivelyUser {
   // 도구 상한(auth_token.tool_ceiling) — 앱 AI 작업 토큰이 앱의 작업별 허용 목록(매니페스트 ai.tools)을 싣는다. 있으면 그 이름들만 부를 수 있다
   //  (앱 동의와 둘 다 — apps/principal.appToolAllowed · 세션 배관 면제보다 앞선다). MCP 도구 목록에서도 그 밖은 감춘다(server.buildServer).
   toolCeiling?: readonly string[];
+  // 이 DB 토큰이 **구성원의 비위험 권한(admin · runtime 밖)을 따르는 토큰**이면 true(#5712 — org/store/tokens.verifyDbToken 이 채운다).
+  //  이 자격으로 디바이스 로그인을 승인하거나 본인 토큰을 다시 구울 때, 새 토큰도 구성원을 따르게 구워도 되는가의 근거다
+  //  (org/auth/grant-util.credentialFollowsMember). 범위가 고정된 토큰(관리자가 scope 를 골라 구운 것 · OAuth · 앱 토큰)은 없다(undefined).
+  followsMemberSafe?: boolean;
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

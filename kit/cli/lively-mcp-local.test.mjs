@@ -226,6 +226,48 @@ const rpc1 = (s, method, params) => s.rpc(method, params, ++_id);
     await new Promise((r) => srv.close(r));
   }
 
+  // 16) 원격에 닿는 git 의 자격 배선 — 코어(repo-worktree-core netGit)가 준 env 가 자식 프로세스까지 실제로 건너가야 한다.
+  //  여기서 env 가 떨어지면 «라이블리에 등록한 내 토큰으로 받기» 가 MCP 에서만 조용히 죽는다(코어 시험은 자기 sh 로 도니 못 잡는다).
+  {
+    const ctx = makeCtx(process.cwd());
+    const probe = "process.stdout.write(JSON.stringify([process.env.LIVELY_T_PROBE ?? null, process.env.LIVELY_T_PARENT ?? null]))";
+    process.env.LIVELY_T_PARENT = "from-parent";
+    const withEnv = JSON.parse(ctx.sh(process.execPath, ["-e", probe], { env: { LIVELY_T_PROBE: "from-call" } }).stdout);
+    check("T6 sh: 호출이 준 env 가 자식에게 건너간다", withEnv[0] === "from-call", JSON.stringify(withEnv));
+    check("T6 sh: 그 호출에만 얹는다(상속 환경은 그대로)", withEnv[1] === "from-parent", JSON.stringify(withEnv));
+    const without = JSON.parse(ctx.sh(process.execPath, ["-e", probe]).stdout);
+    check("T6 sh: env 를 안 주면 종전대로(다음 호출에 새지 않는다)", without[0] === null && without[1] === "from-parent", JSON.stringify(without));
+    delete process.env.LIVELY_T_PARENT;
+
+    // noTty — 원격에 닿는 git 은 제어 터미널 없이 떠야 한다(ssh 가 터미널에 직접 묻고 멈추지 않게). POSIX 에서 «제어 터미널 없음» 은
+    //  새 세션(setsid)이고, 그 자식은 제 프로세스 그룹의 리더다(pgid == pid). 터미널이 없는 CI 에서도 같은 값으로 잴 수 있다.
+    if (process.platform !== "win32") {
+      const leader = "const {execFileSync}=require('child_process');process.stdout.write(String(Number(execFileSync('ps',['-o','pgid=','-p',String(process.pid)],{encoding:'utf8'}).trim())===process.pid))";
+      check("T6b sh: noTty 면 자식이 새 세션에서 뜬다(제어 터미널 없음)", ctx.sh(process.execPath, ["-e", leader], { noTty: true }).stdout === "true", "프로세스 그룹 리더가 아니다");
+      check("T6b sh: noTty 를 안 주면 종전대로(이 프로세스의 세션 그대로)", ctx.sh(process.execPath, ["-e", leader]).stdout === "false", "새 세션에서 떴다");
+      check("T6b sh: noTty 와 env 를 함께 줘도 둘 다 먹는다",
+        ctx.sh(process.execPath, ["-e", "process.stdout.write(String(process.env.LIVELY_T_PROBE))"], { noTty: true, env: { LIVELY_T_PROBE: "both" } }).stdout === "both");
+    }
+
+    // 게이트웨이 오류는 상태코드를 싣는다 — 코어가 «없는 길(404 = 옛 게이트웨이)» 과 그 밖의 실패를 가른다. POST 몸통도 건너간다.
+    const got = [];
+    const srv = createServer((req, res) => {
+      let body = ""; req.on("data", (d) => { body += d; });
+      req.on("end", () => {
+        got.push({ method: req.method, url: req.url, body });
+        const st = req.url.endsWith("/missing") ? 404 : req.url.endsWith("/denied") ? 403 : 200;
+        res.writeHead(st, { "content-type": "application/json" }); res.end("{}");
+      });
+    });
+    await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+    setGw(`http://127.0.0.1:${srv.address().port}`); setTok("tok-file");
+    const statusOf = async (path) => { try { await makeCtx(process.cwd()).api(path, { method: "POST", body: { repo: "r1" } }); return 200; } catch (e) { return e?.status ?? null; } };
+    const sts = [await statusOf("/x/missing"), await statusOf("/x/denied"), await statusOf("/x/ok")];
+    check("T7 api: 실패한 응답의 상태코드를 오류에 싣는다(404 · 403)", sts.join(",") === "404,403,200", `got=${sts}`);
+    check("T7 api: POST 몸통이 그대로 건너간다", got.length === 3 && got.every((g) => g.method === "POST" && g.body === JSON.stringify({ repo: "r1" })), JSON.stringify(got[0]));
+    await new Promise((r) => srv.close(r));
+  }
+
   S.close();
   await S.done;
   console.error(`\n${fail ? "FAIL" : "PASS"} — ${pass} passed, ${fail} failed`);

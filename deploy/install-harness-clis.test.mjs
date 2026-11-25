@@ -41,18 +41,23 @@ ln -sf "$OUTSIDE_FILE" "$HOME/.grok/bin/grok"`;
 const GROK_HOSTILE = `mkdir -p "$HOME/.grok/bin"
 printf '#!/bin/sh\\necho "grok 1.0.99"\\n' > "$HOME/.grok/bin/grok"; chmod +x "$HOME/.grok/bin/grok"
 ln -sf "$HOME/.grok/bin/grok" "$LVLY_HARNESS_BIN_DIR/agent"`;
+const CURSOR = `mkdir -p "$HOME/.local/bin" "$HOME/.local/share/cursor-agent/versions/v1"
+printf '#!/bin/sh\\ncat "$(dirname "$(readlink -f "$0")")/version.txt"\\n' > "$HOME/.local/share/cursor-agent/versions/v1/cursor-agent"
+printf 'cursor 1.0.99\\n' > "$HOME/.local/share/cursor-agent/versions/v1/version.txt"
+chmod +x "$HOME/.local/share/cursor-agent/versions/v1/cursor-agent"
+ln -sf "$HOME/.local/share/cursor-agent/versions/v1/cursor-agent" "$HOME/.local/bin/agent"`;
 
-function sandbox({ grok = GROK_POLITE, agy = AGY } = {}) {
+function sandbox({ grok = GROK_POLITE, agy = AGY, cursor = CURSOR } = {}) {
   const root = mkdtempSync(join(tmpdir(), "ihc-"));
   const bin = join(root, "bin"); const fake = join(root, "fake"); const log = join(root, "curl.log"); const pathLog = join(root, "path.log");
   mkdirSync(bin); mkdirSync(fake);
   chmodSync(root, 0o755);   // root 로 도는 러너면 nobody 가 들어올 수 있게(mkdtemp 는 0700)
-  writeFileSync(join(fake, "agy.sh"), agy); writeFileSync(join(fake, "grok.sh"), grok);
+  writeFileSync(join(fake, "agy.sh"), agy); writeFileSync(join(fake, "grok.sh"), grok); writeFileSync(join(fake, "cursor.sh"), cursor);
   //  가짜 curl — `-o <파일> <주소>` 만 받는다. 불린 인자를 그대로 남긴다(배선 · 상한 · 받기-뒤-실행 단언).
   writeFileSync(join(fake, "curl"), `#!/bin/sh
 echo "$*" >> "${log}"
 out=""; url=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; http*) url="$1";; esac; shift; done
-case "$url" in *antigravity*) src="${join(fake, "agy.sh")}";; *x.ai*) src="${join(fake, "grok.sh")}";; *) exit 22;; esac
+case "$url" in *antigravity*) src="${join(fake, "agy.sh")}";; *x.ai*) src="${join(fake, "grok.sh")}";; *cursor.com*) src="${join(fake, "cursor.sh")}";; *) exit 22;; esac
 [ -n "$out" ] && cp "$src" "$out" || cat "$src"
 `);
   chmodSync(join(fake, "curl"), 0o755);
@@ -161,6 +166,28 @@ t("H5 하나만 고를 수 있다 · 모르는 이름은 실패로 알린다", (
   assert.equal(s.run(["agy"]).status, 0);
   assert.ok(has(join(s.bin, "agy")) && !has(join(s.bin, "grok")), "agy 만 골랐는데 grok 까지 깔았다");
   assert.notEqual(s.run(["nope"]).status, 0, "모르는 이름을 조용히 넘겼다");
+  s.done();
+});
+
+t("H17 Cursor 패키지 전체를 설치하고 agent 이름으로 실행하며, 이미 있으면 다시 받지 않는다", () => {
+  const s = sandbox();
+  const r = s.run(["cursor"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(execFileSync(join(s.bin, "agent"), ["--version"], { encoding: "utf8" }).trim(), "cursor 1.0.99");
+  assert.equal(execFileSync(join(s.bin, "cursor-agent"), ["--version"], { encoding: "utf8" }).trim(), "cursor 1.0.99");
+  assert.ok(existsSync(join(s.bin, ".cursor-agent-package", "version.txt")), "실행 파일의 동반 자산이 없다");
+  assert.equal(s.run(["cursor"]).status, 0);
+  assert.equal(s.calls().length, 1, "이미 설치했는데 다시 받았다");
+  s.done();
+});
+
+t("H18 Cursor 설치는 다른 agent 실행 파일을 덮어쓰지 않는다", () => {
+  const s = sandbox();
+  writeFileSync(join(s.bin, "agent"), "#!/bin/sh\necho other-agent\n"); chmodSync(join(s.bin, "agent"), 0o755);
+  const r = s.run(["cursor"]);
+  assert.notEqual(r.status, 0);
+  assert.equal(execFileSync(join(s.bin, "agent"), { encoding: "utf8" }).trim(), "other-agent");
+  assert.equal(s.calls().length, 0, "충돌을 알면서 설치기를 받았다");
   s.done();
 });
 
@@ -274,7 +301,7 @@ t("H12 root 로 돌 때 설치기와 «이미 있나» 확인은 권한 없는 �
 t("H7 구성원 키트는 넷 다 배선한다 — 제미나이·그록으로 연 세션에도 라이블리 도구·스킬이 있게(provision-member)", () => {
   const prov = readFileSync(join(here, "provision-member.sh"), "utf8");
   const code = prov.split(/\r?\n/).filter((l) => !l.trimStart().startsWith("#")).join("\n");
-  assert.match(code, /MEMBER_KIT_HARNESSES="\$\{MEMBER_KIT_HARNESSES:-claude,codex,antigravity,grok\}"/, "★ 기본 배선이 넷이 아니다");
+  assert.match(code, /MEMBER_KIT_HARNESSES="\$\{MEMBER_KIT_HARNESSES:-claude,codex,antigravity,grok,cursor\}"/, "★ 기본 배선이 다섯 개가 아니다");
   assert.match(code, /user-install\.mjs" --allow-host-effects --harness "\$MEMBER_KIT_HARNESSES"/, "설치기가 그 목록을 안 쓴다");
   assert.doesNotMatch(code, /--harness claude,codex(?!,)/, "옛 두 개짜리 목록이 남아 있다");
 });

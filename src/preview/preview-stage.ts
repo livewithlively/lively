@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { ensureProvisionBase, clearStaleRegistrations } from "../project/project-provision.js";
+import { ensureProvisionBase, clearStaleRegistrations, sharedRepoPath } from "../project/project-provision.js";
 // 공유 워크스페이스 루트는 **project-fs 의 것 하나만** 쓴다 — 여기서 따로 계산하면(구 코드가 그랬다)
 //  TERMINAL_ROOT_SHARED 를 다르게 잡은 설치에서 base 클론은 A 에, stage 워크트리는 B 에 생겨 서로 못 찾는다.
 import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project/project-fs.js";
@@ -53,7 +53,7 @@ export function mergeVerdict(unmergedOut: string, stderr: string): { status: "co
 export async function ensureStageWorktree(id: string, repo: string, baseRef: string, branches: string[]): Promise<StageResult> {
   const base = await ensureProvisionBase(repo); // workspace/repos/<repo> — 없으면 clone, 있으면 FF
   if (base.status === "error") throw new Error("base repo 확보 실패(" + repo + "): " + (base.detail || "unknown"));
-  const repoPath = path.join(SHARED_BASE, "repos", repo);
+  const repoPath = sharedRepoPath(repo);   // ensureProvisionBase 가 받은 자리(이 워크스페이스의 공유 클론)
   const wt = path.join(SHARED_BASE, "stage", id); // stage 워크트리(별도 네임스페이스)
   const stageBranch = "stage/" + id;
   const ref = stageBaseRef(baseRef);
@@ -231,7 +231,7 @@ export interface RepoBranch { name: string; updated_at: string | null; author: s
 export async function listRepoBranches(repo: string, limit = 300): Promise<RepoBranch[]> {
   const base = await ensureProvisionBase(repo); // 없으면 clone, 있으면 fetch+FF
   if (base.status === "error") throw new Error("레포를 확보하지 못했습니다(" + repo + "): " + (base.detail || "unknown"));
-  const repoPath = path.join(SHARED_BASE, "repos", repo);
+  const repoPath = sharedRepoPath(repo);   // ensureProvisionBase 가 받은 자리(이 워크스페이스의 공유 클론)
   const SEP = "\x1f";
   const r = await git([
     "for-each-ref", "--sort=-committerdate", "--count=" + Math.max(1, Math.min(1000, limit)),

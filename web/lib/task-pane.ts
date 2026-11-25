@@ -149,6 +149,14 @@ export function externalTasks<T extends TaskLike>(tasks: T[], excludeIds: Set<nu
   return { open, done: rest.filter((t) => isDone(t)) };
 }
 
+/** ids 에 든 태스크를 **ids 순서대로** 맨 앞에 세우고, 나머지는 원래 순서 그대로 뒤에 둔다(곁칸에서 방금 더한 것 — #5581).
+ *  ids 에 있어도 tasks 에 없으면 건너뛴다(아직 다시 읽지 않았다 · 다른 묶음으로 갔다). */
+export function pinFirst<T extends { id: number | string }>(tasks: T[], ids: number[]): T[] {
+  if (!ids.length) return tasks.slice();
+  const at = (t: T): number => ids.indexOf(Number(t.id));
+  return [...tasks.filter((t) => at(t) >= 0).sort((a, b) => at(a) - at(b)), ...tasks.filter((t) => at(t) < 0)];
+}
+
 /** 순서 목록에서 하나를 옮긴다(끌기 · 번호 메뉴). to 는 **옮긴 뒤의 자리**(0부터). 범위 밖이면 끝으로 붙인다. */
 export function moveInOrder<T>(list: T[], from: number, to: number): T[] {
   const out = list.slice();

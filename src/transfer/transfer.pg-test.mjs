@@ -19,6 +19,8 @@
 //   I15 문서를 쓴 뒤 뒤 단계(가져온 기록)가 실패 → 결과에 «만듦·경고», 되돌리기가 치우고 덮어쓴 문서는 전 판으로(리뷰 반영)
 //   I16 대상자 제한 자료 → 내보내기 안내, 받는 쪽에서 공개로(리뷰 반영)
 //   I17 «들이는 중» 으로 오래 멈춘 배치 → 정리하면 «일부만 들임», 되돌리기를 받는다(리뷰 반영)
+//   I18 받는 쪽에 카테고리 묶음이 있다 → 새 분류가 묶음에 들어가 적용이 성공한다(2026-11-18 GOWIKI 가져오기 실패의 재현)
+//       사람이 고른 묶음(화면 → 적용 API 의 categories[].group)이 실제로 쓰인다
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
@@ -32,6 +34,7 @@ const { stageImport, applyImport, undoImport, transferHousekeeping } = await imp
 const { getWorkspaceUid } = await import(`${DIST}/transfer/store.js`);
 const { PlanError } = await import(`${DIST}/transfer/plan.js`);
 const { BundlePasswordRequiredError } = await import(`${DIST}/transfer/bundle.js`);
+const { transferCapabilities } = await import(`${DIST}/capabilities/transfer.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -46,6 +49,8 @@ const bodyOf = async (name) => (await q1(`SELECT body_md FROM knowledge WHERE na
 const setUid = (uid) => itemsPool.query(`UPDATE org_transfer_identity SET workspace_uid=$1 WHERE id=1`, [uid]);
 
 async function cleanup() {
+  //  I18 이 심은 묶음 — 남아 있으면 다음 판의 준비 단계(createCategory, 묶음 없이)가 «묶음 하나에 반드시» 로 막힌다.
+  await itemsPool.query(`DELETE FROM category_group WHERE origin = '${T}'`).catch(() => {});
   await itemsPool.query(`DROP TRIGGER IF EXISTS ${T}_boom ON org_transfer_origin`).catch(() => {});
   await itemsPool.query(`DROP FUNCTION IF EXISTS ${T}_boom_fn()`).catch(() => {});
   await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE '${T}-%'`);
@@ -221,6 +226,61 @@ try {
   {
     const ops = (await itemsPool.query(`SELECT DISTINCT op FROM org_content_audit WHERE entity='org_transfer' AND at >= $1`, [startedAt])).rows.map((r) => r.op);
     chk("I13 export · import_plan · import_apply · import_undo 감사", ["export", "import_plan", "import_apply", "import_undo"].every((o) => ops.includes(o)), JSON.stringify(ops));
+  }
+  // ── I18 묶음이 있는 워크스페이스로 들이기 ─────────────────────────────────
+  //  2026-11-18 실측: 묶음(g1·g2·g3)이 있는 워크스페이스에 들이다 «카테고리는 묶음 하나에 반드시 들어갑니다» 로 첫 단계에서 실패했다.
+  //  ⚠ 맨 끝에 둔다 — 묶음이 생기면 이 뒤의 «묶음 없이 분류 만들기» 가 막힌다(정리에서 지운다).
+  {
+    await setUid(originalUid);
+    await createCategory({ key: `${T}-cs`, name: "XFER 고객 응대" }, ctx);
+    await upsertKnowledge({ name: `${T}-cs1`, title: "응대 문서", body_md: "응대 본문", type: "reference", category: `${T}-cs` }, ctx);
+    const outG = await exportBundle({ categories: [`${T}-cs`] }, { actor: ctx.actor, source: "web" });
+    // 받는 쪽: 그 분류·문서가 없고 묶음이 있다
+    await setUid(randomUUID());
+    await deleteKnowledge(`${T}-cs1`, ctx);
+    await deleteCategory((await getCategoryByKey(`${T}-cs`)).id, ctx);
+    const had = Number((await q1(`SELECT count(*)::int AS n FROM category_group WHERE state='active'`)).n);
+    if (!had) {
+      for (const [key, name, sort] of [["g1", "XFER 사업", 1], ["g2", "XFER 제품", 2], ["g3", "XFER 시스템", 3]]) {
+        await itemsPool.query(`INSERT INTO category_group(key, name, sort, state, origin) VALUES($1,$2,$3,'active',$4)`, [key, name, sort, T]);
+      }
+    }
+    const activeKeys = (await itemsPool.query(`SELECT key FROM category_group WHERE state='active' ORDER BY sort, key`)).rows.map((r) => r.key);
+    const stG = await stageImport(outG.file, { fileName: `${T}-groups.zip`, ctx });
+    const pc = stG.plan.categories.find((c) => c.ref === `${T}-cs`);
+    chk("I18 미리보기에 새 분류의 묶음 기본값과 받는 쪽 묶음 목록이 있다",
+      pc?.suggestion.action === "create" && activeKeys.includes(pc.group) && (stG.plan.groups ?? []).length === activeKeys.length, JSON.stringify({ pc, groups: stG.plan.groups }));
+    let apG = null, errG = null;
+    try { apG = await applyImport(stG.batch.id, {}, ctx); } catch (e) { errG = e; }
+    chk("I18 묶음이 있어도 적용이 성공한다", !errG && apG?.batch.state === "applied" && apG.result.counts.created === 1,
+      errG ? String(errG.message ?? errG) : JSON.stringify({ state: apG?.batch.state, counts: apG?.result.counts }));
+    const newKey = apG?.result.categories_created?.[0]?.key;
+    const row = newKey ? await q1(`SELECT group_key FROM category WHERE key=$1`, [newKey]) : null;
+    chk("I18 새 분류가 묶음에 들어갔다(규약: «고객·응대» → g2)", !!row && activeKeys.includes(row.group_key) && (had > 0 || row.group_key === "g2"), JSON.stringify({ newKey, row }));
+    chk("I18 결과 안내 — 기본값으로 넣은 묶음은 «(이름 규칙)» 으로 밝힌다", (apG?.result.notes ?? []).some((n) => n.includes("묶음") && n.includes("(이름 규칙)")), JSON.stringify(apG?.result.notes));
+    if (apG) {
+      const unG = await undoImport(stG.batch.id, ctx);
+      chk("I18 되돌리기가 새 분류까지 치운다", unG.batch.state === "undone" && !(await q1(`SELECT 1 AS x FROM category WHERE key=$1`, [newKey])), JSON.stringify(unG.report));
+    }
+    //  사람이 고른 묶음 — 화면과 같은 길(적용 API 의 핸들러 · 결정 읽기)로 기본값(g2)이 아닌 묶음을 고른다.
+    const pick = activeKeys.find((key) => key !== (pc?.group ?? null)) ?? activeKeys[0];
+    const stP = await stageImport(outG.file, { fileName: `${T}-groups-pick.zip`, ctx });
+    const applyCap = transferCapabilities.find((c) => c.name === "transfer_import_apply");
+    let apP = null, errP = null;
+    try {
+      apP = await applyCap.handler({ id: stP.batch.id, categories: { [`${T}-cs`]: { action: "create", group: pick } } },
+        { userId: `${T}-admin`, scopes: ["admin"] }, { actor: `${T}-admin`, source: "web" });
+    } catch (e) { errP = e; }
+    const pickKey = apP?.batch?.result?.categories_created?.[0]?.key;
+    const pickRow = pickKey ? await q1(`SELECT group_key FROM category WHERE key=$1`, [pickKey]) : null;
+    chk("I18 적용 API 로 고른 묶음이 쓰인다(기본값이 아니라)", !errP && pickRow?.group_key === pick && pick !== pc?.group,
+      errP ? String(errP.message ?? errP) : JSON.stringify({ pick, default: pc?.group, pickKey, pickRow }));
+    const pickName = (await q1(`SELECT name FROM category_group WHERE key=$1`, [pick]))?.name;
+    const pickNotes = apP?.batch?.result?.notes ?? [];
+    chk("I18 결과 안내 — 고른 묶음은 그 이름으로, «(이름 규칙)» 이라고 하지 않는다(2026-11-18 «이름에 따라» 실측 문구)",
+      pickNotes.some((n) => n.includes(`→ ${pickName}`) && !n.includes("(이름 규칙)") && !n.includes("이름에 따라")), JSON.stringify({ pickName, pickNotes }));
+    if (apP) await undoImport(stP.batch.id, ctx);
+    await itemsPool.query(`DELETE FROM category_group WHERE origin = $1`, [T]);
   }
 } catch (e) {
   bad("예외", e && e.stack || String(e));

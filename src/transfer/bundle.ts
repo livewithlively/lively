@@ -341,6 +341,9 @@ export function writeBundleZip(b: Omit<Bundle, "manifest"> & { manifest: Omit<Bu
 
 // ── 읽기 ─────────────────────────────────────────────────────────────────────────────
 
+/** 옮기기 파일이 아닐 때 사람에게 보이는 문구(zip 이 아님 · zip 이지만 목록 파일이 없음 — 둘 다 같은 안내). */
+export const NOT_A_BUNDLE = "라이블리 옮기기 파일이 아닙니다 — 다른 워크스페이스의 [지식 내보내기]로 받은 .zip 또는 .lively 파일을 올려 주세요";
+
 /** 파일 바이트(zip 또는 잠긴 묶음) → 묶음. 잠겼는데 비밀번호가 없으면 BundlePasswordRequiredError.
  *  zip = 잠금을 푼 zip 바이트(적용 때 다시 읽으려고 보관한다 — 비밀번호를 다시 묻지 않게). */
 export async function readBundle(buf: Buffer, password?: string | null): Promise<{ bundle: Bundle; problems: BundleProblem[]; sealed: boolean; zip: Buffer }> {
@@ -350,13 +353,15 @@ export async function readBundle(buf: Buffer, password?: string | null): Promise
     if (!password) throw new BundlePasswordRequiredError();
     zip = await openSealedBundle(buf, password);
   }
-  if (!looksLikeZip(zip)) throw new BundleFormatError("라이블리 옮기기 묶음 파일이 아닙니다 — 내보내기로 받은 .zip 또는 .lively 파일을 올려 주세요");
-  let files: Map<string, Buffer>;
-  try { files = readZip(zip); }
+  if (!looksLikeZip(zip)) throw new BundleFormatError(NOT_A_BUNDLE);
+  //  ① 목록 파일(manifest.json)만 먼저 푼다 — 옮기기 파일이 아닌 zip 이면 나머지를 풀기 전에 거절한다
+  //   (2026-11-18 실측: 한글 설치 파일 zip 을 잘못 올리면 상한 512MB 까지 다 푼 뒤에야 «묶음이 아닙니다» 였다).
+  let head: Map<string, Buffer>;
+  try { head = readZip(zip, undefined, (n) => n === "manifest.json"); }
   catch (e) { if (e instanceof ZipFormatError) throw new BundleFormatError(e.message); throw e; }
 
-  const mraw = files.get("manifest.json");
-  if (!mraw) throw new BundleFormatError("manifest.json 이 없습니다 — 라이블리 옮기기 묶음이 아닙니다");
+  const mraw = head.get("manifest.json");
+  if (!mraw) throw new BundleFormatError(NOT_A_BUNDLE);
   let manifest: BundleManifest;
   try { manifest = JSON.parse(mraw.toString("utf8")) as BundleManifest; }
   catch { throw new BundleFormatError("manifest.json 을 읽지 못했습니다"); }
@@ -368,8 +373,11 @@ export async function readBundle(buf: Buffer, password?: string | null): Promise
   const uid = str(manifest.origin?.workspace_uid, 200);
   if (!uid) throw new BundleFormatError("만든 워크스페이스 id 가 없습니다");
 
-  // 무결성 — 목록에 있는 파일만 읽고, 지문이 맞는지 본다(목록에 없는 파일은 읽지 않는다).
+  // 무결성 — 목록에 있는 파일만 **푼다**(목록에 없는 파일은 풀지도 않는다). 그리고 지문이 맞는지 본다.
   const listed = obj(manifest.files) as BundleManifest["files"];
+  let files: Map<string, Buffer>;
+  try { files = readZip(zip, undefined, (n) => Object.prototype.hasOwnProperty.call(listed, n)); }
+  catch (e) { if (e instanceof ZipFormatError) throw new BundleFormatError(e.message); throw e; }
   for (const [path, meta] of Object.entries(listed)) {
     const data = files.get(path);
     if (!data) throw new BundleFormatError(`목록에 있는 파일이 없습니다: ${path} — 파일이 망가졌습니다`);

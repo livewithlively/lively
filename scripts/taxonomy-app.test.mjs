@@ -173,5 +173,17 @@ ok(/openTaxonomyApp\(cat && cat\.id\)/.test(read("web/wiki-category.ts")), "W2 �
   ok(/if \(!ownsHost\(mounted\.host\)\) return;/.test(hc), "T3 주소 변화는 칸의 주인일 때만 스스로 그린다(아니면 셸에 맡긴다)");
 }
 
+// ───────────────────────── X. 치운 분류는 위키 사이드바에 서지 않는다 · 「더 보기」 단추가 보인다 (#5594) ─────────────────────────
+{
+  const SIDE = code(read("web/v2/side.ts"));
+  const wk = cut(SIDE, "  loadWikiCats();\n  loadWikiPins();", "const catRow");
+  ok(/const all = \(wikiCats \|\| \[\]\)\.filter\(\(c\) => !taxArchived\(c\) \|\| c\.id === activeCat\);/.test(wk), "X1 위키 사이드바는 치운 분류를 뺀다(지금 보는 분류만 남긴다)");
+  ok(wk.indexOf("const activeCat = wikiActiveCat();") >= 0 && wk.indexOf("const activeCat = wikiActiveCat();") < wk.indexOf("const all ="), "X1 지금 보는 분류를 먼저 읽고 거른다");
+  ok(/interface WikiCat \{[^}]*state\?: string \| null/.test(SIDE), "X1 위키 분류 타입이 state 를 받는다");
+  const CSSX = read("public/styles/49-v2-taxonomy.css");
+  const rule = (/\.v2-tx-tb\.ic \.v2-tx-ic \{([^}]*)\}/.exec(CSSX) || [])[1] || "";
+  ok(/stroke-width: 2\.6/.test(rule) && /color: var\(--ink-sub\)/.test(rule), "X2 아이콘만 있는 단추(더 보기)는 굵고 글자색이다");
+}
+
 console.log(`\n#4233 분류체계 앱: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 process.exit(fail ? 1 : 0);

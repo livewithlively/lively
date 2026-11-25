@@ -27,3 +27,36 @@ export const soloLast = (files, solo) => [...files.filter((f) => !solo.has(f)), 
 /** 다음 파일을 지금 띄워도 되나 — 혼자 도는 파일은 아무것도 안 돌 때만, 그 밖의 파일은 동시 실행수 안에서.
  *  혼자 도는 파일이 맨 뒤에 모여 있으니(soloLast) 그것이 도는 동안 보통 파일이 끼어들 일은 없다. */
 export const mayStart = (nextIsSolo, running, jobs) => (nextIsSolo ? running === 0 : running < jobs);
+
+// ── 조각(shard) — 한 벌의 시험을 여러 CI 잡이 나눠 돈다 ─────────────────────────────────────────
+//  CI 벽시계를 잡던 것은 시험의 수가 아니라 **한 잡이 전부를 혼자 돈다**는 것이었다(실측 2026-11-18: 유닛 1211 파일 · CPU 합 1749초를
+//  4코어 한 대가 511초에, 그 뒤 PG 통합 106건을 같은 잡에서 하나씩 429초). 조각은 같은 체크아웃에서 `--shard=i/N` 을 N 번 부르면
+//  **모든 파일이 정확히 한 조각에 드는** 나눔이다 — 무엇을 몇 번 부르든 합집합은 전체고 서로 겹치지 않는다(S7 이 그 성질을 잰다).
+
+/** `--shard=i/N` 읽기 — 1 ≤ i ≤ N 인 정수 둘. 그 밖은 null(호출자가 죽인다 — 오타난 조각이 0건 초록이 되면 안 된다). */
+export function parseShard(text) {
+  const m = /^(\d+)\/(\d+)$/.exec(String(text ?? "").trim());
+  if (!m) return null;
+  const index = Number(m[1]), total = Number(m[2]);
+  return index >= 1 && total >= 1 && index <= total ? { index, total } : null;
+}
+
+/**
+ * 파일을 total 개 조각으로 나눈다 — 무거운 것부터 그때 가장 가벼운 조각에 얹는다(같으면 번호가 앞선 조각).
+ *  costOf 는 파일의 예상 비용(초). 모르는 파일은 호출자가 기본값을 준다 — 비용이 틀려도 **들어갈 조각이 달라질 뿐 빠지는 파일은 없다**.
+ *  조각 안의 순서는 받은 순서 그대로다(혼자 도는 시험을 맨 뒤로 모으는 soloLast 가 조각 안에서도 그대로 선다).
+ *  ⚠ 결정적이어야 한다 — 잡마다 따로 계산하므로 같은 입력이면 같은 나눔이 나와야 합집합이 전체다. 그래서 정렬의 동률을 경로로 푼다.
+ */
+export function shardFiles(files, total, costOf = () => 1) {
+  const cost = new Map(files.map((f) => [f, Math.max(0, Number(costOf(f)) || 0)]));
+  const order = [...files].sort((a, b) => cost.get(b) - cost.get(a) || (a < b ? -1 : a > b ? 1 : 0));
+  const load = new Array(total).fill(0);
+  const where = new Map();
+  for (const f of order) {
+    let at = 0;
+    for (let i = 1; i < total; i++) if (load[i] < load[at]) at = i;
+    load[at] += cost.get(f);
+    where.set(f, at);
+  }
+  return Array.from({ length: total }, (_, i) => files.filter((f) => where.get(f) === i));
+}

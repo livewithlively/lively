@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, markStartedOutside, clearStartedOutside } from "./record-scope.mjs";
+import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside, sessionOff, sessionOffNotice, isSessionId, sessionReadonly, modeHint } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -48,14 +48,21 @@ if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
 //  주입 컨텍스트 맨 앞에 배너를 붙여 AI 가 '이 세션은 스토어에 안 쓴다'를 명확히 알게 한다(없는 writeback 툴을 찾는 혼란 방지).
-const READONLY = (process.env.LIVELY_MODE || "").trim().toLowerCase() === "readonly";
-const RO_BANNER = [
+//  세션 **안에서** 읽기전용으로 바꾼 세션(record-scope.mjs «세션 모드» — 표식)이 다시 시작할 때(이어 열기 · 압축 뒤)도 같은 배너를 붙인다.
+//   그 세션은 쓰는 도구가 목록에는 남고 부를 때 막히므로(러너 PreToolUse) 문구만 그에 맞춘다 — markReadonly() 가 둘을 함께 바꾼다.
+let READONLY = (process.env.LIVELY_MODE || "").trim().toLowerCase() === "readonly";
+const READONLY_OPENED = READONLY;   // 띄울 때 정한 읽기전용 — 세션 안에서 일반으로 못 푼다(켜짐 알림이 그렇게 말한다)
+const roBanner = (marked, hint = "/lively-mode") => [
   "## ⚠ 읽기전용 세션 (read-only, #1007)",
   "이 세션은 라이블리 컨텍스트 스토어에 **쓰지 않습니다**. 지식·프로젝트·작업·카테고리·자료·활동·도메인맵의 저장/수정 툴",
-  "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **비활성**입니다(tools/list 에 없음, REST 는 403).",
+  marked ? "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **막혀 있습니다**(부르면 거절됩니다)."
+    : "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **비활성**입니다(tools/list 에 없음, REST 는 403).",
   "그러니 세션 마무리의 컨텍스트 스토어 기록(writeback)을 **시도하지 마세요** — WIKI 인덱스·AGENTS.md 의 '기록하라' 규칙은 이 읽기전용 세션엔 적용되지 않습니다.",
-  "읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 기밀 작업이 끝난 뒤 남길 조직 기록은 읽기전용을 끈 일반 세션에서 하세요.",
+  marked ? `읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 사람이 이 세션 안에서 읽기전용으로 바꿔 둔 것이다 — 남길 조직 기록은 사람이 다시 켠 뒤(${hint} on)에 하세요.`
+    : "읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 기밀 작업이 끝난 뒤 남길 조직 기록은 읽기전용을 끈 일반 세션에서 하세요.",
 ].join("\n");
+let RO_BANNER = roBanner(false);
+function markReadonly() { READONLY = true; RO_BANNER = roBanner(true, modeHint(HARNESS)); }
 const withRo = (t) => READONLY ? (RO_BANNER + "\n\n" + (t || "")).trimEnd() : t;
 // ⚠ OFF 차단은 main() 안에서 한다(모듈 최상단 process.exit 금지) — main-guard(#959) 이후 이 파일은 test 가
 //  reconcileExtPullWiring 을 import 한다. 최상단에서 exit 하면 토큰/OFF 상태에 따라 import 가 프로세스를 죽여
@@ -80,15 +87,26 @@ const HARNESS = (() => {
 //   codex → JSON 봉투(additionalContext), 그 외(claude/미설정) → raw 텍스트.
 //   opts.reloadSkills(Claude 전용, 자산 sync 자기치유가 이번 세션에 스킬을 materialize 했을 때):
 //   raw 텍스트론 신호를 실을 수 없어 JSON 봉투(additionalContext+reloadSkills)로 전환 — 공식 SessionStart 계약.
+//   켜짐 알림(ON_NOTICE — 아래 scopeGate 가 정한다)이 있으면 사람에게 한 줄(systemMessage)과 AI 안내(맥락 앞)를 함께 싣는다.
+//   한 줄은 raw 텍스트에 실을 수 없어 클로드도 JSON 봉투로 낸다(꺼짐 알림과 같은 두 칸). 훅 출력을 버리는 하네스
+//   (contextEnvelope "file" — opencode·antigravity·grok)는 실을 자리가 없어 종전 출력 그대로다.
+//   opts.contextOff(세션 맥락 주입을 관리자가 끈 조직) — AI 안내는 빼고 사람에게 한 줄만 남긴다.
+let ON_NOTICE = null;
 function emitContext(text, opts = {}) {
   const h = harness(HARNESS);
   const reload = !!opts.reloadSkills && h.reloadAssets;
-  if (!text && !reload) return;
-  if (h.contextEnvelope === "json" || reload) {
+  const n = h.contextEnvelope !== "file" ? ON_NOTICE : null;
+  const ai = n && !opts.contextOff ? n.ai : "";
+  //  읽기전용 배너(#1007)는 맨 앞을 지킨다 — 켜짐 안내는 그 바로 뒤, 회사 맥락 앞이다.
+  const body = (ai && READONLY && String(text || "").startsWith(RO_BANNER)
+    ? [RO_BANNER, ai, String(text).slice(RO_BANNER.length).trim()] : [ai, text]).filter(Boolean).join("\n\n");
+  const line = n ? n.user : "";
+  if (!body && !reload && !line) return;
+  if (h.contextEnvelope === "json" || reload || n) {
     const out = { hookEventName: "SessionStart" };
-    if (text) out.additionalContext = text;
+    if (body) out.additionalContext = body;
     if (reload) out.reloadSkills = true;
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: out }) + "\n");
+    process.stdout.write(JSON.stringify({ ...(line ? { systemMessage: line } : {}), hookSpecificOutput: out }) + "\n");
   } else {
     process.stdout.write(text + "\n");
   }
@@ -695,24 +713,61 @@ const PLUGIN_INSTALL = (() => {
   try { return existsSync(join(dirname(dirname(fileURLToPath(import.meta.url))), ".claude-plugin", "plugin.json")); } catch { return false; }
 })();
 
+// 사람에게 한 줄(systemMessage)을 그리지 않는 화면인가 — 그러면 AI 가 첫 답 끝에 그 한 줄을 대신 말하게 한다(record-scope.mjs insideNotice 의 say).
+//  클로드 터미널(CLAUDE_CODE_ENTRYPOINT=cli)은 시작 배너 아래에 그린다(2.1.327 실측). 데스크톱 앱 Code 탭은 훅은 돌지만 그 한 줄이 화면에
+//  없다(2026-11-18 상민님 화면 실측). 데스크톱 진입점 값은 클로드 바이너리(2.1.327)의 데스크톱 묶음 그대로다 — 재지 않은 화면(VS Code 확장 등)은
+//  넣지 않는다(그 화면이 한 줄을 그리면 두 번 말하게 된다). 사람 없이 도는 실행(표의 headless)은 읽을 사람이 없어 뺀다.
+const DESKTOP_ENTRYPOINTS = new Set(["claude-desktop", "claude-desktop-3p", "local-agent"]);
+function lineHidden() {
+  const h = harness(HARNESS);
+  if (h.id !== "claude") return false;
+  return DESKTOP_ENTRYPOINTS.has(String(process.env.CLAUDE_CODE_ENTRYPOINT || "").trim()) && !h.headless({}, process.env);
+}
+
 // 기록 범위(#5016) — 범위 밖(작업 폴더 밖 · 제외 폴더 안)에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
-//  여기서만 하는 일 둘: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
-//  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다.
+//  여기서만 하는 일 셋: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
+//  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다
+//  ③ 범위 안이면 «켜져 있다 · 끄는 법» 알림을 정해 둔다(ON_NOTICE — 내보내기는 emitContext 가 회사 맥락과 함께 한다).
 //  키트 자가 업데이트는 기록이 아니라서 범위 밖에서도 띄운다 — 안 그러면 이 기능의 고침도 그 컴퓨터에 영영 안 닿는다.
 //  라이블리가 띄운 세션(SPAWNED)은 판정할 것이 없다(언제나 켬) — 입력도 안 읽고 종전 경로 그대로 간다.
+const envSessionId = () => {
+  if ((harness(HARNESS).id || "claude") !== "claude") return "";
+  const v = String(process.env.CLAUDE_CODE_SESSION_ID || "").trim();
+  return isSessionId(v) ? v : "";
+};
+function emitSessionOff(sid, again) {
+  const n = sessionOffNotice({ sid, harness: harness(HARNESS).id || "claude", lively: join(homedir(), ".lively") });
+  process.stdout.write(JSON.stringify({ ...(again ? {} : { systemMessage: n.user }), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
+}
 async function scopeGate() {
   const input = await readHookInput();
   const lively = join(homedir(), ".lively");
+  //  세션 id — 훅 입력이 정본이다. 입력을 제때 못 읽었으면 클로드가 훅에 싣는 env(지금 세션 값 — 2.1.327 실측)로 메운다.
+  const hid = harness(HARNESS).id || "claude";
+  const sid = String(input.session_id || input.sessionId || "") || envSessionId();
+  //  사람이 꺼 둔 세션(이 세션만 끄기)이 다시 시작했다(이어 열기 · 압축 뒤) — 꺼진 채로 두고 그 사실과 다시 켜는 법만 알린다.
+  //   서버 왕복(설정 맞추기)보다 먼저 가른다 — 꺼 둔 세션은 게이트웨이를 건드리지 않는다(설정은 다음 켜진 세션이 맞춘다).
+  if (sessionOff(sid, lively)) { emitSessionOff(sid, String(input.source || "") === "compact"); return true; }
+  //  세션 안에서 읽기전용으로 바꿔 둔 세션이 다시 시작했다 — 읽기전용 배너를 붙이고 켜짐 알림이 지금 모드를 말하게 한다.
+  if (!READONLY && sessionReadonly(sid, lively)) markReadonly();
   let kitVersion = null;
   if (TOKEN) {
     const r = await syncScopeSettings({ lively, gw: GW, token: TOKEN, send: fetch, timeoutMs: 1500 }).catch(() => ({ ok: false }));
     if (r.ok) kitVersion = r.kit_version;
   }
-  const sid = String(input.session_id || input.sessionId || "");
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
-  if (d.inScope) { clearStartedOutside(sid); return false; }   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
+  if (d.inScope) {
+    clearStartedOutside(sid);   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
+    //  켜짐 알림(꺼짐 알림의 짝 — record-scope.mjs insideNotice 머리말). 토큰이 없는 컴퓨터는 연결된 것이 아니라 알리지 않는다.
+    //  압축 뒤 다시 도는 시작 훅(source: compact)은 같은 대화의 한가운데다 — AI 안내만 다시 싣고 사람에게 한 줄은 되풀이하지 않는다.
+    //  지금 모드와 바꾸는 법도 같은 한 줄에 싣는다(상민님 2026-11-25) — 읽기전용으로 **연** 세션은 여기서 일반으로 못 바꾼다고 말한다.
+    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, sid, mode: READONLY ? "readonly" : "normal", modeFixed: READONLY_OPENED, harness: hid, plugin: PLUGIN_INSTALL, lively }) : null;
+    const again = String(input.source || "") === "compact";
+    if (on) ON_NOTICE = { user: again ? "" : on.user, ai: on.ai + (!again && lineHidden() ? "\n" + on.say : "") };
+    return false;
+  }
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
-  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
+  const n = outsideNotice({ dir: d.dir, reason: d.reason, root: d.root, harness: hid, plugin: PLUGIN_INSTALL, lively });
   // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
   //  코덱스(0.157) SessionStart 출력 스키마도 같은 두 칸을 받는다. 그 밖의 어댑터는 이 출력을 버리거나 본문만 꺼낸다.
   process.stdout.write(JSON.stringify({ systemMessage: n.user, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
@@ -726,7 +781,10 @@ async function scopeGate() {
 async function main() {
   if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
   mirrorPluginCreds();                                   // 플러그인 설치면 자격을 ~/.lively 에도 굳힌다(#1473). 키트 설치면 무동작.
-  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) — 아래 전부 건너뜀
+  //  라이블리가 띄운 세션은 범위 판정을 건너뛰지만(언제나 켬) «이 세션만 끄기» 는 듣는다 — 입력을 안 읽는 자리라 클로드의 env 세션 id 로 본다.
+  if (SPAWNED && sessionOff(envSessionId(), join(homedir(), ".lively"))) { emitSessionOff(envSessionId(), false); process.exit(0); }
+  if (SPAWNED && !READONLY && sessionReadonly(envSessionId(), join(homedir(), ".lively"))) markReadonly();   // 세션 안에서 읽기전용으로 바꾼 세션(이어 열기)
+  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) · 꺼 둔 세션 — 아래 전부 건너뜀
   // 레포 준비 실패 통지(#1155) — 로컬 마커만 읽으므로 토큰 유무와 무관하게 항상 계산한다(무토큰 세션도 코드는 필요하다).
   const repoNotice = repoStatusNotice();
   if (!TOKEN) { emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n"))); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)
@@ -746,7 +804,7 @@ async function main() {
     const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
     maybeSelfUpdate(rc && rc.kit_version);
     // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
-    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); safeExit(0); return; }
+    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed, contextOff: true }); safeExit(0); return; }
     // 레포 통지는 org-context 앞에 — 길이가 긴 컨텍스트 뒤에 묻히면 안 되는 '지금 이 세션의 상태'다.
     const blocks = [notice, repoNotice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 레포 실패 → org-context(없으면 로컬 STATIC)
     emitContext(withRo(blocks.join("\n\n")), { reloadSkills: healed }); // 읽기전용이면 배너를 맨 앞에(#1007)

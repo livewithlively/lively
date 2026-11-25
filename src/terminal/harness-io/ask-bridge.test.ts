@@ -3,7 +3,7 @@
 //  이 파일이 지키는 것은 하나다: **훅은 어떤 경우에도 유효한 답을 한 번 받는다.**
 //  (못 받으면 antigravity 는 그 세션의 모든 툴을 fail-closed deny 한다 — #1689 실측.)
 import assert from "node:assert/strict";
-import { handleAskRequest, askBridgeEnv, askSessionForToken, askTokenForSession, bindAskBodyToToken, closeAskBridge } from "./ask-bridge.js";
+import { handleAskRequest, handleAuthedAsk, askBridgeEnv, readyAskBridgeEnv, askSessionForToken, askTokenForSession, bindAskBodyToToken, revokeAskSession, closeAskBridge } from "./ask-bridge.js";
 import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 
 let pass = 0;
@@ -65,13 +65,18 @@ await t("[5] 답을 기다리는 시간은 상한을 넘지 않는다(훅이 먼
 });
 
 await t("[6] env 는 **루프백 주소 + 토큰 + 세션** 셋이다 — 이게 있는 자식만 사람에게 묻는다", async () => {
-  const env = askBridgeEnv("box-x");
-  await new Promise((r) => setTimeout(r, 60));      // listen 은 비동기다
-  const env2 = askBridgeEnv("box-x");
-  const e = Object.keys(env2).length ? env2 : env;
+  const e = await readyAskBridgeEnv("box-x");
   assert.ok(e.LIVELY_ASK_URL?.startsWith("http://127.0.0.1:"), `루프백이 아니다: ${e.LIVELY_ASK_URL}`);
   assert.ok((e.LIVELY_ASK_TOKEN || "").length >= 32, "토큰이 짧다");
   assert.equal(e.LIVELY_ASK_SESSION, "box-x");
+  closeAskBridge();
+});
+
+await t("[6b] 자격 없는 요청과 종료된 세션의 옛 자격은 승인을 만들지 못한다", async () => {
+  const token = askTokenForSession("box-revoked");
+  assert.equal((await handleAuthedAsk("bad-token", { id: "a", session: "box-revoked" })).status, 403);
+  revokeAskSession("box-revoked");
+  assert.equal((await handleAuthedAsk(token, { id: "a", session: "box-revoked" })).status, 403);
   closeAskBridge();
 });
 

@@ -20,13 +20,14 @@ import {
   loadHubLayout, matchHubPreset, moveHubItem, resetHubLayout, resizeHubItem, saveHubLayout, setHubScope, showHubItem,
   type HubLayout, type HubTool,
 } from './detail-hub-layout.js';
-import { SEP, TOOL_TONE, type Fill, type HubCtx, type HubData, type HubOpts, btn, hubCtxSurface, hubIcon } from './detail-hub-kit.js';
+import { SEP, TOOL_TONE, type Fill, type HubCtx, type HubData, type HubOpts, btn, hubCtxSurface, hubIcon, hubSessionRows } from './detail-hub-kit.js';
 import { fillTasks } from './detail-hub-tasks.js';
 import { fillSessions } from './detail-hub-sessions.js';
 import { fillBody } from './detail-hub-body.js';
 import { fillKnowledge } from './detail-hub-knowledge.js';
 import { fillFolder } from './detail-hub-folder.js';
 import { fillTimeline } from './detail-hub-timeline.js';
+import { mountHubNow } from './detail-hub-now.js';
 
 export type { HubOpts, HubSectionFactory, HubTasksListOpts } from './detail-hub-kit.js';
 
@@ -48,7 +49,13 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   // 데이터 — 위젯마다 따로 부르지 않고 허브가 한 번 받아 나눠 준다(같은 화면에서 같은 것을 두 번 묻지 않는다). invalidate 로 한 키만 다시.
   const lazyOf = <T,>(fn: () => Promise<T>): { get: () => Promise<T>; drop: () => void } => { let p: Promise<T> | null = null; return { get: () => (p ||= fn()), drop: () => { p = null; } }; };
   const L = {
-    sessions: lazyOf(() => api(o.base + pid + '/sessions').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[])),
+    //  #5630 — 도는 세션 + 지난 세션(꺼진 박스 · 기록만 남은 것). 전체 목록(terminal/sessions — 꺼진 박스와 대화 uuid 가 여기에만 실린다)에서
+    //   이 프로젝트 것만 고르고, 못 받으면 프로젝트 세션(도는 것만)으로 선다. 기록은 팀원 전원 것(session-logs).
+    sessions: lazyOf(() => Promise.all([
+      api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => ((d && d.sessions) || []).filter((s: any) => Number(s.projectId) === Number(pid)))
+        .catch(() => api(o.base + pid + '/sessions').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[])),
+      api(o.base + pid + '/session-logs').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
+    ]).then(([live, logs]) => hubSessionRows(live, logs, String(o.meId || '')))),
     files: lazyOf(() => api(o.base + pid + '/files?path=').then((d: any) => (d && d.items) || []).catch(() => [] as any[])),
     acts: lazyOf(() => api(o.base + pid + '/activity').then((d: any) => (d && d.activities) || []).catch(() => [] as any[])),
     comments: lazyOf(() => api('/api/ui/v6/projects/' + pid + '/comments').then((d: any) => ((d && d.feed) || []).filter((f: any) => f && f.kind === 'comment')).catch(() => [] as any[])),
@@ -99,12 +106,12 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const acts = el('span', { class: 'pjh-wh-acts' });
     const x = el('button', { class: 'pjh-mx', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', onclick: () => closeToolModal() }, hubIcon('x', 16));
     const head = el('div', { class: 'pjh-wh pjh-mh' },
-      el('span', { class: 'pjh-wh-ic ' + TOOL_TONE[tool] }, hubIcon(tool, 16)),
+      el('span', { class: 'pjh-wh-ic t-' + tool + ' ' + TOOL_TONE[tool] }, hubIcon(tool, 16)),
       el('span', { class: 'pjh-wh-name', text: HUB_TOOL_LABEL[tool] }), sub, acts, x);
     const body = el('div', { class: 'pjh-wb pjh-mb' });
     const foot = el('div', { class: 'pjh-wf pjh-mf' });
     const box = el('div', { class: 'pjh-w pjh-modal pjh-w3 pjh-m-' + tool, 'data-tool': tool, role: 'dialog', 'aria-modal': 'true', 'aria-label': HUB_TOOL_LABEL[tool] }, head, body, foot);
-    const back = el('div', { class: 'pjh-mback' }, box);
+    const back = el('div', { class: 'pjh-mback ds3' }, box);
     back.addEventListener('mousedown', (e: MouseEvent) => { if (e.target === back) closeToolModal(); });
     //  Esc — 위에 뜬 것(태스크 모달 · 팝오버)이 있으면 그쪽 몫이다.
     //   · 이미 누가 그 Esc 를 썼으면(자료 부품의 «고르기 풀기» 등) 닫지 않는다 · 파일 뷰어(.ov-back)·우클릭 메뉴가 떠 있으면 그쪽 먼저.
@@ -133,10 +140,11 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
     const card = el('div', { class: 'pjh-w v-' + view + (w === 1 ? ' col' : '') + ' pjh-w' + (narrow ? 1 : w) + ' pjh-h' + h, 'data-tool': tool, style: '--w:' + w + ';--h:' + h });
     const sub = el('span', { class: 'pjh-wh-sub' });
     const acts = el('span', { class: 'pjh-wh-acts' });
-    const openBtn = el('button', { class: 'pjh-open', type: 'button', title: HUB_TOOL_LABEL[tool] + ' 크게 열기(이 화면 위에 창으로)', 'aria-haspopup': 'dialog', onclick: () => openTool(tool) }, '열기 ', hubIcon('right', 13));
+    //  #5630 — «열기 →» 글자 대신 아이콘 하나(카드에 올리면 선다). 바닥 줄의 두 번째 «열기» 는 걷었다(37-projects-hub.css).
+    const openBtn = el('button', { class: 'pjh-open', type: 'button', title: HUB_TOOL_LABEL[tool] + ' 크게 열기', 'aria-label': HUB_TOOL_LABEL[tool] + ' 크게 열기', 'aria-haspopup': 'dialog', onclick: () => openTool(tool) }, hubIcon('expand', 15));
     acts.append(openBtn);
     const head = el('div', { class: 'pjh-wh' },
-      el('span', { class: 'pjh-wh-ic ' + TOOL_TONE[tool] }, hubIcon(tool, 16)),
+      el('span', { class: 'pjh-wh-ic t-' + tool + ' ' + TOOL_TONE[tool] }, hubIcon(tool, 16)),
       el('span', { class: 'pjh-wh-name', text: HUB_TOOL_LABEL[tool] }), sub, acts);
     const body = el('div', { class: 'pjh-wb' });
     const foot = el('div', { class: 'pjh-wf' });
@@ -265,8 +273,8 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
   // ── 조립 ──
   const grid = el('div', { class: 'pjh-grid' });
   const top = el('div', {});
-  const editBtn = btn('배치 편집', 'btn-ghost', () => { editing = !editing; render(); }, { class: 'btn btn-sm btn-ghost pjh-edit-btn' });
-  editBtn.prepend(hubIcon('grid', 13));
+  //  #5630 — 아이콘만(이름은 올렸을 때). 오른쪽 위에 글자 단추 넷이 나란히 서던 것을 [공유][＋ 세션] 둘과 아이콘 둘로.
+  const editBtn = el('button', { class: 'btn btn-sm btn-ghost pjh-edit-btn pjh-icon-btn', type: 'button', title: '배치 편집 — 위젯 순서 · 크기 · 숨김', 'aria-label': '배치 편집', onclick: () => { editing = !editing; render(); } }, hubIcon('grid', 15)) as HTMLButtonElement;
   function renderGrid(): void {
     grid.classList.toggle('edit', editing);
     grid.replaceChildren(...layout.items.map((it) => widget(it.tool, it.w, it.h)));
@@ -280,12 +288,14 @@ export function mountProjectHub(host: HTMLElement, o: HubOpts): void {
         el('span', { class: 'muted', style: 'font-size:12.5px;color:var(--muted-2)', text: '전폭 보기 — 가장 큰 위젯의 확장' })));
       host.append(el('div', { class: 'pjh-focus' }, o.sections[tool]()));
       if (o.actionsHost) o.actionsHost.replaceChildren();
+      if (o.nowHost) o.nowHost.replaceChildren();
       return;
     }
     if (o.actionsHost) { o.actionsHost.replaceChildren(editBtn); editBtn.classList.toggle('active', editing); }
     top.replaceChildren();
     if (editing) top.append(editBar());
     host.append(top, grid);
+    if (o.nowHost) mountHubNow(o.nowHost, ctx);   // #5630 3판 — 맨 위 «지금» 띠(진행 · 내 차례 · 지금 · 최근 활동)
     renderGrid();
     if (editing) host.append(slot());
   }

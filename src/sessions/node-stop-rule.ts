@@ -101,7 +101,7 @@ export function quotaWaitOf(raw: unknown): QuotaWait | null {
 export interface NodeStopResult {
   enabled: boolean;
   why?: string;
-  nodes: Array<{ id: string; skip?: NodeSkipWhy; rule?: { doneMin: number; askingMin: number; unknownMin: number }; result?: StopRuleResult }>;
+  nodes: Array<{ id: string; skip?: NodeSkipWhy; rule?: { doneMin: number; askingMin: number; unknownMin: number; staleMin?: number }; result?: StopRuleResult }>;
   nextDueInSec?: number;
 }
 
@@ -117,6 +117,13 @@ export interface NodeStopDeps {
   listManaged: () => Promise<Array<{ session_id: string | null }>>;
   view: (id: string) => ViewState;
   reap: (nodeId: string, id: string, owner: string) => Promise<void>;
+  /**
+   * #5623 — 오래 남은 세션에 확인 글을 보낸다. 사람이 보낸 글과 같은 통로(deliverPrompt)로 **그 컴퓨터에 릴레이**한다.
+   *  ⚠ 아웃박스에 넣으면 안 된다 — 아웃박스 배달자는 이 박스의 tmux 만 보아 원격 PC 세션엔 닿지 않고, 행만 쌓인다(첫 판이 그랬다).
+   */
+  remind: (nodeId: string, id: string, owner: string, text: string) => Promise<void>;
+  /** #5623 — 첫 판이 아웃박스에 잘못 넣은 확인 글 행을 걷는다(한 프로세스에 테넌트당 한 번 · 실패해도 판은 돈다). */
+  dropStrayReminders: () => Promise<number>;
   /** 컴퓨터 하나를 판정·집행한다 — 기본은 매니지드와 같은 sweepSessionStopRule(부품만 바꿔 끼워 부른다) */
   sweep: (over: Partial<StopRuleDeps>) => Promise<StopRuleResult>;
   now: () => number;
@@ -135,6 +142,16 @@ function defaultDeps(): NodeStopDeps {
     listManaged: () => listManagedSessions(),
     view: (id) => viewState(id),
     reap: (nodeId, id, owner) => reapNodeSession(nodeId, id, owner),
+    remind: async (nodeId, id, owner, text) => {
+      const { deliverPrompt } = await import("../terminal/deliver-prompt.js");
+      await deliverPrompt(id, text, { owner, nodeId });
+    },
+    dropStrayReminders: async () => {
+      const { itemsPool } = await import("../db/client.js");
+      const { STALE_REMINDER_TEXT } = await import("./session-stop-rule.js");
+      const r = await itemsPool.query(`DELETE FROM org_session_outbox WHERE text=$1 AND status IN ('queued','sending','failed')`, [STALE_REMINDER_TEXT]);
+      return r.rowCount ?? 0;
+    },
     sweep: (over) => sweepSessionStopRule(over),
     now: () => Date.now(),
     arm: (dueAtSec) => armNodeStopTimer(dueAtSec),
@@ -144,6 +161,8 @@ function defaultDeps(): NodeStopDeps {
 
 /** 테넌트마다 한 판씩만 — 요청 정비·CP 틱·마감 깨움이 겹쳐도 같은 컴퓨터에 같은 걸음을 두 번 묻지 않는다. */
 const inFlight = new Set<string>();
+/** #5623 — 잘못 쌓인 확인 글을 이미 걷은 테넌트. */
+const strayDropped = new Set<string>();
 const tenantKey = (): string => String(currentTenant()?.id ?? "");
 
 /** 한 번에 묻는 세션 수 — 노드 걸음의 상한(node/stop-step.ts STOP_STEP_IDS_MAX)과 같다. 더 많으면 나눠 묻는다(무거운 컴퓨터일수록 빠지면 안 된다). */
@@ -178,6 +197,12 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
     const [policy, rows] = await Promise.all([d.loadPolicy(), d.listNodeRows()]);
     const rowById = new Map(rows.map((r) => [r.id, r]));
     const out: NodeStopResult = { enabled: false, nodes: [] };
+    if (!strayDropped.has(key)) {
+      strayDropped.add(key);
+      await d.dropStrayReminders()
+        .then((n) => { if (n) logger.info({ dropped: n }, "원격 PC 하네스 종료 규칙: 아웃박스에 잘못 쌓인 확인 글을 걷었다(#5623)"); })
+        .catch((e) => logger.warn({ err: e }, "원격 PC 하네스 종료 규칙: 잘못 쌓인 확인 글 걷기 실패(비치명)"));
+    }
     let nextDue = Infinity;
     let shared: { states: SessionState[]; managed: Array<{ session_id: string | null }> } | null = null;
     for (const first of snaps) {
@@ -189,7 +214,7 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
       if (rule.enabled && row?.enabled) out.enabled = true;
       const skip = nodeStopEligibility({ snap, row, rule, supports: d.supports(snap.nodeId), staleMs: d.staleMs });
       if (skip) { out.nodes.push({ id: snap.nodeId, skip }); continue; }
-      const mins = { doneMin: rule.doneMin, askingMin: rule.askingMin, unknownMin: rule.unknownMin };
+      const mins = { doneMin: rule.doneMin, askingMin: rule.askingMin, unknownMin: rule.unknownMin, staleMin: rule.staleMin };
       const sessions = snap.sessions.filter((s) => ID_RE.test(s.id));
       if (!sessions.length) { out.nodes.push({ id: snap.nodeId, skip: "no-sessions", rule: mins }); continue; }
       const nodeId = snap.nodeId;
@@ -242,6 +267,13 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
           if (!owner) throw new Error("세션 주인을 모른다 — 그 컴퓨터에 끄기를 보낼 수 없다");   // 위 거르기 뒤라 오지 않는다(방어)
           await stillAlone(id);
           await d.reap(nodeId, id, owner);
+        },
+        //  #5623 — 끄기와 같은 «직전 확인»: 그 PC 터미널에 사람이 붙어 있으면 보내지 않는다(그 사람의 입력칸에 글이 끼어든다).
+        remind: async (id, text) => {
+          const owner = stateById.get(id)?.owner;
+          if (!owner) throw new Error("세션 주인을 모른다 — 확인 글을 보낼 수 없다");
+          await stillAlone(id);
+          await d.remind(nodeId, id, owner, text);
         },
         arm: (dueAtSec) => { nextDue = Math.min(nextDue, dueAtSec); },
         logCtx: { node: nodeId },
@@ -312,7 +344,7 @@ function defaultReapDeps(): NodeReapDeps {
     },
     markEnded: (id, e, atSec) => markSessionEnded(id, e, {}, atSec),
     revertEnded: (id, why, atSec) => revertSessionEnded(id, why, atSec),
-    revokeTokens: async (id) => (await import("../terminal/profiles.js")).revokeSessionHookToken(id),
+    revokeTokens: async (id) => (await import("../terminal/profiles.js")).retireSessionTokens(id),   // #5611 — 훅 토큰은 유예 뒤(SessionEnd 캡처가 그 토큰으로 올린다)
     now: () => Date.now(),
   };
 }

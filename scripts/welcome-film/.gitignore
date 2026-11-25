@@ -1,2 +1,4 @@
 node_modules
 out
+tour-*.gen.html
+guide-*.gen.html

@@ -10,6 +10,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { PROJECT_SHARED_BASE, projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
 import { assertDiskWritable } from "../ops/disk-guard.js"; // #813 T5 — 클론 전에 디스크 확인(꽉 차면 507)
+import { workspaceDirSegments, WORKSPACE_DIR_MARK } from "../ops/workspace-dir-key.js"; // 공유 클론 자리를 워크스페이스마다 따로
 import { effectiveStoragePolicy, diskThresholds } from "../org/policies/storage-policy.js";
 import { loadStoragePolicy } from "../org/policies/runtime-loaders.js";
 import { getRepo } from "../domainmap/core/repos.js";
@@ -52,6 +53,21 @@ export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "../org/creden
 import { githubRepoFullName } from "../org/credentials/github-repo-url.js";   // #2165 잎 모듈 — 무거운 자격 모듈을 끌어오지 않는다
 
 export const REPOS_SUBDIR = "repos"; // workspace/repos/<name> — 박스 호스트 클론(프로젝트 간 공유, worktree 의 부모)
+
+// 공유 클론이 모이는 폴더 · 한 레포의 공유 클론 자리 — **이 워크스페이스의 것**(ops/workspace-dir-key.ts).
+//  · 워크스페이스 열쇠가 없으면(단일 워크스페이스 · 셀프호스트 다중 워크스페이스의 primary · 노드) 종전 그대로 `workspace/repos/<name>`.
+//  · 있으면 `workspace/repos/@ws/<워크스페이스 id>/<name>` — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, 다른 워크스페이스가 같은
+//    이름으로 등록한 레포가 먼저 받아 둔 쪽의 클론(남의 비공개 코드)을 그대로 쓰지 않게.
+//  ⚠ 공유 클론을 읽고 쓰는 모든 자리(provision · 코드 최신화 · 판 읽기 · 위키 수집 · 프리뷰 stage)는 경로를 직접 잇지 말고 이 둘만 쓴다 —
+//   한 곳이라도 `repos/<name>` 을 직접 이으면 그 자리만 공용 자리를 본다.
+//  ⓘ 옮기지 않는다: 열쇠가 생기기 전에 공용 자리에 받아 둔 클론은 어느 워크스페이스의 것인지 증명할 길이 없다. 그 워크스페이스의
+//   다음 준비 · 주기 갱신(refresh_bases)이 제 자리에 새로 받는다. 옛 클론에 붙은 워크트리는 그대로 돈다(워크트리는 제 base 를 스스로 가리킨다).
+export function sharedReposBase(): string {
+  return path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, ...workspaceDirSegments());
+}
+export function sharedRepoPath(name: string): string {
+  return path.join(sharedReposBase(), name);
+}
 const REPO_NAME_RE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/; // 경로 컴포넌트로 쓰이므로 슬래시 금지 + 점세그먼트(.·..·…) 거부(traversal 방지). 이름 속 점은 허용
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
 const GIT_TIMEOUT_MS = 180_000;
@@ -285,7 +301,7 @@ export interface SharedRepoRefreshResult {
 export async function refreshSharedRepo(name: string, memberId?: string | null, inject?: RepoProvisionAuth): Promise<SharedRepoRefreshResult> {
   const clean = String(name ?? "").trim();
   if (!REPO_NAME_RE.test(clean)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
-  const repoPath = confineToWorkspace(path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, clean), "레포");
+  const repoPath = confineToWorkspace(sharedRepoPath(clean), "레포");
   if (!(await isRepo(repoPath))) {
     return { repo: clean, status: "no-clone", advanced: false, detail: "공유 베이스에 클론이 없습니다 — 이 레포를 쓰는 프로젝트에서 먼저 provision 하세요." };
   }
@@ -414,6 +430,23 @@ function confineToWorkspace(abs: string, label: string): string {
   }
   return resolved;
 }
+const insideDir = (p: string, base: string): boolean => p === base || p.startsWith(base + path.sep);
+// 사람이 직접 지정한 레포 경로(spec.path)의 봉쇄 — 워크스페이스 안이어야 하고, **다른 워크스페이스의 공유 클론 자리**를 가리킬 수 없다.
+//  · 워크스페이스 열쇠가 있는 호출(다중 워크스페이스의 비-primary · 매니지드): 제 공유 클론 폴더 안만. 그 밖은 공용 디스크의 남의 자리다
+//    (primary 의 `repos/<name>` · 다른 워크스페이스의 프로젝트 폴더).
+//  · 열쇠가 없는 호출(단일 워크스페이스 · primary): 종전 그대로 워크스페이스 안 어디든 — 단 `repos/@ws/…`(다른 워크스페이스의 자리)는 안 된다.
+function confineRepoInputPath(abs: string): string {
+  const resolved = confineToWorkspace(abs, "레포");
+  const own = sharedReposBase();
+  const keyed = workspaceDirSegments().length > 0;
+  const others = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, WORKSPACE_DIR_MARK);
+  if (keyed ? !insideDir(resolved, own) : insideDir(resolved, others)) {
+    throw new HttpError(400, keyed
+      ? `레포 경로는 이 워크스페이스의 공유 클론 폴더 안이어야 합니다: ${abs} — 경로를 비우면 그 자리에 받습니다`
+      : `레포 경로가 다른 워크스페이스의 공유 클론 자리입니다: ${abs}`);
+  }
+  return resolved;
+}
 const expandHome = (p: string): string => (p.startsWith("~/") ? path.join(process.env.HOME || "", p.slice(2)) : p);
 
 // 공유 base 클론 확보(#458/#660 RO 모델) — workspace/repos/<name> 에 호스트당 1회 clone, 재사용 시 upstream FF.
@@ -426,9 +459,9 @@ async function ensureBaseClone(
   opts?: { inputPath?: string | null; allowClone?: boolean; inject?: RepoProvisionAuth },
 ): Promise<{ repoPath: string; cloned: boolean; branch: string | null; branchNote?: string }> {
   if (!REPO_NAME_RE.test(name)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
-  const reposBase = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR);
-  const inputPath = opts?.inputPath && String(opts.inputPath).trim() ? expandHome(String(opts.inputPath).trim()) : path.join(reposBase, name);
-  const repoPath = confineToWorkspace(inputPath, "레포");
+  const reposBase = sharedReposBase();                          // 이 워크스페이스의 공유 클론 폴더(위 sharedReposBase 머리말)
+  const given = opts?.inputPath && String(opts.inputPath).trim() ? expandHome(String(opts.inputPath).trim()) : null;
+  const repoPath = given ? confineRepoInputPath(given) : confineToWorkspace(path.join(reposBase, name), "레포");
   const allowClone = opts?.allowClone !== false;
   const existed = await isRepo(repoPath);
   // 🔴 주입 경로(#905 C4) — **노드엔 DB 가 없다**(agent.ts: "DB·웹 UI 없이 부팅한다"). 여기서 getRepo/resolveGitSecret 을
@@ -622,7 +655,7 @@ function planSpecs(projectId: number, projDir: string, specs: RepoSpec[]): RepoP
     //  worktree 면 프로젝트 폴더 아래, 아니면 클론 경로(ensureBaseClone 의 기본 자리와 같은 계산).
     const expect = worktree
       ? path.join(projDir, name)
-      : (spec.path && String(spec.path).trim() ? expandHome(String(spec.path).trim()) : path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, name));
+      : (spec.path && String(spec.path).trim() ? expandHome(String(spec.path).trim()) : sharedRepoPath(name));
     return { spec, name, branch, worktree, expect };
   });
 }

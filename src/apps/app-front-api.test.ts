@@ -208,7 +208,8 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
   const rt = readFileSync(new URL("../../web/v2/app-ui-runtime.ts", import.meta.url), "utf8");
   const tc = readFileSync(new URL("../../src/capabilities/app-tool-call.ts", import.meta.url), "utf8");
   assert.ok(rt.includes(`j.code === '${CONSENT_REQUIRED}'`), "SDK 런타임이 같은 글자로 가른다");
-  assert.ok(/body: \{ code: CONSENT_REQUIRED \}/.test(tc) && (tc.match(/code: CONSENT_REQUIRED/g) || []).length === 2, "도구 판정의 두 403(동의 없음 · 예전 범위)이 표지를 단다");
+  assert.ok(/body: \{ code: CONSENT_REQUIRED \}/.test(tc) && (tc.match(/code: CONSENT_REQUIRED/g) || []).length === 3,
+    "도구 판정의 세 403(동의 없음 · 예전 범위 도구 #4225 · 예전 범위 scope #1644)이 표지를 단다");
   const { d } = deps({ tool: () => { throw new HttpError(403, "x", { body: { code: CONSENT_REQUIRED } }); } });
   assert.ok("consent_url" in ((await run(d, "POST", "/store/sql", {})).json as object), "그 표지면 동의 자리가 붙는다");
   ok("세 자리 consent_required 일치");

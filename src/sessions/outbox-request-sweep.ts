@@ -198,6 +198,13 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  자가호스팅(#4487 · #5102)이 이 기능의 주 사용처라 하우스키핑에도 건다(housekeeping) — 함수 실행면을 부르지 않는 DB 정비라 실행면과 무관하다.
   { key: "app-call-sweep", intervalMs: TEN_MIN_MS, housekeeping: true,
     run: () => import("../apps/app-server-call.js").then((m) => m.sweepAppCalls()) },
+  // 슬랙 다리(#1782) — 켜진 다리마다 이 프로세스가 슬랙 소켓 모드 연결을 하나 쥐게 맞춘다(없으면 붙이고 · 꺼졌으면 내리고 · 금고의 토큰이 바뀌면 다시 붙인다).
+  //  연결은 프로세스 메모리에 있어 게이트웨이가 다시 뜨면 이 정비가 다시 붙인다(셀프호스트 30초 안 · 매니지드는 그 워크스페이스의 다음 요청 —
+  //   CP 틱은 깨어 있는 워크스페이스에만 5분마다). 다리가 없는 워크스페이스는 조회 한 번이다.
+  //  ⚠ 테넌트 스코프 — 다리 · 한 번만 넘기기 기록은 그 워크스페이스 것이고(RLS), 연결의 이벤트 처리는 이 정비가 돌던 테넌트로 감싼다(manager.ts).
+  //  housekeeping 표시 — 셀프호스트(사내 IP 로 막아 둔 고객사 게이트웨이가 주 사용처)는 boot/housekeeping 이 같은 정의 · 같은 주기로 돌린다.
+  { key: "slack-bridge", intervalMs: STOP_RULE_SWEEP_MS, housekeeping: true,
+    run: () => import("../org/slack-bridge/manager.js").then((m) => m.reconcileSlackBridges()) },
   // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,

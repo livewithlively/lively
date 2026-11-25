@@ -207,6 +207,11 @@ export const VIEWER_TO_EVT = 'pn-viewer-to';
 /** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다. 세 웹 칸(iframe · 데스크톱 탭 · 웹 판 원격 화면)이 다 듣는다.
  *  ⚠ 이 신호는 **곁칸 한 벌 안에서만** 돈다(ctx.paneRoot). 문서 전체로 뿌리면 다른 세션 탭까지 물든다. */
 export const WEB_OPEN_EVT = 'pn:open-web';
+/** #5650 «이 지식을 [지식] 칸에서 펴라» — 셸(panes.ts openKnowledgeAt)이 칸을 세운 뒤 곁칸 한 벌(ctx.paneRoot) 안에서 쏜다.
+ *  원준 2026-11-24 «지식 이름만 보여주고 누르면 곁칸에서 — 웹칸이 아니라 지식 칸에서». 칸이 막 생겼으면 신호보다 늦게 들을 수 있어
+ *  같은 이름을 knPending 에도 적어 둔다(칸이 생길 때 읽고 지운다). */
+export const KN_OPEN_EVT = 'pn-kn-open';
+export const knPending = new WeakMap<HTMLElement, string>();
 /** 어떤 파일을 펴 두었나 — 세션마다 따로(곁칸 부품은 그 세션의 것). */
 export const ED_PATH_KEY = 'pn_ed_path';
 /** 그 부품 인스턴스의 저장 열쇠 — 첫 탭은 세션 열쇠 **그대로**(옛 기억을 그대로 물려받는다),

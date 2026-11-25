@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
   parseListLine, parseListing, displayName, displayPath, isSafeRawPath, parsePasvPort, encodeRawPath, decodeRawPath,
+  rawOfDisplayPath, childRawPath, parentRawPath,
 } from "./ftp-list.js";
 
 let pass = 0;
@@ -149,6 +150,67 @@ await t("encodeRawPath/decodeRawPath: 원본 바이트 왕복, 토큰은 base64u
 
 await t("decodeRawPath: 빈 문자열·base64url 밖 문자 섞이면 null", () => {
   for (const tok of ["", "ab+c", "ab/c", "ab c", "ab!c", "한글"]) assert.equal(decodeRawPath(tok), null, JSON.stringify(tok));
+});
+
+await t("rawOfDisplayPath: UTF-8 바이트를 latin1 로, 앞뒤 공백 제거, 빈 값은 /, / 없으면 붙인다", () => {
+  const cases: [string, string][] = [
+    ["/문서/한글.txt", utf8Raw("/문서/한글.txt")],
+    ["/a/b.txt", "/a/b.txt"],
+    ["  /a b  ", "/a b"],
+    ["a/b", "/a/b"],
+    ["", "/"],
+    ["   ", "/"],
+  ];
+  for (const [input, want] of cases) assert.equal(rawOfDisplayPath(input), want, JSON.stringify(input));
+});
+
+await t("childRawPath: 부모 아래 UTF-8(NFC) 이름 하나 — 부모가 / 면 /이름, 끝 / 는 하나로, 부모 원본 바이트는 그대로", () => {
+  const cases: [string, string, string][] = [
+    ["/", "a.txt", "/a.txt"],
+    ["/x", "a.txt", "/x/a.txt"],
+    ["/x/", "a.txt", "/x/a.txt"],
+    ["/x", "한글", `/x/${utf8Raw("한글")}`],
+    ["/x", "한글".normalize("NFD"), `/x/${utf8Raw("한글")}`],
+    [`/${EUCKR_MUNSEO}`, "한글.txt", `/${EUCKR_MUNSEO}/${utf8Raw("한글.txt")}`],
+    ["/x", "a".repeat(255), `/x/${"a".repeat(255)}`],
+    ["/x", "가".repeat(85), `/x/${utf8Raw("가".repeat(85))}`], // 255 바이트
+  ];
+  for (const [parent, name, want] of cases) assert.equal(childRawPath(parent, name), want, `${JSON.stringify(parent)} + ${JSON.stringify(name)}`);
+});
+
+await t("childRawPath: 이름이 비거나 . / .. 이거나 / CR LF NUL 포함·255바이트 초과, 부모가 안전하지 않으면 null", () => {
+  const cases: [string, string][] = [
+    ["/x", ""],
+    ["/x", "."],
+    ["/x", ".."],
+    ["/x", "a/b"],
+    ["/x", "a\rb"],
+    ["/x", "a\nb"],
+    ["/x", "a\0b"],
+    ["/x", "a".repeat(256)],
+    ["/x", "가".repeat(86)], // 258 바이트
+    ["x", "a"],
+    ["", "a"],
+    ["/x\ry", "a"],
+    ["/x\ny", "a"],
+    ["/x\0y", "a"],
+    ["/x/..", "a"],
+    ["/../x", "a"],
+  ];
+  for (const [parent, name] of cases) assert.equal(childRawPath(parent, name), null, `${JSON.stringify(parent)} + ${JSON.stringify(name)}`);
+});
+
+await t("parentRawPath: 부모 원본 경로, 맨 위 바로 아래·/ 는 /, 끝 / 무시", () => {
+  const cases: [string, string][] = [
+    ["/", "/"],
+    ["/a", "/"],
+    ["/a/", "/"],
+    ["/a/b", "/a"],
+    ["/a/b/", "/a"],
+    ["/a/b/c.txt", "/a/b"],
+    [`/${EUCKR_MUNSEO}/x`, `/${EUCKR_MUNSEO}`],
+  ];
+  for (const [raw, want] of cases) assert.equal(parentRawPath(raw), want, JSON.stringify(raw));
 });
 
 console.log(`\n${pass} passed, ${failed.length} failed`);

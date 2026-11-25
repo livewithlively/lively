@@ -323,7 +323,7 @@ function closePopover(): void {
 }
 function onDocDown(e: MouseEvent): void {
   const t = e.target as HTMLElement;
-  if (popEl && !popEl.contains(t) && !t.closest('.v2-rail-stack') && !t.closest('.v2-secdd') && !t.closest('.v2-ws')) closePopover();
+  if (popEl && !popEl.contains(t) && !t.closest('.v2-rail-stack') && !t.closest('.v2-secdd') && !t.closest('.v2-ws') && !t.closest('.v2-mws')) closePopover();   // .v2-mws — 폰 맨 윗줄 타일(#5615): 제 클릭이 여닫기다
 }
 function onDocKey(e: KeyboardEvent): void { if (e.key === 'Escape') closePopover(); }
 //  #3870 — 본문(앱 액자·세션 터미널)을 누른 것은 위 mousedown 에 오지 않는다. 그걸 안 받으면 메뉴는 빈 사이드바를
@@ -355,11 +355,13 @@ export function openWorkspacePopover(anchor: HTMLElement): void {
   openPopover(anchor);
 }
 
-function openPopover(anchor: HTMLElement): void {
-  closePopover();
+type WsMenuRow = WsRow & { kind: string; active: boolean; enter_url?: string; tenant_state?: string | null };
+/** 폰 [나] 판의 「워크스페이스 설정」(#5615) — 레일 메뉴와 같은 행 재료로 같은 모달을 연다. 폰엔 레일이 없어 이 메뉴에 닿을 길이 없었다. */
+export function openWorkspaceSettingsNow(): void { closePopover(); openCurrentWsSettings(wsMenuRows() as never); }
+function wsMenuRows(): WsMenuRow[] {
   const cur = workspaceInfo();
   const curSlug = activeWorkspaceSlug();
-  const rows: Array<WsRow & { kind: string; active: boolean; enter_url?: string; tenant_state?: string | null }> = spaces.length
+  return spaces.length
     //  ★ 종류는 저장된 kind 가 아니라 **지금 명부에 몇 명인가**에서 나온다(#1875 kind_effective).
     //  '지금 여기'의 판정 — 셀프호스트는 브라우저가 고른 slug 로, **매니지드는 서버가 준 is_current 로**.
     //   매니지드에선 워크스페이스마다 게이트웨이가 달라 브라우저에 고른 값이 없다(주소 자체가 답이다).
@@ -377,6 +379,10 @@ function openPopover(anchor: HTMLElement): void {
         //  #2188 — 사람이 정한 얼굴. 타일(workspaceFace)과 설정 모달이 이 값으로 그린다.
         face: (w as any).face ?? null }))
     : [{ slug: 'primary', name: cur.name, kind: cur.kind, active: true, is_primary: true, role: null, member_count: null, owner_count: null, face: null }];
+}
+function openPopover(anchor: HTMLElement): void {
+  closePopover();
+  const rows = wsMenuRows();
 
   //  #1875 — 나에게 온 초대는 **맨 위**. 내가 결정해 줘야 저쪽이 기다림을 멈추고, '내가 갈 수 있는 곳'이라
   //   워크스페이스 목록과 같은 질문에 답한다.

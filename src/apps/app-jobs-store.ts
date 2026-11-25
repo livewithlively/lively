@@ -53,6 +53,8 @@ export interface NewAppJob {
   scopeCeiling?: string[] | null;
   /** #1639 사람 신원이 사람이 보지 않는 자리에서 왔다 — 그 돌기 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended). 아니면 생략. */
   unattended?: boolean;
+  /** #1782 사람이 시키지 않은 작업(슬랙 다리의 run_as · 앱 v2 #121 앱 정기 작업) — 그 돌기 신원으로는 개인 구독을 쓰지 못한다(공용 시트 · API 키만 — ai-runs/plan.subscriptionRefusal). 아니면 생략. */
+  automation?: boolean;
 }
 
 /**
@@ -76,6 +78,8 @@ export async function insertAppJob(j: NewAppJob, admit: (have: { queuedApp: numb
     if (j.scopeCeiling) await c.query(`UPDATE org_app_job SET scope_ceiling=$2::text[] WHERE id=$1`, [row.id, j.scopeCeiling]);
     //  #1639 사람이 보지 않는 자리 표시도 그 작업만 따로 적는다(같은 까닭 · 롤 창에 이 표시를 달 작업은 실패한다 — 닫힌 쪽).
     if (j.unattended === true) await c.query(`UPDATE org_app_job SET unattended=true WHERE id=$1`, [row.id]);
+    //  #1782 사람이 시키지 않은 작업 표시도 같은 규칙(롤 창에 이 표시를 달 작업은 실패한다 — 닫힌 쪽).
+    if (j.automation === true) await c.query(`UPDATE org_app_job SET automation=true WHERE id=$1`, [row.id]);
     return { row };
   });
 }
@@ -98,11 +102,30 @@ export async function appJobUnattended(id: number): Promise<boolean> {
   }
 }
 
+/** #1782 이 작업이 사람이 시키지 않은 작업(슬랙 다리의 run_as)인가 — 칸이 아직 없으면(42703 · 롤 창) 아니다(같은 까닭 — 그 표시를 단 행이 없다). */
+export async function appJobAutomation(id: number): Promise<boolean> {
+  try {
+    const r = await itemsPool.query(`SELECT automation FROM org_app_job WHERE id=$1`, [id]);
+    return (r.rows[0] as { automation?: unknown } | undefined)?.automation === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;
+    throw e;
+  }
+}
+
 /** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(없으면 null). 칸 묶음(LIGHT) 밖이라 따로 읽는다 — 그 작업의 돌기 신원을 풀 때만. */
 export async function jobScopeCeiling(id: number): Promise<string[] | null> {
   const r = await itemsPool.query(`SELECT scope_ceiling FROM org_app_job WHERE id=$1`, [id]);
   const v = (r.rows[0] as { scope_ceiling?: unknown } | undefined)?.scope_ceiling;
   return Array.isArray(v) ? v.map(String) : null;
+}
+
+/** 같은 이름 · 출처의 열린(줄 · 보냄 · 도는 중) 작업 하나의 번호 — 없으면 null(앱 v2 #121 정기 작업이 앞 실행이 아직 열려 있는지 본다). */
+export async function openAppJobWithLabel(appId: string, label: string, source: string): Promise<number | null> {
+  const r = await itemsPool.query(
+    `SELECT id FROM org_app_job WHERE app_id = $1 AND label = $2 AND source = $3 AND status IN ('queued', 'dispatched', 'running') ORDER BY id DESC LIMIT 1`,
+    [appId, label, source]);
+  return r.rows[0] ? Number(r.rows[0].id) : null;
 }
 
 /** 목록 — 결과 본문은 싣지 않는다(작업 하나에 64KB 까지라 목록이 무거워진다 — app_job_get 으로 본다). */

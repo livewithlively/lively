@@ -1,4 +1,4 @@
-// 자동 생성 프로젝트 정리(project_gc) — 실제 Postgres 필요(기본 유닛 체인 밖, CI pg-test 잡 · .github/workflows/test.yml 에 등록).
+// 자동 생성 프로젝트 정리(project_gc) — 실제 Postgres 필요(기본 유닛 체인 밖, CI pg-test 잡 · .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/scheduler/actions/project-gc.pg-test.mjs
 //
 // 왜 이 계층인가: 무엇이 «기록»이고 «마지막 손길»인지가 전부 후보 SQL(가족 범위 2단계 · 여러 출처의 최댓값) 안에 있다.

@@ -118,7 +118,7 @@ test("★★ 리브 좌표는 워크스페이스 층이다 — 다른 워크스�
 //   레일 [리브] · [연결할게요] · [연결 도와줘] · 리브 칸이 같은 문을 탄다(행위 시험은 capabilities/delivery/liv-open.test).
 test("★★ 창구 — 리브 세션 찾기(GET)·리브에게 일 맡기기(POST) 두 문과 물음 접기뿐, 전부 화면 전용(mcp:false)", () => {
   const byName = new Map(livChatCapabilities.map((c) => [c.name, c]));
-  assert.deepEqual([...byName.keys()].sort(), ["me_liv_ask_dismiss", "me_liv_open", "me_liv_session"],
+  assert.deepEqual([...byName.keys()].sort(), ["me_liv_open", "me_liv_session"],   // #5713 — 물음 접기(me_liv_ask_dismiss)는 세션 요청(session_ask_dismiss)으로 옮겼다
     "★ 헤드리스 턴 문(me_liv_turn·log·stop·chat·chat-reset)·옛 첫 말 문(me_liv_session_open)이 남아 있거나 문이 빠졌다");
   const rest = (n: string): string[] => (byName.get(n)?.expose.rest || []).flatMap((r) => r.paths.map((p) => `${r.method} ${p}`));
   assert.deepEqual(rest("me_liv_session"), ["GET /api/ui/me/liv/session"]);
@@ -202,22 +202,17 @@ test("★★ 화면 — #/liv 는 리브 세션이 있으면 그 세션 화면�
   assert.match(WEB_MAIN, /const board = params\.get\('board'\) === '1';/, "로컬 AI 링크(?board=1)가 세션으로 넘겨진다");
   //  세션 화면 — 리브 세션은 물음 자리 · 곁칸 맨 앞 «리브». 보기는 일반 세션(#4940 상민님 2026-10-23 «그냥 터미널로 열면 되잖아»
   //   — 종전 «대화 보기가 본자리»(원준 2026-09-14)를 걷었다. 대화 고정이면 하네스가 첫 실행 화면에서 기다릴 때 «전달하는 중…» 에 갇힌다).
-  assert.match(WEB_MAIN, /\.\.\.\(isLiv\(sid\) \? \{ livAsks: true \} : \{\}\),/, "★ 리브 세션이 물음 자리로 안 열린다");
+  //  #5713 — 물음 자리(대화창 입력칸 위 · livAsks)는 걷었다. AI 가 건 요청은 어느 세션이든 곁칸 «요청» 칸에 뜬다(v2/session-ask-pane.ts).
+  assert.doesNotMatch(WEB_MAIN + WEB_CHAT, /livAsks|mountLivAskDock|placeLivAsk/, "★ 요청 카드가 아직 리브 세션 대화창에 묶여 있다 — 리브가 아닌 세션의 요청이 뜰 자리가 없다");
   assert.doesNotMatch(WEB_MAIN, /chatHome: true/, "★ 셸이 리브 세션(또는 다른 세션)을 대화 고정으로 연다 — 하네스가 떠도 터미널로 안 넘어간다");
   assert.match(WEB_MAIN, /livSession: projectId === 0 && isLiv\(sessionId\),/, "곁칸 «리브» 칸이 리브 세션에 안 선다");
   assert.match(WEB_MAIN, /return isLivSessionId\(\[sid, s\?\.id, s\?\.logId, s\?\.raw\?\.claudeSessionId\], knownLivSessionId\(\) \|\| livId\);/, "리브 세션을 좌표로 안 알아본다");
   assert.match(WEB_CHAT, /chatHome\?: boolean;/, "세션 대화창에 대화 보기 본자리 옵션이 없다");
-  assert.match(WEB_CHAT, /livAsks\?: boolean;/, "세션 대화창에 리브 물음 자리 옵션이 없다");
   assert.match(WEB_CHAT, /const chatHome = \(\): boolean => livKickoff\(\) \|\| !!opts\.chatHome/, "★ 옵션이 보기 판정에 안 들어간다(리브 세션에 터미널이 뜬다)");
   assert.doesNotMatch(WEB_CHAT, /LIV_CHAT_LABEL|livChat\(\)/, "★ 세션 화면이 아직 이름 글자로 리브 세션을 가른다 — 이름을 바꾸면 리브 세션이 터미널로 열린다");
-  assert.match(WEB_CHAT, /const livDock = opts\.livAsks \? mountLivAskDock\(liveDock, \{/, "★ 리브 물음이 입력칸 바로 위(liveDock)에 안 뜬다");
-  //  #4940 — 터미널을 볼 때도 물음이 보인다: 보기가 바뀔 때마다 자리를 옮긴다(대화 = 입력칸 위 · 터미널 = 머리줄 아래). 런타임은 term-warm-runtime W33.
-  assert.match(WEB_CHAT, /livAskEl = livDock \? livDock\.el : null;/, "★ 리브 물음 자리를 보기에 맞춰 옮길 손잡이가 없다");
-  assert.match(WEB_CHAT, /function setMode\(m: 'term' \| 'chat'\): void \{[\s\S]{0,2400}?\n    placeLivAsk\(\);\n/, "★ 보기가 바뀌어도 리브 물음 자리를 안 옮긴다");
-  //  카드에 치는 중(비밀 값)이면 터미널로 넘겨도 초점을 빼앗지 않는다 — 넘기면 이어 치는 값이 하네스 입력칸으로 간다(격리 리뷰 실측). 런타임은 W34.
-  assert.match(WEB_CHAT, /if \(a && livAskEl\?\.contains\(a\)\) return;\n    if \(!a \|\| a === document\.body \|\| wrap\.contains\(a\)\) termSend\('focus'\);/, "★ 리브 물음 카드에 치는 중인데 터미널로 초점을 옮긴다");
-  assert.match(WEB_CHAT, /if \(mode === 'term'\) \{ if \(a\.parentElement !== wrap\) wrap\.insertBefore\(a, chatHost\); \}/, "★ 터미널을 볼 때 물음이 숨은 대화창 안에 남는다");
-  assert.match(WEB_CHAT, /livDock\?\.destroy\(\);/, "세션 화면을 걷을 때 물음 자리를 안 걷는다(되묻기가 남는다)");
+  //  곁칸의 요청 카드(비밀 값)에 치는 중이면 터미널로 넘겨도 초점을 빼앗지 않는다 — 카드는 세션 화면(wrap) 밖이라 아래 조건이 넘기지 않는다.
+  //   넘기면 이어 치는 값이 하네스 입력칸으로 간다(#4940 격리 리뷰 실측). 런타임은 term-warm-runtime W34.
+  assert.match(WEB_CHAT, /if \(!a \|\| a === document\.body \|\| wrap\.contains\(a\)\) termSend\('focus'\);/, "★ 초점이 이 화면 밖(곁칸 요청 카드)에 있어도 터미널로 초점을 옮긴다");
 });
 
 test("★★ 리브 화면(단독)엔 대화 칸이 없고, 떠나면 되묻기가 멈춘다 · 조회는 읽기만 한다", () => {

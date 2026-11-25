@@ -11,13 +11,14 @@
 //  기본값은 전부 **켜짐** — 지금 동작 그대로다(끄기 전까지 아무것도 달라지지 않는다).
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
+import { ensureInviteOnlyColumn, inviteOnlySql } from "./project-invite-column.js";   // #5598 롤 창
 
 /** 공개범위를 걸 수 있는 맥락 유형. 새 축이 생기면 여기에 한 줄 + 강제 지점에서 axisOn 확인. */
 export const VIS_AXES = ["project", "knowledge", "source", "shared_folder", "session_cap"] as const;
 export type VisAxis = (typeof VIS_AXES)[number];
 
 export const AXIS_LABEL: Record<VisAxis, string> = {
-  project: "프로젝트(리스트·스페이스)",
+  project: "프로젝트(리스트·스페이스·초대제)",
   knowledge: "지식",
   source: "자료",
   shared_folder: "공유폴더",
@@ -82,15 +83,19 @@ export interface AxisLockSummary {
  */
 export async function axisLockSummary(): Promise<AxisLockSummary[]> {
   const on = await visAxes();
+  await ensureInviteOnlyColumn();   // 아래 프로젝트 셈이 칸을 읽는다(롤 창)
   const count = async (sql: string): Promise<{ n: number; names: string[] }> => {
     try {
       const r = await itemsPool.query(sql);
       return { n: r.rows.length, names: r.rows.slice(0, 5).map((x: any) => String(x.name ?? x.id ?? "")) };
     } catch { return { n: 0, names: [] }; }
   };
+  // #5598 — 비공개 프로젝트(초대제 · 초안)도 이 축이 가린다(visibility.ts projectVisFor — 축이 꺼지면 거르지 않는다).
+  //  그래서 끄면 그것들도 전원에게 열린다. 지운 것은 세지 않는다(휴지통은 축과 상관없이 만든 사람 것이다).
   const proj = await count(
     `SELECT name FROM project_list WHERE visibility='members'
-     UNION ALL SELECT name FROM project_folder WHERE visibility='members'`);
+     UNION ALL SELECT name FROM project_folder WHERE visibility='members'
+     UNION ALL SELECT pp.name FROM project pp WHERE pp.level='project' AND (pp.draft OR ${inviteOnlySql("pp")}) AND pp.trashed_at IS NULL`);
   const know = await count(`SELECT name FROM knowledge WHERE visibility='members'`);
   const src = await count(`SELECT id::text AS name FROM source WHERE visibility='members'`);
   const sf = await count(`SELECT path AS name FROM shared_folder_acl WHERE visibility='members'`);

@@ -41,6 +41,7 @@ If **organization-specific skills** are registered on the gateway, they're added
 
 The organization admin picks «work folders only (default · allow list) | anywhere (exclude list)»; members override only the lists, per computer (web **My skills · hooks ▸ per-computer connection**). With «anywhere», only sessions started inside an excluded folder are off. With «work folders only», a session started outside a work folder gets no company context from the hooks, and no records, transcript upload or first-prompt project; a one-line notice says so at session start.
 Work folders are Lively project folders (`.lively/project.json`) and folders registered on the web under **My skills · hooks ▸ per-computer connection**. The plugin ships no `/lively-connect` command and no `lively` CLI, so register on the web.
+A session where Lively is on also says so in one line at start, and points at the same web screen to remove or exclude the folder.
 ⚠ The plugin's MCP tools are not gated — the MCP headers helper does not learn the session folder (measured on Claude Code 2.1.310). The kit install gates the tools too.
 
 ## ⚠ Don't use it together with the kit

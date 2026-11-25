@@ -138,8 +138,11 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "③-m 액자를 걷은 뒤 대화 화면으로 내려앉는다");
   ok(/const dead = \(\): boolean => goneByFrame \|\|/.test(chat),
     "③-n 프레임이 말한 '박스 없음'이 목록의 라이브 판정을 이긴다 — 그래야 입력창이 '보내면 이어서 열립니다'로 동작한다");
-  ok(/if \(goneByFrame && t\.live && t\.alive && !t\.raw\?\.restorable\) goneByFrame = false;/.test(chat),
-    "③-o ★ 얼리지 않는다 — 행이 다시 '살아 있다'고 오면 걸쇠가 풀린다(2026-09-08 의 영구 갇힘 재발 금지)");
+  //  #5620 — 단 **액자의 말보다 먼저 만들어진 낡은 행**으로는 풀지 않는다(멈춘 뒤 약 15초 동안 목록은 그 세션을 «살아 있다» 로 낸다 —
+  //   그 행이 걸쇠를 풀면 «아래에 말을 걸면 이어서 열려요» 를 보고 친 첫 말이 멈춘 세션의 큐에 묻혔다). 그래도 얼지는 않는다 —
+  //   목록이 «멈춤» 을 한 번 실어 온 뒤이거나 지연창(LIST_LAG_MS)이 지나면 반드시 풀린다(경계는 stop-latch.test.mjs L4·L5).
+  ok(/if \(goneByFrame\) \{\s*const l = latchAfterRow\(\{ gone: true, at: goneAt, listSaw: listSawGone \}, !!\(t\.live && t\.alive && !t\.raw\?\.restorable\), Date\.now\(\)\);\s*goneByFrame = l\.gone;/.test(chat),
+    "③-o ★ 얼리지 않는다 — 행이 다시 '살아 있다'고 오면 걸쇠가 풀린다(2026-09-08 의 영구 갇힘 재발 금지 · #5620 낡은 행은 지연창 안에서만 거른다)");
   ok(/if \(m === 'term'\) goneByFrame = false;/.test(chat),
     "③-p 사람이 터미널을 고르면 그 자리에서 걸쇠가 풀린다(수기 전환의 문은 늘 열려 있다)");
   ok(/termGoneN < 2 && mode === 'chat'/.test(chat),

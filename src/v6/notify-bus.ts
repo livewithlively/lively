@@ -119,8 +119,28 @@ export interface NotifyBrowserEvent {
   ws?: NotifyWorkspace;
 }
 
+/**
+ * 세션 요청 사건(#5713) — 세션의 AI 가 사람에게 요청을 걸었다(open) · 그 요청이 끝났다(done · dismissed · canceled).
+ *  세션 화면 곁칸의 «요청» 칸과 요청 주소 화면(#/ask)이 이걸 보고 목록을 다시 읽는다. 요청을 건 **그 사람에게만** 민다
+ *  (요청은 사람 것이다 — src/asks/store.ts 머리말). 내용(무엇을 받으려 하나)은 싣지 않는다 — «다시 읽어라» 뿐이다.
+ *  배너 사건이 아니다 — 데스크톱 앱은 `type !== "session"` 을 거른다.
+ */
+export interface NotifyAskEvent {
+  type: "ask";
+  kind: "open" | "done" | "dismissed" | "canceled";
+  /** 요청 id(주소 #/ask/<id> 의 그 값). */
+  id: string;
+  /** 어느 세션에서 건 요청인가 — 세션을 모르는 자리에서 걸었으면 null. */
+  session: string | null;
+  /** 요청의 종류(secret · choice · upload …). */
+  ask_kind: string;
+  key: string;
+  ts: number;
+  ws?: NotifyWorkspace;
+}
+
 /** 버스가 싣는 사건 — 종류(type)로 가른다. SSE 이벤트 이름도 이 값이다(notify-routes.ts). */
-export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent | NotifyBrowserEvent;
+export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent | NotifyBrowserEvent | NotifyAskEvent;
 
 /**
  * 구독 하나가 받는 자리 — «이 워크스페이스에서 난, 이 조건에 맞는 사건».

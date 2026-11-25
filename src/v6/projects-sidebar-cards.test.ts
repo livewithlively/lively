@@ -302,7 +302,8 @@ test("A7 배선(셸): 「전체」 줄이 고정 줄 맨 앞에 서고, #/projec
   assert.match(body, /href: '#\/projects2\/all'/);
   //  #3870 — 수와 즐겨찾기 줄은 목록의 정본을 받은 뒤(ready)에만 선다(lib/side-boot). 「전체」 줄 자신은 받기 전에도 맨 앞에 선다.
   assert.match(body, /icon\('proj', 'v2-ptl-ic'\), el\('span', \{ class: 'n', text: '전체' \}\), ready \? cnt\(plan\.allN\) : null\)/);
-  assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.\(ready \? plan\.favs\.map\(favRow\) : \[\]\)\];/);
+  //  #5630 — 「전체」 바로 아래 «초대받은 · 내가 만든» 두 줄(relRows)이 서고 즐겨찾기가 그 뒤다.
+  assert.match(body, /const fixed: HTMLElement\[\] = \[allRow, \.\.\.relRows, \.\.\.\(ready \? plan\.favs\.map\(favRow\) : \[\]\)\];/);
   assert.match(body, /if \(!plan\.groups\.length\) return \(plan\.favs\.length \|\| plan\.noneN \|\| plan\.draftN\) \? \[\] : \[el\('p', \{ class: 'v2-empty'/);
 });
 
@@ -472,12 +473,14 @@ test("D8 배선(목록): 맨 아래 「초안」 묶음이 없다 · 표 줄 · 
   assert.ok(!/pjvRenderStatusGroupsInner|hasDrafts|pjv-tgroup-draft|pjv-draft-pill|'__draft__'/.test(ROWS), "초안만 모으는 묶음 길이 없다");
   assert.match(ROWS, /const pjvIsDraft = isDraftProj;/);
   assert.match(ROWS, /const draftTag = pjvIsDraft\(p\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  //  #5630 — 이름 뒤 «누가 보나» 알약은 걷었다(project-access-ui.test.ts W1). 이름 뒤에는 초안 뱃지만 선다.
   assert.match(ROWS, /caret, lead, title, draftTag,/);
   const BOARD = readFileSync("web/projects/board.ts", "utf8");
-  assert.match(BOARD, /if \(isDraftProj\(p\)\) card\.append\(el\('span', \{ class: 'pj-draft-tag pjv-kb-draft'/);
+  assert.match(BOARD, /const kbDraft = isDraftProj\(p\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  assert.match(BOARD, /card\.append\(el\('div', \{ class: 'pjv-kb-draft pjv-kb-marks' \}, kbDraft\)\)/, "칸반 카드 — 이름 위 한 줄에 초안");
   const LIST = readFileSync("web/projects/session-list.ts", "utf8");
   assert.ok(!/tail:/.test(LIST) && !/draftOpen/.test(LIST), "「리스트」 뷰에도 맨 아래 묶음이 없다");
-  assert.match(LIST, /rowTag: \(it\) => !draftScope && isDraftProj\(it\.proj\) \? el\('span', \{ class: 'pj-draft-tag'/);
+  assert.match(LIST, /rowTag: \(it\) => \(!draftScope && isDraftProj\(it\.proj\) \? el\('span', \{ class: 'pj-draft-tag'/);
   const TABLE = readFileSync("web/v2/sess-table.ts", "utf8");
   assert.ok(!/tail\?:/.test(TABLE), "표 부품에 따로 세우는 묶음(tail) 자리가 없다");
   //  잣대가 화면마다 따로 있지 않다

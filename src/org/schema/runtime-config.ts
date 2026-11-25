@@ -165,6 +165,9 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS knowledge_chunk_search BOOLEAN NOT NULL DEFAULT true;
     -- #1291 맥락 유형별 공개범위 켜기/끄기. 키가 없으면 '켜짐'(현행 동작) — 새 축이 추가돼도 자동으로 켜진 채 시작한다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS visibility_axes JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- #5598 새 프로젝트 공개 방식 — 'invite'(초대제: 만든 사람과 초대한 사람만) | 'open'(전체 공개: 초안만 닫혔다가 풀리면 전원).
+    --  NULL = 아직 안 고름 = 초대제(v6/project-access.ts PROJECT_ACCESS_DEFAULT). 새 프로젝트의 기본값일 뿐, 있는 프로젝트는 안 바뀐다.
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS project_access TEXT;
   `);
 
   // ── org_runtime_config 확장(#1454 S2~S5): 매니지드 표면 노브 4종 — 전부 기본값이 '기존 동작 완전 불변'이라

@@ -10,11 +10,12 @@
 | ② itest | `scripts/*.itest.mjs` — integration tests that need a real DB (schema init, session-log CAS, etc.) | `npm run test:itest` · single file `node --env-file-if-exists=.env scripts/<x>.itest.mjs` | `ITEMS_DATABASE_URL` (.env) |
 | ③ integration/ | [scripts/integration/](./integration/) — manual e2e against a real PG and a real gateway (each file's header comment says how to run it) | Manual, per file | Varies by file (PG, a running gateway, secret keys) |
 | ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — e2e for the visibility axes and UI wiring (has its own README) | See `vis-e2e/README.md` | A running gateway |
-| ⑤ pg-test | `src/**/*.pg-test.mjs` — real-Postgres integration (excluded from the unit runner). Because the runner doesn't collect them, **each file only runs once it is registered as its own step in test.yml** (a missing registration is caught by `scripts/pg-test-registered.test.mjs`) | CI (test.yml) runs each registered file against a pgvector service · locally `ITEMS_DATABASE_URL=… node <file>` | A real PG (pgvector) |
+| ⑤ pg-test | `src/**/*.pg-test.mjs` — real-Postgres integration (excluded from the unit collection). The runner **discovers them with `--pg`** — adding one means just creating the file (the per-file steps in test.yml are gone; `scripts/ci-test-jobs.test.mjs` pins that the `pg` job calls the runner) | CI (test.yml `pg` job) runs `node scripts/run-tests.mjs --pg --shard=i/N` against a pgvector service, one fresh database per shard · locally `ITEMS_DATABASE_URL=… node scripts/run-tests.mjs --pg` or a single file with `ITEMS_DATABASE_URL=… node <file>` | A real, disposable PG (pgvector) with the schema initialized |
 | ⑥ Hook bash | [kit/hooks/test-hooks.sh](../kit/hooks/test-hooks.sh) — runner for the hooks' shell paths | `kit/hooks/test-hooks.sh` | None |
 
 - ① is the default safety net — adding a test means **just creating the file** (do not register it in package.json; the runner discovers it).
 - `*.itest.mjs` and `*.pg-test.mjs` are excluded from the runner's default collection (see the runner's header comment).
+- **CI splits one suite across several jobs** (#5603) — `unit` × 6, `pg` × 4 and `test-windows` × 3 each run one shard (`--shard=i/N`), and the `test` job (the required check) passes only when every unit and pg shard passed. One job used to run everything in sequence: 1,036 s (build 56 s · 1,211 unit files 511 s · 106 PG steps 429 s). See the header of `.github/workflows/test.yml`.
 
 ### Runner execution policy (#1431 — run to completion · parallel)
 The old runner was **serial and stopped at the first failure**, so one failure hid the 100-odd files after it, and it used one core out of ten. Now:
@@ -36,6 +37,9 @@ The old runner was **serial and stopped at the first failure**, so one failure h
 | `--list` / `--itest` / `--build` | Only list what was discovered / tier ② (real DB — always serial) / have the runner run the build too |
 | `--scope=kit,desktop` | Collect only `*.test.mjs` in the given areas (skips the src→dist mapping). **The Windows CI job uses this to run the common runner** — that job does no `npm ci` or build, so collecting dist would make everything "missing output" |
 | `--budget=N` | Per-file limit for unit tests (seconds). Exceeding it **fails even if the file passed**. Off by default — the CI Linux job turns it on with `--budget=45` |
+| `--shard=i/N` | Run only shard `i` of `N`. Calling it `N` times on the same checkout runs **every file exactly once** (pinned by `test-runner-schedule.test.mjs` S7·S8). Files are balanced with `scripts/test-weights.json`; a stale or missing table only skews the balance, it never drops a file |
+| `--pg` | Tier ⑤: collect `src/**/*.pg-test.mjs` and run them serially against `ITEMS_DATABASE_URL` (exits 2 without it) |
+| `--write-weights` | After a full, all-green run, rewrite `scripts/test-weights.json` with this tier's per-file seconds (files of 2 s or more only). Refused with `--shard` or a filter |
 
 ### Per-file time budget (#2457 — 2026-08-31)
 

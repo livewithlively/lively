@@ -8,12 +8,15 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync, existsSync as existsSyncReal, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, bootstrapManualHint, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
-import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
+import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL, INTERNAL_KINDS, harnessList, workRootPath } from "./ipc-contract.mjs";
+import { s256, deviceLabel, deviceStart, devicePoll, normGateway, fetchProfile } from "./device-login.mjs";
+import { detectHarnesses, HARNESS_ORDER, HARNESS_BIN, HARNESS_LABEL } from "./harness-detect.mjs";
+import { createHash, randomBytes } from "node:crypto";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -21,11 +24,12 @@ import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_IN
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
+import { hideWindow, LEAVE_FULLSCREEN_TIMEOUT_MS } from "./window-hide.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, enterUrlWith, tenantUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, bannerHome, shouldFollowGateway, enterUrlWith, tenantUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
 import { createHashNav } from "./web-shell.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
@@ -1170,7 +1174,7 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(js, /nodeSleepNote/, '렌더러가 잠자기 원인 문구를 띄우지 않는다(#1849)');
   assert.match(main, /nodeSleepNote:/, 'main 이 status 의 sleep.note 를 앱 상태로 옮기지 않는다(#1849)');
   assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
-  assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
+  assert.match(js, /zombie \? "다시 켜기"/, '좀비면 버튼이 다시 켜기여야 한다');
 });
 
 t('U14 업데이트 적용 재시작 후 창 복원 — 창에서 눌렀을 때만 마커, 시작 때 마커 소비 후 창 (#1541 실측: 트레이에만 떠 손으로 열었다)', () => {
@@ -1216,7 +1220,7 @@ t('D6b ★ 새 실행이 시작되면 답한 질문 기억을 비운다 — 안 
   //  카드가 안 떠 CLI 가 답을 기다리며 멈췄다. 그때 CLI 는 실행마다 confirm-1 부터 붙였고, 렌더러는 답한 id 를
   //  창이 살아 있는 내내 기억했다. 그 기억은 한 실행 안의 경쟁(D6)만 막으면 된다.
   const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
-  const startSeg = main.slice(main.indexOf('async function start(kind, opts)'), main.indexOf('await runCli({', main.indexOf('async function start(kind, opts)')));
+  const startSeg = main.slice(main.indexOf('async function start(kind, opts'), main.indexOf('await runCli({', main.indexOf('async function start(kind, opts')));
   assert.ok(/progress = null;\s*send\(IPC\.PROGRESS, progress\)/.test(startSeg), '메인이 새 실행의 시작(빈 진행 상태)을 렌더러에 안 알린다');
   const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
   const rp = js.slice(js.indexOf('function renderProgress(p)'), js.indexOf('function renderPrompt(p)'));
@@ -1398,23 +1402,23 @@ t("W1 저장값 없음 → 기본 크기 · 좌표는 **주지 않는다**(0,0 �
 });
 
 t("W2 저장값이 그 디스플레이 안 → 그대로 복원", () => {
-  assert.deepEqual(normalizeBounds({ x: 100, y: 80, width: 800, height: 600 }, [D1]),
-    { width: 800, height: 600, x: 100, y: 80 });
+  assert.deepEqual(normalizeBounds({ x: 100, y: 80, width: 900, height: 640 }, [D1]),
+    { width: 900, height: 640, x: 100, y: 80 });
 });
 
 t("W3 ★ 화면 밖 좌표(뺀 모니터 자리) → 크기만 살리고 위치는 버린다", () => {
-  const b = normalizeBounds({ x: 2000, y: 200, width: 800, height: 600 }, [D1]);
-  assert.deepEqual(b, { width: 800, height: 600 });
+  const b = normalizeBounds({ x: 2000, y: 200, width: 900, height: 640 }, [D1]);
+  assert.deepEqual(b, { width: 900, height: 640 });
 });
 
 t("W4 경계에 걸쳐 있어도 충분히 보이면 유지 — 완전 포함을 요구하면 멀쩡한 배치를 매번 되돌린다", () => {
-  const b = normalizeBounds({ x: 1440 - 300, y: 0, width: 800, height: 600 }, [D1]);
+  const b = normalizeBounds({ x: 1440 - 300, y: 0, width: 900, height: 640 }, [D1]);
   assert.equal(b.x, 1140);
 });
 
 t("W5 살짝만 걸치면(잡을 수 없다) 버린다", () => {
   const x = 1440 - (MIN_VISIBLE.width - 10);
-  assert.ok(!("x" in normalizeBounds({ x, y: 0, width: 800, height: 600 }, [D1])), "잡을 수 없는 배치를 유지했다");
+  assert.ok(!("x" in normalizeBounds({ x, y: 0, width: 900, height: 640 }, [D1])), "잡을 수 없는 배치를 유지했다");
 });
 
 t("W6 최소 크기 밑으로는 못 내려간다", () => {
@@ -1423,13 +1427,13 @@ t("W6 최소 크기 밑으로는 못 내려간다", () => {
 });
 
 t("W7 디스플레이보다 큰 창은 작업영역으로 제한", () => {
-  const small = { x: 0, y: 0, width: 800, height: 600 };
+  const small = { x: 0, y: 0, width: 1024, height: 700 };
   const b = normalizeBounds({ x: 0, y: 0, width: 5000, height: 4000 }, [small]);
-  assert.equal(b.width, 800); assert.equal(b.height, 600);
+  assert.equal(b.width, 1024); assert.equal(b.height, 700);
 });
 
 t("W8 디스플레이를 모르면(빈 목록) 좌표를 믿지 않는다", () => {
-  assert.deepEqual(normalizeBounds({ x: 100, y: 100, width: 800, height: 600 }, []), { width: 800, height: 600 });
+  assert.deepEqual(normalizeBounds({ x: 100, y: 100, width: 900, height: 640 }, []), { width: 900, height: 640 });
 });
 
 t("W9 값이 망가져도(NaN·문자열·빈 객체) throw 없이 기본으로 접힌다", () => {
@@ -2098,7 +2102,9 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(appReady({ ...okState, cliOutdated: true }), false, "구 CLI 인데 준비됐다고 한다");
     assert.equal(appReady({ ...okState, cliBroken: "spawn EINVAL" }), false, "못 띄우는 CLI 인데 준비됐다고 한다");
     assert.equal(appReady({ ...okState, tokenRejected: true }), false, "게이트웨이가 토큰을 거부했는데 준비됐다고 한다");
-    assert.equal(appReady({ accountLoggedIn: true }), true, "계정 로그인만으로 앱의 웹 화면을 열 수 있어야 한다");
+    // #5650 — 계정 쿠키만 있고 이 PC 에 아무것도 안 깔렸으면 준비가 아니다(마법사가 떠야 설치할 길이 있다).
+    assert.equal(appReady({ accountLoggedIn: true }), false, "계정 로그인만으로 준비됐다고 한다 — 이 PC 에 CLI·키트가 없는데 마법사가 안 뜬다");
+    assert.equal(appReady({ ...okState, accountLoggedIn: true }), true, "로컬이 갖춰졌는데 계정 로그인 때문에 준비가 아니라고 한다");
     assert.equal(appReady(null), false); assert.equal(appReady({}), false);
     // ★ 세 곳(메인·트레이·렌더러)이 각자 식을 적지 않는다 — 트레이는 appReady 를 import 하고, 렌더러는 state.ready 를 받는다
     const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
@@ -2296,7 +2302,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(w, /rejectedToken = tok;/, "거부된 토큰을 기억하지 않는다");
     assert.ok(w.indexOf("res.status !== 401") < w.indexOf("rejectedToken = tok;"), "재검증 확인보다 먼저 거부를 기록한다");
     // 회복: 재로그인(setup·login) 성공 시 해제 — CLI 는 토큰이 먹히면 재발급 없이 끝나(파일 불변) 파일 비교만으론 안 풀린다
-    assert.match(main, /if \(r\.ok && \(kind === "setup" \|\| kind === "login"\)\) rejectedToken = null;/, "재로그인 성공이 오판 플래그를 안 푼다(만료 화면 무한 루프)");
+    assert.match(main, /if \(r\.ok && \(kind === "setup" \|\| kind === "login"( \|\| kind === "login-token")?\)\) rejectedToken = null;/, "재로그인 성공이 오판 플래그를 안 푼다(만료 화면 무한 루프)");
     assert.match(main, /next\.tokenRejected = !!\(rejectedToken && readTrim\(join\(LIVELY_DIR, "token"\)\) === rejectedToken\)/, "파일 토큰과 비교하지 않는다(재로그인해도 안 풀린다)");
     // 트레이·마법사 문구
     assert.match(statusLabel({ ...okState, tokenRejected: true }), /다시 로그인/);
@@ -2341,14 +2347,14 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   t("H8 웹 창 배선 — 준비됐을 때만·/ui/·전용 preload·격리·주소/토큰 바뀌면 다시 싣기·실패는 마법사 카드로·닫아도 트레이", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const a = main.slice(main.indexOf("function showApp"), main.indexOf("function loadAppBounds"));
-    assert.match(a, /if \(!state\.ready && selectedGatewayUrl !== cloudUrl\(\)\) return \{ ok: false/, "계정 로그인 화면 이외의 미준비 웹 창을 연다");
+    assert.match(a, /if \(!state\.ready && !state\.webOnly && selectedGatewayUrl !== cloudUrl\(\)\) return \{ ok: false/, "계정 로그인 화면·웹 화면만 쓰기(#5650 건너뛰기) 이외의 미준비 웹 창을 연다");
     assert.match(a, /webUiUrl\(displayGateway\)/, "선택한 워크스페이스 주소를 webUiUrl 로 안 만든다");
     assert.match(a, /preload: WEB_PRELOAD/, "웹 창이 마법사 preload 를 쓴다(원격 페이지에 CLI 통로가 열린다)");
     assert.match(a, /contextIsolation: true, nodeIntegration: false, sandbox: true/, "웹 창 격리가 빠졌다");
     assert.match(a, /if \(appLoaded\.url !== url \|\| appLoaded\.token !== token\)/, "재로그인·다른 게이트웨이에서 다시 싣지 않는다");
     assert.match(a, /appWin\.webContents\.on\("did-fail-load"/, "못 실었을 때를 다루지 않는다(빈 창이 남는다)");
     assert.match(a, /code === -3\) return/, "ERR_ABORTED 를 실패로 오인한다");
-    assert.match(a, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); appWin\.hide\(\); \} \}\)/, "웹 창을 닫으면 앱이 죽거나 자리를 잃는다");
+    assert.match(a, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); hideWindow\(appWin\); \} \}\)/, "웹 창을 닫으면 앱이 죽거나 자리를 잃는다(숨기기는 hideWindow — #5791 전체화면)");
     assert.match(a, /watchTokenRejection\(state\.gatewayUrl\)/, "401 감시를 안 건다");
     assert.match(main, /const WEB_PRELOAD = join\(HERE, "\.\.", "preload", "web\.cjs"\)/);
     // 마법사 창과 자리를 따로 기억하고, 크기 기본이 웹 셸에 맞다
@@ -2360,7 +2366,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.deepEqual(normalizeBounds(null, []), { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height }, "옵션 없으면 마법사 기본 그대로");
     // 준비 상태 전이 → 창 전환(syncWindows): 무너지면 웹 창 내리고 마법사, 마법사에서 갖춰지면 웹 창
     const sy = main.slice(main.indexOf("function syncWindows"), main.indexOf("function syncWindows") + 900);
-    assert.match(sy, /if \(wasReady && !ready\)/); assert.match(sy, /appWin\.hide\(\); showWindow\(\);/);
+    assert.match(sy, /if \(wasReady && !ready\)/); assert.match(sy, /hideWindow\(appWin\); showWindow\(\);/);
     assert.match(sy, /if \(!wasReady && ready && win/); assert.match(sy, /showApp\(\)/);
     assert.match(main, /syncWindows\(wasReady\)/, "refreshState 가 전이를 안 본다");
     // 업데이트 자동 적용의 '보고 있나' 는 두 창 다
@@ -3014,9 +3020,9 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(/new Notification\(\{ title, body, \.\.\.\(subtitle \? \{ subtitle \} : \{\}\) \}\)/.test(banner), "부제(워크스페이스 아래 줄)를 버린다");
     assert.ok(/void openFromBanner\(event\)/.test(banner), "클릭이 새 경로 판정을 안 탄다");
     const open = main.slice(main.indexOf("async function openFromBanner("), main.indexOf("function cpOrigins("));
-    assert.ok(/clickTarget\(event, \{ gatewayUrl: state\.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins\(\) \}\)/.test(open), "클릭 판정에 창·매인 곳·계정 서버를 안 넘긴다");
+    assert.ok(/clickTarget\(event, \{ gatewayUrl: home, windowUrl, windowWs, cpOrigins: cpOrigins\(\) \}\)/.test(open), "클릭 판정에 창·그곳(#5701 받아 온 곳)·계정 서버를 안 넘긴다");
     assert.ok(/t\.how === "external"\) \{ await shell\.openExternal\(t\.url\)/.test(open), "다른 워크스페이스를 브라우저로 안 연다");
-    assert.ok(/t\.how === "load"\) \{ loadInApp\(t\.url\)/.test(open), "매인 곳을 다시 싣지 않는다");
+    assert.ok(/t\.how === "load"\) \{ await loadGatewayInApp\(home, t\.url\)/.test(open), "매인 곳을 다시 싣지 않는다");
     assert.ok(/READ_WEB_WORKSPACE_JS/.test(open) && /ws\.via === "header"/.test(open), "셀프호스트 다중에서 창의 선택을 안 묻는다");
     const load = main.slice(main.indexOf("function loadInApp("), main.indexOf("function resetNotifyBinding("));
     assert.ok(load.indexOf("hashNav.failed()") >= 0 && load.indexOf("hashNav.failed()") < load.indexOf("loadURL(url)"), "다시 싣기 전에 기다리던 해시를 안 버린다");
@@ -3053,6 +3059,81 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
     const sGen = conn.indexOf("const gen = notifyGen;"), sGuard = conn.indexOf("if (gen !== notifyGen) break;");
     assert.ok(sGen >= 0 && sGen < conn.indexOf("await fetch(") && sGuard > 0 && sGuard < conn.indexOf("showBanner("), "끊기 직전 들어온 옛 곳 사건을 띄운다");
+  });
+
+  // ── #5701 배너의 «그곳» = 받아 온 게이트웨이 ────────────────────────────────────────────────────
+  //  원준(2026-11-22): «내가 지금 접속해있는 다른 워크스페이스 작업 끝났다고 알림이 라이블리에서 뜨는데 그거 눌러도 그 워크스페이스로 안가».
+  //  앱 안 워크스페이스 전환(bd0af759) 뒤 알림은 지금 보는 워크스페이스(selected)에 붙는데, 클릭 판정은 처음 로그인한 곳(bound)을 매인으로 썼다.
+  //  | #  | 배너의 gw          | selected        | bound | 그곳     |
+  //  |----|--------------------|-----------------|-------|----------|
+  //  | H1 | B                  | C               | A     | B        |
+  //  | H2 | 없음               | B(워크스페이스) | A     | B        |
+  //  | H3 | 없음               | 계정 서버       | A     | A        |
+  //  | H4 | 없음               | 없음(토큰 판)   | A     | A        |
+  //  | H5 | 형식 아님(스킴·자격·해시) | B        | A     | B        |
+  //  | H6 | 끝 '/' · 경로 접두  | —               | —     | 끝 '/' 만 뗀다 |
+  //  | H7 | 없음               | 없음            | 없음  | null     |
+  const GW_A = "https://lively-46e3.app.lvly.io", GW_B = "https://soltimal-adce.app.lvly.io", GW_C = "https://hbinit14-2341.app.lvly.io", CLOUD = "https://app.lvly.io";
+  t("A48 H1~H7 배너의 그곳(bannerHome) — 받아 온 곳 › 보는 워크스페이스 › 처음 로그인한 곳", () => {
+    assert.equal(bannerHome({ id: "box-a-1", gw: GW_B }, { selected: GW_C, bound: GW_A, cloud: CLOUD }), GW_B, "H1");
+    assert.equal(bannerHome({ id: "box-a-1" }, { selected: GW_B, bound: GW_A, cloud: CLOUD }), GW_B, "H2");
+    assert.equal(bannerHome({ id: "box-a-1" }, { selected: CLOUD, bound: GW_A, cloud: CLOUD }), GW_A, "H3 계정 서버 화면은 워크스페이스가 아니다");
+    assert.equal(bannerHome({ id: "box-a-1" }, { selected: null, bound: GW_A, cloud: CLOUD }), GW_A, "H4");
+    for (const bad of ["javascript:alert(1)", "https://u:p@x.app.lvly.io", "https://x.app.lvly.io/#/s/1", "https://x.app.lvly.io/?a=1", "not a url", 7]) {
+      assert.equal(bannerHome({ id: "box-a-1", gw: bad }, { selected: GW_B, bound: GW_A, cloud: CLOUD }), GW_B, "H5 " + bad);
+    }
+    assert.equal(bannerHome({ gw: GW_B + "/" }, {}), GW_B, "H6 끝 '/'");
+    assert.equal(bannerHome({ gw: "https://corp.example.com/lively/" }, {}), "https://corp.example.com/lively", "H6 경로 접두는 지킨다");
+    assert.equal(bannerHome(null, {}), null, "H7");
+    assert.equal(bannerHome(undefined, undefined), null, "H7 인자 없음");
+  });
+  t("A49 ★ 앱에서 B 를 보는 중 B 의 «작업을 마쳤어요» — 그 자리 해시로 간다(종전: 처음 곳 A 를 다시 실었다)", () => {
+    const HERE_B = { slug: "soltimal-adce", name: "NCEO", current: true, via: "same" };
+    const ev = { kind: NOTIFY.DONE, id: "box-b-9", name: "빌드", ws: HERE_B, gw: GW_B };
+    const ctx = { windowUrl: GW_B + "/ui/#/home", windowWs: null, cpOrigins: CP_ORIGINS };
+    const home = bannerHome(ev, { selected: GW_B, bound: GW_A, cloud: CLOUD });
+    assert.deepEqual(clickTarget(ev, { ...ctx, gatewayUrl: home }), { how: "hash", hash: "#/s/box-b-9" });
+    //  종전 배선(gatewayUrl = 처음 로그인한 곳) — 이 판정이 B 의 세션을 A 에서 찾게 했다(원인 기록).
+    assert.deepEqual(clickTarget(ev, { ...ctx, gatewayUrl: GW_A }), { how: "load", url: GW_A + "/ui/#/s/box-b-9" });
+    //  B 의 배너를 받아 둔 뒤 C 로 옮겼다 — 그 배너는 B 를 다시 싣는다(그곳 = 받아 온 곳). 앱 화면은 B 세션이 있으면 B 로 옮겨 적는다(A49b · A50).
+    assert.deepEqual(clickTarget(ev, { ...ctx, windowUrl: GW_C + "/ui/", gatewayUrl: bannerHome(ev, { selected: GW_C, bound: GW_A, cloud: CLOUD }) }), { how: "load", url: GW_B + "/ui/#/s/box-b-9" });
+  });
+  t("A49b F1~F5 다시 실을 때 «보는 워크스페이스» 도 옮겨 적나(shouldFollowGateway) — 그곳 세션이 있을 때만", () => {
+    assert.equal(shouldFollowGateway(GW_B, { selected: null, hasSession: true }), false, "F1 토큰 판은 손대지 않는다");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_B + "/", hasSession: true }), false, "F2 이미 그곳");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_C, hasSession: true }), true, "F3 다른 워크스페이스 · 세션 있음");
+    assert.equal(shouldFollowGateway(GW_B, { selected: CLOUD, hasSession: true }), true, "F3 계정 서버 화면에서도");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_C, hasSession: false }), false, "F4 세션이 없으면 창만 싣는다(알림을 끊지 않는다)");
+    assert.equal(shouldFollowGateway(GW_B, { selected: GW_C }), false, "F4 모르면 옮기지 않는다");
+    assert.equal(shouldFollowGateway(null, { selected: GW_C, hasSession: true }), false, "F5 그곳을 모른다");
+  });
+  t("A50 배선 — 배너는 받아 온 곳을 달고 · 클릭은 그곳으로 판정 · 다른 워크스페이스 입장 실패를 삼키지 않는다(#5701)", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    assert.ok(/showBanner\(\{ \.\.\.bannerFor\(hit, process\.platform\), event: \{ \.\.\.hit, gw \} \}\)/.test(conn), "실시간 배너에 받아 온 곳이 없다");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    assert.ok(/planBanners\(events\.map\(\(e\) => \(\{ \.\.\.e, gw \}\)\), undefined, process\.platform\)/.test(poll), "폴링 배너에 받아 온 곳이 없다");
+    const feed = main.slice(main.indexOf("async function pollPersonFeed("), main.indexOf("// ── 라이블리 화면 = 웹 UI 창"));
+    assert.ok(/planPersonBanners\(events\.map\(\(e\) => \(\{ \.\.\.e, gw \}\)\), undefined, process\.platform\)/.test(feed), "사람 알림 배너에 받아 온 곳이 없다");
+    assert.ok(feed.indexOf("rememberSeen(personSeen, events)") >= 0, "본 것 기억은 원래 사건으로");
+    const open = main.slice(main.indexOf("async function openFromBanner("), main.indexOf("function cpOrigins("));
+    assert.ok(/const home = bannerHome\(event, \{ selected: selectedGatewayUrl, bound: state\.gatewayUrl, cloud: cloudUrl\(\) \}\);/.test(open), "그곳을 받아 온 곳·보는 워크스페이스로 안 정한다");
+    assert.ok(!/gatewayUrl: state\.gatewayUrl/.test(open), "클릭 판정이 아직 처음 로그인한 곳을 매인으로 쓴다");
+    assert.ok(/try \{ await enterWorkspaceInApp\(enter\.id, hash\); \}\s*catch \(err\) \{ await enterFailed\(err, t\.how === "external" \? t\.url : null\); \}/.test(open), "앱 안 입장 실패를 삼킨다(눌러도 아무 일 없음)");
+    const fail = main.slice(main.indexOf("async function enterFailed("), main.indexOf("async function hasGatewaySession("));
+    assert.ok(!/계정 연결을 취소/.test(fail), "아무도 던지지 않는 문구로 실패를 거른다(리뷰 #1)");
+    assert.ok(/if \(\/ERR_ABORTED\|\\\(-3\\\)\/\.test\(msg\)\) return;/.test(fail), "밀린 싣기(-3)까지 실패로 띄운다");
+    assert.ok(/appWin\.isVisible\(\) && !appWin\.isMinimized\(\) \? appWin : null/.test(fail), "숨은 창에 대화상자를 붙인다(macOS 에서 안 보인다, 리뷰 #2)");
+    assert.ok(/dialog\.showMessageBox\(/.test(fail) && /브라우저에서 열기/.test(fail) && /shell\.openExternal\(browserUrl\)/.test(fail), "실패 사유·브라우저 길을 안 준다");
+    const go = main.slice(main.indexOf("async function loadGatewayInApp("), main.indexOf("async function accountCookie("));
+    assert.ok(/shouldFollowGateway\(gw, \{ selected: selectedGatewayUrl, hasSession: gw \? await hasGatewaySession\(gw\) : false \}\)/.test(go), "옮겨 적기 판정이 그곳 세션을 안 본다(리뷰 #3)");
+    const startAt = go.indexOf("if (!loadInApp(url) || !follow) return;");
+    assert.ok(startAt > 0, "창이 싣기 시작했는지 안 본다(리뷰 #4)");
+    for (const k of ["selectedGatewayUrl = gw;", "lastGen = null;", "appLoaded = { url: webUiUrl(gw), token: null };", "resetNotifyBinding();"]) {
+      assert.ok(go.indexOf(k) > startAt, `${k} 가 없거나 싣기 시작 전에 적는다`);
+    }
+    const load = main.slice(main.indexOf("function loadInApp("), main.indexOf("function resetNotifyBinding("));
+    assert.ok(/return false;/.test(load) && /return true;/.test(load), "loadInApp 이 싣기 시작 여부를 안 알린다");
   });
 }
 
@@ -3193,57 +3274,68 @@ t("CL3 클라우드 설치는 화이트리스트·재시도 목록에 있다(버
   assert.ok(RETRYABLE_KINDS.includes("setup-cloud"), "실패해도 '다시 시도' 가 안 붙는다 — 안전한 작업이다");
 });
 
-t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 땐 주소칸만", () => {
+t("CL4 ★ 화면은 배타다 — 처음이면 시작(클라우드 우선·회사 서버), 고칠 땐 주소칸만(#5650)", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
-  assert.match(app, /show\(\$\("start-card"\), !ready && !s\?\.busy && !needsFix\)/, "시작 카드 조건이 없다");
-  assert.match(app, /show\(\$\("gw-card"\), !ready && !s\?\.busy && !!needsFix\)/, "고치기 카드 조건이 없다");
+  // 화면 이름은 한 함수(currentScreen)가 정하고, render 가 그 하나만 보인다.
+  assert.match(app, /function currentScreen\(\)/, "화면을 한 자리에서 고르지 않는다");
+  assert.match(app, /show\(\$\("scr-" \+ id\), scr === id\)/, "여러 화면이 동시에 보일 수 있다");
+  assert.match(app, /show\(\$\("gw-card"\), !ready && !s\.busy && !!needsFix\)/, "고치기 카드 조건이 없다");
   const html = readFileSync(fileURLToPath(new URL("../renderer/index.html", import.meta.url)), "utf8");
-  assert.match(html, /id="cloud-go"/, "클라우드 버튼이 없다");
-  assert.match(html, /id="selfhost-wrap"/, "셀프호스팅 주소 입력 자리가 없다");
+  assert.match(html, /id="go-cloud"/, "클라우드 버튼이 없다");
   // 셀프호스팅 경로가 사라지면 안 된다 — 그쪽엔 클라우드가 없다.
-  assert.match(html, /id="gw"[^>]*>/, "시작 카드의 주소칸이 없다");
+  assert.match(html, /id="go-server"/, "회사 서버 입구가 없다");
+  assert.match(html, /id="gw"[^>]*>/, "회사 서버 주소칸이 없다");
 });
 
 // ── #5520 — 준비 전 첫 화면이 클라우드 로그인으로 직행해 셀프호스팅 입구(주소 입력)가 사라졌던 것 ──────────
 // 실측(2026-11-11): #5430 뒤 앱을 처음 켜면 곧장 app.lvly.io/login 이 떴다 — «회사에 직접 설치했어요» 를 누를 화면이 없다.
-t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 계정 로그인은 버튼으로, 셀프호스팅 주소 입력은 그대로", () => {
+t("CL12 ★ 준비 전엔 두 갈래 시작 카드 — 클라우드 버튼은 설치 흐름(#5650), 셀프호스팅 주소 입력은 그대로", () => {
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
   // [1·2] 준비 전 = 마법사, 준비됨 = 웹 창. 클라우드 선택을 여기서 하지 않는다.
   const smAt = main.indexOf("function showMain()");
   assert.ok(smAt >= 0, "showMain 이 없다");
   const sm = main.slice(smAt, main.indexOf("\n}\n", smAt));
   assert.ok(!/selectedGatewayUrl\s*=/.test(sm), "준비 전 showMain 이 클라우드 로그인으로 직행한다 — 셀프호스팅 입구가 사라진다");
-  assert.match(sm, /if \(state\.ready\) return showApp\(\)\.ok \? appWin : showWindow\(\);\s*return showWindow\(\);/, "준비 전에 마법사를 안 연다");
-  // [3·6] 클라우드 버튼 → 계정 로그인 화면. env 형식 오류는 throw 대신 오류로 돌려준다.
-  const alAt = main.indexOf("function openAccountLogin()");
-  assert.ok(alAt >= 0, "클라우드 버튼이 부를 openAccountLogin 이 없다");
-  const al = main.slice(alAt, main.indexOf("\n}\n", alAt));
-  assert.match(al, /try \{ cloud = cloudUrl\(\); \} catch \(e\) \{ return \{ ok: false, error: e\.message \}; \}/, "cloudUrl 형식 오류가 IPC 를 throw 로 깬다");
-  assert.ok(al.indexOf("selectedGatewayUrl = cloud;") >= 0 && al.indexOf("selectedGatewayUrl = cloud;") < al.indexOf("showApp()"),
-    "계정 로그인 화면을 고르기 전에 앱 창을 연다(준비 전이면 showApp 이 거절한다)");
-  assert.match(main, /ipcMain\.handle\(IPC\.ACCOUNT_LOGIN, \(\) => openAccountLogin\(\)\)/, "계정 로그인 IPC 배선이 없다");
-  assert.equal(IPC.ACCOUNT_LOGIN, "lively:account-login");
+  assert.match(sm, /if \(state\.ready \|\| state\.webOnly\) return showApp\(\)\.ok \? appWin : showWindow\(\);\s*return showWindow\(\);/, "준비 전에 마법사를 안 연다");
+  // [3·6] 클라우드 버튼 → 설치 흐름(#5650). 앱 안 계정 로그인(웹 화면만)으로 가면 이 PC 에 아무것도 안 깔린다.
+  assert.ok(main.indexOf("function openAccountLogin()") < 0, "클라우드 버튼이 다시 웹 화면 로그인만 하는 길이 남아 있다");
+  assert.ok(!/IPC\.ACCOUNT_LOGIN/.test(main), "계정 로그인만 하는 IPC 가 남아 있다");
+  assert.equal(IPC.ACCOUNT_LOGIN, undefined);
   // [4·5] 셀프호스팅 갈래 — 계정 미로그인일 때만 앞서 눌러 본 클라우드 선택을 지운다.
   const obAt = main.indexOf("async function onboard(url)");
   const ob = main.slice(obAt, main.indexOf("const c = await ensureCli", obAt));
   assert.match(ob, /if \(selectedGatewayUrl === cloudUrl\(\) && !state\.accountLoggedIn\) selectedGatewayUrl = null;/, "셀프호스팅 설치 뒤에도 클라우드 로그인 화면이 열린다");
 });
 
-t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다 [E6·E7]", () => {
+t("CL5 ★ 배선 — 로그인 버튼은 로그인만, 설치는 «이 컴퓨터 설정» 의 [설정하고 시작] 에서만(#5650)", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
-  // 시작 카드의 클라우드 버튼은 #5430 부터 앱 안 계정 로그인이다(CL12). setup-cloud 흐름은 워크스페이스 재바인딩이 쓴다.
-  assert.match(app, /\$\("cloud-go"\)[\s\S]{0,200}window\.lively\.accountLogin\(\)/, "버튼이 아무것도 안 부른다");
+  // ★ 0.1.414~0.1.423 은 로그인 버튼이 웹 화면 로그인만 해서 PC 에 아무것도 안 깔렸다. 이제 로그인 → 설정 화면 → 고른 것 설치.
+  const cg = app.slice(app.indexOf('$("go-cloud").addEventListener'), app.indexOf("\n", app.indexOf('$("go-cloud").addEventListener')));
+  assert.match(cg, /window\.lively\.loginStart\("cloud"\)/, "클라우드 버튼이 로그인을 안 부른다");
+  assert.ok(!/accountLogin|run\(/.test(cg), "클라우드 버튼이 로그인 말고 다른 일을 한다");
+  assert.match(app, /window\.lively\.applySetup\(\{ harnesses:/, "[설정하고 시작] 이 고른 도구를 안 넘긴다");
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-  // IPC 는 클라우드 경로를 **따로** 몰아야 한다 — 그냥 start() 로 보내면 CLI 가드에 걸린다(CL6).
+  const ap = main.slice(main.indexOf("async function applySetup("), main.indexOf("async function retrySetup("));
+  // 순서: 명령어 확보 → 로그인 저장(토큰은 env) → 도구 설치·연결 → 작업 폴더 → 노드
+  const at = (k) => { const i = ap.indexOf(k); assert.ok(i >= 0, `applySetup 에 ${k} 가 없다`); return i; };
+  assert.ok(at("ensureCli(") < at('start("login-token"'), "명령어보다 로그인 저장을 먼저 한다");
+  assert.ok(at('start("login-token"') < at('start("install-multi"'), "로그인 전에 설치한다");
+  assert.ok(at('start("install-multi"') < at('start("work-root-add"'), "작업 폴더 순서가 틀렸다");
+  assert.ok(at('start("work-root-add"') < at('start("node-start"'), "노드를 먼저 세운다");
+  assert.match(ap, /env: \{ LIVELY_TOKEN: login\.token \}/, "토큰을 env 로 넘기지 않는다");
+  assert.ok(!/argv.*login\.token|login\.token.*argv/.test(ap), "토큰이 argv 로 샌다");
+  assert.match(ap, /if \(!c\.ok\) \{ markRow\("cli", "fail"/, "명령어 확보 실패에서 멈추지 않는다");
+  // 렌더러로 가는 화면 상태엔 토큰이 없다
+  const sp = main.slice(main.indexOf("function setupPayload()"), main.indexOf("function setView("));
+  assert.ok(!/token/.test(sp), "화면 상태에 토큰을 싣는다");
+  // 구 게이트웨이(브라우저 로그인 미지원)는 종전 흐름으로 — 셀프호스팅 무회귀
+  const ls = main.slice(main.indexOf("async function loginStart("), main.indexOf("async function applySetup("));
+  assert.match(ls, /if \(s0\.unsupported && !cloud\) \{.*return onboard\(base\);/, "구 게이트웨이를 종전 흐름으로 안 보낸다");
+  // 종전 클라우드 흐름(onboardCloud)은 «고쳐야 할 때» 와 트레이가 계속 쓴다 — 노드까지 서야 한다.
   const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));
   const seg = h.slice(0, h.indexOf("ipcMain.handle(IPC.CANCEL"));
-  assert.ok(seg.includes('"setup-cloud"'), "메인이 클라우드 경로를 따로 몰지 않는다");
-  // 흐름의 정본은 onboardCloud 다 — 끝이 주소 경로(onboard)와 같아야 한다.
+  assert.ok(seg.includes('"setup-cloud"') && seg.includes("onboardCloud"), "메인이 클라우드 경로를 따로 몰지 않는다");
   const fn = cloudFlow(main);
-  assert.ok(seg.includes("onboardCloud"), "IPC 가 그 흐름을 안 탄다");
-  assert.ok(fn.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
-  // ⚠ 가드의 **존재**를 먼저 단언한다. 위치만 비교하면 가드를 통째로 지웠을 때 indexOf 가 -1 이라
-  //  "-1 < n" 으로 통과한다 — 실측(mutation Pb): 없는 가드를 있다고 읽었다.
   const guardAt = fn.indexOf("if (!r.ok) return r;");
   assert.ok(guardAt >= 0, "설치 실패 가드가 없다 — 실패한 설치 위에 노드를 올린다");
   assert.ok(guardAt < fn.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
@@ -3344,6 +3436,187 @@ t("CL11 ★ CLI 를 못 찾았을 때의 안내가 **주소를 모르는 사람*
   assert.match(help, /회사에 직접 설치/, "자가호스팅 안내가 사라졌다");
   // E12 무회귀 — 주소를 알면 종전대로 그 플랫폼의 한 줄을 준다(GW8 과 같은 축).
   assert.match(cliMissingHelp("https://acme.app.lvly.io", "win32"), /irm https:\/\/acme\.app\.lvly\.io\/cli\.ps1 \| iex/);
+});
+
+// ── SU. 새 시작 흐름 (#5650) — 로그인은 로그인만, 설치는 고른 것만 ─────────────────────
+const jres = (status, body) => ({ status, ok: status >= 200 && status < 300, text: async () => (typeof body === "string" ? body : JSON.stringify(body)), json: async () => body });
+
+await ta("SU1 디바이스 시작 — 지원 서버면 코드, 구 서버(404·501·500·비-JSON·device_code 없음)면 unsupported", async () => {
+  let sent = null;
+  const ok = await deviceStart({ base: "https://g", label: "lively-desktop@mac", randomBytes, createHash,
+    fetchImpl: async (u, o) => { sent = { u, body: JSON.parse(o.body) }; return jres(200, { device_code: "d", user_code: "ABCD-EFGH", verification_uri: "https://g/activate", interval: 5, expires_in: 900 }); } });
+  assert.equal(ok.ok, true); assert.equal(sent.u, "https://g/cli/device/start");
+  assert.equal(sent.body.code_challenge, s256(ok.verifier, createHash), "PKCE S256 가 verifier 와 안 맞는다");
+  assert.ok(!JSON.stringify(sent.body).includes(ok.verifier), "verifier 원문을 시작 요청에 싣는다");
+  for (const [st, body] of [[404, "nf"], [501, {}], [500, {}], [200, "<html>"], [200, { user_code: "x" }]]) {
+    const r = await deviceStart({ base: "https://g", label: "x", randomBytes, createHash, fetchImpl: async () => jres(st, body) });
+    assert.equal(r.ok, false); assert.equal(r.unsupported, true, `${st} ${JSON.stringify(body)}`);
+  }
+  const net = await deviceStart({ base: "https://g", label: "x", randomBytes, createHash, fetchImpl: async () => { throw new Error("ENOTFOUND"); } });
+  assert.equal(net.ok, false); assert.ok(!net.unsupported, "연결 실패를 구 서버로 오판하면 엉뚱한 종전 흐름으로 간다");
+});
+
+await ta("SU2 승인 대기 — 202 계속·429 늦추기·전송 오류 계속·200 토큰, 403 거부·410/401 만료·취소", async () => {
+  const seq = (list) => { let i = 0; return async () => { const x = list[Math.min(i++, list.length - 1)]; if (x instanceof Error) throw x; return jres(x[0], x[1]); }; };
+  const slept = [];
+  const base = { base: "https://g", start: { device_code: "d", interval: 2, expires_in: 900 }, verifier: "v", sleep: async (ms) => { slept.push(ms); } };
+  const ok = await devicePoll({ ...base, fetchImpl: seq([[202, {}], new Error("reset"), [429, { interval: 3 }], [200, { token: "T", gateway_url: "https://ws.app.lvly.io", workspace: "acme" }]]) });
+  assert.deepEqual(ok, { ok: true, token: "T", gateway: "https://ws.app.lvly.io", workspace: "acme" });
+  assert.equal(slept[3], 8000, "429 뒤에 간격을 늘리지 않는다");
+  assert.match((await devicePoll({ ...base, fetchImpl: seq([[403, {}]]) })).error, /거부/);
+  assert.match((await devicePoll({ ...base, fetchImpl: seq([[410, {}]]) })).error, /만료/);
+  assert.match((await devicePoll({ ...base, fetchImpl: seq([[401, {}]]) })).error, /만료/);
+  const ctl = new AbortController(); ctl.abort();
+  assert.equal((await devicePoll({ ...base, signal: ctl.signal, fetchImpl: seq([[202, {}]]) })).cancelled, true);
+  let t0 = 0; const exp = await devicePoll({ ...base, now: () => (t0 += 600000), fetchImpl: seq([[202, {}]]) });
+  assert.match(exp.error, /만료/, "기한이 지나도 끝나지 않는다");
+});
+
+await ta("SU3 프로필·주소·기기 이름", async () => {
+  let auth = null;
+  const p = await fetchProfile({ gateway: "https://g", token: "T", fetchImpl: async (u, o) => { auth = o.headers.authorization; return jres(200, { email: "a@b.c", display_name: "A" }); } });
+  assert.deepEqual(p, { ok: true, email: "a@b.c", name: "A" }); assert.equal(auth, "Bearer T");
+  assert.equal((await fetchProfile({ gateway: "https://g", token: "T", fetchImpl: async () => jres(401, {}) })).rejected, true);
+  assert.equal(normGateway("https://x.io/ui/"), "https://x.io"); assert.equal(normGateway("https://x.io///"), "https://x.io");
+  assert.match(deviceLabel("내-맥북.local"), /^lively-desktop@[\w .@-]*$/, "서버가 거르는 글자를 기기 이름에 싣는다");
+  assert.equal(deviceLabel(""), "lively-desktop@PC");
+});
+
+t("SU4 AI 도구 찾기 — PATH·공급사 설치 자리·Cursor 홈 폴더, 화면 순서 그대로", () => {
+  // 경로는 이 OS 의 join·구분자로 만든다(harness-detect 가 node:path 를 그대로 쓴다 — 윈도우 CI 에서 «/» 표기는 안 맞는다).
+  const home = join(sep, "h"), opt = join(sep, "opt", "bin"), usr = join(sep, "usr", "bin");
+  const have = (set) => (p) => set.has(p);
+  assert.deepEqual(detectHarnesses({ exists: have(new Set()), env: { PATH: usr }, home, platform: "darwin" }), []);
+  const r = detectHarnesses({ exists: have(new Set([join(opt, "codex"), join(home, ".local", "bin", "agy"), join(home, ".opencode", "bin", "opencode"), join(home, ".grok", "bin", "grok"), join(home, ".local", "bin", "claude"), join(home, ".cursor")])), env: { PATH: [usr, opt].join(delimiter) }, home, platform: "darwin" });
+  assert.deepEqual(r, ["claude", "codex", "antigravity", "cursor", "grok", "opencode"]);
+  assert.deepEqual(HARNESS_ORDER, ["claude", "codex", "antigravity", "cursor", "grok", "opencode"], "사람이 정한 순서가 바뀌었다");
+  for (const id of HARNESS_ORDER) assert.ok(HARNESS_LABEL[id], `${id} 이름이 없다`);
+});
+
+await ta("SU5 ★ 실행 파일 이름은 레지스트리와 한 벌 — 어긋나면 «설치 안 됨» 으로 보이고 이미 있는 도구를 또 깐다", async () => {
+  const reg = await import("../../kit/hooks/harness-registry.mjs");
+  assert.deepEqual([...HARNESS_ORDER].sort(), [...reg.HARNESS_IDS].sort(), "화면의 도구 목록과 레지스트리 목록이 다르다");
+  for (const id of HARNESS_ORDER) {
+    const h = reg.harness(id);
+    assert.ok(h, `레지스트리에 ${id} 가 없다`);
+    assert.equal(HARNESS_BIN[id], h.bin, `${id} 실행 파일 이름이 다르다`);
+    assert.ok(h.install?.posix?.cmd, `${id} 는 설치 방법이 없다 — 화면에서 고를 수 있으면 안 된다`);
+  }
+});
+
+t("SU6 ★ 내부 작업은 렌더러가 못 부른다 · 도구 목록은 허용 목록만 · 작업 폴더는 절대경로만", () => {
+  for (const k of INTERNAL_KINDS) assert.ok(!RUN_KINDS.includes(k), `${k} 를 렌더러가 직접 부를 수 있다(토큰 env·임의 도구 설치)`);
+  assert.deepEqual(argvFor("install-multi", { harnesses: ["codex", "claude", "codex"] }), ["install", "--harness", "codex,claude", "--only", "--yes"]);
+  assert.throws(() => argvFor("install-multi", { harnesses: [] }), /하나 이상/);
+  for (const bad of [["codex;rm -rf /"], ["--token"], ["vim"]]) assert.throws(() => harnessList(bad), undefined, JSON.stringify(bad));
+  assert.deepEqual(harnessList("codex"), [], "배열이 아닌 값은 빈 목록(→ 설치 거절)이어야 한다");
+  assert.deepEqual(argvFor("login-token", { gateway: "https://acme.app.lvly.io" }).slice(-1), ["--use-env-token"]);
+  assert.ok(!argvFor("login-token", { gateway: "https://acme.app.lvly.io" }).some((a) => /token=|^T$/.test(a)), "토큰이 argv 에 실린다");
+  assert.equal(workRootPath("/Users/a/workspace"), "/Users/a/workspace");
+  assert.equal(workRootPath("C:\\Users\\a\\workspace"), "C:\\Users\\a\\workspace");
+  for (const bad of ["workspace", "~/workspace", "/a\nb", '/a"b', "/" + "x".repeat(1100), ""]) assert.throws(() => workRootPath(bad), undefined, JSON.stringify(bad));
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  assert.match(main, /if \(!RUN_KINDS\.includes\(kind\) && !\(internal && INTERNAL_KINDS\.includes\(kind\)\)\) return \{ ok: false/, "start() 가 내부 작업을 외부 요청에서 막지 않는다");
+});
+
+t("SU7 배선 — 새 채널이 메인·preload·렌더러에 다 있다", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const pre = readFileSync(fileURLToPath(new URL("../preload/preload.cjs", import.meta.url)), "utf8");
+  for (const k of ["LOGIN_START", "LOGIN_CANCEL", "LOGIN_REOPEN", "LOGIN_RESET", "REDETECT", "PICK_FOLDER", "APPLY_SETUP", "SKIP_SETUP"]) {
+    assert.match(main, new RegExp(`ipcMain\\.handle\\(IPC\\.${k},`), `메인에 ${k} 핸들러가 없다`);
+    assert.ok(pre.includes(`"${IPC[k]}"`), `preload 에 ${k} 채널이 없다`);
+  }
+  assert.ok(pre.includes(`"${IPC.SETUP}"`), "preload 가 설정 화면 상태를 안 받는다");
+  const html = readFileSync(fileURLToPath(new URL("../renderer/index.html", import.meta.url)), "utf8");
+  for (const id of HARNESS_ORDER) assert.ok(existsSyncReal(fileURLToPath(new URL(`../renderer/logos/${id}.svg`, import.meta.url))), `${id} 로고가 없다`);
+  for (const id of ["scr-start", "scr-server", "scr-wait", "scr-setup", "scr-running", "scr-done", "scr-partial", "scr-home"]) assert.match(html, new RegExp(`id="${id}"`), `${id} 화면이 없다`);
+  // 로고 SVG 에 스크립트가 없다(img 로 싣지만 파일 자체도 깨끗해야 한다)
+  for (const id of HARNESS_ORDER) assert.ok(!/<script|on\w+=/i.test(readFileSync(fileURLToPath(new URL(`../renderer/logos/${id}.svg`, import.meta.url)), "utf8")), `${id} 로고에 스크립트`);
+});
+
+// ── 창 숨기기 (#5791) — ⌘W 로 닫으면 까만 화면만 남던 것 ──────────────────────────────
+//  | #   | 창                                     | 기대 |
+//  | WH1 | 전체화면 아님                           | 바로 숨긴다 · 전체화면은 건드리지 않는다 |
+//  | WH2 | 전체화면                               | 먼저 풀고(setFullScreen(false)) · leave-full-screen 뒤에 숨긴다(그 전엔 안 숨긴다) |
+//  | WH3 | 전체화면 · leave-full-screen 이 안 온다  | 시한 뒤에 그냥 숨긴다(숨기기를 영영 미루지 않는다) |
+//  | WH4 | 알림도 오고 시한도 지난다               | 한 번만 숨긴다 · 듣개를 떼고 시한을 지운다 |
+//  | WH5 | 이미 없는 창 · 전환 중에 없어진 창        | 아무것도 안 한다(던지지 않는다) |
+//  | WH6 | 배선 — main.mjs 의 창 숨기기가 전부 이 함수를 거친다 |
+function fakeWin({ fullscreen = false } = {}) {
+  const w = new EventEmitter();
+  Object.assign(w, {
+    destroyed: false, fs: fullscreen, hides: 0, fsCalls: [],
+    isDestroyed() { return this.destroyed; }, isFullScreen() { return this.fs; },
+    setFullScreen(v) { this.fsCalls.push(v); }, hide() { this.hides++; },
+  });
+  return w;
+}
+function fakeTimers() {
+  const q = [];
+  return {
+    setTimeout: (fn, ms) => { const h = { fn, ms, cleared: false }; q.push(h); return h; },
+    clearTimeout: (h) => { if (h) h.cleared = true; },
+    fire() { for (const h of q) if (!h.cleared) { h.cleared = true; h.fn(); } },
+    q,
+  };
+}
+
+t("WH1 전체화면이 아니면 바로 숨긴다", () => {
+  const w = fakeWin();
+  assert.equal(hideWindow(w), "hidden");
+  assert.equal(w.hides, 1);
+  assert.deepEqual(w.fsCalls, [], "전체화면을 건드렸다");
+});
+
+t("WH2 전체화면이면 먼저 풀고, 풀린 뒤에 숨긴다", () => {
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  assert.equal(hideWindow(w, T), "leaving-fullscreen");
+  assert.deepEqual(w.fsCalls, [false], "전체화면을 안 풀고 숨긴다 — 까만 Space 가 남는다");
+  assert.equal(w.hides, 0, "풀리기 전에 숨겼다 — 그 Space 가 까맣게 남는다");
+  w.fs = false; w.emit("leave-full-screen");
+  assert.equal(w.hides, 1);
+  assert.equal(T.q[0].ms, LEAVE_FULLSCREEN_TIMEOUT_MS);
+  assert.ok(T.q[0].cleared, "시한을 안 지웠다");
+});
+
+t("WH3 풀렸다는 알림이 안 오면 시한 뒤에 숨긴다", () => {
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  hideWindow(w, T);
+  assert.equal(w.hides, 0);
+  T.fire();
+  assert.equal(w.hides, 1, "알림이 안 오면 영영 안 숨는다");
+  assert.equal(w.listenerCount("leave-full-screen"), 0, "듣개가 남았다 — 다음 전체화면 해제 때 엉뚱하게 숨는다");
+});
+
+t("WH4 알림과 시한이 둘 다 와도 한 번만 숨긴다", () => {
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  hideWindow(w, T);
+  w.emit("leave-full-screen");
+  T.q[0].fn();   // 지워졌어도 이미 떠난 시한이 불린 경우
+  w.emit("leave-full-screen");
+  assert.equal(w.hides, 1);
+});
+
+t("WH5 없는 창 · 전환 중에 없어진 창은 건드리지 않는다", () => {
+  assert.equal(hideWindow(null), "gone");
+  const gone = fakeWin(); gone.destroyed = true;
+  assert.equal(hideWindow(gone), "gone");
+  assert.equal(gone.hides, 0);
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  hideWindow(w, T);
+  w.destroyed = true;
+  w.emit("leave-full-screen");
+  assert.equal(w.hides, 0, "없어진 창에 hide — Electron 은 여기서 던진다");
+});
+
+t("WH6 배선 — 앱 창 · 마법사 창 숨기기가 전부 hideWindow 를 거친다(⌘W 의 close 포함)", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  assert.match(main, /import \{ hideWindow \} from "\.\/window-hide\.mjs";/);
+  assert.doesNotMatch(main, /\b(win|appWin)\.hide\(\)/, "전체화면을 안 풀고 바로 숨기는 자리가 남았다");
+  assert.match(main, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); hideWindow\(appWin\); \} \}\);/,
+    "앱 창 close(⌘W)가 hideWindow 를 안 거친다");
+  assert.match(main, /win\.on\("close", \(e\) => \{ saveBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); hideWindow\(win\); \} \}\);/,
+    "마법사 창 close 가 hideWindow 를 안 거친다");
 });
 
 console.log(`\n${pass} passed`);

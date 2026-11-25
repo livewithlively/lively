@@ -86,6 +86,14 @@ t("★ D9 grok 도 이 러너로 띄운다 — device-auth 한 줄(재실측 202
   assert.match(sh, /command -v 'grok'[^\n]*exit 127/, "바이너리가 없으면 그렇게 말한다");
 });
 
+t("★ Cursor 로그인은 원격 자리에서 브라우저를 열지 않고 URL을 출력한다", () => {
+  const env = loginEnvFor({ osUser: "box_a", harness: "cursor", profileDir: null });
+  assert.deepEqual(env, { NO_OPEN_BROWSER: "1" });
+  const sh = loginStartSh({ home: "/h", slotName: "s", argv: aiLoginArgv("cursor"), env });
+  assert.match(sh, /export NO_OPEN_BROWSER='1'/);
+  assert.match(sh, /'agent' 'login'/);
+});
+
 t("★ D8 claude 는 stdin 을 되받는다 — 입력 파일을 폴링해 자식에게 넘긴다", () => {
   const sh = loginStartSh({ home: "/h", slotName: "s", argv: aiLoginArgv("claude") });
   assert.match(sh, /claude' 'auth' 'login'/);

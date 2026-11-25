@@ -10,6 +10,8 @@ import {
   removeColumnMask, type DbSourceInput, type DbSourceRow
 } from "../../org/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../../db/source-guard.js";
+import { parseSecretRef, SECRET_REF_FORMS, SECRET_REF_MAX } from "../../db/secret-ref.js";
+import { forgetDbSecret } from "../../db/secret-store.js";
 import { invalidatePool } from "../../db/pool.js";
 import { listTableNames, listColumnsMeta } from "../../db/catalog.js";
 import { refreshSources, listSourceConfigs } from "../../db/sources.js";
@@ -36,7 +38,8 @@ export const dbSourcesCapabilities: Capability[] = [
   // ════════ DB 데이터소스 레지스트리 (admin 권한) ════════
   // db_query/db_schema 가 읽는 외부 운영 DB. 시크릿 미저장: url=비번 없는 접속문자열, 인증은 auth_mode+auth_ref(참조).
   restOnly("org_db_sources", "DB 데이터소스 목록",
-    "관리탭 [DB 데이터소스] — 등록된 DB 소스 목록. 접속 url(비번 가능)은 host 만, auth_ref 는 이름만 노출. allowedSecretRefs=참조 가능한 env 화이트리스트. " +
+    "관리탭 [DB 데이터소스] — 등록된 DB 소스 목록. 접속 url(비번 가능)은 host 만, auth_ref 는 참조(이름)만 노출. " +
+    "allowedSecretRefs=auth_ref 가 가리킬 수 있는 비밀번호 참조 허용 목록(환경변수 이름 · gcp-sm: · aws-sm: — 값 아님). " +
     "envSources = .env 로만 정의된 소스(#1169 — DB 등록분과 나란히 봐야 '어느 소스가 어디서 왔나'가 보인다. host 만).",
     [{ method: "GET", paths: ["/api/ui/org/db-sources"], parse: () => ({}) }],
     async (_input: Record<string, unknown>, user: LivelyUser) => {
@@ -48,7 +51,11 @@ export const dbSourcesCapabilities: Capability[] = [
       };
     }),
   restOnly("org_db_source_upsert", "DB 데이터소스 추가·수정",
-    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. 저장 즉시 반영(연결 풀 재생성).",
+    "db_query 가 읽을 외부 데이터소스를 저장한다(admin). url 은 비번 없는 접속문자열, 인증은 auth_mode + auth_ref(참조 — 시크릿 값 금지). 1차 password 만. " +
+    "auth_ref 는 게이트웨이 환경변수 이름이거나 시크릿 저장소 참조다 — gcp-sm:<프로젝트>/<시크릿>[#버전](GCP Secret Manager, 게이트웨이 VM 의 서비스 계정으로 읽는다) · " +
+    "aws-sm:<리전>/<시크릿 이름>[#버전] 또는 aws-sm:<시크릿 ARN>(AWS Secrets Manager, 게이트웨이의 AWS 기본 자격으로 읽는다). " +
+    "저장소 참조는 재시작 없이 저장 즉시 반영되고, 값을 5분 기억하며, 교체로 인증이 실패하면 다시 읽어 한 번 더 붙는다. " +
+    "시크릿 값이 {\"username\":…,\"password\":…} JSON 이면 password 를 쓰고, url 에 사용자 이름이 없을 때만 username 을 쓴다. 저장 즉시 반영(연결 풀 재생성).",
     [{ method: "POST", paths: ["/api/ui/org/db-source"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const cfg = await getRuntimeConfig(); // host·auth_ref 화이트리스트 검증 공용(운영자 통제 경계)
@@ -83,7 +90,7 @@ export const dbSourcesCapabilities: Capability[] = [
           } else {
             // pg 파서 기준 검사(검증=접속 일치) — new URL 이 못 보는 ?host=/?password=/?hostaddr= 쿼리파라미터 우회 차단.
             const ins = inspectConnString(url);
-            if (ins.hasPassword) throw new HttpError(400, "url 에 비밀번호를 넣지 마세요(?password= 포함) — auth_ref(환경변수 이름)로 참조하세요");
+            if (ins.hasPassword) throw new HttpError(400, "url 에 비밀번호를 넣지 마세요(?password= 포함) — auth_ref(환경변수 이름 또는 시크릿 저장소 참조)로 참조하세요");
             if (ins.hasHostAddr) throw new HttpError(400, "url 에 hostaddr 파라미터는 허용되지 않습니다");
             if (!ins.host) throw new HttpError(400, "url 이 올바른 접속문자열이 아닙니다(host 없음)");
             host = ins.host;
@@ -91,13 +98,15 @@ export const dbSourcesCapabilities: Capability[] = [
           if (await isHostBlocked(host, cfg.allowed_db_hosts)) throw new HttpError(400, `차단된 host(사설/메타데이터 IP): ${host} — 외부 DB host 만 허용됩니다(사설/localhost 는 런타임설정 allowed_db_hosts 에 먼저 등록하세요)`);
         }
       }
-      // auth_ref — 환경변수 이름 형식 + 화이트리스트(인프라 시크릿 차단).
+      // auth_ref — 참조 꼴(환경변수 이름 · gcp-sm: · aws-sm:, #1764 secret-ref.ts) + 화이트리스트(인프라 시크릿 차단).
+      //  어느 꼴도 아닌 값(실수로 붙여 넣은 비밀번호일 수 있다)은 오류 문장에 되싣지 않는다 — 응답 · 로그에 남지 않게.
       let authRef: string | null | undefined;
       if (input.auth_ref !== undefined) {
         if (input.auth_ref === null || input.auth_ref === "") authRef = null;
         else {
-          authRef = str(input.auth_ref, "auth_ref", 100).trim();
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(authRef)) throw new HttpError(400, "auth_ref 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)");
+          authRef = str(input.auth_ref, "auth_ref", SECRET_REF_MAX).trim();
+          const pr = parseSecretRef(authRef);
+          if (!pr.ok) throw new HttpError(400, `auth_ref — ${pr.error}`);
           if (!isSecretRefAllowed(authRef, cfg.allowed_db_secret_refs)) {
             throw new HttpError(400, `auth_ref '${authRef}' 는 허용목록(allowed_db_secret_refs)에 없습니다 — 런타임 설정에 먼저 추가하세요`);
           }
@@ -132,6 +141,9 @@ export const dbSourcesCapabilities: Capability[] = [
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       };
       const src = await upsertDbSource(payload, actorOf(user), "web");
+      // 다시 저장하면 기억한 시크릿 값도 버린다 — 시크릿을 바꾸고 «저장» 을 누르면 다음 접속이 새로 읽는다(#1764).
+      forgetDbSecret(existing?.auth_ref);
+      forgetDbSecret(src.auth_ref);
       invalidatePool(name);
       await refreshSources(true); // 무재시작 반영
       return { source: maskDbSource(src) };
@@ -140,7 +152,7 @@ export const dbSourcesCapabilities: Capability[] = [
       driver: z.enum(["postgres", "mysql"]).optional().describe("미전송 시 기존 소스 값 유지(수정 때 mysql 이 postgres 로 뒤집히지 않게, #715). 신규 기본 postgres"),
       url: z.string().nullable().optional().describe("**비번 없는** 접속문자열. 인라인 비번(?password=)·hostaddr 금지, 외부 host 만(사설/메타데이터 IP 차단)"),
       auth_mode: z.enum(["password", "iam", "mtls", "vault"]).optional().describe("기본 password — 현재 password 만 지원(iam/mtls/vault 는 후속)"),
-      auth_ref: z.string().nullable().optional().describe("비밀번호가 담긴 환경변수 **이름**(값 금지). allowed_db_secret_refs 허용목록에 있어야 한다"),
+      auth_ref: z.string().nullable().optional().describe(`비밀번호 **참조**(값 금지) — ${SECRET_REF_FORMS}. allowed_db_secret_refs 허용목록에 문자열 그대로 있어야 한다`),
       rls: z.string().nullable().optional().describe("행수준 격리 GUC 설정. mysql 은 등가가 없어 지원 안 함(#715)"),
       max_rows: z.number().int().positive().nullable().optional().describe("조회 최대 행수(양의 정수)"),
       timeout_ms: z.number().int().positive().nullable().optional().describe("조회 타임아웃 ms(양의 정수)"),
@@ -154,7 +166,9 @@ export const dbSourcesCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/db-source/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const name = slug(input.name, "name");
+      const before = await getDbSource(name);
       await removeDbSource(name, actorOf(user), "web");
+      forgetDbSecret(before?.auth_ref); // 지운 소스의 기억한 시크릿도 버린다(#1764)
       invalidatePool(name);
       await refreshSources(true);
       return { ok: true };

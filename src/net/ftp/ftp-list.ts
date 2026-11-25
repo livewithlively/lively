@@ -91,6 +91,32 @@ export function isSafeRawPath(raw: string): boolean {
   return !raw.split("/").some((seg) => seg === "..");
 }
 
+/** 사람이 읽는 경로(UTF-8)를 원본 경로로 — 서버가 UTF-8 이름을 쓰는 경우(OPTS UTF8 ON). / 로 시작하지 않으면 붙인다. */
+export function rawOfDisplayPath(path: string): string {
+  const p = String(path ?? "").trim() || "/";
+  return Buffer.from(p.startsWith("/") ? p : `/${p}`, "utf8").toString("latin1");
+}
+
+/**
+ * 부모 원본 경로 아래에 새로 만들 이름(UTF-8) 하나의 원본 경로. 새 이름은 UTF-8 로 쓴다(서버에 OPTS UTF8 ON).
+ *  이름이 비었거나 구분자(/)·제어문자(CR·LF·NUL)·`.`·`..` 이거나 UTF-8 255바이트를 넘으면 null.
+ */
+export function childRawPath(parentRaw: string, name: string): string | null {
+  const n = String(name ?? "").normalize("NFC");
+  if (!n || n === "." || n === ".." || /[/\r\n\0]/.test(n)) return null;
+  const bytes = Buffer.from(n, "utf8");
+  if (bytes.length > 255) return null;
+  if (!isSafeRawPath(parentRaw)) return null;
+  const raw = `${parentRaw.replace(/\/+$/, "")}/${bytes.toString("latin1")}`;
+  return isSafeRawPath(raw) ? raw : null;
+}
+
+/** 원본 경로의 부모(맨 위는 /). */
+export function parentRawPath(raw: string): string {
+  const i = raw.replace(/\/+$/, "").lastIndexOf("/");
+  return i <= 0 ? "/" : raw.slice(0, i);
+}
+
 /** PASV 응답(`227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)`) → 포트. 주소는 쓰지 않는다(아래 클라이언트 주석). */
 export function parsePasvPort(reply: string): number | null {
   const m = /\((\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3})\)/.exec(reply);
