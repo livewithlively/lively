@@ -9,7 +9,7 @@ import { getWritingFormat } from "../org/store/runtime-config.js";
 import type { WritingFormat, WritingSurface } from "../org/policies/writing-format.js";
 import { lintWriting, LOCAL_PATH_RE, type WritingFinding } from "../v6/writing-lint.js";
 import { needsHumanJudgment } from "../v6/writing-rewrite-gate.js";
-import { normalizeHomePaths } from "../v6/writing-resolve.js";
+import { anchorHint, normalizeHomePaths, type TimeAnchor } from "../v6/writing-resolve.js";
 
 /** 웹 화면의 표식 — web/lib/net.ts 의 api() 가 모든 요청에 `x-lively-client` 헤더로 싣고 REST 어댑터(web.ts)가 ctx.client 로 넘긴다.
  *  웹 모듈은 서버 모듈을 import 하지 않는 leaf 라 같은 글자를 그쪽에 따로 적는다 — 바꾸면 둘을 함께 바꾼다. */
@@ -45,6 +45,8 @@ export interface WritingCheckOpts {
   before?: { title: string | null | undefined; body: string | null | undefined } | null;
   /** 사람의 웹 편집이면 거부하지 않고 안내만 한다(isHumanWriter(user, ctx)). */
   human?: boolean;
+  /** 시점 표현 줄의 기준 날짜(writing-resolve timeAnchors). 위반 안내에 싣는다. */
+  anchors?: TimeAnchor[];
 }
 
 export interface WritingCheck {
@@ -76,15 +78,20 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legac
   },
 };
 
-// 고치는 법(fix). 사실이 있어야 고칠 수 있는 규칙(needsHumanJudgment) 가운데 서버가 직접 고치는 것(홈 경로 치환)은
-//  사람에게 묻지 않는다(serverResolves·resolveFindings).
+// 고치는 법(fix). 사실이 있어야 고칠 수 있는 규칙(needsHumanJudgment) 가운데 그 사실을 서버가 찾아 주거나(기준 날짜) 서버가
+//  직접 고치는(홈 경로) 것은 사람에게 묻지 않는다(serverResolves·resolveFindings). 시점 규칙은 그 줄의 기준 날짜를 얻었을
+//  때만 그렇다(처음 판을 못 찾은 줄도 마지막 저장일을 상한으로 한 no_later_than 날짜를 얻는다). 기준 날짜를 하나도 얻지
+//  못하면(조회 자체가 실패) ask_human 으로 남겨 사람에게 묻는다(날짜를 지어내지 않게).
 export const RULE_FIX: Partial<Record<WritingFinding["rule"], string>> = {
+  relative_time: "anchors 의 기준 날짜로 고친다. 상대시간은 그 날을 기준으로 절대 날짜로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
+  undated_status: "anchors 의 기준 날짜를 같은 문장에 「(YYYY-MM-DD 기준)」으로 붙이거나, 상태 대신 규칙으로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
   local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
 };
 
 export type ResolvedFinding = WritingFinding & {
   fix?: string;
-  /** 사람 확인이 필요하다 — 고치는 데 글에 없는 사실이 필요하고, 서버도 그 사실 없이 처리하지 못한다. */
+  anchors?: Array<{ line: string; date: string; basis: string; hint: string }>;
+  /** 사람 확인이 필요하다 — 고치는 데 글에 없는 사실이 필요하고, 서버도 그 사실을 찾지 못했다. */
   ask_human?: true;
 };
 
@@ -97,12 +104,22 @@ function serverResolves(rule: WritingFinding["rule"], ctx: ResolveContext): bool
   return false;
 }
 
-/** 위반마다 고치는 법을 달고, 사람 확인이 필요한 것에 ask_human 을 단다. 저장 응답과 읽기 신호가 같이 쓴다. */
-export function resolveFindings(findings: WritingFinding[], ctx: ResolveContext = {}): ResolvedFinding[] {
+const ANCHORS_PER_FINDING = 6;
+const ANCHOR_LINE_MAX = 120;
+
+/** 위반마다 고치는 법과(있으면) 줄별 기준 날짜를 단다. 저장 응답과 읽기 신호가 같이 쓴다. */
+export function resolveFindings(findings: WritingFinding[], anchors: TimeAnchor[] = [], ctx: ResolveContext = {}): ResolvedFinding[] {
   return findings.map((f) => {
     const fix = RULE_FIX[f.rule];
-    const ask = needsHumanJudgment(f.rule) && !serverResolves(f.rule, ctx) ? { ask_human: true as const } : {};
-    return { ...f, ...(fix ? { fix } : {}), ...ask };
+    const ask = needsHumanJudgment(f.rule) ? { ask_human: true as const } : {};
+    if (f.rule !== "relative_time" && f.rule !== "undated_status") {
+      return { ...f, ...(fix ? { fix } : {}), ...(serverResolves(f.rule, ctx) ? {} : ask) };
+    }
+    const mine = anchors.filter((a) => (a.rules as string[]).includes(f.rule)).slice(0, ANCHORS_PER_FINDING).map((a) => ({
+      line: [...a.line].length > ANCHOR_LINE_MAX ? `${[...a.line].slice(0, ANCHOR_LINE_MAX).join("")}…` : a.line,
+      date: a.date, basis: a.basis, hint: anchorHint(a),
+    }));
+    return mine.length ? { ...f, ...(fix ? { fix } : {}), anchors: mine } : { ...f, ...ask };
   });
 }
 
@@ -138,13 +155,13 @@ export async function checkWriting(
     const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
     // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
     const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
-    const marked = resolveFindings(findings, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}` });
+    const marked = resolveFindings(findings, opts.anchors, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}` });
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
     // 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있는 위반(needsHumanJudgment)은 «고쳐서 다시 저장» 만 말하면
     //  에이전트가 그럴듯한 값을 지어낸다 — 읽기 안내(readStyleNote)와 같이 따로 적고, 그것만 남았으면 고치라는 말은 하지 않는다.
-    //  서버가 직접 처리하는 위반은 사람 확인 항목에서 뺀다(resolveFindings 의 ask_human).
+    //  서버가 사실을 찾아 줬거나(anchors) 직접 처리하는 위반은 사람 확인 항목에서 뺀다(resolveFindings 의 ask_human).
     const askRules = [...new Set(marked.filter((f) => f.ask_human).map((f) => f.rule))];
     const askOnly = askRules.length > 0 && marked.every((f) => f.ask_human);
     const askLine = askRules.length
@@ -152,7 +169,7 @@ export async function checkWriting(
       : "";
     const stepLine = askOnly ? "" : ` ${step} 의미는 바꾸지 말고 형식만 고치세요.`;
     const fixLine = !opts.human && !askOnly && marked.some((f) => f.fix && !f.ask_human)
-      ? " 위반마다 fix 에 고치는 법이 있습니다."
+      ? ` 위반마다 fix 에 고치는 법이 있습니다.${marked.some((f) => f.anchors) ? " 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓰고, 다른 날짜를 지어내지 마세요." : ""}`
       : "";
     return {
       rejects,
@@ -182,8 +199,8 @@ export type ReadStyleEditBlock = "no_write" | "injected" | "recently_edited";
 export interface ReadStyleHint {
   /** 위반 전체 건수 — findings 는 앞부분만 싣는다. */
   count: number;
-  /** fix — 고치는 법, ask_human — 글에 없는 사실이 필요하고 서버도 그 사실 없이 처리하지 못하는 항목(자동 정리 규칙 밖).
-   *  에이전트가 혼자 고치면 그럴듯한 값을 지어낸다. */
+  /** fix — 고치는 법, anchors — 시점 표현 줄의 기준 날짜(저장 기록에서 찾은 값), ask_human — 글에 없는 사실이 필요한데 서버도
+   *  찾지 못한 항목(자동 정리 규칙 밖). 에이전트가 혼자 고치면 그럴듯한 값을 지어낸다. */
   findings: ResolvedFinding[];
   /** 있으면 지금 고치지 않는다 — note 도 고치라고 하지 않는다. */
   edit_blocked?: ReadStyleEditBlock;
@@ -195,6 +212,8 @@ export interface ReadStyleOpts {
   editBlock?: () => Promise<ReadStyleEditBlock | null>;
   /** 부분읽기(offset·limit)로 읽었다 — 판정은 전문 기준이라, 고치기 전에 전문을 읽으라고 덧붙인다. */
   partial?: boolean;
+  /** 시점 표현 줄의 기준 날짜를 찾는다(DB 조회). 시점 위반이 있을 때만 부른다. 실패하면 날짜 없이(사람 확인으로) 안내한다. */
+  anchorsOf?: () => Promise<TimeAnchor[]>;
 }
 
 // 고치지 말아야 하는 까닭 — note 의 첫머리(위반 묶음) 뒤에 그대로 싣는다.
@@ -231,7 +250,9 @@ function readStyleNote(findings: ResolvedFinding[], blocked: ReadStyleEditBlock 
   //  보낸 본문 저장이 409 가 된다. 본문을 먼저 고치고 그 응답의 판으로 제목을 고치는 순서가 왕복이 적다.
   //  (knowledge_set_title 도 저장 채널을 confidence 에 남기므로 — #1740 — 제목 변경 뒤에도 «내 마지막 저장» 판정은 유지된다.)
   const title = self.some((f) => f.rule.startsWith("title_")) ? " 제목은 본문을 고친 뒤 마지막에 knowledge_set_title 로 고친다." : "";
-  const fix = self.some((f) => f.fix) ? " 위반마다 fix 에 고치는 법이 있다." : "";
+  const fix = self.some((f) => f.fix)
+    ? ` 위반마다 fix 에 고치는 법이 있다.${self.some((f) => f.anchors) ? " 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓴다." : ""}`
+    : "";
   const askLine = ask.length
     ? ` 사람 확인이 필요한 항목(findings 의 ask_human)은 ${ASK_HUMAN_WHY} — 지어내지 말고 사람에게 묻고, 답을 받은 뒤에만 고친다. 저장 응답의 안내가 한 번 더 고치라고 해도 사람 확인이 필요한 항목만 남으면 멈추고 사람에게 묻는다.`
     : "";
@@ -269,7 +290,10 @@ export async function readStyleHint(
         blocked = "no_write";
       }
     }
-    const marked = resolveFindings(findings, { surface: "knowledge", text: `${k.title ?? ""}\n${k.body_md ?? ""}` });
+    //  기준 날짜는 시점 위반이 있을 때만 찾는다(DB 조회). 못 찾은 시점 위반은 사람 확인 항목으로 남는다.
+    const needsAnchors = findings.some((f) => f.rule === "relative_time" || f.rule === "undated_status");
+    const anchors = needsAnchors && opts.anchorsOf ? await opts.anchorsOf().catch(() => []) : [];
+    const marked = resolveFindings(findings, anchors, { surface: "knowledge", text: `${k.title ?? ""}\n${k.body_md ?? ""}` });
     return {
       style: {
         count: findings.length,

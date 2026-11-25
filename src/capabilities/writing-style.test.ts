@@ -25,6 +25,21 @@ await ta("위반이 있으면 findings·note·guide 를 싣는다", async () => 
   assert.ok(st.guide_md.length > 0);
   assert.deepEqual(rejects, [], "warn 만 있으면 거부 없음");
 });
+await ta("저장 응답 — 기준 날짜를 찾은 시점 위반은 사람 확인으로 두지 않고 고치는 법(fix)과 기준 날짜(anchors)를 싣는다 — 사람의 웹 편집엔 독촉 문구를 싣지 않는다", async () => {
+  type F = { rule: string; fix?: string; anchors?: Array<{ date: string }>; ask_human?: true };
+  const anchors = [{ line: "오늘 바꿨다.", rules: ["relative_time" as const], date: "2026-11-24", basis: "this_save" as const }];
+  const st = ((await checkWriting("knowledge", BAD, { anchors }, on)).info as { style: { findings: F[]; note: string } }).style;
+  const rel = st.findings.find((f) => f.rule === "relative_time");
+  assert.ok(rel?.fix && rel.anchors?.[0].date === "2026-11-24", JSON.stringify(rel));
+  assert.ok(st.findings.every((f) => !("ask_human" in f)));
+  assert.match(st.note, /anchors 의 기준 날짜/);
+  assert.doesNotMatch(st.note, /사람에게 확인/, "사실을 찾아 준 위반을 사람에게 물으라고 했다");
+  const byHuman = ((await checkWriting("knowledge", BAD, { anchors, human: true }, on)).info as { style: { note: string } }).style;
+  assert.doesNotMatch(byHuman.note, /anchors 의 기준 날짜/);
+  const fixable = { title: "🔴 배포 노트 범위", body: "노트는 직전 배포 이후 커밋을 싣는다." };
+  const st2 = ((await checkWriting("knowledge", fixable, {}, on)).info as { style: { findings: F[]; note: string } }).style;
+  assert.doesNotMatch(st2.note, /anchors/, "고치는 법이 없는 규칙만 있으면 안내를 붙이지 않는다");
+});
 await ta("서버 처리 판정 — 홈 경로는 지식 저장에서 치환으로 다 풀릴 때만 사람 확인을 뺀다(다른 표면·남는 경로는 사람 확인)", async () => {
   type F = { rule: string; ask_human?: true };
   const lp = (fs: F[]) => fs.find((f) => f.rule === "local_path");

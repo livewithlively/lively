@@ -23,6 +23,8 @@ import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, cat
 import { isAdmin } from "../principal.js";
 import { logger } from "../../log.js";
 import { readStyleHint, type ReadStyleEditBlock } from "../writing-style.js";
+import { knowledgeAnchors } from "./style-resolve.js";
+import type { TimeAnchor } from "../../v6/writing-resolve.js";
 import type { KnowledgeRow } from "../../v6/knowledge-store.js";
 import type { WritingFormat } from "../../org/policies/writing-format.js";
 import { getWritingFormat } from "../../org/store/runtime-config.js";
@@ -472,6 +474,8 @@ export const knowledgeGet: Capability = {
     const result = await knowledgeGetResult(knowledge, input, revInfo, {
       staged: pendingRev?.mode === "staged",
       editBlock: () => readEditBlock(knowledge, user, ctx),
+      // 시점 표현 줄의 기준 날짜 — 그 줄이 처음 저장된 판의 날(감사 기록). 시점 위반이 있을 때만 조회한다.
+      anchorsOf: () => knowledgeAnchors({ name: knowledge.name, body: knowledge.body_md ?? "", updatedAt: knowledge.updated_at }),
     }, getDeps.loadFormat);
     return { ...result, ...flags };
   },
@@ -537,14 +541,14 @@ export async function knowledgeGetResult(
   knowledge: KnowledgeRow,
   input: { offset?: number; limit?: number },
   revInfo: Record<string, unknown>,
-  opts: { staged: boolean; editBlock?: () => Promise<ReadStyleEditBlock | null> },
+  opts: { staged: boolean; editBlock?: () => Promise<ReadStyleEditBlock | null>; anchorsOf?: () => Promise<TimeAnchor[]> },
   loadFormat?: () => Promise<WritingFormat>,
 ): Promise<Record<string, unknown>> {
   // 형식 신호는 부분읽기로 자르기 전 전문으로 판정한다 — 잘린 범위만 보면 뒤쪽 위반을 놓친다. 그래서 부분읽기면 note 가
   //  «고치기 전에 전문을 읽어라» 를 더한다(위반 위치는 받은 줄 범위 밖일 수 있고, edit 의 앵커는 전문에서 찾는다).
   //  검토 대기 중인 수정 제안(staged)이 있으면 싣지 않는다. 그동안 edit·제목 변경이 409 로 막혀 안내를 따를 수 없다.
   const partial = input.offset != null || input.limit != null;
-  const styleInfo = opts.staged ? {} : await readStyleHint(knowledge, loadFormat, { editBlock: opts.editBlock, partial });
+  const styleInfo = opts.staged ? {} : await readStyleHint(knowledge, loadFormat, { editBlock: opts.editBlock, partial, anchorsOf: opts.anchorsOf });
   if (!partial) return { knowledge, ...revInfo, ...styleInfo };
   // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
   const lines = (knowledge.body_md ?? "").split("\n");

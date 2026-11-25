@@ -1,7 +1,11 @@
-// 서술 형식 위반 중 «글에 없는 사실이 있어야 고칠 수 있다» 던 규칙을 사람 없이 풀기 위한 결정적 정리.
+// 서술 형식 위반 중 «글에 없는 사실이 있어야 고칠 수 있다» 던 규칙을 사람 없이 풀기 위한 사실 공급과 결정적 정리.
 //
-// local_path 는 홈 디렉터리 접두를 $HOME 으로 바꾸면 가리키는 곳은 같고 개인 계정 이름만 빠진다 — 결정적이라 서버가 한다.
-// 순수 함수다(DB 없음).
+// relative_time·undated_status 는 «그 문장을 쓴 날» 이 있으면 고칠 수 있다. 그 날은 글이 아니라 저장 기록에 있다 —
+//  이번 저장에서 처음 생긴 줄이면 오늘이고, 이미 있던 줄이면 그 줄이 처음 들어간 판의 저장 시각이다(감사 기록에 판마다
+//  본문 전문이 남는다). 서버가 그 날을 찾아 기준 날짜(anchor)로 주면 에이전트는 날짜를 지어내지 않고 고칠 수 있다.
+//  local_path 는 홈 디렉터리 접두를 $HOME 으로 바꾸면 가리키는 곳은 같고 개인 계정 이름만 빠진다 — 결정적이라 서버가 한다.
+// 순수 함수다(DB 없음). 처음 들어간 판을 찾는 조회는 호출자가 넘긴다.
+import { INLINE_CODE_RE, RELATIVE_TIME_RE, UNDATED_STATUS_RE, isQuote, unquoted } from "./writing-lint.js";
 
 // ── 홈 경로 ──
 // 탐지(writing-lint LOCAL_PATH_RE)와 같은 경계를 쓴다 — 앞에 글자·경로 문자가 붙은 «/Users/» 는 API·URL·저장소 경로다.
@@ -20,4 +24,116 @@ export function normalizeHomePaths(s: string): string {
 /** normalizeHomePaths 가 바꿀 자리 수. */
 export function countHomePaths(s: string): number {
   return (s.match(MAC_HOME_RE) ?? []).length + (s.match(WIN_HOME_RE) ?? []).length;
+}
+
+// ── 시점 표현이 있는 줄 ──
+export type TimeRule = "relative_time" | "undated_status";
+export interface TimeRefLine { line: string; rules: TimeRule[] }
+
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+const DATE_IN_LINE_RE = /\b20\d{2}-\d{2}(?:-\d{2})?\b/;
+const RELATIVE_ONE_RE = new RegExp(RELATIVE_TIME_RE.source);
+
+/**
+ * lint 가 relative_time·undated_status 로 잡는 줄을 원문 그대로 돌려준다(코드 펜스 안은 보지 않는다). 판정은 lint 와 같다
+ *  — 인라인 코드·URL·따옴표 속·인용줄을 빼고 보고, undated 는 같은 줄에 날짜가 있으면 잡지 않는다. 같은 줄은 한 번만 싣는다.
+ */
+export function timeReferenceLines(body: string): TimeRefLine[] {
+  const out = new Map<string, TimeRule[]>();
+  let fence: string | null = null;
+  for (const raw of String(body ?? "").split("\n")) {
+    const m = FENCE_RE.exec(raw);
+    if (fence) { if (m && m[1][0] === fence[0] && m[1].length >= fence.length && !raw.trim().slice(m[1].length).trim()) fence = null; continue; }
+    if (m) { fence = m[1]; continue; }
+    if (isQuote(raw) || raw.length > 2000) continue;
+    const prose = unquoted(raw.replace(INLINE_CODE_RE, "").replace(/https?:\/\/\S+/g, ""));
+    const rules: TimeRule[] = [];
+    if (RELATIVE_ONE_RE.test(prose)) rules.push("relative_time");
+    if (UNDATED_STATUS_RE.test(prose) && !DATE_IN_LINE_RE.test(raw)) rules.push("undated_status");
+    if (!rules.length) continue;
+    const key = raw.trim();
+    if (!out.has(key)) out.set(key, rules);
+  }
+  return [...out].map(([line, rules]) => ({ line, rules }));
+}
+
+// ── 기준 날짜 ──
+/** this_save: 이번 저장에서 생긴 줄(오늘) · first_version: 그 줄이 처음 들어간 판의 저장일 · no_later_than: 처음 판을 못 찾아
+ *  마지막 저장일까지만 안다(그 날 «이전에» 쓴 줄이다). */
+export type AnchorBasis = "this_save" | "first_version" | "no_later_than";
+export interface TimeAnchor { line: string; rules: TimeRule[]; date: string; basis: AnchorBasis }
+
+/** 시각을 시간대의 날짜(YYYY-MM-DD)로. 시간대 이름이 틀리면 UTC. */
+export function dateIn(at: Date | string | number, tz: string): string {
+  const d = new Date(at);
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+/** YYYY-MM-DD 에 n 일을 더한다(달력 계산 — 시간대 무관). */
+export function shiftDate(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/** 한 번에 찾는 줄 수 상한 — 줄마다 감사 기록을 한 번 조회한다. 넘는 줄은 no_later_than 로 둔다. */
+export const ANCHOR_LOOKUP_MAX = 12;
+
+export interface AnchorInput {
+  body: string;
+  /** 저장이면 고치기 전 본문(신규는 null). 읽기면 undefined — 모든 줄이 이미 있던 줄이다. */
+  beforeBody?: string | null;
+  /** 지금(저장 시각). */
+  now: Date;
+  /** 지식의 마지막 저장 시각 — 처음 판을 못 찾을 때의 상한. 없으면 now. */
+  updatedAt?: Date | string | null;
+  tz: string;
+  /** 이 줄이 처음 들어간 판의 저장 시각. 모르면 null. 실패하면 던져도 된다(no_later_than 로 둔다). */
+  firstSeen?: (line: string) => Promise<Date | string | null>;
+}
+
+export async function timeAnchors(o: AnchorInput): Promise<TimeAnchor[]> {
+  const lines = timeReferenceLines(o.body);
+  if (!lines.length) return [];
+  const today = dateIn(o.now, o.tz);
+  const upper = dateIn(o.updatedAt ?? o.now, o.tz);
+  const beforeLines = o.beforeBody === undefined ? null : new Set(String(o.beforeBody ?? "").split("\n").map((l) => l.trim()));
+  const out: TimeAnchor[] = [];
+  let lookups = 0;
+  for (const { line, rules } of lines) {
+    if (beforeLines && !beforeLines.has(line)) { out.push({ line, rules, date: today, basis: "this_save" }); continue; }
+    let seen: Date | string | null = null;
+    if (o.firstSeen && lookups < ANCHOR_LOOKUP_MAX) {
+      lookups++;
+      try { seen = await o.firstSeen(line); } catch { seen = null; }
+    }
+    out.push(seen ? { line, rules, date: dateIn(seen, o.tz), basis: "first_version" } : { line, rules, date: upper, basis: "no_later_than" });
+  }
+  return out;
+}
+
+/** 형식 정리 저장에 새로 들어와도 되는 날짜 — 기준 날짜와, 상대시간(어제·그저께)을 풀어 쓴 날. 이 밖의 날짜는 여전히 사실 변경이다. */
+export function allowedAnchorDates(anchors: TimeAnchor[]): Set<string> {
+  const out = new Set<string>();
+  for (const a of anchors) {
+    out.add(a.date);
+    if (a.rules.includes("relative_time") && a.basis !== "no_later_than") {
+      for (const n of [-2, -1, 1]) out.add(shiftDate(a.date, n));
+    }
+  }
+  return out;
+}
+
+/** 에이전트에게 주는 고치는 법 — 한 줄씩. 날짜는 위 기준 날짜만 쓴다. */
+export function anchorHint(a: TimeAnchor): string {
+  const when = a.basis === "this_save" ? `이번 저장에서 쓴 줄이라 기준 날짜는 ${a.date}다`
+    : a.basis === "first_version" ? `이 줄이 처음 저장된 날은 ${a.date}다`
+    : `이 줄을 처음 쓴 날은 기록에 없고 ${a.date} 이전에 쓴 줄이다`;
+  const how = a.basis === "no_later_than"
+    ? `상대시간은 「${a.date} 이전」처럼, 상태 서술은 「(${a.date} 이전 작성)」처럼 적는다`
+    : `상대시간은 이 날을 기준으로 절대 날짜로 바꾸고(어제는 ${shiftDate(a.date, -1)}), 상태 서술은 같은 문장에 「(${a.date} 기준)」을 붙인다`;
+  return `${when}. ${how}. 지난주·이번 주·다음 주·엊그제처럼 날 하나로 풀리지 않는 말은 「(${a.date} 기준 지난주)」처럼 기준 날짜만 덧붙인다. 그 낱말이 시점이 아니라 이름·화면 문구·상태값이면 그대로 둔다.`;
 }

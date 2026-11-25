@@ -308,7 +308,7 @@ function exemptBacktickOnly(before: RewriteDoc, after: RewriteDoc, missing: stri
  */
 export function checkInvariants(
   before: RewriteDoc, after: RewriteDoc,
-  opts: { requireTitle?: boolean; allowLeadRepeat?: boolean } = {},
+  opts: { requireTitle?: boolean; allowLeadRepeat?: boolean; allowAddedDates?: ReadonlySet<string> } = {},
 ): RewriteViolation[] {
   const violations: RewriteViolation[] = [];
   if ((opts.requireTitle ?? true) && !String(after.title ?? "").trim()) violations.push({ kind: "empty-title", detail: "재작성본의 제목이 비었다" });
@@ -326,6 +326,10 @@ export function checkInvariants(
     const bset = new Set(ib[k]), aset = new Set(ia[k]);
     let missing = subtractAllowance(d.missing, al.missing, aset);
     let added = subtractAllowance(d.added, al.added, bset);
+    // 서버가 준 기준 날짜(writing-resolve timeAnchors)를 상대시간·상태 서술 옆에 적는 것은 사실 추가가 아니다 — 그 날은
+    //  저장 기록에서 온 값이다. 이 면제도 아래 «양쪽 동시 면제 금지» 가드에 넣는다: 제목 허용량으로 빠진 날짜와 기준 날짜로
+    //  생긴 날짜가 함께 면제되면 그건 본문 날짜를 기준 날짜로 바꿔치기한 것이다.
+    if (k === "numbers" && opts.allowAddedDates?.size) added = added.filter((x) => !opts.allowAddedDates!.has(x));
     // 양쪽을 동시에 면제하지 않는다 — 누락 하나(제목 허용)와 추가 하나(첫 줄 허용)를 함께 면제하면 그건 X→Y 치환이다
     //  (예: 제목의 배포일을 첫 줄로 옮기며 본문 날짜를 바꿈). 정당한 경우는 늘 한 방향뿐이다.
     if (missing.length < d.missing.length && added.length < d.added.length) { missing = d.missing; added = d.added; }
