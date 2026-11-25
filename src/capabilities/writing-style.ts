@@ -1,30 +1,47 @@
 // 서술 형식 검사의 capability 쪽 배선 — 지식·작업기록·프로젝트 저장이 같은 판정과 같은 응답 모양을 쓰게 한다.
 //
-// 저장을 막는 것은 reject 규칙뿐이고, 그것도 에이전트 저장에만 건다. 사람 여부는 채널(source)이 아니라 인증 출처로 가른다
+// 저장을 막는 것은 reject 규칙뿐이고, 그것도 에이전트 저장에만 건다. 사람 여부는 채널(source)만으로 가르지 않는다
 //  — REST(/api/ui)는 웹 화면과 토큰 스크립트가 같은 source='web' 으로 들어오므로, source 로 가르면 토큰으로 REST 를 부르는
-//  에이전트가 거부를 비껴간다. 웹 로그인 세션(tokenSource='session')만 사람이다.
+//  에이전트가 거부를 비껴간다. 사람은 웹 로그인 세션(tokenSource='session')이거나, 웹 화면이 보낸 요청(화면 표식)이다(isHumanWriter).
 import { HttpError } from "../http-error.js";
 import { audit } from "../org/store/audit.js";
 import { getWritingFormat } from "../org/store/runtime-config.js";
 import type { WritingFormat, WritingSurface } from "../org/policies/writing-format.js";
 import { lintWriting, type WritingFinding } from "../v6/writing-lint.js";
 
-/** 사람의 웹 편집인가 — 웹 로그인 세션이면서 앱이 대신 쓰는 호출이 아닐 때만. 앱 세션은 로그인한 사람의 신원을
- *  물려받지만 글을 쓰는 것은 앱(대개 LLM)이다. */
-export function isHumanWriter(user: { tokenSource?: string; appId?: string } | null | undefined): boolean {
-  return user?.tokenSource === "session" && !user?.appId;
+/** 웹 화면의 표식 — web/lib/net.ts 의 api() 가 모든 요청에 `x-lively-client` 헤더로 싣고 REST 어댑터(web.ts)가 ctx.client 로 넘긴다.
+ *  웹 모듈은 서버 모듈을 import 하지 않는 leaf 라 같은 글자를 그쪽에 따로 적는다 — 바꾸면 둘을 함께 바꾼다. */
+export const WEB_UI_CLIENT = "web-ui";
+
+/**
+ * 사람의 웹 편집인가 — 앱이 대신 쓰는 호출이 아니면서 ① 웹 로그인 세션이거나 ② 웹 화면이 REST 로 보낸 요청일 때.
+ *  ② 는 데스크톱 앱과 «토큰으로 로그인(고급)» 웹 사용자 몫이다. 둘 다 사람이 같은 웹 화면에서 쓰지만 쿠키 세션이 아니라
+ *  토큰(Bearer)으로 인증해 tokenSource 가 'db' 다(데스크톱 앱은 CLI 토큰을 웹 화면의 localStorage 에 넣는다 — desktop/preload/web.cjs).
+ *  ①만 보면 이들이 에이전트로 판정돼, 지식을 고치거나 프로젝트 본문이 자동 저장될 때 새 위반이 있으면 422 를 받는다.
+ *  ⚠ 화면 표식은 요청 헤더라 스크립트도 흉내 낼 수 있다. 이 판정이 정하는 것은 «거부 대신 안내» 뿐인 형식 정책이라 그 위조는 감수한다.
+ *   MCP(source 'mcp')는 표식을 실어도 사람이 아니다 — 표식은 REST 어댑터만 넘긴다.
+ *  앱 세션은 로그인한 사람의 신원을 물려받지만 글을 쓰는 것은 앱(대개 LLM)이다.
+ */
+export function isHumanWriter(
+  user: { tokenSource?: string; appId?: string } | null | undefined,
+  ctx?: { source?: string; client?: string } | null,
+): boolean {
+  if (!user || user.appId) return false;
+  return user.tokenSource === "session" || (ctx?.source === "web" && ctx?.client === WEB_UI_CLIENT);
 }
 
 export interface WritingCheckOpts {
-  /** 외부 미러 — 원본 소유가 밖이라 고칠 수 없는 글이다. 판정하지 않는다. */
+  /** 외부 미러 — 원본 소유가 밖이라 고칠 수 없는 글이다. 판정하지 않는다.
+   *  ⚠ 호출부는 이 값을 저장 입력이 아니라 **저장된 행**(또는 미러임을 보이는 좌표)으로 정한다 — 입력 하나로 판정을 건너뛰면
+   *   reject 를 비껴가는 길이 된다(provenance:"observed" 를 실은 저장). */
   observed?: boolean;
-  /** 폴더 — 본문이 없는 구조 노드. 판정하지 않는다. */
+  /** 폴더 — 본문이 없는 구조 노드. 판정하지 않는다. 본문이 있는 폴더는 이 값을 주지 않는다(입력 is_folder 만으로 건너뛰지 않게). */
   folder?: boolean;
   /** 수정 제안(stage)으로 접수 — 라이브가 안 바뀌었고 제안이 있는 동안 edit·append 가 거부되므로 안내가 달라진다. */
   proposed?: boolean;
   /** 고치기 전 글. 있으면 거부는 이번 저장이 새로 만든 위반에만 건다. */
   before?: { title: string | null | undefined; body: string | null | undefined } | null;
-  /** 사람의 웹 편집이면 거부하지 않고 안내만 한다. */
+  /** 사람의 웹 편집이면 거부하지 않고 안내만 한다(isHumanWriter(user, ctx)). */
   human?: boolean;
 }
 

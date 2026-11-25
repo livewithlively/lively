@@ -143,6 +143,23 @@ await ta("사람 판정: 웹 로그인 세션만 사람이고, 앱이 대신 쓰
   assert.equal(isHumanWriter({ tokenSource: "static" }), false);
   assert.equal(isHumanWriter(null), false);
 });
+// 회귀 대상 ⑥: 데스크톱 앱 · «토큰으로 로그인(고급)» 웹 사용자 — 같은 웹 화면인데 쿠키가 아니라 토큰(tokenSource 'db')으로 들어와
+//  에이전트로 판정돼 422 를 받던 것. 웹 화면의 REST 요청(source 'web')에 화면 표식(client 'web-ui')이 있으면 사람이다.
+await ta("사람 판정: 웹 화면 표식(source web · client web-ui)이 있는 토큰 요청은 사람이다", async () => {
+  const webUi = { source: "web", client: "web-ui" };
+  assert.equal(isHumanWriter({ tokenSource: "db" }, webUi), true, "데스크톱 앱 · 토큰 로그인 웹");
+  assert.equal(isHumanWriter({ tokenSource: "session" }, webUi), true, "웹 로그인 세션은 표식과 무관하게 사람");
+  assert.equal(isHumanWriter({ tokenSource: "session" }, { source: "web" }), true);
+});
+await ta("사람 판정: 표식만으로는 사람이 아니다 — 앱 · MCP · 표식 없는 토큰 · 다른 표식", async () => {
+  assert.equal(isHumanWriter({ tokenSource: "db", appId: "app-1" }, { source: "web", client: "web-ui" }), false, "앱 토큰은 표식이 있어도 앱");
+  assert.equal(isHumanWriter({ tokenSource: "session", appId: "app-1" }, { source: "web", client: "web-ui" }), false);
+  assert.equal(isHumanWriter({ tokenSource: "db" }, { source: "mcp", client: "web-ui" }), false, "MCP 는 표식이 있어도 에이전트");
+  assert.equal(isHumanWriter({ tokenSource: "db" }, { source: "web" }), false, "표식 없는 토큰 REST = 스크립트");
+  assert.equal(isHumanWriter({ tokenSource: "db" }, { source: "web", client: "cli" }), false);
+  assert.equal(isHumanWriter({ tokenSource: "db" }, { source: "app-ui", client: "web-ui" }), false);
+  assert.equal(isHumanWriter(null, { source: "web", client: "web-ui" }), false, "주체 없음");
+});
 const REJ = [{ rule: "title_date" as const, level: "reject" as const, message: "제목에 날짜를 넣지 마라.", sample: "배포 (2026-09-23)" }];
 await ta("거부는 감사 로그에 표면·규칙·대상·제목을 남기고, 본문은 남기지 않는다", async () => {
   const calls: unknown[][] = [];

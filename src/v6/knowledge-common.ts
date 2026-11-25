@@ -97,7 +97,13 @@ export function pickKnowledgeName(raw: string, exists: (name: string) => boolean
 
 export async function resolveKnowledgeName(raw: string): Promise<string> {
   const slug = slugify(raw);
-  const r = await itemsPool.query<{ name: string }>(`SELECT name FROM knowledge WHERE name = ANY($1::text[])`, [[raw, slug]]);
+  //  이미 정규형이면 조회하지 않는다 — pickKnowledgeName 이 어느 DB 상태에서도 raw 를 돌려준다(knowledge-store.test.ts
+  //   '정규형이면 … 그대로다'). 기존 지식을 그 이름 그대로 고치는 저장이 대부분이라, 저장마다 붙던 조회 한 번이 빠진다.
+  if (slug === raw) return raw;
+  //  NUL 이 든 원문은 후보에서 뺀다 — PG text 는 NUL 을 못 담아 `= ANY($1)` 가 «invalid byte sequence … 0x00» 으로 실패한다.
+  //   그런 이름의 행은 있을 수 없으니 slug(NUL 을 걸러 낸 이름)만 보면 결과가 같다.
+  const cands = raw.includes("\u0000") ? [slug] : [raw, slug];
+  const r = await itemsPool.query<{ name: string }>(`SELECT name FROM knowledge WHERE name = ANY($1::text[])`, [cands]);
   const found = new Set(r.rows.map((x) => x.name));
   return pickKnowledgeName(raw, (n) => found.has(n));
 }
