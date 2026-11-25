@@ -69,7 +69,9 @@ test("9 하네스를 깐 직후에만, 설치기가 안 심을 때만 PATH 를 �
   const calls = (CLI.match(/(?<!function )wireLocalBinPath\(/g) || []).length;
   assert.equal(calls, 1, `호출은 설치 직후 한 곳뿐이어야 한다(지금 ${calls}곳)`);
   //  ⚠ 정의(`function runInstaller(plan) {`)가 아니라 **호출**을 앵커로 잡는다 — indexOf 는 정의를 먼저 찾는다.
-  const i = CLI.indexOf("= runInstaller(plan)");
+  //  #5650 — 설치 루프는 설치기를 주입받는다(exec, 기본값 runInstaller — 테스트가 공급사 설치기를 안 돌리게). 호출 지점은 exec(plan).
+  assert.ok(/exec = runInstaller\b/.test(CLI), "설치 루프의 기본 설치기가 runInstaller 가 아니다");
+  const i = CLI.indexOf("= exec(plan)");
   assert.ok(i > 0, "설치기 실행 지점을 못 찾았다");
   const after = CLI.slice(i, i + 900);
   assert.ok(/wireLocalBinPath\(/.test(after), "설치 직후에 안 부른다");

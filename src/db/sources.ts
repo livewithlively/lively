@@ -6,13 +6,17 @@
 //   아무것도 저장하지 않는다(BEGIN READ ONLY → SELECT → ROLLBACK).
 //
 // 시크릿: DB 소스의 url 은 비번 없는 접속문자열이고 인증은 authMode(password|iam|mtls|vault) + secretSource
-//   (참조)로 — 비번은 런타임에 env 에서 해소(resolveConnectionString, allowed_db_secret_refs 화이트리스트).
+//   (참조)로 — 비번은 런타임에 해소(resolvePgPoolSpec, allowed_db_secret_refs 화이트리스트). 참조는 환경변수 이름이거나
+//   시크릿 저장소(gcp-sm: · aws-sm: — #1764, secret-ref.ts · secret-store.ts)다. 저장소가 어디든 authMode 는 password 다
+//   (DB 가 비밀번호로 인증한다는 뜻이고, 비밀번호를 어디서 꺼내는지는 참조 꼴이 가른다).
 //   사설/localhost host 는 allowed_db_hosts 화이트리스트로만 허용. 1차 구현은 authMode='password' 만.
 import pg from "pg";
 import { parse } from "pg-connection-string";
 import { listDbSources, getRuntimeConfig } from "../org/store.js";
 import { inspectMysqlUrl, isSecretRefAllowed, pinHost } from "./source-guard.js";
 import { SELF_SOURCE } from "./self-source.js";
+import { isSecretStoreRef } from "./secret-ref.js";
+import { readDbSecret, DbSecretError, type DbSecret } from "./secret-store.js";
 
 export type AuthMode = "password" | "iam" | "mtls" | "vault";
 
@@ -25,7 +29,7 @@ export interface DbSource {
   maxRows: number;
   timeoutMs: number;
   authMode: AuthMode;
-  secretSource: string | null; // password: 비번 env 이름(DB 소스) | null(env 소스 — url 에 비번 포함) | null(builtin — itemsPool 직결)
+  secretSource: string | null; // password: 비번 참조(DB 소스 — env 이름 | gcp-sm:… | aws-sm:…, #1764) | null(env 소스 — url 에 비번 포함) | null(builtin — itemsPool 직결)
   origin: "env" | "db" | "builtin"; // builtin = 내장 self 소스(#604) — getPool 이 itemsPool 로 단락, resolveConnectionString 미경유
   tableDefault: "allow" | "deny"; // 테이블 기본자세 — allow=deny-list(후방호환) / deny=allow-list(컴플라이언스) (#186)
 }
@@ -155,8 +159,33 @@ export function resolveSourceName(given?: string): string {
   return pickSourceFrom(sources(), given);
 }
 
-// ── auth_mode 별 pg 접속 설정 조립 ── DB 엔 비번 미저장: password 면 secretSource(env)에서 런타임 해소.
+// ── auth_mode 별 pg 접속 설정 조립 ── DB 엔 비번 미저장: password 면 secretSource 에서 런타임 해소.
+//  secretSource 꼴(#1764 — secret-ref.ts): 환경변수 이름 = process.env(종전 그대로) · gcp-sm:/aws-sm: = 시크릿 저장소.
+//  저장소 참조면 비밀번호를 **함수**로 넘긴다 — pg 는 새 연결마다 그 함수를 불러(pg/lib/client.js _getPassword) 5분 기억한
+//  값을 받으므로, 교체된 값이 재시작 없이 다음 새 연결부터 쓰인다. 인증이 실패하면 풀(pool.ts SecretRefPgPool)이 fresh 로
+//  다시 읽어 한 번 더 붙는다.
+export interface PgPoolSpec {
+  config: pg.PoolConfig;
+  /** 시크릿 저장소 참조(gcp-sm: · aws-sm:)면 그 문자열 — 환경변수 · 비밀번호 없음이면 null. */
+  secretRef: string | null;
+  /** 접속 사용자 이름을 시크릿 JSON 의 username 에서 가져왔는가(주소에 사용자 이름이 없을 때) — 다시 읽으면 함께 바꾼다. */
+  userFromSecret: boolean;
+}
+
+/** 저장소 시크릿 읽기 — 오류에 소스 이름을 붙인다(값은 어디에도 싣지 않는다). */
+export async function readSourceSecret(source: string, ref: string, fresh = false): Promise<DbSecret> {
+  try {
+    return await readDbSecret(ref, { fresh });
+  } catch (e) {
+    throw e instanceof DbSecretError ? e.withSource(source) : e;
+  }
+}
+
 export async function resolveConnectionString(src: DbSource): Promise<pg.PoolConfig> {
+  return (await resolvePgPoolSpec(src)).config;
+}
+
+export async function resolvePgPoolSpec(src: DbSource): Promise<PgPoolSpec> {
   if (src.origin === "builtin") {
     // 내장 self 소스는 itemsPool 직결 — getPool 이 단락하므로 여기 도달하면 안 된다(호출 경로 회귀 방어).
     throw new Error(`db source '${src.name}' 은 내장(builtin) 소스로 접속문자열을 만들지 않습니다 — getPool 이 itemsPool 로 처리`);
@@ -170,14 +199,16 @@ export async function resolveConnectionString(src: DbSource): Promise<pg.PoolCon
   }
   if (!src.url) throw new Error(`db source '${src.name}' url 미설정`);
 
-  // 비번 해소(공통) — DB 엔 비번 미저장: secretSource(env) 화이트리스트 통과 시 런타임 주입.
+  // 비번 해소(공통) — DB 엔 비번 미저장: secretSource 화이트리스트 통과 시 런타임 주입.
+  //  환경변수 이름은 종전 그대로 여기서 값을 꺼낸다. 저장소 참조는 주소 · host 검증 뒤(아래)에 읽는다 — 형식 오류가 네트워크보다 먼저 드러나게.
   let password: string | undefined;
   const rc = await getRuntimeConfig(); // 시크릿참조(allowed_db_secret_refs)·host(allowed_db_hosts) 화이트리스트 공용
+  const storeRef = isSecretStoreRef(src.secretSource) ? src.secretSource : null;
   if (src.secretSource) {
     if (!isSecretRefAllowed(src.secretSource, rc.allowed_db_secret_refs)) {
       throw new Error(`db source '${src.name}' auth_ref '${src.secretSource}' 가 허용목록(allowed_db_secret_refs)에 없습니다`);
     }
-    password = process.env[src.secretSource] || undefined;
+    if (!storeRef) password = process.env[src.secretSource] || undefined;
   }
 
   // 모든 db_query 소스는 웹 등록(org_db_source) — IP-pin 으로 검증된 IP 에 connect 고정(DNS 리바인딩·멀티앤서 우회 차단).
@@ -194,10 +225,21 @@ export async function resolveConnectionString(src: DbSource): Promise<pg.PoolCon
   if (!host) throw new Error(`db source '${src.name}' url 에 host 가 없습니다`);
   const ip = await pinHost(host, rc.allowed_db_hosts); // 검증 + IP 핀(allowed_db_hosts 면 사설/localhost 도 허용)
 
+  // 저장소 참조 — 풀을 만들 때 한 번 읽어(실패 까닭을 지금 드러낸다 · 사용자 이름이 시크릿에 있으면 쓴다) 기억해 두고,
+  //  이후 새 연결은 함수로 기억한 값을 받는다(5분 뒤엔 다시 읽는다).
+  let secretUser: string | undefined;
+  let passwordFn: (() => Promise<string>) | undefined;
+  if (storeRef) {
+    const first = await readSourceSecret(src.name, storeRef);
+    secretUser = first.username;
+    passwordFn = async () => (await readSourceSecret(src.name, storeRef)).password;
+  }
+  const urlUser = typeof p.user === "string" && p.user !== "" ? p.user : undefined;
+
   const out: pg.PoolConfig = {
     host: ip,
     port: p.port ? Number(p.port) : undefined,
-    user: p.user ?? undefined,
+    user: urlUser ?? secretUser,
     database: p.database ?? undefined,
   };
   // TLS: IP 로 치환했으므로 인증서/SNI 검증은 원래 호스트명(servername)으로. p.ssl: {}(require)|false(disable)|undefined.
@@ -206,8 +248,9 @@ export async function resolveConnectionString(src: DbSource): Promise<pg.PoolCon
   } else if (p.ssl === true) {
     out.ssl = { servername: host } as pg.PoolConfig["ssl"];
   }
-  if (password) out.password = password;
-  return out;
+  if (passwordFn) out.password = passwordFn;
+  else if (password) out.password = password;
+  return { config: out, secretRef: storeRef, userFromSecret: !urlUser && secretUser !== undefined };
 }
 
 // 테스트 전용 — 모듈 캐시 무효화.

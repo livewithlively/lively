@@ -73,10 +73,16 @@ async function load(host: HTMLElement, deps: AutoPaneDeps): Promise<void> {
 }
 
 function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement {
-  const rc = data.runtimeConfig;                    // 관리자만 non-null — 아니면 읽기 전용 화면이 된다
-  //  원준 2026-09-28: 관리자만 보는 화면을 두지 않는다 — 모두 같은 화면이다. 권한이 없는 사람의 저장은 서버가
-  //   거절하고, 그 사실을 알림으로 말한다(스위치는 되돌린다). rc 가 없으면 서버 기본값(켜짐)으로 그린다.
-  const canEdit = true;
+  //  관리자는 runtimeConfig(전량), 구성원은 injectionConfig(주입 축만 — work_roots · 보안 필드 없음)를 받는다.
+  //   종전엔 runtimeConfig 만 읽어, 관리자가 아닌 구성원에겐 스위치가 실제 값이 아니라 기본값(켜짐)으로 그려졌다(#5801).
+  const isAdmin = !!data.canEdit;                   // org_overview: canEdit = admin
+  const rc = data.runtimeConfig || data.injectionConfig;
+  //  원준 2026-09-28: 관리자만 보는 화면을 두지 않는다 — 모두 같은 화면이다. 스위치는 구성원 누구나 바꾼다.
+  const canEdit = !!(data.canManage ?? data.canEdit) && !!rc;
+  //  #5801(상민 2026-11-25) — AI 에 **글로** 주입되는 것(주입 문구 본문 · 순서 · 삭제, 기록 요청 문구)은 관리자만 고친다.
+  //   모든 구성원의 AI 세션에 지시문으로 들어가는 글이기 때문이다. 내용은 누구나 그대로 본다(같은 화면 — 단추만 없다).
+  //   서버가 같은 판정을 한다(org_update_section 등 admin). 여기는 안내일 뿐이다.
+  const canText = isAdmin;
   const hooks = (rc && rc.hooks) || {};
   const on = (k: string) => hooks[k] !== false;     // 서버 기본값이 '켜짐'이라 !== false 로 읽는다
   const guideOn = (rc ? rc.inject_ontology_guide : data.injectOntologyGuide) !== false;
@@ -86,8 +92,12 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   const mine = secs.filter((s) => s.name !== GUIDE);   // 내가 고칠 수 있는 것
   const guide = secs.find((s) => s.name === GUIDE);
 
+  //  관리자는 runtime-config(전량), 구성원은 주입 축 전용 저장(맥락 관리 화면 admin-injection.ts 와 같은 갈래).
   async function saveRuntime(patch: any, okMsg: string): Promise<void> {
-    await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify(patch) });
+    await api(isAdmin ? '/api/ui/org/runtime-config' : '/api/ui/org/injection-config', { method: 'POST', body: JSON.stringify(patch) });
+    //  스위치는 hooks 를 통째로 실어 보낸다. 저장한 값을 여기 반영해 두지 않으면, 스위치 하나를 바꾼 뒤 다른 스위치를
+    //   누를 때 앞 스위치의 **옛 값**이 다시 실려 가 방금 바꾼 것이 되돌아간다.
+    if (patch && patch.hooks) Object.assign(hooks, patch.hooks);
     toast(okMsg);
   }
 
@@ -95,7 +105,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   function sw(getter: () => boolean, save: (v: boolean) => Promise<void>, chip?: HTMLElement): HTMLElement {
     const b = el('button', { class: 'v2a-sw' + (getter() ? '' : ' off'), type: 'button',
       'aria-label': getter() ? '켜짐' : '꺼짐' }) as HTMLButtonElement;
-    if (!canEdit) { b.disabled = true; b.classList.add('ro'); b.title = '관리자만 바꿀 수 있습니다'; return b; }
+    if (!canEdit) { b.disabled = true; b.classList.add('ro'); b.title = '설정을 불러오지 못해 바꿀 수 없습니다'; return b; }
     b.addEventListener('click', async () => {
       const next = b.classList.contains('off');
       b.disabled = true;
@@ -159,8 +169,9 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       sw(() => guideOn, (v) => saveRuntime({ inject_ontology_guide: v },
         v ? '사용 설명서를 함께 주입합니다.' : '사용 설명서를 주입하지 않습니다. AI가 라이블리 사용 방법을 알 수 없게 됩니다.'))));
   }
+  if (!canText) aBody.append(el('p', { class: 'v2a-fh' }, ...uiText('주입 문구는 모든 AI 세션에 주입되는 글이라 관리자만 추가하고 수정합니다.')));
   aBody.append(el('div', { class: 'v2a-acts' },
-    canEdit ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 주입 문구 추가', onclick: () => openEditor(null) }) : null,
+    canText ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 주입 문구 추가', onclick: () => openEditor(null) }) : null,
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'AI에 주입되는 전체 내용 보기', onclick: () => viewPreview() })));
   bodies.set('a', aBody);
 
@@ -212,7 +223,7 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   // ── 메모 한 덩어리 ──
   function memoBlock(s: Sec, i: number): HTMLElement {
     const acts = el('div', { class: 'v2a-memo-a' });
-    if (canEdit) {
+    if (canText) {
       acts.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '수정', onclick: () => openEditor(s) }));
       if (mine.length > 1) {
         acts.append(
@@ -307,11 +318,12 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
   function viewNotice(): void {
     const text = (rc && rc.writeback_notice) || data.writebackNoticeDefault || '';
     overlay('기록 요청 문구', el('div', { class: 'v2a-read' },
-      el('p', { class: 'v2a-fh' }, ...uiText('조건이 맞으면 AI 세션이 응답을 마칠 때 AI에 이 문구를 한 번 보냅니다. 문구는 ' + ctxPath('deliver') + '에서 수정합니다.')),
+      el('p', { class: 'v2a-fh' }, ...uiText('조건이 맞으면 AI 세션이 응답을 마칠 때 AI에 이 문구를 한 번 보냅니다. '
+        + (canText ? '문구는 ' + ctxPath('deliver') + '에서 수정합니다.' : '모든 AI 세션에 주입되는 글이라 관리자만 수정합니다.'))),
       el('div', { class: 'v2a-notice', text }),
-      el('div', { class: 'v2a-editor-a' },
+      canText ? el('div', { class: 'v2a-editor-a' },
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: ctxPath('deliver') + '에서 수정 →',
-          onclick: () => { deps.close(); location.hash = DEEP; } }))));
+          onclick: () => { deps.close(); location.hash = DEEP; } })) : null));
   }
 
   // 실제로 조립돼 나가는 전문 — 게이트웨이가 만든 그대로(우리가 다시 조립하지 않는다).
@@ -339,10 +351,9 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
     save.addEventListener('click', async () => {
       save.disabled = true;
       try {
-        await saveRuntime({
-          work_roots: roots.value.trim() || null,
-          pull_tools: pull.value.split(',').map((x) => x.trim()).filter(Boolean),
-        }, '저장했습니다.');
+        //  work_roots 는 구성원 컴퓨터의 폴더 경로라 관리자 몫이다 — 구성원용 저장(injection-config)은 이 키를 받지 않는다.
+        const pull_tools = pull.value.split(',').map((x) => x.trim()).filter(Boolean);
+        await saveRuntime(isAdmin ? { work_roots: roots.value.trim() || null, pull_tools } : { pull_tools }, '저장했습니다.');
       } catch (e: any) { toast((e && e.message) || '저장하지 못했습니다', true); }
       save.disabled = false;
     });
@@ -350,8 +361,8 @@ function render(data: any, reload: () => void, deps: AutoPaneDeps): HTMLElement 
       el('summary', { text: '개발자용 설정' }),
       el('div', { class: 'v2a-dev-b' },
         //  개발자용은 정확한 이름을 쓴다(원준 2026-09-28). 동작 설명은 이름 옆 (?) 안에만 둔다.
-        el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl' }, 'work_roots · 기록 요청을 적용할 작업 폴더',
-          qmark('여기 적은 폴더에서 연 AI 세션에 stop-writeback-gate 훅을 적용합니다. 이 폴더 밖에서 연 AI 세션도 라이블리 MCP 도구를 한 번이라도 쓰면 적용됩니다.')), roots),
+        isAdmin ? el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl' }, 'work_roots · 기록 요청을 적용할 작업 폴더',
+          qmark('여기 적은 폴더에서 연 AI 세션에 stop-writeback-gate 훅을 적용합니다. 이 폴더 밖에서 연 AI 세션도 라이블리 MCP 도구를 한 번이라도 쓰면 적용됩니다.')), roots) : null,
         el('label', { class: 'v2a-f' }, el('span', { class: 'v2a-fl' }, 'pull_tools · 외부 자료 가져오기로 판정할 도구 이름 접두어',
           qmark('이 접두어로 시작하는 MCP 도구를 호출하면 외부 자료를 가져온 AI 세션으로 기록되어, 응답을 마칠 때 기록 요청 대상이 됩니다.')), pull),
         el('p', { class: 'v2a-fh', text: '워크스페이스에서 직접 만든 훅 ' + ((data.orgHooks || []).length) + '개는 ' + ctxPath('deliver') + '에서 관리합니다.' }),

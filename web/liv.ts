@@ -4,7 +4,7 @@
 //  리브는 그 사람의 리브 세션 하나다(src/org/liv/session.ts). 리브 세션이 있는 사람은 이 화면이 아니라 **그 세션 화면**으로 간다
 //   (보통 세션 화면 + 오른쪽 «리브» 칸 — v2/main.ts 'liv' 라우트 · lib/liv-desk livRoute). 이 화면에 남는 사람은 둘이다:
 //   · 리브 세션이 아직 없는 사람 — [리브와 대화 시작](로그인한 AI 가 있으면 그 AI 로 연다 · 없으면 «쓰는 AI 에서 하기» 세 걸음)
-//   · 커서 같은 로컬 AI 를 쓰는 사람 — 그 AI 가 «이 링크에서 넣어 주세요» 로 준 `#/liv?board=1` (물음 카드를 여기서 받는다)
+//   · (옛 링크) `#/liv?board=1` — 로컬 AI 가 «이 링크에서 넣어 주세요» 로 주던 주소. 물음 카드는 세션 요청으로 옮겼다(#5713) — 셸이 요청 화면(#/ask)으로 넘긴다
 //  종전(#4032)엔 이 화면이 리브 세션 대화창을 통째로 붙였다(liv-chat.ts). 대화는 이제 세션 화면이 하므로 이 화면엔 대화 칸이 없다.
 //
 //  ── 판정은 여기서 하지 않는다 ──
@@ -12,13 +12,13 @@
 //  그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다(카드는 web/liv-cards.ts 한 벌).
 import { api, el, toast } from './core.js';
 import { bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
-import { fillConnectApps, livAskCard, livAskKeep, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
+import { fillConnectApps, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
 import { openLiv } from './v2/liv-open.js';
 import { rememberUnsentDraft } from './v2/quick-session.js';
 import { putIntoSession } from './v2/sess-input.js';
 import { ownAiStepsHtml, wireOwnAiSteps } from './v2/connect-own-ai.js';
 
-export type { LivFinding, LivMode, LivSecretAsk, LivStatus } from './liv-cards.js';
+export type { LivFinding, LivMode, LivStatus } from './liv-cards.js';
 
 /** 쓰는 AI(로그인된 서버 AI 가 없을 때)에 붙여 넣을 말 — 리브 점검. */
 export const SAY_LIV_IN_AI = '라이블리 liv 스킬로 이 워크스페이스 점검해 줘';
@@ -81,13 +81,12 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   };
   paintDoor();
 
-  // 편지 = 지금 손볼 것. 물음 = 리브가 사람에게 받아야 하는 것(자격·객관식·올리기) — 이 화면에선 머리 바로 아래(대화 칸이 없다).
-  const askHost = el('div', { class: 'liv-askdock liv-board-ask' });
+  // 편지 = 지금 손볼 것. (AI 가 사람에게 건 요청 — 자격·객관식·올리기 — 은 여기 없다: 그 세션 화면 곁칸의 «요청» 칸 · 요청 화면 #/ask — #5713)
   const letter = el('section', { class: 'liv-letter' }, el('div', { class: 'liv-letter-skel' }));
   const apps = el('div', { class: 'liv-apps' }, el('p', { class: 'pn-fine', text: '불러오는 중…' }));
   const wrapEl = el('div', { class: 'liv-wrap liv-board' }, head,
     el('div', { class: 'liv-body liv-body-solo' },
-      door, ownAi, askHost, letter,
+      door, ownAi, letter,
       el('section', { class: 'liv-apps-sec' },
         el('div', { class: 'liv-apps-h' }, el('b', { text: '외부 앱 연결' }), el('a', { class: 'liv-apps-more', href: '#/connect', text: '현황판 →' })),
         apps)));
@@ -122,10 +121,6 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
 
   watchLivStatus((st) => {
     if (!wrapEl.isConnected || !st) return;
-    if (!livAskKeep(askHost, st.secretAsk)) {
-      const card = livAskCard(st.secretAsk, hooks);
-      askHost.replaceChildren(...(card ? [card] : []));
-    }
     letter.replaceChildren(livLetterBox(st, hooks, letter));
   }, () => wrapEl.isConnected && document.body.dataset.route === 'liv', () => wrapEl.isConnected);
   void fillConnectApps(apps);

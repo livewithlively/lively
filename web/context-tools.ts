@@ -120,7 +120,9 @@ function builtinPage(data, onChange: () => void): HTMLElement {
     const exposedNow = () => { const o = cur(); return o ? o.enabled !== false : def; };
     const sw = dlvSwitch(exposedNow(), name + ' 노출');
     const aa = el('input', { type: 'checkbox', 'aria-label': name + ' 자동승인' }) as HTMLInputElement;
-    aa.checked = cur() ? !!cur().auto_approve : true;
+    // 행이 없으면 서버가 정한 기본값(후보의 autoApproveDefault) — 노출만 바꿔 저장해도 이 값이 그대로 실린다
+    const aaNow = () => (cur() ? !!cur().auto_approve : c.autoApproveDefault !== false);
+    aa.checked = aaNow();
     const al = el('select', { class: 'dlv-sel', 'aria-label': name + ' 주입 방식' },
       el('option', { value: '', text: '기본 · ' + (defAlways ? '처음부터 전문' : '검색하면 로드') }),
       el('option', { value: 'always', text: '처음부터 전문' }),
@@ -138,7 +140,7 @@ function builtinPage(data, onChange: () => void): HTMLElement {
         onChange();
       } catch (e) {
         toast((e as Error).message, true);
-        sw.set(exposedNow()); aa.checked = cur() ? !!cur().auto_approve : true;
+        sw.set(exposedNow()); aa.checked = aaNow();
       }
     };
     sw.input.addEventListener('change', save); aa.addEventListener('change', save); al.addEventListener('change', save);

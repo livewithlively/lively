@@ -175,7 +175,7 @@ ok(!/term-glass\[data-theme/.test(html), "T3b color-scheme 을 터미널 테마(
 const scheme = term.slice(term.indexOf("function applyGlassScheme("), term.indexOf("function setGlass("));
 ok(/document\.documentElement\.style\.colorScheme = glassOn \? \(appIsDark\(\) \? 'dark' : 'light'\) : '';/.test(scheme) && /applyGlassScheme\(\);/.test(term.slice(term.indexOf("function setGlass("), term.indexOf("function syncGlassTheme("))), "T3c color-scheme 은 앱 테마로(켤 때 · 끌 때 되돌림)");
 const tf = term.slice(term.indexOf("function themeFor("), term.indexOf("function applyGlassScheme("));
-ok(/if \(!glassOn\) return resolveTheme\(key\);/.test(tf) && /const th = resolveTheme\('auto'\);/.test(tf) && /background: clearOf\(th\.background\)/.test(tf), "T4a 비치는 동안은 앱 테마의 색(이름 있는 테마를 골랐어도)", tf.slice(0, 200));
+ok(/if \(!glassOn\) return withCodeColor\(resolveTheme\(key\)\);/.test(tf) && /const th = resolveTheme\('auto'\);/.test(tf) && /background: clearOf\(th\.background\)/.test(tf), "T4a 비치는 동안은 앱 테마의 색(이름 있는 테마를 골랐어도)", tf.slice(0, 200));
 const wat = term.slice(term.indexOf("function watchAppTheme("), term.indexOf("\n}\n", term.indexOf("function watchAppTheme(")));
 ok((wat.match(/syncGlassTheme\(\)/g) || []).length === 2 && /function syncGlassTheme\(\): void \{\s*if \(!glassOn\) return;/.test(term), "T4b 앱 테마가 바뀌면 비치는 중인 터미널도 따라간다(저장소 · 시스템 둘 다)");
 

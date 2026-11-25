@@ -380,7 +380,7 @@ ensure_server_ais() {
   elif ! command -v codex >/dev/null 2>&1; then
     warn "서버 AI: 게이트웨이가 root 로 돕니다 — 챗GPT(codex)는 깔지 않습니다(root 의 npm 전역 자리를 바꾸지 않으려고). 필요하면: sudo npm i -g @openai/codex"
   fi
-  for h in agy grok; do
+  for h in agy grok cursor; do
     sudo timeout "$t" bash "$d/install-harness-clis.sh" "$h" \
       || warn "서버 AI: $h 설치 실패(비치명) — 나중에: sudo bash deploy/install-harness-clis.sh $h"
   done

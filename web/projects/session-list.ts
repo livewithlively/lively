@@ -27,7 +27,10 @@ import { enterSession, openRouteRow } from './detail-hub-kit.js';
 import { pjvProjStatusMeta, pjvResolveProjStatus } from './status.js';
 import { pjvProjClosedView } from './state.js';
 import { pjvPopover } from './popover.js';
-import { DRAFT_LABEL, DRAFT_TIP, draftCountText, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 뱃지 · 개수 글 한 벌
+import { DRAFT_LABEL, draftCountText, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 뱃지 · 개수 글 한 벌
+import { draftTipFor } from '../lib/proj-access.js';   // #5598
+import { projPeopleStack } from './people-ui.js';      // #5630 사람 칸(리드 + 함께) — «누가 보나» 알약을 대신한다
+import { projRelation, RELATION_LABEL, type ProjRelation } from '../lib/proj-relation.js';   // #5630 나와의 관계 묶기
 
 const PAGE = SESS_TABLE_PAGE;
 // 세션 목록 화면과 같은 두 축(main.ts loadData) — 기록은 서버 상한(2000)까지 한 번에. 실측 384건 · 0.2MB.
@@ -35,15 +38,17 @@ const LIVE_URL = '/api/ui/terminal/sessions?includeProjects=1';
 const LOGS_URL = '/api/ui/v6/sessions?limit=2000';
 
 // ── 묶기 기준 — 세션 목록 사이드바와 같은 축(시간 · 리스트 · 사람 · 상태 · 묶지 않음). 줄이 프로젝트라 «프로젝트» 묶기는 없다. 기본 «시간». ──
+//  #5630(원준 2026-11-22) — 프로젝트가 기본 초대제(#5598)가 되어 «초대받은 것 · 내가 만든 것» 을 먼저 가른다. 기본 묶기 = 관계.
 const GROUP_BYS: ReadonlyArray<{ key: SessGroupBy; label: string }> = [
-  { key: 'day', label: '시간' }, { key: 'list', label: '리스트' }, { key: 'state', label: '상태' }, { key: 'owner', label: '사람' },
+  { key: 'rel', label: '관계' }, { key: 'day', label: '시간' }, { key: 'list', label: '리스트' }, { key: 'state', label: '상태' }, { key: 'owner', label: '사람' },
   { key: 'none', label: '묶지 않음' },
 ];
 //  2판에서 기본을 바꿨으므로 기억 열쇠도 바꾼다 — 1판 기본(프로젝트)이 기억으로 남아 새 기본을 가리지 않게.
-const GROUP_STORE = 'pjv:sessGroupBy2';
+//  #5630 — 기본이 «관계» 로 바뀌어 열쇠를 다시 바꾼다(2판의 기억 «시간» 이 새 기본을 가리지 않게).
+const GROUP_STORE = 'pjv:sessGroupBy3';
 function loadGroupBy(): SessGroupBy {
   try { const v = localStorage.getItem(GROUP_STORE); if (v && GROUP_BYS.some((g) => g.key === v)) return v as SessGroupBy; } catch (_) { /* 못 읽으면 기본 */ }
-  return 'day';
+  return 'rel';
 }
 
 /** 화면 상태 — 보드가 통째로 다시 그려도 고른 것이 남게 모듈 수준(세션 목록 allUi 와 같은 이유). 기간 · 사람 · 상태는 기억하지 않는다(페이지 수명). */
@@ -53,7 +58,15 @@ const ui: SessTableUi & { period: PastPeriod; owner: string; state: string; by: 
   sort: null,
   shown: PAGE,
   scopeKey: '',
-  closed: new Set<string>(), openUntitled: new Set<string>(),
+  //  #5630 — «그 밖 · 전체 공개» 묶음은 처음엔 접혀 있다(원준 2026-11-22: 나와 직접 관계없는 수백 줄이 먼저 펼쳐지지 않게). 머리를 누르면 펴진다.
+  //  단, 그 묶음이 화면의 유일한 묶음이면 펴서 그린다(softClosed — 남의 공개 프로젝트만 든 리스트가 머리 한 줄로 비어 보이지 않게).
+  closed: new Set<string>(['rel:open']), softClosed: new Set<string>(['rel:open']), openUntitled: new Set<string>(), expanded: new Set<string>(),
+};
+/** #5630 관계 묶음 머리 밑 한 줄 — 무엇이 이 묶음에 드나. */
+const REL_HINT: Record<ProjRelation, string> = {
+  invited: '다른 사람이 나를 함께하는 사람으로 넣은 프로젝트',
+  mine: '내가 리드인 프로젝트',
+  open: '나와 직접 관계는 없지만 전체 공개라 보이는 프로젝트',
 };
 
 //  재료는 **보드 한 판 동안** 쥔다 — 보드 진입·다시 받기(pjvPrefetchSessions)만 새로 받는다. 검색 · 묶기 · 스코프 전환 같은 다시 그리기마다
@@ -198,6 +211,7 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
         sess: { n: ss.length, key: top ? top.stateKey : '', label: top ? top.stateLabel : '' } },
       projectId: id, listId: p.list_id != null ? Number(p.list_id) : null, trashedAt: null, lastSeen: seen,
       stateKey: 'p:' + (st ? String(st.label || '') : meta.label),
+      rel: projRelation(p, meId),
       owner: owner && owner === meId ? 'me' : owner, name: String(p.name || '') || '이름 없는 프로젝트', untitled: false, proj: p,
       top, mine: new Set(ss.filter((x) => isMineSess(x)).map((x) => x.stateKey)),
     });
@@ -217,13 +231,19 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
   const tools = el('div', { class: 'v2-sa-tools pjv-sl-tools' }, ...picks.filter((x): x is HTMLElement => !!x), el('span', { class: 'sp' }),
     el('span', { class: 'pjv-sl-count', text: draftCountText(vis.length, inScope.length, draftScope ? 0 : Number(ctx.hiddenDrafts) || 0, draftScope ? DRAFT_LABEL : '프로젝트') }));
   const by = ui.by;
-  const groupLabel = (key: string): string => by === 'list' ? (listName.get(Number(key)) || '리스트 없음')
+  const groupLabel = (key: string): string => by === 'rel' ? (RELATION_LABEL[key as ProjRelation] || key)
+    : by === 'list' ? (listName.get(Number(key)) || '리스트 없음')
     : by === 'owner' ? ownerName(key)
     : by === 'state' ? key.replace(/^p:/, '') || '상태 모름'
     : key;
   const { list, more } = sessTable({
     vis, by, ui, now, cols: true, meId, projName: () => '', ownerName, groupLabel, repaint, nameHead: '프로젝트', projHead: '세션',
-    rowTag: (it) => !draftScope && isDraftProj(it.proj) ? el('span', { class: 'pj-draft-tag', title: DRAFT_TIP, text: DRAFT_LABEL }) : null,
+    //  #5630 — 이름 뒤 «나만 · N명과 공유» 알약은 걷었다. 누가 보는지는 바로 옆 「사람」 칸(자물쇠 + 리드 + 함께)이 말한다.
+    //   이름 뒤에는 초안 뱃지만 남는다.
+    rowTag: (it) => (!draftScope && isDraftProj(it.proj) ? el('span', { class: 'pj-draft-tag', title: draftTipFor(it.proj), text: DRAFT_LABEL }) : null),
+    peopleCell: (it) => projPeopleStack(it.proj, { max: 4 }),
+    groupCap: by === 'rel' ? 10 : undefined,
+    groupHint: by === 'rel' ? (k) => REL_HINT[k as ProjRelation] || '' : undefined,
     open: () => { /* 세션 줄이 없다 */ },
     openProj: (it) => { location.hash = '#/projects2/p/' + it.pj!.id; },
     menuRows: (it) => [

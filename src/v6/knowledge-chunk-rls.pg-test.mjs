@@ -1,4 +1,4 @@
-// 조각 색인 · 찾기의 워크스페이스 격리(#5204) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 조각 색인 · 찾기의 워크스페이스 격리(#5204) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/v6/knowledge-chunk-rls.pg-test.mjs
 //
 // 왜 이 계층인가: 조각 검색의 벡터 후보에는 워크스페이스 조건이 SQL 에 없다 — 행 보안이 격리의 전부다. 슈퍼유저로는 재지 못하므로 매니지드 게이트웨이와 같은 조건

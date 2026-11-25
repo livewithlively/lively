@@ -159,6 +159,25 @@ const INJECTIONS = new Set(["always", "recalled"]);
   ok("자동 소환 압축 판이 PreCompact · 같은 소스 · 같은 하네스 · 기본 켜짐 + 소환 블록이 프로젝트 규칙 앞(#5197)");
 }
 
+// ── #5611 — 대화 캡처는 세션이 내려갈 때(SessionEnd)도 돈다. 그 판이 빠지면 Stop 이 안 뜬 턴 끝(사람이 끊음 · 사용 한도)이
+//  보관·자동 끔 뒤 중앙 기록에 영영 안 들어가, 꺼진 노드 세션 대화창이 마지막 질문 앞에서 끝난다(빈 채로 남기도 한다). ──
+{
+  const turn = DEFAULT_HOOKS.find((x) => x.id === "session-log-capture")!;
+  const end = DEFAULT_HOOKS.find((x) => x.id === "session-log-capture-end");
+  assert.ok(end, "SessionEnd 판 session-log-capture-end 가 시드에 없음");
+  assert.equal(end!.event, "SessionEnd", "내려갈 때 판은 SessionEnd 여야 한다(tmux 를 내려도 뜨는 이벤트)");
+  assert.equal(end!.source_code, turn.source_code, "두 판은 **같은 소스**여야 한다 — 복제하면 정책·모드 판정이 갈라진다");
+  assert.ok(end!.source_code.includes('"SessionEnd"'), "소스가 SessionEnd 입력을 알아봐야 한다(앞에서 붙잡지 않고 뒤의 판에 맡긴다)");
+  assert.equal(end!.harness, turn.harness, "두 판의 하네스가 다르면 내려갈 때 안 올라가는 하네스가 생긴다");
+  assert.equal(end!.enabled, turn.enabled, "새 설치의 켜짐 여부가 턴 끝 판과 같아야 한다");
+  assert.ok(end!.timeout_sec <= 9, `러너의 SessionEnd 상한(10초) 안이어야 한다 — ${end!.timeout_sec}초`);
+  assert.ok(DEFAULT_HOOKS.indexOf(end!) > DEFAULT_HOOKS.indexOf(turn), "본 판이 먼저 심겨야(승격까지 끝나야) 새 판이 그 켜짐을 따른다");
+  const seedSrc = fs.readFileSync(path.join(REPO_ROOT, "src", "org", "delivery", "seed-content.ts"), "utf8");   // dist 에서 돌아도 원본을 읽는다
+  assert.match(seedSrc, /SEED_ENABLED_FOLLOWS[^=]*=\s*\{[^}]*"session-log-capture-end":\s*"session-log-capture"/,
+    "처음 심을 때 켜짐을 턴 끝 판에서 따라야 한다 — 운영자가 끈 조직에 내려갈 때 판만 켜진 채 심기면 대화가 올라간다");
+  ok("대화 캡처 SessionEnd 판 — 같은 소스 · 같은 하네스 · 상한 안 · 처음 켜짐은 턴 끝 판을 따른다(#5611)");
+}
+
 // ── 앞뒤가 있는 시드 훅 짝은 sort 가 **엄격히** 달라야 한다 — 러너는 같은 sort 를 동시에 돌린다. ──
 //  같으면 둘이 겹쳐 돌아, 같은 동기화 원장을 다시 쓰는 짝은 한쪽 기록이 덮이고(push-tool/pull-tool),
 //  프로젝트가 붙기 전에 받고·규칙을 싣는 짝은 첫 지시 턴을 빈손으로 지나간다(auto-bind 뒤의 둘).

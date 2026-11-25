@@ -1,4 +1,4 @@
-// 앱 맥락 범위(#5100) — 훑기(canary sweep) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(.github/workflows/test.yml 에 등록).
+// 앱 맥락 범위(#5100) — 훑기(canary sweep) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(.github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-context-sweep.pg-test.mjs
 //
 // 왜 따로인가: 범위를 못 지키는 길은 리뷰 때마다 «적어 둔 목록 밖의 형제» 로 나왔다(휴지통 → 이력 → 수정 제안 → 맥락 파이프라인). 길 이름을 적은

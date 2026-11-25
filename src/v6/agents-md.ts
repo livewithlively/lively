@@ -41,6 +41,16 @@ const SESSION_TASK_RULE = [
   "내 세션의 태스크는 `session_task` 로 본다(번호 불필요). 요청받은 일을 끝내면(검증까지) `session_task {status:\"done\"}`(`reason` 에 끝낸 내용 한 줄 — ClickUp 미러면 코멘트로 남는다), 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.",
 ].join("\n");
 
+// 결과물 파일(#5790) — 세션이 만든 결과물은 **프로젝트 폴더 안에** 둬야 자료가 된다(중앙 세션은 턴 끝 훑기 —
+//  ingest/session-outputs.ts, 노드 세션은 project-push 훅). 바탕화면·홈·/tmp 에 둔 파일은 그 사람 작업 공간에만 남아
+//  아무도 못 본다(2026-11-24 실측: 홍보물 PNG 가 /home/box_<그 사람>/Desktop 에만 있어 팀이 못 받았다).
+//  등록 장치와 **같은 배포로** 켜져야 하므로 훅(DB)이 아니라 digest 에 둔다(SESSION_TASK_RULE 와 같은 이유).
+const OUTPUTS_RULE = [
+  "## 결과물 파일",
+  "사람에게 줄 결과물(문서·이미지·PDF·표 등)은 **이 프로젝트 폴더 안에** 저장한다 — 턴이 끝나면 자동으로 [자료]에 «AI가 만든 파일»로 등록돼 팀이 보고 찾을 수 있다.",
+  "바탕화면·홈·/tmp 처럼 이 폴더 밖에 두면 등록되지 않고 다른 사람은 못 본다. 코드·임시 파일은 등록하지 않는다. 결과를 알려 줄 땐 이 폴더 안의 경로로 준다.",
+].join("\n");
+
 // 코드 작업 진입 — 프로젝트 세션은 코드가 체크아웃되지 않은 폴더에서 뜬다(#918: 세션 생성이 워크트리를 만들지 않는다).
 //  그래서 '코드를 어떻게 확보하나'를 프로젝트 폴더에서 항상 알려준다. 이게 없으면 에이전트가 공유 base 를 ls 로 더듬거나
 //  (#906) base 에서 직접 작업하는 사고로 간다 — 발견을 전역 WIKI 인덱스 제목 한 줄의 운에 맡기지 않는다.
@@ -95,6 +105,7 @@ function buildProjectDigest(p: any): string {
     }
     L.push("- 각 항목 상세: `project_get_v6` 의 tasks 로 id 조회.", "");
   }
+  L.push(OUTPUTS_RULE, "");
   L.push(SESSION_TASK_RULE, "");
   L.push(CLOSEOUT_SECTION, "");
   return L.join("\n").trim();

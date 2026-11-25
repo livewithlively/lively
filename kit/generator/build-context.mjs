@@ -277,7 +277,7 @@ ${orgName} 팀 컨텍스트 **설치 묶음**입니다. 설치 한 줄(\`/cli\`)
 
 토큰은 명령줄에 넣지 않습니다 — 실행하면 화면에 안 보이는 가림 입력으로 받습니다.
 설치 후 자기 코드 레포 등 **쓰는 폴더**에서 \`lively work-root add\` 를 한 번 실행하면, 그 폴더에서 켠 \`claude\` 가 회사 맥락을 아는 상태로 시작됩니다.
-그 폴더에서 켠 \`claude\` 안에서 \`/lively-connect\` 를 쳐도 같습니다 — Windows 에서 보안 프로그램이 \`lively\` 실행을 «액세스가 거부되었습니다» 로 막으면 이쪽을 쓰세요.
+그 폴더에서 켠 \`claude\` 안에서 \`/lively-mode on\` 을 쳐도 같습니다 — Windows 에서 보안 프로그램이 \`lively\` 실행을 «액세스가 거부되었습니다» 로 막으면 이쪽을 쓰세요.
 
 업데이트는 **자동**입니다(다음 세션에 스스로 최신화). 지금 당장 맞추려면 \`lively update\`,
 상태 확인은 \`lively status\` / \`lively doctor\`. 라이브 현황은 세션마다 자동 갱신됩니다.
@@ -582,6 +582,12 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   //  게이트웨이(src/ops/workspace-reclaim.ts)도 **이 같은 파일**을 읽는다 — 삭제 규칙이 두 벌로 갈라지지 않게.
   copyMjsWithHeader(kitAbs("cli/workspace-reclaim-core.mjs"), join(target, "cli", "workspace-reclaim-core.mjs"), "kit/cli/workspace-reclaim-core.mjs", orgLabel);
   copied.push("cli/workspace-reclaim-core.mjs");
+  // NAS 받기 코어 — lively-mcp-local.mjs(lively_local_nas_pull)가 dynamic import. 번들 동봉(옆에 둬야 import 해결).
+  //  ⚠ 여기서 빠지면 설치기(user-install.mjs)의 복사가 조용히 건너뛰어 구성원 PC 에서 그 툴만 매번 실패한다.
+  copyMjsWithHeader(kitAbs("cli/nas-pull-core.mjs"), join(target, "cli", "nas-pull-core.mjs"), "kit/cli/nas-pull-core.mjs", orgLabel);
+  copied.push("cli/nas-pull-core.mjs");
+  copyMjsWithHeader(kitAbs("cli/nas-push-core.mjs"), join(target, "cli", "nas-push-core.mjs"), "kit/cli/nas-push-core.mjs", orgLabel);
+  copied.push("cli/nas-push-core.mjs");
   // 서브커맨드 모듈(#1313 R52) — lively.mjs 가 `node`·`delegate`·`resume/backfill/share` 에서 dynamic import.
   //  번들 동봉(lively.mjs 옆에 둬야 import 해결) → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
   for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs"]) {

@@ -268,7 +268,9 @@ async function route() {
         else if (sub2 === 'f' && segs[2]) scopeKey = 'F' + segs[2];
         else if (sub2 === 'none') scopeKey = '__none__';
         else if (sub2 === 'all') scopeKey = '__all__';   // #3870 — 셸 사이드바 「전체」. 스코프 없는 주소(#/projects2)는 보던 스코프를 이어 간다.
-        else if (sub2 === 'drafts') scopeKey = '__drafts__';   // #5522 — 셸 사이드바 「초안」. 나와 초대한 사람만 보는 초안 프로젝트만.
+        else if (sub2 === 'drafts') scopeKey = '__drafts__';
+        else if (sub2 === 'invited') scopeKey = '__invited__';   // #5630 — 셸 사이드바 「초대받은」
+        else if (sub2 === 'mine') scopeKey = '__mine__';         // #5630 — 셸 사이드바 「내가 만든」   // #5522 — 셸 사이드바 「초안」. 나와 초대한 사람만 보는 초안 프로젝트만.
         await renderProjectsV2(view, 'dashboard', params, scopeKey);
       }
     } else if (page === 'system') {

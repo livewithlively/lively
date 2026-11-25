@@ -215,7 +215,7 @@ export const knowledgeSave: Capability = {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 공개범위(#1291) — 이름을 명시해 **기존 문서를 고치는** 경우만 막는다(신규 생성은 그대로).
     //  안 그러면 이름만 알면 안 보이는 문서를 upsert 로 통째로 덮어쓸 수 있다.
-    if (input.name) await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    if (input.name) await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
 
     // ── #4824 증류 저장 — derived_from 정리 · 증류 배치 가드(사양 R7) · 볼 수 있는 자료인가. 전부 쓰기 **전에**. ──
     //  빈 배열은 «없음» 과 같다. 안 보이는 자료는 없는 자료와 같은 문구(존재 은닉 — source_link_knowledge 와 같은 규율).
@@ -551,7 +551,7 @@ export const knowledgeSetLifecycle: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetLifecycleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     // 🔒 전환 가드(#783 자가승인 차단 · #638 미러 복원 금지) — 판정은 denyLifecycleChange 한 곳에.
     //  여기서 막아야 MCP·웹 REST·다른 클라이언트가 같은 규칙을 쓴다. UI 버튼 숨김은 안내일 뿐 규칙이 아니다.
     const gate = await getKnowledgeGateFields(input.name);
@@ -610,7 +610,7 @@ export const knowledgeSetTitle: Capability = {
     //  같은 이름을 봐야 한다(knowledge_save 의 #1442 정규화와 같은 이유·같은 함수). resolveKnowledgeName 은 멱등이다.
     //  slugify 를 바로 쓰면 대소문자만 다른 실재 이름이 소문자 쪽 행으로 간다(knowledge-common.ts pickKnowledgeName).
     input.name = await resolveKnowledgeName(input.name);
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다).
     const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
     if (gate.isCreate || !gate.before) {
@@ -787,7 +787,7 @@ export const knowledgeSetFields: Capability = {
     const capped = applySoftCaps("knowledge_set_fields", input, KFIELDS_CAPS);
     // 이름 정규화 → 공개범위 검사 순서는 set_title 과 같다(정규화한 이름의 행을 고치므로 검사도 그 이름을 본다).
     input.name = await resolveKnowledgeName(input.name);   // 저장·set_title 과 같은 정규화(대소문자만 다른 실재 이름을 그 행으로)
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
     if (gate.isCreate || !gate.before) {
       throw new HttpError(404, `지식 '${input.name}' 없음 — fields 갱신은 기존 지식에만 됩니다.`);
@@ -846,7 +846,7 @@ export const knowledgeSetWiki: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetWikiInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await setKnowledgeWiki(input.name, input.is_wiki, writeCtx) };
   },
@@ -883,7 +883,7 @@ export const knowledgeSetSearchable: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetSearchableInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     try {
       return await setKnowledgeSearchable(input.name, input.searchable, writeCtx);
@@ -913,7 +913,7 @@ export const knowledgeDelete: Capability = {
       parse: (req) => ({ name: String(req.params?.name ?? "") }) }],
   },
   handler: async (input: KnowledgeDeleteInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     if (ctx?.source === "mcp") {
       throw new HttpError(403, "지식 삭제는 사람(웹)만 가능합니다 — 에이전트는 거부됩니다(비가역). 정정은 같은 이름으로 덮어쓰기(저장)하세요");
     }
@@ -956,7 +956,7 @@ export const knowledgeMove: Capability = {
       } }],
   },
   handler: async (input: KnowledgeMoveInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await moveKnowledge(input.name, input.parent_name ?? null, input.sort, writeCtx) };
   },

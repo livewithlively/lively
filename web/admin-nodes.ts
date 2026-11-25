@@ -104,7 +104,8 @@ function stopRuleLine(n) {
   //  켰어도 이 컴퓨터를 판정하지 않으면(윈도우 · 옛 연결 프로그램 · 중앙 자리) «켬» 이라 하지 않고 그 까닭을 말한다 — 서버가 준 말 그대로.
   const text = !e.enabled ? '꺼짐'
     : n.stop_rule_note ? '켰지만 이 컴퓨터엔 적용 안 됨 — ' + n.stop_rule_note
-    : '켬 · 끝난 뒤 ' + fmtStopMin(e.doneMin) + ' · 답 대기 ' + fmtStopMin(e.askingMin) + ' · 상태 모름 ' + fmtStopMin(e.unknownMin);
+    : '켬 · 끝난 뒤 ' + fmtStopMin(e.doneMin) + ' · 답 대기 ' + fmtStopMin(e.askingMin) + ' · 상태 모름 ' + fmtStopMin(e.unknownMin)
+      + (typeof e.staleMin === 'number' ? ' · 오래 남은 세션 확인 ' + fmtStopMin(e.staleMin) : '');
   const allWorkspace = e.source && Object.values(e.source).every((s) => s === 'workspace');
   return el('span', { class: 'wikicat-should', title: '아무도 보지 않는 세션의 AI 를 이 시간이 지나면 끕니다. 대화는 남아 다시 열면 이어집니다.' },
     el('span', { class: 'wikicat-should-label', text: '자동 종료' }), text + (allWorkspace ? ' (워크스페이스 기본값)' : ''));
@@ -131,6 +132,7 @@ function openStopRuleForm(n, reload) {
   const doneIn = minIn(own.done_minutes, ws.doneMin);
   const askingIn = minIn(own.asking_minutes, ws.askingMin);
   const unknownIn = minIn(own.unknown_minutes, ws.unknownMin);
+  const staleIn = minIn(own.stale_minutes, ws.staleMin);   // #5623
   const msg = el('p', { class: 'admin-hint' });
   const save = el('button', { class: 'btn btn-primary', text: '저장' });
   const body = el('div', {},
@@ -142,8 +144,10 @@ function openStopRuleForm(n, reload) {
     field('작업이 끝난 뒤 끄기 (분)', doneIn),
     field('답을 기다린 뒤 끄기 (분)', askingIn),
     field('상태를 모를 때 끄기 (분)', unknownIn),
+    field('오래 남은 세션 확인 (분)', staleIn),
     el('p', { class: 'admin-hint', style: 'margin:-8px 0 12px' },
-      '칸을 비우면 워크스페이스 기본값을 따릅니다. 0 이면 그 상태의 세션은 끄지 않습니다. “상태를 모를 때”는 AI 가 작업을 마쳤는지 알리지 않은 세션에 걸리는 안전망입니다.'),
+      '칸을 비우면 워크스페이스 기본값을 따릅니다. 0 이면 그 상태의 세션은 끄지 않습니다. “상태를 모를 때”는 AI 가 작업을 마쳤는지 알리지 않은 세션에 걸리는 안전망입니다. '
+      + '“오래 남은 세션 확인”은 백그라운드 작업이 있다고 알린 채 남은 세션과 대화 기록이 연결되지 않은 세션에 걸립니다. 아무도 안 본 지 이 시간이 지나면, 실제로 도는 작업이 없는 세션은 끄고, 도는 작업이 있거나 대화 기록이 연결되지 않은 세션에는 «아직 필요한지 확인해 달라» 는 글을 자동으로 보냅니다(그 세션에서 AI 가 한 번 답합니다).'),
     msg,
     el('div', { class: 'admin-actions' }, save));
   const back = overlay('하네스 자동 종료 — ' + (n.name || n.id), body);
@@ -154,7 +158,7 @@ function openStopRuleForm(n, reload) {
     return Number.isInteger(v) && v >= 0 && v <= 43200 ? v : NaN;
   };
   save.onclick = async () => {
-    const mins = { done_minutes: minOf(doneIn), asking_minutes: minOf(askingIn), unknown_minutes: minOf(unknownIn) };
+    const mins = { done_minutes: minOf(doneIn), asking_minutes: minOf(askingIn), unknown_minutes: minOf(unknownIn), stale_minutes: minOf(staleIn) };
     if (Object.values(mins).some((v) => Number.isNaN(v))) { msg.textContent = '분은 0~43200 사이의 정수로 적거나 비워 두세요.'; return; }
     save.disabled = true;
     try {

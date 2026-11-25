@@ -15,7 +15,7 @@
 import { CODEX_AUTH_KIND, describeCodexAuth, parseCodexAuth } from "./codex-auth.js";
 
 export interface VerifyResult {
-  /** true=상류가 이 토큰을 받아들였다. false=거부. null=확인 경로가 없는 kind(=건너뜀). */
+  /** true=상류가 이 토큰을 받아들였다. false=거부. null=확인 경로가 없거나 확인하지 못함(=판정 보류). */
   ok: boolean | null;
   /** 사람이 읽는 한 줄. 성공이면 누구인지, 실패면 무엇을 어떻게 고치는지. */
   message: string;
@@ -137,9 +137,55 @@ const LOCAL_VERIFIERS: Record<string, (token: string) => VerifyResult> = {
   [CODEX_AUTH_KIND]: (token) => describeCodexAuth(parseCodexAuth(token)),
 };
 
+/**
+ * Claude setup-token 의 소속 조직. 관리 설정 forceLoginOrgUUID(회사 조직만 허용)를 켜면 조직 밖 토큰은 위탁 시작 단계에서
+ *  거부된다 — 켜기 전에 본인이 자기 토큰의 조직을 확인할 수 있게 하려고 있다.
+ *
+ *  경로는 Claude Code 번들이 토큰의 조직을 얻을 때 쓰는 것을 그대로 따랐다 — POST·빈 body·Bearer·Content-Type: application/json,
+ *  응답의 organization_uuid. 번들(2.1.327)은 forceLoginOrgUUID 검사에서 토큰 권한에 user:profile 이 없으면(setup-token 등) 이 경로를,
+ *  있으면 프로필 조회를 쓴다. 메시지 생성은 부르지 않으니 구독 사용량을 쓰지 않고 부작용도 없다[미확인 — 번들 코드 읽기 기준].
+ *  실측(2026-11-18, api.anthropic.com): 토큰 없음 401 «Missing Authorization header…» · 지어낸 토큰 401 «OAuth access token is
+ *   invalid.» · GET 405 · 없는 경로 404 — 경로·호스트·메서드는 맞다. 유효한 로그인 토큰(Max · 권한에 user:profile 있음)은
+ *   200 {organization_uuid} 만 돌려줬다(organization_name 없음). setup-token(user:profile 없음)의 200 은 아직 실측 전이다.
+ *  ⚠ 거부를 단정하지 않는다: 200 + organization_uuid 만 ok=true 이고, 401/403 을 포함한 나머지는 전부 null 이다.
+ *   문서 없는 경로의 401 이 «토큰이 틀렸다» 인지 «경로·헤더가 바뀌었다» 인지 모르는데 거부로 말하면 멀쩡한 토큰을 지우게 만든다.
+ *   해제 조건: 유효한 토큰·깨진 토큰으로 각 1회 실측해 401 이 깨진 토큰에서만 나오면 401 을 false 로 올린다. 깨진 토큰 쪽과
+ *   로그인 토큰 쪽은 위 실측으로 됐고, setup-token 의 200 이 남았다(권한이 달라 로그인 토큰 결과로 갈음하지 않는다).
+ */
+const CLAUDE_ORG_URL = "https://api.anthropic.com/api/oauth/org";
+async function verifyClaudeSetupToken(token: string): Promise<VerifyResult> {
+  const unknown = (why: string): VerifyResult => ({
+    ok: null,
+    message: `Claude 토큰의 조직을 확인하지 못했어요(${why}) — 확인되지 않은 경로라 토큰 문제로 단정하지 않습니다. 위탁이 실제로 시작되는지로 확인해 주세요.`,
+  });
+  let res: Response;
+  try {
+    res = await fetch(CLAUDE_ORG_URL, {
+      method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return { ok: null, message: "Claude 에 연결하지 못했어요(네트워크) — 토큰 문제는 아닙니다. 잠시 뒤 다시 확인해 주세요." };
+  }
+  if (res.status === 401 || res.status === 403) return unknown(`거부 응답 ${res.status} 을 받음`);
+  if (res.status === 429) return { ok: null, message: "Claude 가 잠시 요청을 제한하고 있어요 — 잠깐 뒤 다시 확인해 주세요." };
+  if (res.status !== 200) return unknown(`응답 ${res.status}`);
+  const body = (await res.json().catch(() => null)) as { organization_uuid?: unknown; organization_name?: unknown } | null;
+  const uuid = typeof body?.organization_uuid === "string" && body.organization_uuid ? body.organization_uuid : null;
+  if (!uuid) return unknown("응답 모양이 예상과 다름");
+  // organization_name 은 번들이 읽는 필드가 아니고 실측 응답(2026-11-18)에도 없었다. 응답에 있으면 사람이 알아보기 쉬우라고 붙일 뿐, 판정은 uuid 로만 한다.
+  const name = typeof body?.organization_name === "string" && body.organization_name ? body.organization_name : null;
+  const who = name ? `${name} (${uuid})` : uuid;
+  return { ok: true, who, message: `Claude 조직 ${who} 의 토큰이에요.` };
+}
+
+/** 표의 GET 판정 규칙을 따르지 않는 확인기 — 요청 모양·판정을 그 kind 가 직접 정한다. */
+const PROBE_VERIFIERS: Record<string, (token: string) => Promise<VerifyResult>> = {
+  claude_setup_token: verifyClaudeSetupToken,
+};
+
 export function verifierExists(kind: string): boolean {
   const k = String(kind ?? "").toLowerCase();
-  return Object.prototype.hasOwnProperty.call(VERIFIERS, k) || Object.prototype.hasOwnProperty.call(LOCAL_VERIFIERS, k);
+  return [VERIFIERS, LOCAL_VERIFIERS, PROBE_VERIFIERS].some((t) => Object.prototype.hasOwnProperty.call(t, k));
 }
 
 /**
@@ -147,10 +193,13 @@ export function verifierExists(kind: string): boolean {
  *  "우리가 못 물어본 것"을 "토큰이 틀린 것"으로 말하면 사용자가 멀쩡한 토큰을 지운다.
  */
 export async function verifyCredential(kind: string, token: string): Promise<VerifyResult> {
-  const local = Object.prototype.hasOwnProperty.call(LOCAL_VERIFIERS, String(kind ?? "").toLowerCase())
-    ? LOCAL_VERIFIERS[String(kind).toLowerCase()] : undefined;
+  const k = String(kind ?? "").toLowerCase();
+  const own = (t: object): boolean => Object.prototype.hasOwnProperty.call(t, k);
+  const local = own(LOCAL_VERIFIERS) ? LOCAL_VERIFIERS[k] : undefined;
   if (local) return token ? local(token) : { ok: false, message: "저장된 토큰이 없어요." };
-  const v = VERIFIERS[String(kind ?? "").toLowerCase()];
+  const probe = own(PROBE_VERIFIERS) ? PROBE_VERIFIERS[k] : undefined;
+  if (probe) return token ? probe(token) : { ok: false, message: "저장된 토큰이 없어요." };
+  const v = VERIFIERS[k];
   if (!v) return { ok: null, message: "이 종류는 자동 확인을 지원하지 않아요 — 저장은 정상입니다." };
   if (!token) return { ok: false, message: "저장된 토큰이 없어요." };
 

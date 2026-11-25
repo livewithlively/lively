@@ -1,4 +1,4 @@
-// 앱 판(#4600) PG 통합 테스트 — **실제 Postgres 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 판(#4600) PG 통합 테스트 — **실제 Postgres 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-versions.pg-test.mjs
 //
 // 화면·데이터만으로 된 빌트인(픽스처 폴더)을 시딩한 뒤 구성원이 app_save 로 덮어쓰고 → 판 이력 → 시더가 덮지 않는지 → 되돌리기 → 보관 규칙을

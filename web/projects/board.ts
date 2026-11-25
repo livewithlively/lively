@@ -34,7 +34,6 @@ import { avatarColor } from './files.js';
 // ⚠ 보기 상태 싱글턴은 projects/state.ts 소유(#1313 R31) — 여기선 읽고 프로퍼티만 바꾸며, 통째 교체는 세터 경유.
 import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvOwnSideAllowed, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScrollHost, pjvScrollTop, pjvScopeKept, pjvSetFolderOpen, pjvSideDrag, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
 import { PJV_DEFAULT_STATUS_DEFS, PJV_PRIORITY, pjvFmtDate, pjvIsOverdue, pjvListIsCustomStatus, pjvListStatusDefs, pjvApplyStatusTemplates, pjvLoadStatusTemplates, pjvNativeStatusOf, pjvResolveProjStatus, pjvSetStatusRegistry, pjvStatusIcon, pjvStatusIconStd } from './status.js';
-import { pjvAssignees } from './task-controls.js';
 import { PJV_STD_COLS, PJV_STD_COL_VAR, PJV_STD_COL_W, pjvApplyColOrder, pjvApplyColWidths, pjvApplyHiddenCols, pjvFieldsForList, pjvGetColSort, pjvGetShownCols, pjvInitNameResize, pjvNameResizeHandle, pjvProjGridTemplate, pjvSetListRegistry, pjvStdColHead, pjvWireColReorder, setBoardFieldsCur } from './columns.js';
 import { pjvAddColumnButton, pjvColumnHead } from './fields.js';
 import { pjvApplyToolbarFilters, pjvAsgFilter, pjvAssigneePopover, pjvBoardSearch, pjvBoardSettingsPopover, pjvClosedPopover, pjvColumnsPopover, pjvFilterCount, pjvFilterPopover, pjvMeModeOn, pjvMeModePopover, pjvSavedViewMenu, pjvSetFilterUniverse, pjvViewTabsRow } from './filters.js';
@@ -46,7 +45,11 @@ import { isMyProject } from '../lib/board-view.js';   // #4865 — '내 할당' 
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 바깥 셸이 알려 온 리스트 즐겨찾기 변경
 import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavListCacheSet, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
 import { openProjectV2Form } from './project-form.js';
-import { DRAFT_HINT, DRAFT_LABEL, DRAFT_TIP, draftsShown, isDraftProj, setDraftsShown, withDraftToggle } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 · 「초안 보기」 토글 한 벌
+import { DRAFT_HINT, DRAFT_LABEL, draftsShown, isDraftProj, setDraftsShown, withDraftToggle } from '../lib/proj-draft.js';   // #5522 초안 잣대 · 말 · 「초안 보기」 토글 한 벌
+import { draftTipFor } from '../lib/proj-access.js';                // #5598
+import { setAccessConfig } from './access-ui.js';
+import { projPeopleStack } from './people-ui.js';                    // #5630 사람 한 벌(리드 + 함께)
+import { projRelation, RELATION_LABEL } from '../lib/proj-relation.js';   // #5630 관계 스코프     // #5598 «누가 보나» 표시 · 워크스페이스 설정
 import { pjvMySessionCounts, pjvPrefetchSessions, pjvSessGroupLabel, pjvSessGroupMenu, pjvSessionListView } from './session-list.js';   // #4865 「리스트」 뷰 = 스코프 안 프로젝트(줄마다 세션 요약)
 
 /** #5522 「초안」 스코프가 비었을 때 — 초안은 무언가를 남기면 풀려 제 리스트 · 「기타 (미분류)」로 간다. */
@@ -156,7 +159,10 @@ function pjvKanbanBoard(projects, selList, ctx) {
     for (const p of cards) {
       const card = el('div', { class: 'pjv-kb-card' + (p.status === 'done' ? ' done' : ''), draggable: 'true', role: 'link', tabindex: '0' });
       //  #5522 초안 표시 — 칸반은 상태 칸으로만 나뉘어 초안이 제 칸에 섞인다. 이름 위에 작은 표시로 가른다(이름은 두 줄에서 잘리므로 따로).
-      if (isDraftProj(p)) card.append(el('span', { class: 'pj-draft-tag pjv-kb-draft', title: DRAFT_TIP, text: DRAFT_LABEL }));
+      //  #5598 «누가 보나» 도 같은 줄에 — 닫힌 프로젝트의 자물쇠가 카드마다 보여야 «이 칸에 올린 게 공유되나» 를 안 묻는다.
+      //  #5630 — «누가 보나» 알약(나만 · N명과 공유)은 걷었다. 사람(리드 + 함께 얼굴)은 카드 아래 얼굴 자리(종전엔 프로젝트에 담당자가 없어 늘 비었다).
+      const kbDraft = isDraftProj(p) ? el('span', { class: 'pj-draft-tag', title: draftTipFor(p), text: DRAFT_LABEL }) : null;
+      if (kbDraft) card.append(el('div', { class: 'pjv-kb-draft pjv-kb-marks' }, kbDraft));
       card.append(el('div', { class: 'pjv-kb-name', text: p.name }));
       const tags = Array.isArray(p.tags) ? p.tags.slice(0, 3) : [];
       if (tags.length) {
@@ -170,7 +176,8 @@ function pjvKanbanBoard(projects, selList, ctx) {
       const pr = p.priority && PJV_PRIORITY[p.priority];
       if (pr) meta.append(el('span', { class: 'pjv-kb-prio ' + pr.cls, text: '⚑ ' + pr.label }));
       const faces = el('span', { class: 'pjv-kb-faces' });
-      for (const mid of pjvAssignees(p).slice(0, 3)) faces.append(personFace(mid, 'pjv-kb-face', mid));
+      const kbPpl = projPeopleStack(p, { max: 4, size: 's' });
+      if (kbPpl) faces.append(kbPpl);
       meta.append(faces);
       card.append(meta);
       card.onclick = () => { location.hash = '#/projects2/p/' + p.id; };
@@ -280,7 +287,7 @@ async function renderProjectV2Board(view, scopeKey?, fresh?: boolean) {
     //  ⚠ 종전엔 '내 프로젝트'(mine=1)도 따로 받았다 — 서버가 프로젝트 목록을 한 벌 더 만들고 tmux 목록까지 훑어 가장 늦게 왔다(0.6초).
     //   그 응답이 주던 둘(내 세션 수 · '내 할당' 집합)은 이미 받는 재료로 같은 셈을 한다(paint).
     const [projects, mySess, lists, folders, fav, st] = await Promise.all([
-      api('/api/ui/v6/projects?slim=1').then((d) => (d && d.projects) || []),
+      api('/api/ui/v6/projects?slim=1').then((d) => { setAccessConfig(d && d.access); return (d && d.projects) || []; }),   // access — #5598 «누가 보나» 표시의 재료
       pjvMySessionCounts(),
       api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
@@ -604,6 +611,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     //  #5522 초안만 보는 스코프 — 비어 있어도 다른 스코프로 옮기지 않는다(초안이 모두 풀린 것이 «여기 없다» 의 뜻이다).
     //   여기선 초안을 맨 아래 묶음으로 빼지 않고(전부가 초안이다) 새 프로젝트 줄도 두지 않는다(사람이 만든 것은 초안이 아니라 곧 빠진다).
     const draftScope = sel === '__drafts__';
+    //  #5630 관계 스코프 — 셸 사이드바 「초대받은」(__invited__) · 「내가 만든」(__mine__). 리스트 · 폴더를 가로질러 모든 뷰가 좁혀진다.
+    const relScope = sel === '__invited__' ? 'invited' : sel === '__mine__' ? 'mine' : null;
     // 스코프별 뷰 로드(#541) — 이 스코프의 저장 뷰(없으면 기본: 폴더/스페이스=개요, 리스트=상태)를 globals 로.
     //  byStatus 파라미터도 여기서 재동기(render() 가 넘긴 값은 로드 전 스냅샷이므로).
     pjvApplyView(pjvLoadScopeView(sel) || pjvDefaultView(sel));
@@ -620,7 +629,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       : sel[0] === 'L' ? new Set([Number(sel.slice(1))]) : null;
     const scopeAll = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
       : sel === '__none__' ? projects.filter((p) => p.list_id == null)
-      : sel === '__drafts__' ? projects.filter(isDraftProj) : projects;
+      : sel === '__drafts__' ? projects.filter(isDraftProj)
+      : relScope ? projects.filter((p) => projRelation(p, meId) === relScope) : projects;
     //  #5522 「초안 보기」 토글을 끄면 초안이 빠진다(「초안」 스코프는 그대로). 숨긴 수는 「리스트」 뷰 개수 글이 말한다.
     const scopeRaw = draftScope ? scopeAll : withDraftToggle<any>(scopeAll, showDrafts);
     const hiddenDrafts = scopeAll.length - scopeRaw.length;
@@ -643,6 +653,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     else if (sel[0] === 'L') { selList = lists.find((l) => String(l.id) === sel.slice(1)); shownProjects = (groupByList.get(Number(sel.slice(1)))?.projects) || []; }
     else if (sel === '__none__') shownProjects = unGroup ? unGroup.projects : [];
     else if (sel === '__drafts__') shownProjects = draftsAll;
+    else if (relScope) shownProjects = groups.flatMap((g) => g.projects).filter((p) => projRelation(p, meId) === relScope);
     const listIdForAdd = selList ? selList.id : null; // 특정 리스트 선택 시 새 프로젝트는 그 리스트로
     const mineOnly = pjvBoardMineOnly.on;
 
@@ -1304,6 +1315,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   const scopeName = (key) => {
     if (key === '__none__') return '기타 (미분류)';
     if (key === '__drafts__') return DRAFT_LABEL;
+    if (key === '__invited__') return RELATION_LABEL.invited;
+    if (key === '__mine__') return RELATION_LABEL.mine;
     if (typeof key === 'string' && key[0] === 'L') { const l = lists.find((x) => String(x.id) === key.slice(1)); return l ? l.name : null; }
     if (typeof key === 'string' && key[0] === 'F') { const f = (folders || []).find((x) => String(x.id) === key.slice(1)); return f ? f.name : null; }
     return null;
@@ -1442,6 +1455,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     if (leafList) items.push(mkCrumb(pjvListGlyph(leafList), leafList.name, 'L' + leafList.id, 'is-leaf'));
     if (sel === '__none__') items.push(mkCrumb(pjvBundleIcon(null, 'none'), '기타 (미분류)', '__none__', 'is-leaf'));
     if (sel === '__drafts__') items.push(mkCrumb(pjvBundleIcon(null, 'draft'), DRAFT_LABEL, '__drafts__', 'is-leaf'));
+    if (sel === '__invited__' || sel === '__mine__') items.push(mkCrumb(pjvBundleIcon(null, sel === '__invited__' ? 'invited' : 'mine'), RELATION_LABEL[sel === '__invited__' ? 'invited' : 'mine'], sel, 'is-leaf'));
     // 구분자(/)를 끼워 넣고, 잎 옆에 ⌄(설정 메뉴)·☆(즐겨찾기)를 붙인다.
     // 경로(조상)와 잎(지금 자리)을 따로 감싼다(#4231) — 데스크톱은 둘 다 display:contents 라 종전과 한 픽셀도 다르지 않고,
     //  폰(50-mobile.css ≤640)에서만 «작은 경로 한 줄 + 큰 제목 한 줄» 두 층으로 선다(클릭업 모바일의 리스트 머리).
@@ -1512,7 +1526,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
 function pjvListColHead(fields, anchorId, reload, listId?) {
   const headEl = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols pjv-list-colhead' },
     el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'pjv-list-colhead-name', text: '프로젝트' }), pjvNameResizeHandle()),
-    pjvStdColHead('proj', 'team', '팀원'),
+    pjvStdColHead('proj', 'team', '사람'),
     pjvStdColHead('proj', 'due', '마감일'),
     pjvStdColHead('proj', 'start', '시작일'),
     pjvStdColHead('proj', 'created', '생성일'),

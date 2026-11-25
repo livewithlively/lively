@@ -5,6 +5,7 @@ import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
+import { parseSecretRef, SECRET_REF_FORMS, SECRET_REF_MAX } from "../../db/secret-ref.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../../org/policies/storage-policy.js";
 import type { CallLogPolicyPatch } from "../../org/policies/call-log-policy.js"; // #1082 호출 감사로그 보존기간
 import {
@@ -39,6 +40,7 @@ import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
 import { actorOf, restOnly, restRead, restWork, str } from "./shared.js";
+import { isAdmin } from "../principal.js";
 import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
@@ -173,6 +175,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (s.pty_critical_pct !== undefined) patchIn.pty_critical_pct = num(s.pty_critical_pct, "pty_critical_pct", 0, 100); // #687 후속 0=끔
         if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
         if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
+        if (s.derived_evict_enabled !== undefined) patchIn.derived_evict_enabled = Boolean(s.derived_evict_enabled);                       // #5368
+        if (s.derived_evict_idle_days !== undefined) patchIn.derived_evict_idle_days = num(s.derived_evict_idle_days, "derived_evict_idle_days", 0, 365); // #5368
         // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
         const stored = (await getRuntimeConfig()).storage_policy;
         // 비율도 남은 공간도 0 이면 막는 기준이 없다 — normalize 가 바닥을 기본값으로 되돌리기 전에 여기서 알린다.
@@ -342,6 +346,11 @@ export const runtimeConfigCapabilities: Capability[] = [
           const n = Number(s.node_stop_unknown_minutes);
           if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_unknown_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=상태를 모르는 세션을 끄지 않음)`);
           patchIn.node_stop_unknown_minutes = Math.floor(n);
+        }
+        if (s.node_stop_stale_minutes !== undefined) {
+          const n = Number(s.node_stop_stale_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_stale_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=상태를 모르는 세션을 끄지 않음)`);
+          patchIn.node_stop_stale_minutes = Math.floor(n);
         }
         patch.session_reclaim_policy = patchIn;
       }
@@ -522,14 +531,17 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (!Array.isArray(input.allowed_internal_hosts)) throw new HttpError(400, "allowed_internal_hosts 는 배열이어야 합니다");
         patch.allowed_internal_hosts = input.allowed_internal_hosts.map((h) => str(h, "allowed_internal_hosts[]", 200).trim().toLowerCase()).filter(Boolean);
       }
-      // db 소스 auth_ref 가 참조할 수 있는 비번 env '이름' 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
-      //  외부(비번 필요) 소스 등록이 불가능했다). allowed_auth_envs 와 동일한 env 이름 형식 검증. 값이 아니라 이름만.
+      // db 소스 auth_ref 가 참조할 수 있는 비번 참조 화이트리스트(#715 배선 — store 엔 있었으나 REST 입력이 없어
+      //  외부(비번 필요) 소스 등록이 불가능했다). 값이 아니라 참조만 — 환경변수 이름 · gcp-sm: · aws-sm:(#1764). 등록 도구와
+      //  같은 판정(secret-ref.parseSecretRef)을 써서, 여기서 받은 꼴은 auth_ref 로도 반드시 받힌다.
+      //  어느 꼴도 아닌 항목(실수로 붙여 넣은 비밀번호일 수 있다)은 오류 문장에 되싣지 않고 몇 번째인지만 말한다.
       if (input.allowed_db_secret_refs !== undefined) {
         if (!Array.isArray(input.allowed_db_secret_refs)) throw new HttpError(400, "allowed_db_secret_refs 는 배열이어야 합니다");
-        patch.allowed_db_secret_refs = input.allowed_db_secret_refs.map((e) => str(e, "allowed_db_secret_refs[]", 100).trim()).filter(Boolean);
-        for (const e of patch.allowed_db_secret_refs) {
-          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e)) throw new HttpError(400, `allowed_db_secret_refs 항목 '${e}' 는 환경변수 이름 형식이어야 합니다(시크릿 값 금지)`);
-        }
+        patch.allowed_db_secret_refs = input.allowed_db_secret_refs.map((e) => str(e, "allowed_db_secret_refs[]", SECRET_REF_MAX).trim()).filter(Boolean);
+        patch.allowed_db_secret_refs.forEach((e, i) => {
+          const pr = parseSecretRef(e);
+          if (!pr.ok) throw new HttpError(400, `allowed_db_secret_refs ${i + 1}번째 항목 — ${pr.error}`);
+        });
       }
       if (input.write_tools !== undefined) {
         if (!Array.isArray(input.write_tools)) throw new HttpError(400, "write_tools 는 배열이어야 합니다");
@@ -730,7 +742,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       url_allowlist: z.array(z.string()).optional().describe("http_proxy 허용 호스트"),
       allowed_db_hosts: z.array(z.string()).optional().describe("db 소스 허용 host"),
       allowed_internal_hosts: z.array(z.string()).optional().describe("MCP 프록시 허용 내부(사설/localhost) host — SSRF 면제(#746)"),
-      allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
+      allowed_db_secret_refs: z.array(z.string()).optional().describe(`db 소스 auth_ref 가 참조 가능한 비번 참조 화이트리스트(값 아님) — ${SECRET_REF_FORMS}. 여기 적은 비밀은 등록한 DB 접속에 비밀번호로 쓰이니 DB 비밀번호 참조만 적는다(비밀이 나가는 경계)`),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
       pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
       session_share: z.object({
@@ -754,6 +766,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         pty_critical_pct: z.number().int().min(0).max(100).optional().describe("#687후속 PTY 슬롯 위험 임계(사용%, 0=끔) — 기본 85. warn 보다 커야"),
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
+        derived_evict_enabled: z.boolean().optional().describe("#5368 디스크가 경고 임계를 넘으면 쉬는 워크트리의 파생물(node_modules·dist…)을 오래 안 쓴 것부터 자동으로 지운다. 워크트리·소스·.env 는 지우지 않는다"),
+        derived_evict_idle_days: z.number().int().min(0).max(365).optional().describe("#5368 자동 정리가 건너뛰는 기간(일) — 이 안에 손댄 워크트리는 지우지 않는다. 0 = 기간을 보지 않는다"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
       call_log_policy: z.object({
         retention_days: z.number().int().min(0).max(3650).optional().describe("MCP 호출 감사로그 보존일수 — 이보다 오래된 기록은 삭제. 0=무기한 보관"),
@@ -780,6 +794,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         node_stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 턴이 끝나고 아무도 안 보는 채 이 분이 지나면 그 컴퓨터의 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 30"),
         node_stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다(질문은 남겨 다시 열 때 보여 준다). 0=끔. 기본 180"),
         node_stop_unknown_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 상태를 모르는 세션(턴 끝 보고에 예약 셈이 없음 · 마지막 보고가 작업 중에서 멈춤)의 안전망. 마지막 활동·안 보기 시작 뒤 이 분이 지나면 끈다(살아 있는 셸 작업·도는 턴·질문은 집행 직전에 다시 재서 지킨다). 0=끔. 기본 1440"),
+        node_stop_stale_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5623) — 오래 남은 세션(마지막 보고가 «백그라운드 작업 있음» 에서 굳음 · 대화 id 없음)을 다시 보는 간격(분). 아무도 안 본 지 이만큼 지나면: 실제로 도는 작업이 없으면 끄고, 있거나 대화 id 가 없으면 그 세션에 확인 글을 보낸다. 0 = 끔(그 세션은 남는다). 기본 1440"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택). ⚠ 두 축은 스코프가 다르다(#2509): 유휴는 워크스페이스별로, 압박은 박스 전역으로 한 번 돈다 — pressure_* 를 켠다는 것은 «박스가 벼랑에 서면 이 워크스페이스 세션도 걷어도 좋다»는 동의다"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),
@@ -876,9 +891,12 @@ export const runtimeConfigCapabilities: Capability[] = [
   //  여기선 그 op 의 **검증을 그대로** 태우되 받는 키를 주입 축으로 좁힌다. 남겨 둔 관리자 몫 둘:
   //   · hooks.self_update — 구성원 **컴퓨터의 키트**를 바꾸는 스위치(워크스페이스 밖에 닿는다, DANGEROUS_SCOPES 와 같은 근거)
   //   · work_roots — 구성원 컴퓨터의 디렉터리 경로(비-admin 에겐 조회도 안 한다, 위 org_runtime_config 주석)
+  //  #5801(상민 2026-11-25) — 관리자 몫 하나 더: writeback_notice(응답을 마칠 때 AI 에 보내는 글). 주입 문구(org_update_section)와
+  //   같은 근거다 — 모든 구성원의 AI 세션에 지시문으로 들어가는 **글**은 관리자만 고친다. 켜고 끄는 스위치는 그대로 구성원 몫.
   restWork("org_injection_update", "AI 전달(세션 주입) 설정 수정",
-    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·세션 종료 너지 문구·기록 인정 툴(write_tools)·" +
-    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
+    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·기록 인정 툴(write_tools)·" +
+    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 세션 종료 너지 문구(writeback_notice)는 AI 에 주입되는 글이라 관리자만 바꾼다" +
+    "(지금 값 그대로 보내는 것은 받는다). 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
     [{ method: "POST", paths: ["/api/ui/org/injection-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const src = (input ?? {}) as Record<string, unknown>;
@@ -887,6 +905,14 @@ export const runtimeConfigCapabilities: Capability[] = [
       const cur = await getRuntimeConfig();
       const out: Record<string, unknown> = {};
       for (const k of INJECTION_KEYS) if (src[k] !== undefined) out[k] = src[k];
+      //  글(너지 문구)은 관리자만 — 화면이 지금 값을 함께 실어 보내는 저장은 그대로 넘긴다(self_update 와 같은 규칙). null · '' = 기본값.
+      if (out.writeback_notice !== undefined && !isAdmin(user)) {
+        const norm = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+        if (norm(out.writeback_notice) !== norm(cur.writeback_notice)) {
+          throw new HttpError(403, "응답을 마칠 때 보내는 기록 요청 문구는 모든 AI 세션에 주입되는 글이라 관리자만 바꿉니다");
+        }
+        delete out.writeback_notice;
+      }
       if (out.hooks !== undefined) {
         const h = out.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
@@ -906,7 +932,7 @@ export const runtimeConfigCapabilities: Capability[] = [
     }, {
       hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 주입 시점 on/off"),
       inject_ontology_guide: z.boolean().optional().describe("제품 가이드(라이블리 사용법) 주입 on/off"),
-      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값"),
+      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값. 바꾸는 것은 관리자만"),
       write_tools: z.array(z.string()).optional().describe("기록 인정 툴 이름(접두사 없이) — 비우면 기본 목록"),
       pull_tools: z.array(z.string()).optional().describe("외부 인입으로 볼 MCP 툴 이름 prefix — 비우면 기능 끔"),
     }),

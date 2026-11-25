@@ -12,7 +12,9 @@
 //
 // 도는 곳: 부팅 하우스키핑(DB_BOOT_STEPS, scheduler 게이트)이라 **요청별 테넌시(매니지드 중앙 게이트웨이)에서는 뜨지 않는다**
 //  (그 체인이 통째로 건너뛰어진다 — boot/housekeeping.ts requestScopedTenancy). 단일·고정·registry(셀프호스트 다중
-//  워크스페이스)가 대상이다. 관측 상태(seen)는 메모리라 재시작하면 지금 실패 중인 잡을 한 번 더 알린다(box-watch 와 같다).
+//  워크스페이스)가 대상이다. 관측 상태(seen)는 메모리라 재시작하면 비워진다. 그래도 직전 프로세스가 이미 봤을 만큼 오래된
+//  실패는 다시 알리지 않는다(inheritsAlertedFailure — 전제와 범위는 그 머리말) — 격주 잡의 실패 하나가 다음 회차까지
+//  재시작마다 같은 경보로 되살아났다.
 //
 // 규약은 box-watch 를 그대로 따른다(새 규약을 만들지 않는다):
 //  · 판정은 순수 함수 — 전이 규칙을 테스트가 직접 못 박는다.
@@ -34,13 +36,15 @@ export interface CronJobHealth {
   action: string;
   last_status: string | null;
   last_summary?: unknown;
+  /** 행이 마지막으로 바뀐 때 — 실패를 적은 때와 같거나 늦다(failureRecordedAt). */
+  updated_at?: string | Date | null;
 }
 
 /** 잡의 건강 상태. `null` = **관측 없음**(판정 근거가 없는 회차 — 무엇이 그런지는 cronPhaseOf) — 전이를 만들지 않는다. */
 export type CronPhase = "ok" | "failing";
 
 /** 크론이 낸 위탁 하나의 실제 상태(org_task). */
-export interface BatchTaskState { status: string; error?: string | null }
+export interface BatchTaskState { status: string; error?: string | null; finished_at?: string | Date | null }
 
 export interface CronWatchDeps {
   /** 감시 대상 조회(주입 seam). 생략하면 그 워크스페이스의 **켜져 있는** 잡을 읽는다. 못 읽으면 null(빈 목록과 다르다). */
@@ -49,6 +53,8 @@ export interface CronWatchDeps {
   taskStates?: (ids: string[]) => Promise<ReadonlyMap<string, BatchTaskState> | null>;
   /** 알림 전송(채널 미설정이면 no-op). 실패해도 throw 하지 않아야 한다. */
   send: AlertSender;
+  /** 이 프로세스가 뜬 시각(ms, 주입 seam). 생략하면 process.uptime 으로 잰다. */
+  bootedAt?: number;
 }
 
 //  하한 60초 — 빈 값(`CRON_WATCH_INTERVAL_MS=`)은 Number("")=0 이 되어 setInterval 이 1ms 로 돈다. 이 tick 은 워크스페이스마다
@@ -58,6 +64,9 @@ const CHECK_MS = Math.max(60_000, Number(process.env.CRON_WATCH_INTERVAL_MS) || 
 // 마지막으로 관측한 상태 + **실제로 보낸 문제 경보가 있었나**. 키는 워크스페이스 ⊕ 잡 id —
 //  워크스페이스마다 같은 id 의 잡이 따로 산다(스케줄러가 순회하는 것과 같은 이유).
 const seen = new Map<string, { phase: CronPhase; problemSent: boolean }>();
+//  이 프로세스에서 잡 목록을 읽는 데 성공한 첫 스캔을 마친 워크스페이스(scope). 재시작 이어받기(inheritsAlertedFailure)는
+//   그 첫 스캔에 이미 켜져 있던 잡에만 건다 — 그 뒤에 목록에 들어온 잡(다시 켬·새로 만듦)은 직전 프로세스가 지켜보던 잡이 아니다.
+const firstScanned = new Set<string>();
 const KEY_SEP = "\u0000";
 let timer: NodeJS.Timeout | null = null;
 //  tick 중첩 방지 — 워크스페이스가 많고 웹훅이 느리면 한 tick 이 주기를 넘길 수 있다. 두 tick 이 같은 `seen` 을
@@ -215,12 +224,63 @@ export function cronAlertFor(prev: CronPhase | null, cur: CronPhase, job: CronJo
   };
 }
 
+const toMs = (v: string | Date | null | undefined): number | null => {
+  if (v == null) return null;
+  const ms = new Date(v).getTime();
+  return Number.isFinite(ms) ? ms : null;
+};
+
+//  모듈 로드 때 한 번 고정한다 — process.uptime 은 단조 시계라 호스트가 잠들었다 깨면 매번 다시 잰 기동 시각이 늦어진다.
+const BOOTED_AT = Date.now() - process.uptime() * 1000;
+
+/**
+ * 지금 보이는 실패를 감시가 처음 «실패» 로 판정할 수 있게 된 시각(ms, 순수). 모르면 null — 모르면 이어받지 않고 알린다.
+ *  · 잡 행의 updated_at 은 실패를 적은 때와 같거나 늦다. 사람의 편집·재활성화는 이 값을 늦추기만 하므로
+ *    이어받기가 덜 걸리는 쪽(= 한 번 더 알리는 쪽)으로만 틀린다.
+ *  · 위탁형은 회차의 위탁이 **전부** 끝나야 판정된다(delegatedPhaseOf — 하나라도 도는 중이면 관측 없음). 그래서 실패한
+ *    위탁이 아니라 끝난 위탁 전부의 finished_at 중 가장 늦은 것을 본다. 레인 하나가 일찍 실패해도 다른 레인이 재시작 뒤에
+ *    끝났다면 직전 프로세스는 그 실패를 본 적이 없다. 되먹임이 덮이거나(cronPhaseOf ③) 취소·id 가드로 행이 안 바뀌어도
+ *    이 시각은 정확하다. 끝난 위탁 하나라도 finished_at 을 모르면 null 이다.
+ */
+export function failureRecordedAt(
+  job: CronJobHealth, work: DelegatedWork | null, states: ReadonlyMap<string, BatchTaskState> | null,
+): number | null {
+  const row = toMs(job.updated_at);
+  if (row === null) return null;
+  let at = row;
+  for (const id of work?.ids ?? []) {
+    const t = states?.get(id);
+    if (!t || t.status === "queued" || t.status === "running") continue;   // 조회에 없는 id 는 판정에도 안 쓰인다
+    const fin = toMs(t.finished_at);
+    if (fin === null) return null;
+    at = Math.max(at, fin);
+  }
+  return at;
+}
+
+/**
+ * 재시작 뒤 처음 본 실패를 직전 프로세스가 이미 알렸다고 볼 수 있나(순수).
+ *  직전 프로세스는 CHECK_MS 마다 돌았으므로 실패가 판정 가능해지고 한 주기 안에 그것을 봤다. tick 이 주기를 넘길 수 있어
+ *  한 주기를 더 둔다. 그보다 최근의 실패와 시각을 모르는 실패는 알린다.
+ *  이 추론은 직전 프로세스가 그 두 주기 동안 살아서 감시를 돌렸고 전송에 성공했다는 전제를 깐다. 실패 직후 게이트웨이가
+ *  내려가 두 주기 넘게 비었거나, 직전 프로세스의 전송이 실패·미설정이었으면 그 경보는 잃는다(이어받은 상태에서 나으면
+ *  알린 적 없는 문제의 복구가 나간다). 재시작마다 같은 경보가 되살아나는 쪽보다 작은 손실로 본다 — 없애려면 «알렸음» 을
+ *  DB 에 남겨야 한다.
+ *  행이 주기마다 다시 쓰이는 잡(엔진이 회차마다 updated_at 을 올린다 — 주기가 두 감시 주기 이하인 비위탁 잡)은 이 판정에
+ *  안 걸려 재시작마다 종전처럼 다시 알린다. 알리는 쪽 오차다.
+ *  호출부(scanOne)는 이 판정을 재시작 뒤 그 워크스페이스의 **첫 스캔**에 이미 켜져 있던 잡에만 쓴다 — «직전 프로세스가
+ *  지켜보던 잡» 이라는 전제가 그 잡에서만 선다.
+ */
+export function inheritsAlertedFailure(recordedAt: number | null, bootedAt: number, checkMs: number = CHECK_MS): boolean {
+  return recordedAt !== null && recordedAt < bootedAt - 2 * checkMs;
+}
+
 /** 위탁 상태. 표 부재·DB 미연결은 null(관측 없음 — 못 재면 알리지 않는다). */
 async function loadTaskStates(ids: string[]): Promise<ReadonlyMap<string, BatchTaskState> | null> {
   try {
-    const rows = (await q(itemsPool, `SELECT id::text AS id, status, error FROM org_task WHERE id = ANY($1::bigint[])`, [ids])) as
-      Array<{ id: string; status: string; error: string | null }>;
-    return new Map(rows.map((r) => [r.id, { status: r.status, error: r.error }]));
+    const rows = (await q(itemsPool, `SELECT id::text AS id, status, error, finished_at FROM org_task WHERE id = ANY($1::bigint[])`, [ids])) as
+      Array<{ id: string; status: string; error: string | null; finished_at: string | Date | null }>;
+    return new Map(rows.map((r) => [r.id, { status: r.status, error: r.error, finished_at: r.finished_at }]));
   } catch { return null; }
 }
 
@@ -231,7 +291,7 @@ async function loadTaskStates(ids: string[]): Promise<ReadonlyMap<string, BatchT
  */
 async function loadJobs(): Promise<CronJobHealth[] | null> {
   try {
-    return (await q(itemsPool, `SELECT id, label, action, last_status, last_summary FROM org_cron WHERE enabled=true`)) as CronJobHealth[];
+    return (await q(itemsPool, `SELECT id, label, action, last_status, last_summary, updated_at FROM org_cron WHERE enabled=true`)) as CronJobHealth[];
   } catch { return null; }
 }
 
@@ -240,6 +300,12 @@ async function scanOne(deps: CronWatchDeps): Promise<void> {
   const jobs = await (deps.listJobs ?? loadJobs)();
   if (!jobs) return;   // 못 읽었다 — 관측 없음. 상태도 그대로 둔다(아래 폐기 단계를 건너뛴다).
   const scope = (currentTenant()?.id ?? "") + KEY_SEP;
+  //  재시작 이어받기는 이 워크스페이스의 첫 스캔에서만 건다. 첫 스캔 뒤에 목록에 들어온 잡은 처음 보는 실패로 알린다 —
+  //   수집기·커넥터 싱크 잡은 다시 켤 때 updated_at 을 올리지 않아(org/store/collectors.ts·connectors.ts 의
+  //   ON CONFLICT … enabled=true) 행 시각이 옛 실패에 머물고, 그대로 이어받으면 고치지 못한 채 다시 켠 잡이 계속 실패해도
+  //   경보가 한 번도 나가지 않는다. 목록을 못 읽은 tick 은 위에서 돌아가므로 첫 스캔을 소비하지 않는다.
+  const firstScan = !firstScanned.has(scope);
+  firstScanned.add(scope);
   const alive = new Set<string>();
   for (const job of jobs) {
     const key = scope + job.id;
@@ -249,6 +315,11 @@ async function scanOne(deps: CronWatchDeps): Promise<void> {
     const cur = cronPhaseOf(job.last_status, job.last_summary, states);
     if (cur === null) continue;   // 관측 없음 — 이전 상태를 그대로 둔다(중립)
     const prev = seen.get(key);
+    if (firstScan && !prev && cur === "failing"
+      && inheritsAlertedFailure(failureRecordedAt(job, work, states), deps.bootedAt ?? BOOTED_AT)) {
+      seen.set(key, { phase: "failing", problemSent: true });   // 복구 알림은 그대로 나가게 «보냈음» 으로 잇는다
+      continue;
+    }
     const a = cronAlertFor(prev?.phase ?? null, cur, withTaskReason(job, work, states));
     const next = { phase: cur, problemSent: prev?.problemSent ?? false };
     if (a) {
@@ -292,12 +363,13 @@ export function startCronWatch(deps: CronWatchDeps): void {
   if (timer) return;
   timer = setInterval(() => { void tick(deps); }, CHECK_MS);
   timer.unref?.();
-  void tick(deps); // 부팅 직후 1회 — 이미 실패해 있는 잡을 다음 주기까지 방치하지 않는다
+  void tick(deps); // 부팅 직후 1회 — 직전 프로세스가 못 본 실패를 다음 주기까지 방치하지 않는다
 }
 
 export function stopCronWatch(): void {
   if (timer) { clearInterval(timer); timer = null; }
   seen.clear();
+  firstScanned.clear();
 }
 
 /** 테스트 전용 — 한 tick 을 즉시 돌린다(주기를 기다리지 않고 전이 규칙을 검증). */

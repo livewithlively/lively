@@ -1,4 +1,4 @@
-// 앱 공개 범위 · 만든 사람 · 책임자(#4632 「나만」 · #4667 앱 v2-15) PG 통합 테스트 — **실제 Postgres 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 공개 범위 · 만든 사람 · 책임자(#4632 「나만」 · #4667 앱 v2-15) PG 통합 테스트 — **실제 Postgres 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/visibility.pg-test.mjs
 //
 // 앱 만들기 「만들기 시작」 의 예약부터 공개 · 초안 · 되돌리기 · 사본 · 공개 거두기 · 떠난 사람의 책임자 이관까지 **새 DB** 위에서 끝까지 돈다

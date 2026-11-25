@@ -51,6 +51,15 @@ export async function getSection(section: string): Promise<OrgSection | null> {
   return r.rows[0] ? rowToSection(r.rows[0]) : null;
 }
 
+// 이 이름들 중 항상-주입 행(세션 주입 문구)이 있나 — 지식 쓰기 표면이 «관리자만» 을 판정할 때 쓴다(#5801).
+//  lifecycle 을 가리지 않는다: 보관·검토 대기로 내려간 주입 문구를 active 로 올리면 다시 주입되므로 그 전환도 같은 문을 지난다.
+export async function anyInjectedDoc(names: readonly string[]): Promise<boolean> {
+  const list = [...new Set(names.filter(Boolean))];
+  if (!list.length) return false;
+  const r = await itemsPool.query(`SELECT 1 FROM knowledge WHERE name = ANY($1::text[]) AND injection='always' LIMIT 1`, [list]);
+  return r.rows.length > 0;
+}
+
 // 항상-주입 섹션 전체(=injection='always' 행) — sort 우선, 동률이면 name. #335: 섹션이 곧 항상-주입의 전부(N개 관리형).
 export async function listSections(): Promise<OrgSection[]> {
   const r = await itemsPool.query(

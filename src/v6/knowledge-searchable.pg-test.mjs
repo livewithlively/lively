@@ -1,4 +1,4 @@
-// 지식 «검색 제외»(#5169 · 이슈 #1619) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 지식 «검색 제외»(#5169 · 이슈 #1619) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/v6/knowledge-searchable.pg-test.mjs
 //
 // 왜 이 계층인가: 검색 제외는 전부 SQL 술어와 임베딩 스윕의 대상 조건이다 — 렉시컬·벡터 두 채널, 벡터 없이 카테고리로 고르는 추천(구제),

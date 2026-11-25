@@ -197,13 +197,13 @@ export async function initToolAndAssetRegistry(pool: Pool): Promise<void> {
   `);
 
   // 빌트인 도구 정책 시드 — 운영자 웹 최종 편집본(노출 enabled + 자동승인 auto_approve)을 신규 게이트웨이 기본으로 박는다.
-  //  org_tool 행은 명시 override 의 SoT 다. 행이 없으면 expose.mcp 노출값 + 자동승인 ON 이 기본이다.
+  //  org_tool 행은 명시 override 의 SoT 다. 행이 없으면 expose.mcp 노출값 + builtinAutoApproveDefault(src/mcp/mcp-surface.ts)가 기본이다.
   //  ON CONFLICT DO NOTHING = 최초 1회만 — 기존 인스턴스의 운영자 변경을 덮지 않는다(시드는 신규 설치 기본값일 뿐).
-  //  현 정책: 모든 빌트인은 자동승인 기본. 위험한 삭제와 delegate_run 은 MCP 노출만 OFF 이고,
+  //  자동승인 기본값은 builtinAutoApproveDefault 가 정한다(사람 확인이 기본인 빌트인은 그 파일의 목록). 위험한 삭제와 delegate_run 은 MCP 노출만 OFF 이고,
   //  나중에 운영자가 노출을 켜면 별도 승인 토글 없이 같은 기본값을 따른다.
   //  delegate_run OFF(#904): MCP 동기 wait 는 하네스 인라인 블로킹 → 긴 위탁서 transport-drop(응답 유실) footgun. 위탁은 lively delegate CLI 를 Bash(run_in_background) 로(런북 delegate-background-cli-not-mcp-wait).
   //   REST(POST /api/ui/delegate)·모니터(delegate_status/list/logs/cancel) 는 유지 — CLI·교차세션 관찰 무손상(모니터는 non-blocking 이라 footgun 아님). delegate_run 은 현재 org_tool 행이 없어 이 시드가 신규·기존 모든 박스에 INSERT 된다. 시드에 없는 신규 도구도
-  //  org_tool 행 없음 → expose.mcp 기본(노출) + auto_approve ON 으로 즉시 동작하고, 웹에서 끄면 그때 override 행이 생긴다.
+  //  org_tool 행 없음 → expose.mcp 기본(노출) + builtinAutoApproveDefault 로 즉시 동작하고, 웹에서 끄면 그때 override 행이 생긴다.
   await pool.query(`
     INSERT INTO org_tool(name, kind, enabled, auto_approve) VALUES
       ('activity_list','builtin',true,true),

@@ -232,6 +232,18 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pj-draft-tag { display: inline-flex; align-items: center; flex: none; height: 18px; padding: 0 6px; border: 1px dashed var(--muted-2); border-radius: 999px; background: transparent; font-size: 11px; font-weight: 600; line-height: 1; color: var(--muted); white-space: nowrap; }
 .pjv-drafts-scope .pj-draft-tag { display: none; }
 .pjv-kb-draft { margin-bottom: 5px; }
+/* #5598 «누가 보나» 표시 — 닫힌 프로젝트는 자물쇠 + «나만» · «N명과 공유» · «초대받음», 초대제 워크스페이스의 열린 프로젝트는 지구본.
+   이름 바로 뒤에 선다. 글자는 초안 뱃지와 같은 크기 — 줄 높이를 바꾸지 않는다. 색은 말하지 않고 그림(자물쇠 · 지구본)과 글자가 말한다. */
+.pj-acc-tag { display: inline-flex; align-items: center; flex: none; gap: 3px; height: 18px; padding: 0 6px 0 5px; border-radius: 999px; background: rgba(var(--tint-ink), .06); font-size: 11px; font-weight: 600; line-height: 1; color: var(--muted); white-space: nowrap; }
+.pj-acc-tag .pj-acc-ic, .pjh-acc-btn .pj-acc-ic, .pj-share-state .pj-acc-ic { width: 12px; height: 12px; flex: none; }
+.pj-acc-tag.pj-acc-icononly { padding: 0 3px; background: transparent; color: var(--muted-2); }
+.pj-acc-tag.pj-acc-open { color: var(--muted-2); }
+.pj-acc-tag.pj-acc-shared, .pj-acc-tag.pj-acc-invited, .pj-acc-tag.pj-acc-list { color: var(--ink); }
+.pjv-kb-marks, .pj-row-marks { display: inline-flex; align-items: center; gap: 4px; }
+.pjv-kb-marks { display: flex; }
+/* #5598 새 프로젝트 창의 «공개 범위» 고르기 */
+.np-access-sel { min-width: 0; max-width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); font: inherit; font-size: 13px; color: var(--ink); }
+
 .pjv-tb-btn.pjv-draft-toggle { gap: 7px; padding: 0 8px 0 11px; font-weight: 600; color: var(--ink-sub); }
 .pjv-draft-toggle .pjv-switch { width: 26px; height: 15px; pointer-events: none; }
 .pjv-draft-toggle .pjv-switch-knob { top: 2px; left: 2px; width: 11px; height: 11px; }
@@ -495,3 +507,23 @@ body[data-route="domainmap"] .app-foot { display: none; }   /* 캔버스가 하�
 .dmx-dcard.viol .dmx-sev{background:var(--danger-bg-2);color:var(--dmx-viol);}
 .dmx-why{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.5;}
 
+
+/* ── #5630 프로젝트의 «사람» 한 벌(web/projects/people-ui.ts) — 리드(테두리) + 함께 얼굴 묶음 + 이름 글.
+   닫힌 프로젝트는 묶음 앞 자물쇠. 리스트 · 테이블 · 보드 카드 · 타임라인 · 상세가 같은 것을 쓴다. */
+.pj-ppl { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.pj-ppl-faces { display: inline-flex; align-items: center; flex: none; }
+.pj-ppl-face { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; overflow: hidden; font-size: 10px; font-weight: 700; color: var(--on-fill); box-shadow: 0 0 0 2px var(--bg); flex: none; }
+.pj-ppl-face img { width: 100%; height: 100%; object-fit: cover; }
+.pj-ppl-face + .pj-ppl-face { margin-left: -4px; }
+/* 리드는 맨 앞 자리로만 갈린다(테두리 강조 없음 — 원준 2026-11-22 «짜치다»). 앞 얼굴이 위로 겹친다. */
+.pj-ppl-face.lead { position: relative; z-index: 1; }
+.pj-ppl-face.more { background: var(--bg-tint-2); color: var(--ink-sub); font-size: 9.5px; }
+.pj-ppl-t { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pj-ppl-s .pj-ppl-face { width: 18px; height: 18px; font-size: 8.5px; }
+.pj-ppl-s .pj-ppl-t { font-size: 12px; }
+.pj-ppl-l .pj-ppl-face { width: 28px; height: 28px; font-size: 12px; }
+.pj-ppl-l .pj-ppl-face + .pj-ppl-face { margin-left: -5px; }
+.pj-ppl-l .pj-ppl-t { font-size: 14px; }
+/* #5630 사람 칸 — 테이블은 머리 · 다른 칸(마감 · 우선순위)이 가운데 정렬이라 얼굴도 가운데. 리스트 뷰는 머리가 왼쪽이라 왼쪽(47-v2-rail). */
+.pjv-tcell[data-col="team"] .pjv-ppl-btn { justify-content: center; }
+.pjv-kb-faces .pj-ppl-face { box-shadow: 0 0 0 1.5px var(--bg); }
