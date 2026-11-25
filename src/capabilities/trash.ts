@@ -4,14 +4,15 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { listDeleted, countDeleted, getDeleteSnapshot, purgeDeleted, isDeletedNow, previewOf, TRASH_ENTITIES, type DeletedRow, type TrashEntity } from "../v6/trash-store.js";
+import { listDeleted, countDeleted, getDeleteSnapshot, purgeDeleted, isDeletedNow, previewOf, deletedTaskRootId, TRASH_ENTITIES, type DeletedRow, type TrashEntity } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
 import { restoreSource, countTrashedFileSources } from "../v6/source-store.js";
 import { restoreKnowledge } from "../v6/knowledge-store.js";
 import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
-import { projectVisFor, type Viewer } from "../v6/visibility.js";
+import { canSeeProjectRowVis, projectVisFor, type ProjectVis, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
+import { INJECTED_DOC_ADMIN_ONLY } from "./knowledge/shared.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
 
 const ENTITIES = TRASH_ENTITIES;   // knowledge · project · category · source(#3778) — 목록·복원·미리보기·파기가 같은 집합을 본다
@@ -28,6 +29,7 @@ const entityOf = (raw: unknown, allowed: readonly string[] = ENTITIES): string =
 async function filterVisibleDeleted(entries: DeletedRow[], viewer: Viewer): Promise<DeletedRow[]> {
   if (viewer === null || !entries?.length) return entries;
   const pv = await projectVisFor(viewer);
+  const memo = new Map<string, Promise<number | null> | Promise<boolean>>();
   const out: DeletedRow[] = [];
   for (const e of entries) {
     if (e.entity === "knowledge" || e.entity === "source") {
@@ -36,14 +38,44 @@ async function filterVisibleDeleted(entries: DeletedRow[], viewer: Viewer): Prom
       out.push(e); continue;
     }
     if (e.entity === "project") {
-      if (e.list_id != null && pv.lists && !pv.lists.has(e.list_id)) continue;
-      // #5522 — 지운 초안은 만든 사람에게만(팀원 행은 삭제와 함께 사라져 근거가 없다).
-      if (e.draft && pv.draftViewer !== null && e.created_by !== pv.draftViewer) continue;
+      if (!(await deletedProjectRowVisible(e, pv, memo))) continue;
       out.push(e); continue;
     }
     out.push(e);   // 카테고리 — 조직 공용 분류축이라 종전대로(콘텐츠 본문이 아니다)
   }
   return out;
+}
+
+/**
+ * 지운 project 테이블 행(프로젝트 · 태스크 · 서브태스크)의 스냅샷이 이 뷰어에게 보이나 — 목록 · 복원 · 미리보기 · 완전 삭제가
+ *  함께 쓰는 **한 판정**이다(개수는 trash-store.countDeleted 가 같은 조건을 SQL 로 센다).
+ *   · 프로젝트 행 — 제 스냅샷의 list_id 와 비공개(초안 · 초대제) 여부로. 지운 비공개 프로젝트는 만든 사람에게만
+ *     (팀원 행은 삭제와 함께 사라져 근거가 없다 — #5522 · #5598).
+ *   · 태스크 · 서브태스크 행(#5598) — 제 스냅샷에는 list_id · draft · invite_only 가 없다(늘 비어 있다). 그대로 판정하면
+ *     **남의 닫힌 프로젝트에서 지운 태스크의 제목이 전원의 휴지통에 서고, 아무나 되살릴 수 있다.** 그래서 뿌리 프로젝트
+ *     (살아 있는 행)를 찾아 그 프로젝트를 볼 수 있는 사람에게만 보인다. 뿌리를 못 찾으면(뿌리도 지워졌다 · 부모 태스크가
+ *     함께 지워졌다) 그 태스크를 만든 사람에게만 — 모르면 닫는다.
+ */
+async function deletedProjectRowVisible(
+  s: Pick<DeletedRow, "level" | "parent_id" | "list_id" | "draft" | "invite_only" | "created_by">, pv: ProjectVis,
+  /** 한 목록 안에서 같은 부모 · 같은 뿌리를 다시 묻지 않게(태스크 수백 건이 한 프로젝트에서 지워져 있는 것이 보통이다). */
+  memo?: Map<string, Promise<number | null> | Promise<boolean>>,
+): Promise<boolean> {
+  if (pv.lists === null && pv.privateViewer === null) return true;   // 필터 없음(특권 · 축 꺼짐 · 전체 긴급 열람)
+  if (s.level === "task" || s.level === "subtask") {
+    const once = <T>(key: string, make: () => Promise<T>): Promise<T> => {
+      if (!memo) return make();
+      let p = memo.get(key) as Promise<T> | undefined;
+      if (!p) { p = make(); memo.set(key, p as never); }
+      return p;
+    };
+    const rootId = await once(`root:${s.level}:${s.parent_id}`, () => deletedTaskRootId(s.level, s.parent_id));
+    if (rootId === null) return pv.privateViewer !== null && s.created_by === pv.privateViewer;
+    return once(`see:${rootId}`, () => canSeeProjectRowVis(rootId, pv));
+  }
+  if (s.list_id != null && pv.lists && !pv.lists.has(s.list_id)) return false;
+  if ((s.draft || s.invite_only) && pv.privateViewer !== null && s.created_by !== pv.privateViewer) return false;
+  return true;
 }
 
 // 복원 게이트 — 목록(filterVisibleDeleted)과 **같은 근거**를 쓴다. 목록에서 숨긴 것을 복원으로 꺼낼 수
@@ -52,12 +84,13 @@ async function canRestore(before: Record<string, unknown>, entity: string, viewe
   if (viewer === null) return true;   // 특권(내부·긴급 열람)
   if (entity === "knowledge" || entity === "source") return before.visibility !== "members";
   if (entity === "project") {
-    const listId = before.list_id == null ? null : Number(before.list_id);
-    const pv = await projectVisFor(viewer);
-    if (listId != null && pv.lists && !pv.lists.has(listId)) return false;
-    // #5522 — 지운 초안은 만든 사람만 되살린다(목록 filterVisibleDeleted 와 같은 근거).
-    if (before.draft === true && pv.draftViewer !== null && before.created_by !== pv.draftViewer) return false;
-    return true;
+    return deletedProjectRowVisible({
+      level: (before.level as string | null) ?? null,
+      parent_id: before.parent_id == null ? null : Number(before.parent_id),
+      list_id: before.list_id == null ? null : Number(before.list_id),
+      draft: before.draft === true, invite_only: before.invite_only === true,
+      created_by: (before.created_by as string | null) ?? null,
+    }, await projectVisFor(viewer));
   }
   return true;   // 카테고리 — 조직 공용 분류축
 }
@@ -117,7 +150,7 @@ const trashCounts: Capability = {
     const viewer: Viewer = ctx?.viewer ?? null;
     const pv = viewer === null ? null : await projectVisFor(viewer);
     const [c, files] = await Promise.all([
-      countDeleted({ gate: viewer !== null, visibleListIds: pv?.lists ? [...pv.lists] : null, draftViewer: pv?.draftViewer ?? null }),
+      countDeleted({ gate: viewer !== null, visibleListIds: pv?.lists ? [...pv.lists] : null, privateViewer: pv?.privateViewer ?? null }),
       countTrashedFileSources(ctx?.viewer, undefined, personalRootMember(_user ?? {})),
     ]);
     return { knowledge: c.knowledge, project: c.project, source: c.source, files };
@@ -161,6 +194,10 @@ const contentRestore: Capability = {
     //  복원된 행은 DDL 기본값(open)으로 되살아난다. 목록에서 안 보이는 것을 복원할 수는 없어야 한다.
     if (!(await canRestore(before, input.entity, ctx?.viewer ?? null))) {
       throw new HttpError(404, `복원할 삭제 스냅샷이 없습니다(entity=${input.entity}, key=${input.key})`);
+    }
+    // #5801 — 지운 세션 주입 문구를 되살리면 다시 모든 AI 세션에 주입된다. 저장 · 삭제와 같은 문(관리자)을 지난다.
+    if (input.entity === "knowledge" && (before as Record<string, unknown>).injection === "always" && !isAdmin(user)) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     let item: unknown;
@@ -231,6 +268,10 @@ const contentPurge: Capability = {
       throw new HttpError(404, `휴지통에 없는 항목입니다(entity=${input.entity}, key=${input.key})`);
     }
     if (!(await isDeletedNow(input.entity, input.key))) throw new HttpError(409, "지금 삭제 상태가 아닙니다 — 살아 있는 항목은 먼저 지워야 완전히 지울 수 있어요");
+    // #5801 — 지운 세션 주입 문구의 스냅샷을 비우면 관리자가 되살릴 길과 이력이 사라진다. 복원과 같은 문(관리자).
+    if (input.entity === "knowledge" && (before as Record<string, unknown>).injection === "always" && !isAdmin(user)) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
+    }
     const scrubbed = await purgeDeleted(input.entity, input.key);
     await auditOrgContent(input.entity, input.key, "purge", null, { scrubbed_rows: scrubbed },
       { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" });

@@ -24,7 +24,7 @@ import { tmpdir, homedir } from "node:os";
 import { join, resolve, sep, delimiter } from "node:path";
 // harness-registry 는 훅과 같은 디렉터리로 설치된다(HOOK_SCRIPTS — sync-harness-assets 의 import 와 같은 계약).
 import { isForeignGrokInvocation, isForeignCursorInvocation, isRecordForkLabel, recordPendingPrefix, RECORD_PENDING_TTL_MS } from "./harness-registry.mjs";
-import { inScopeNow, workRootsOf, effectiveSettings } from "./record-scope.mjs";
+import { inScopeNow, workRootsOf, effectiveSettings, sessionModeNow } from "./record-scope.mjs";
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 종료 게이트가 camelCase 페이로드를 오파싱해 오판한다).
@@ -123,6 +123,8 @@ try {
   //  아래 자가 게이팅(work-root·lively 툴 사용)은 그대로 둔다 — 범위 안이어도 일을 안 한 세션은 붙잡지 않는다.
   const harnessArg = process.argv.indexOf("--harness") > -1 ? process.argv[process.argv.indexOf("--harness") + 1] : "";
   if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: harnessArg, lively: join(homedir(), ".lively") }).inScope) process.exit(0);
+  //  세션 안에서 읽기전용으로 바꾼 세션(record-scope.mjs «세션 모드») — 위 env 판정과 같은 이유로 넛지하지 않는다.
+  if (sessionModeNow({ env: process.env, input, lively: join(homedir(), ".lively") }).mode !== "normal") process.exit(0);
   const sid = String(input?.session_id ?? "");
   if (!SID_RE.test(sid)) process.exit(0);
 

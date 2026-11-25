@@ -104,7 +104,7 @@
 | scope | 의미 |
 |---|---|
 | `items` · `context` | 아이템 조회(레거시 — 지금은 GitHub 연결 등 일부만) · 컨텍스트(도메인맵·레포·분류축·팀) |
-| `memory` | 조직 콘텐츠 — 지식·프로젝트/과업·자료 등 대부분의 표면. 구성원 기본 scope 는 `items`·`context`·`memory` |
+| `memory` | 조직 콘텐츠 — 지식·프로젝트/과업·자료 등 대부분의 표면. 구성원 기본 scope 는 `items`·`context`·`memory`·`db`·`code` |
 | `db` (`db:<source>`) | `db_query`/`db_schema`(전 소스 또는 특정 소스) |
 | `admin` | 데이터/정책 관리(섹션·구성원·WIKI 인덱스·토큰·발행) |
 | `runtime` | **멤버 머신에서 실행되는 것 정의** — 커스텀 훅·AI 도구. admin 과 분리(admin ⊉ runtime) |

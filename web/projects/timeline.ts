@@ -6,6 +6,7 @@
 //   같은 화면이 서로 다른 하위 작업을 그린다. 캐시 비우기(pjvTlClearTasks)는 뷰 탭 전환(pjvSetViewTab)이 부른다.
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유** — rows.ts 와 같은 이유(projects↔taskmodal 순환에 새 가지 금지).
 import { api, el, personFace, sv, toast } from '../core.js';
+import { projPeopleStack } from './people-ui.js';   // #5630 사람 한 벌
 import { pjvOpenTaskModal } from '../projects.js';
 import { pjvPopover } from './popover.js';
 import { pjvClosedView, pjvProjClosedView, pjvReloadKeepScroll } from './state.js';
@@ -455,6 +456,8 @@ function pjvTimelineView(projects, ctx) {
     nameEl.onclick = (e) => { e.stopPropagation(); openDetail(); };
     r.append(el('div', { class: 'pjv-gt-sheet', style: 'width:' + PJV_GT_SHEET_W + 'px;padding-left:' + (10 + n.depth * 15) + 'px' },
       caret, pjvStatusIconStd(row.status), nameEl,
+      //  #5630 — 이름 옆 얼굴(리드 + 함께, 글자 없이). 일정이 없어 바가 없는 줄도 «누구 것인지» 가 읽히게.
+      n.kind === 'project' ? projPeopleStack(row, { max: 2, size: 's' }) : null,
       n.children.length ? el('span', { class: 'pjv-gt-count', text: n.done + '/' + n.children.length }) : null,
       outOfRange ? el('span', { class: 'pjv-gt-warn', text: '⚠',
         title: '하위 일정이 이 항목의 기간(' + pjvTlFmt(n.own.from) + ' – ' + pjvTlFmt(n.own.to) + ')을 벗어납니다 — 하위 전체는 '
@@ -500,7 +503,10 @@ function pjvTimelineView(projects, ctx) {
       attachDrag(bar, bar, n, n.own, 'move', rangeEl);
       attachDrag(hl, bar, n, n.own, 'l', rangeEl);
       attachDrag(hr, bar, n, n.own, 'r', rangeEl);
-      const asg = pjvAssignees(row).slice(0, 2);
+      //  #5630 — 프로젝트 바 옆엔 사람(리드 + 함께 얼굴). 프로젝트엔 담당자가 없어 종전엔 이 자리가 늘 비었다.
+      const ppl = n.kind === 'project' ? projPeopleStack(row, { max: 3, size: 's' }) : null;
+      if (ppl) track.append(el('div', { class: 'pjv-gt-faces pjv-gt-ppl', style: 'left:' + (x + w + 8) + 'px' }, ppl));
+      const asg = n.kind === 'project' ? [] : pjvAssignees(row).slice(0, 2);
       if (asg.length) {
         const faces = el('div', { class: 'pjv-gt-faces', style: 'left:' + (x + w + 6) + 'px' });
         for (const id of asg) faces.append(personFace(id, 'pjv-ava', id));

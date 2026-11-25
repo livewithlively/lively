@@ -1,4 +1,8 @@
-// projects/detail-hub-sessions.ts — 허브 «터미널 세션» 위젯(#4135, 5판 시안 2026-09-25 원준).
+// projects/detail-hub-sessions.ts — 허브 «세션» 위젯(#4135 5판 · #5630 2026-11-22 원준 «세션 목록은 보여줘야 — 회수된 것 포함, 누르면 다시 실행»).
+//  ★ 격자 위젯(#5630) = **한 목록**: 도는 세션(확인 필요 → 작업 완료 → 작업 중 → 대기) 다음 «지난 세션»(꺼진 박스 · 기록만 남은 것, 최근 순).
+//    줄 = 점 · 이름(3칸이면 하던 일 한 줄) · 태스크(2칸+) · 상태(2칸+) · 얼굴 · 때(2칸+) · 단추 하나 — 도는 것 [입장](확인 필요면 [답하기]),
+//    지난 것은 [다시 실행](내 것 — 세션 화면이 도착하자마자 되살린다 #1820) / [기록 보기](남의 것). 도구 줄 · 옆 칸은 「크게 열기」 모달에만.
+//  아래 크기별 설명은 모달과 종전 판의 것이다.
 //  줄 = 상태 점 · 이름 · 태스크 칩(이름 바로 뒤, 2칸 이상) · [입장|열기]·[태스크에 붙이기](이름 뒤 — 다른 열을 가리지 않는다) · 상태 · 사람(2칸+) · 마지막 활동(3칸).
 //   1×1  지금 볼 세션 하나(확인 필요 → 작업 완료 → 작업 중 순) + 마지막 줄 + [입장], 그 아래 한 줄 더
 //   1×N  «사용 중»·«최근» 묶음, 상태 열 하나
@@ -9,8 +13,8 @@
 //  «태스크에 붙이기» = POST /v6/projects/:id/sessions/:sid/task {taskId}(세션 = 태스크 #4084 의 잇기 규칙 그대로).
 import { api, el, personFace, relTime, toast } from '../core.js';
 import { pjvPopover } from './popover.js';
-import { type CtxRow, type Fill, type SessView, SEP, absUrl, btn, copyRow, emptyNote, footText, hubCtx, hubIcon, lastLine, lastTurns, enterSession, openRouteRow, sessDot, sessView } from './detail-hub-kit.js';
-import { type SessionGroupDef, nodeLabel, sessionGroupsFor, sessionLastActivity, sessionTaskIndex, sortSessions } from './detail-hub-model.js';
+import { type CtxRow, type Fill, type SessView, SEP, absUrl, btn, copyRow, emptyNote, footText, hubCtx, hubIcon, lastTurns, enterSession, openRouteRow, sessDot, sessView } from './detail-hub-kit.js';
+import { type SessionGroupDef, nodeLabel, orderHubSessions, sessionGroupsFor, sessionIsPast, sessionLastActivity, sessionTaskIndex, sortSessions } from './detail-hub-model.js';
 
 // 2칸 이상 도구 줄의 필터·묶기 — 페이지 안에서만 산다(프로젝트별).
 const TOOLS: Map<number, { group: 'task' | 'state'; state: string; person: string; picked: string }> = new Map();
@@ -44,8 +48,8 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     const noTask = ss.filter((s) => !hasTask(s)).length;
     sub.textContent = !ss.length ? '' : (w <= 1 && h <= 1 && waiting) ? '확인 필요 ' + waiting : ss.length + (live.length ? ' · 사용 중 ' + live.length : '');
     if (!ss.length) {
-      body.append(emptyNote('아직 이 프로젝트의 세션이 없습니다. ＋ 새 세션으로 시작하세요.'));
-      foot.append(footText('세션 0'), newBtn());
+      body.append(emptyNote('아직 세션이 없어요.'), el('div', {}, newBtn()));
+      foot.append(footText('세션 0'));
       return;
     }
 
@@ -116,7 +120,7 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     };
     const enterBtn = (s: any, label?: string): HTMLElement => {
       const v = V(s);
-      const b = el('button', { class: 'pjh-sbtn' + (v.live ? '' : ' ghost'), type: 'button' }, hubIcon('term', 12), label || (v.live ? '입장' : '열기'));
+      const b = el('button', { class: 'pjh-sbtn' + (v.live ? '' : ' ghost'), type: 'button' }, hubIcon('term', 12), label || (v.live ? '입장' : sessionIsPast(s) && s.owned ? '다시 실행' : '열기'));
       b.onclick = (e) => { e.stopPropagation(); enterSession(s); };
       return b;
     };
@@ -124,26 +128,68 @@ export const fillSessions: Fill = (ctx, f, body, foot, sub, acts) => {
     const stateCell = (s: any): HTMLElement => el('span', { class: 'pjh-sr-c', text: V(s).label });
     const actCell = (s: any): HTMLElement => { const at = sessionLastActivity(s); return el('span', { class: 'pjh-sr-c', text: at ? relTime(new Date(at).toISOString()) : '' }); };
 
-    // ── 1×1 — 지금 볼 세션 하나 + 한 줄 ──
-    if (w <= 1 && h <= 1) {
-      const first = ss[0], v = V(first);
-      // 마지막 줄 — 도는 세션의 마지막 AI 문장. 없으면 줄을 비운다(상태는 아래 메타 줄이 이미 말한다 — 같은 말을 두 번 쓰지 않는다).
-      const line = el('div', { class: 'pjh-now-l', text: v.live ? '마지막 줄을 읽는 중…' : '' });
-      line.hidden = !v.live;
-      const meta = el('div', { class: 'pjh-now-m' }, hubIcon('monitor', 12), el('span', { text: nodeLabel(first.node) + ' · ' + v.label + (sessionLastActivity(first) ? ' · ' + relTime(new Date(sessionLastActivity(first)).toISOString()) : '') }),
-        el('span', { style: 'margin-left:auto' }, enterBtn(first)));
-      body.append(withMenu(el('div', { class: 'pjh-now' + (v.key === 'waiting' ? ' wait' : v.live ? ' live' : '') },
-        el('div', { class: 'pjh-now-t' }, sessDot(v), el('span', { class: 'pjh-sr-n', text: first.label || first.id }), personFace(first.owner, 'pjv-ava', memberName(first.owner))),
-        line, meta) as HTMLElement, first));
-      if (v.live) lastLine(first).then((t) => { line.textContent = t; line.hidden = !t; });
-      const second = ss[1];
-      if (second) {
-        const v2 = V(second);
-        body.append(withMenu(el('div', { class: 'pjh-sr pjh-sr-one', style: 'grid-template-columns:minmax(0,1fr) auto' },
-          el('div', { class: 'pjh-sr-t' }, sessDot(v2), el('span', { class: 'pjh-sr-n', text: second.label || second.id }), el('span', { class: 'pjh-sr-acts' }, enterBtn(second))),
-          el('span', { class: 'pjh-sr-c' }, el('span', { text: v2.label }), personFace(second.owner, 'pjv-ava', memberName(second.owner)))) as HTMLElement, second));
+    // ── #5630 격자 위젯 — 한 목록(도는 세션 → 지난 세션). 도구 줄 · 옆 칸 · 묶기는 모달에만. ──
+    if (!modal) {
+      const { live: liveRows, past } = orderHubSessions(raw, (x) => V(x).rank);
+      const wide = w >= 2, full = w >= 3;
+      const whenOf = (x: any): string => { const at = sessionLastActivity(x); return at ? relTime(new Date(at).toISOString()) : ''; };
+      const workOf = (x: any): string => { const t = String(x.title || x._logTitle || '').trim(); return t && t !== String(x.label || '') ? t : ''; };
+      const isMine = (x: any): boolean => !!x.owned || (!!ctx.meId && String(x.owner || '') === ctx.meId);
+      const actBtn = (x: any): HTMLElement => {
+        const v = V(x), gone = sessionIsPast(x), mine = isMine(x);
+        const label = gone ? (mine ? '다시 실행' : '기록 보기') : v.key === 'waiting' ? '답하기' : '입장';
+        const b = el('button', { class: 'pjh-sbtn' + (!gone && v.key === 'waiting' ? '' : ' ghost'), type: 'button',
+          title: gone ? (mine ? '다시 실행 — 꺼진 세션을 다시 켜고 대화를 이어 갑니다' : '기록 보기 — 이 세션의 대화 기록을 엽니다') : '세션 화면으로 갑니다', 'aria-label': label },
+          hubIcon(gone && mine ? 'replay' : 'term', 13), el('span', { class: 'pjh-sbtn-l', text: label }));
+        b.onclick = (e) => { e.stopPropagation(); enterSession(x); };
+        return b;
+      };
+      //  세션 = 태스크(#4084)라 이름이 같은 일이 흔하다 — 같은 글자를 칩으로 한 번 더 그리지 않는다.
+      const sameAsTask = (x: any): boolean => { const t = taskIdx.get(String(x.id)); return !!t && String(t.name || '').trim() === String(x.label || '').trim(); };
+      const rowOf = (x: any): HTMLElement => {
+        const v = V(x), gone = sessionIsPast(x), work = workOf(x);
+        const r = el('div', { class: 'pjh-sx' + (wide ? ' wide' : '') + (gone ? ' past' : '') + (!gone && v.key === 'waiting' ? ' wait' : ''), 'data-sid': String(x.id) },
+          el('div', { class: 'pjh-sx-n' }, gone ? el('span', { class: 'pjh-dot off', title: v.label }) : sessDot(v),
+            el('span', { class: 'pjh-sr-n', text: x.label || x.id }),
+            full && work ? el('span', { class: 'pjh-sx-w', text: work }) : null,
+            wide && !sameAsTask(x) ? taskChip(x) : null),
+          //  3판 — 상태는 도는 세션에만 색 칩으로. 지난 세션은 «지난 세션» 머리가 이미 말했으니 줄마다 «중단됨» 을 되풀이하지 않는다.
+          wide ? (gone ? el('span', { class: 'pjh-sx-s' }) : el('span', { class: 'pjh-sx-s k-' + v.key }, el('i', { 'aria-hidden': 'true' }), v.label)) : null,
+          el('span', { class: 'pjh-sx-f' }, personFace(x.owner, 'pjv-ava', memberName(x.owner))),
+          wide ? el('span', { class: 'pjh-sx-t', text: whenOf(x) }) : null,
+          el('span', { class: 'pjh-sx-a' }, actBtn(x))) as HTMLElement;
+        //  도는 세션은 줄을 눌러도 들어간다. 지난 세션은 단추로만 — 줄을 스친 클릭이 꺼진 세션을 다시 켜지 않게.
+        if (!gone) { r.classList.add('go'); r.onclick = () => enterSession(x); }
+        return withMenu(r, x);
+      };
+      const plus = el('button', { class: 'pjh-hbtn', type: 'button', title: '새 세션', 'aria-label': '새 세션', onclick: (e: Event) => { e.stopPropagation(); if (o.newSession) o.newSession(); else ctx.openTool('sessions'); } }, hubIcon('plus', 15));
+      acts.prepend(plus);
+      //  머리의 수 — 지금 손이 가야 하는 것만(확인 필요 · 작업 중). 없으면 전체 수 하나.
+      const busyN = liveRows.filter((x) => V(x).key === 'busy').length;
+      sub.textContent = [waiting ? '확인 필요 ' + waiting : '', busyN ? '작업 중 ' + busyN : ''].filter(Boolean).join(' · ') || String(ss.length);
+      //  3판 — 넓은 위젯(2칸 × 2줄 이상)에선 열려 있는 세션을 «카드» 로 먼저 세운다: 이름 · 상태 · 누구 · 언제(하던 말 줄은 걷었다 — «글이 많으면 안 본다»).
+      //   같이 일하는 사람이 «저 세션이 지금 뭘 하고 있나» 를 들어가 보지 않고 안다. 넷까지 카드, 그 뒤는 줄. 지난 세션은 늘 줄.
+      const cardOf = (x: any): HTMLElement => {
+        const v = V(x);
+        const c = el('div', { class: 'pjh-sc' + (v.key === 'waiting' ? ' wait' : '') + (v.key === 'busy' ? ' busy' : ''), 'data-sid': String(x.id), role: 'button', tabindex: '0', title: '세션 화면으로 갑니다' },
+          el('div', { class: 'pjh-sc-h' }, el('span', { class: 'pjh-sx-s k-' + v.key }, el('i', { 'aria-hidden': 'true' }), v.label), el('span', { class: 'pjh-sc-sp' }),
+            el('span', { class: 'pjh-sc-t', text: whenOf(x) }), personFace(x.owner, 'pjv-ava', memberName(x.owner))),
+          el('div', { class: 'pjh-sc-n', text: x.label || x.id }),
+          el('span', { class: 'pjh-sc-go' + (v.key === 'waiting' ? ' on' : '') }, v.key === 'waiting' ? '답하기' : '입장', hubIcon('right', 12))) as HTMLElement;
+        c.onclick = () => enterSession(x);
+        c.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enterSession(x); } });
+        return withMenu(c, x);
+      };
+      const cardMode = w >= 2 && h >= 2;
+      const glist = el('div', { class: 'pjh-sxl', 'data-mscroll': 'sess' });
+      const cards = cardMode ? liveRows.slice(0, 4) : [];
+      if (cards.length) glist.append(el('div', { class: 'pjh-scs' + (w >= 3 ? ' c3' : '') + (cards.length === 1 ? ' one' : '') }, ...cards.map(cardOf)));
+      for (const x of liveRows.slice(cards.length)) glist.append(rowOf(x));
+      if (past.length) {
+        if (liveRows.length) glist.append(el('div', { class: 'pjh-sx-div' }, el('span', { text: '지난 세션' }), el('span', { class: 'pjh-sg-n', text: String(past.length) })));
+        for (const x of past) glist.append(rowOf(x));
       }
-      foot.append(footText('세션 ' + ss.length + (noTask ? ' · 태스크 없는 세션 ' + noTask : '')), newBtn());
+      body.append(glist);
       return;
     }
 

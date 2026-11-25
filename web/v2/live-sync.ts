@@ -65,6 +65,23 @@ export function onAppEvent(fn: (ev: LiveAppEvent) => void): () => void {
   return () => { appListeners.delete(fn); };
 }
 
+/** 세션 요청 사건(#5713, src/v6/notify-bus.ts NotifyAskEvent) — 세션의 AI 가 나에게 요청을 걸었다 · 그 요청이 끝났다. 내용은 없다(«다시 읽어라»). */
+export interface LiveAskEvent {
+  type: 'ask';
+  kind: 'open' | 'done' | 'dismissed' | 'canceled';
+  id: string;
+  session: string | null;
+  ask_kind?: string;
+  key?: string;
+  ts?: number;
+}
+const askListeners = new Set<(ev: LiveAskEvent) => void>();
+/** 세션 요청 사건을 받는다(곁칸 «요청» 칸 · 요청 화면 — web/asks/api.ts). 돌려주는 함수를 부르면 끊는다. 스트림이 없으면 아무것도 안 온다 — 받는 쪽이 느린 되묻기를 곁에 둔다. */
+export function onAskEvent(fn: (ev: LiveAskEvent) => void): () => void {
+  askListeners.add(fn);
+  return () => { askListeners.delete(fn); };
+}
+
 const browserRevealHub = new BrowserRevealHub();
 /** 다른 창의 브라우저 호스트가 요청한 웹 칸 표시를 받는다. 마운트 직전 사건은 짧게 재생한다. */
 export function onBrowserEvent(fn: (ev: BrowserRevealEvent) => void): () => void {
@@ -147,6 +164,9 @@ async function connect(onChange: () => void): Promise<void> {
         } else if (ev && ev.type === 'browser') {
           const b = ev as BrowserRevealEvent;
           if (b.kind === 'reveal' && b.session && b.tab) browserRevealHub.push(b);
+        } else if (ev && (ev as { type?: string }).type === 'ask') {
+          //  세션 요청(#5713) — 사이드바 목록에 보일 것이 바뀌지 않는다. 요청 칸이 따로 받는다.
+          for (const fn of [...askListeners]) { try { fn(ev as unknown as LiveAskEvent); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ } }
         } else if (ev && ev.type === 'presence') {
           const p = ev as unknown as { session?: string; viewers?: Viewer[] };
           if (p.session) setViewers(p.session, p.viewers);

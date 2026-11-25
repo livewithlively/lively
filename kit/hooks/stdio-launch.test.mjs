@@ -230,16 +230,17 @@ test("«여기 연결» 커맨드 — Windows 에서 node 경로를 알면 심�
   for (const format of ["claude", "codex", "cursor"]) {
     const files = connectCommandFiles({ format, shim: SHIM_P, win: true, nodeBin: NODE, cliPath: LIB });
     for (const f of files) {
-      const verb = f.id === "lively-connect" ? "add" : "remove";
-      assert.ok(f.text.includes(`"${NODE}" "${LIB}" work-root ${verb} "<폴더>"`), `${format}/${f.id}: node 직결 명령 없음`);
-      assert.ok(!f.text.includes(`\`lively work-root ${verb}`), `${format}/${f.id}: 심 명령이 남아 있음`);
+      //  본문의 명령은 스위치(`on`·`off` — 기본은 이 세션만, #5596)다. 앞머리가 node 직결이어야 한다.
+      const verb = f.id === "lively-connect" ? "on" : "off";
+      assert.ok(f.text.includes(`\`& "${NODE}" "${LIB}" ${verb}\``), `${format}/${f.id}: node 직결 명령 없음`);
+      assert.ok(!f.text.includes(`\`lively ${verb}`), `${format}/${f.id}: 심 명령이 남아 있음`);
     }
   }
   // node 경로를 모르면(맨몸 node)·Windows 가 아니면 종전 명령 그대로
   for (const o of [{ win: true, nodeBin: "node" }, { win: false, nodeBin: NODE }]) {
     for (const f of connectCommandFiles({ format: "claude", shim: SHIM_P, cliPath: LIB, ...o })) {
-      const verb = f.id === "lively-connect" ? "add" : "remove";
-      assert.ok(f.text.includes(`\`lively work-root ${verb} "<폴더>"\``), `${JSON.stringify(o)}/${f.id}: 종전 명령 없음`);
+      const verb = f.id === "lively-connect" ? "on" : "off";
+      assert.ok(f.text.includes(`\`lively ${verb}\``), `${JSON.stringify(o)}/${f.id}: 종전 명령 없음`);
       assert.ok(!f.text.includes(LIB), `${JSON.stringify(o)}/${f.id}: node 직결이 섞임`);
     }
   }

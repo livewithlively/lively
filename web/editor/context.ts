@@ -9,6 +9,8 @@
 //
 // ⚠ 가변 상태는 EditorState 에 모은다 — ESM import 바인딩은 재할당이 불가하고, 모듈 밖에서 `dirty = true`
 //   같은 대입을 하려면 객체 필드여야 한다. 필드마다 '소유 모듈'을 적어 둔다(그 모듈만 쓰고 나머지는 읽는다).
+import type { WikiLinksOpt } from '../lib/markdown.js';
+
 export interface BlockEditorOpts {
   initial?: string;
   placeholder?: string;
@@ -17,6 +19,8 @@ export interface BlockEditorOpts {
   // 파일 업로드 콜백(#730) — 이미지 붙여넣기·드롭·슬래시 업로드·첨부에 사용. 저장 후 서빙 URL(또는 실패 null) 반환.
   //  넘기지 않으면(지식 문서 등) 업로드형 명령은 숨고, 이미지는 URL 삽입만 가능.
   uploadFile?: (file: File) => Promise<string | null>;
+  // 본문의 [[이름]] 을 지식 링크로 그린다(lib/markdown WikiLinksOpt). 저장은 원문 [[…]] 그대로 — serialize inlineDomToMd.
+  wikiLinks?: WikiLinksOpt | null;
 }
 
 export interface EditorState {

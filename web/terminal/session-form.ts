@@ -3,6 +3,8 @@
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
 import { api, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
+import { sessionInviteGenericNote, sessionInviteProjectNote } from '../lib/proj-access.js';   // #5598 — 세션에 초대하면 프로젝트에도 초대된다
+import { loadAccessConfig } from '../projects/access-ui.js';   // #5598 — 축이 꺼진 워크스페이스에서는 그 안내를 하지 않는다
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -221,13 +223,23 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
   // 기본 비공개(아무도 선택 안 됨). 프로젝트 세션이면 그 팀원을 후보 **위로만** 올린다 — 고르지는 않는다.
   const projMembers = new Set<string>();
   const inviteBox = buildInvitePicker(cfg, new Set(), { priority: projMembers });
+  //  #5598 — 세션에 초대하면 그 세션이 속한 프로젝트(닫힌 프로젝트일 때)에도 초대된다. 초대칸 바로 아래에서 미리 말한다.
+  //   프로젝트에서 열었으면 그 프로젝트를 읽어 닫혔을 때만 이름까지 말하고(열린 프로젝트는 이미 다 본다 — 말할 것이 없다),
+  //   프로젝트 없이 열었으면(세션과 함께 프로젝트가 생긴다) 이름 없이 같은 말을 한다.
+  //   프로젝트 공개범위를 안 쓰는 워크스페이스(축 꺼짐)에서는 말하지 않는다 — 거기서는 모든 프로젝트를 이미 전원이 본다.
+  const inviteProjNote = el('p', { class: 'caption term-invite-projnote' }) as HTMLElement;
+  inviteProjNote.hidden = true;
+  if (!project) void loadAccessConfig().then((acfg) => { const t = sessionInviteGenericNote(acfg); if (t) { inviteProjNote.textContent = t; inviteProjNote.hidden = false; } });
   // 팀원 명부는 비동기로 온다(프로젝트 상세를 안 거치고 대시보드·목록에서도 이 모달이 열리므로 여기서 직접 묻는다).
   //  실패해도 조용히 넘어간다 — 순서 힌트일 뿐이라 없으면 조직 명부 그대로다(초대 자체는 그대로 된다).
   if (project) {
     void (async () => {
       try {
         const p: any = await api((project.base || '/api/ui/v6/projects/') + project.id);
-        for (const m of (p && p.members) || []) { const mid = String(m.member_id || m.id || ''); if (mid) projMembers.add(mid); }
+        const pj = (p && (p.project || p)) || {};
+        for (const m of pj.members || []) { const mid = String(m.member_id || m.id || ''); if (mid) projMembers.add(mid); }
+        const note = sessionInviteProjectNote(pj, p && p.access ? { mode: p.access.mode === 'open' ? 'open' : 'invite', enforced: p.access.enforced !== false } : undefined);
+        if (note) { inviteProjNote.textContent = note; inviteProjNote.hidden = false; }
       } catch (_) { /* 순서 힌트 없이 진행 */ }
     })();
   }
@@ -546,7 +558,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
           'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.',
           el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
       // 초대는 프로젝트/자유가 **같은 칸**이다 — 어느 쪽이든 여기서 고른 사람만 그 세션을 본다(#1876 D1).
-      el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
+      el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box), inviteProjNote),
       advToggle, advBody,
       // '이 설정을 기억하기'는 고급 설정 밖 맨 아래 — 고급을 펼치지 않아도 켤 수 있어야 한다.
       el('div', { class: 'term-checks' }, rememberWrap));
@@ -719,9 +731,13 @@ function openTermEdit(s, cfg, view) {
   const lockNote = el('div', { class: 'term-lock-note' },
     el('span', { text: '🔒 작업 폴더 · 하네스 · 모델 · 자동 승인은 세션을 처음 켤 때 정해집니다. 바꾸려면 실행 중인 LLM(또는 셸)을 닫고 새로 켜야 하므로 여기서는 수정할 수 없습니다 — 바꾸려면 새 세션을 만드세요.' }));
 
+  const editProjNote = el('p', { class: 'caption term-invite-projnote' }) as HTMLElement;
+  editProjNote.hidden = true;
+  void loadAccessConfig().then((acfg) => { const t = sessionInviteGenericNote(acfg); if (t) { editProjNote.textContent = t; editProjNote.hidden = false; } });
   const back = overlay('세션 수정',
     field('이름', labelI),
     field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box),
+    editProjNote,   // #5598 — 초대하면 그 세션의 프로젝트도 함께 보게 된다(축이 켜진 워크스페이스에서만)
     lockNote,
     field('작업자', ro(author)),
     field('작업 폴더', ro(s.dir || '(기본)')),

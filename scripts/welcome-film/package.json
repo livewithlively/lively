@@ -1,7 +1,7 @@
 {
   "name": "lively-welcome-film",
   "private": true,
-  "description": "처음 설정 첫 장면의 소개 영상(public/media/welcome-film.mp4)을 다시 굽는 도구 — 제품 번들·CI 와 무관하다.",
+  "description": "제품의 안내 영상(public/media/welcome-*.mp4)을 다시 굽는 도구 — 제품 번들·CI 와 무관하다.",
   "type": "module",
   "scripts": { "render": "node render.mjs" },
   "dependencies": { "playwright-core": "1.56.1" }

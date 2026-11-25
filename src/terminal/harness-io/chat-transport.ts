@@ -199,9 +199,11 @@ export function sseTransport(o: {
     let wait = 1000;
     while (!closed) {
       const attempt = new AbortController();
-      const onAll = () => attempt.abort();
-      ctl.signal.addEventListener("abort", onAll);
       let silence: NodeJS.Timeout | null = null;
+      //  닫으면 침묵 타이머도 함께 거둔다 — abort 만 하면 읽기가 그 신호에 답하지 않는 한(끊긴 소켓 · 느린 프록시) 타이머가
+      //   SILENCE(40초) 동안 남아 닫은 연결이 프로세스를 붙든다(이 파일의 시험이 그래서 끝난 뒤 40초를 더 살았다).
+      const onAll = () => { attempt.abort(); if (silence) { clearTimeout(silence); silence = null; } };
+      ctl.signal.addEventListener("abort", onAll);
       const beat = () => { if (silence) clearTimeout(silence); silence = setTimeout(() => attempt.abort(), SILENCE); };
       try {
         const res = await doFetch(o.eventUrl, { headers: o.headers, signal: attempt.signal });

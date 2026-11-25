@@ -135,7 +135,7 @@ function openMemberModal(m, data, detail) {
   let editing = isNew;
   const refreshGrid = () => rerenderPanel(detail, 'members-list', state.admin.data);
   const closeModal = () => { if (back) { back.remove(); back = null; } };
-  const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] };
+  const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: [...MEMBER_DEFAULT_SCOPES] };
   const rerender = () => {
     if (isNew) {
       memberForm(body, blank, data, detail, true, {
@@ -175,6 +175,9 @@ const MEMBER_SCOPE_OPTS = [
 ];
 
 const MEMBER_SCOPE_LABEL = Object.fromEntries(MEMBER_SCOPE_OPTS);
+
+// 새 구성원 등록 폼에 미리 체크돼 있는 권한 — 서버의 새 구성원 기본 권한(src/auth/scopes.ts DEFAULT_MEMBER_SCOPES)과 같은 값.
+export const MEMBER_DEFAULT_SCOPES = ['items', 'context', 'memory', 'db', 'code'];
 
 // 멤버 계정 발급/재설정 시 — 로그인 주소·이메일·임시 비번을 1회 표시(관리자가 1:1 전달). overlay 재사용.
 function showInitialAccount(id, name, email, password, data) {

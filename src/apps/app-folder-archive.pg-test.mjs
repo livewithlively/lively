@@ -1,4 +1,4 @@
-// 앱 폴더 보관(#4778) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 폴더 보관(#4778) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-folder-archive.pg-test.mjs
 //
 // 사양 표(태스크 #4778 + 상민님 결정 2026-10-16) E · F · G · H · I · J — 진짜 DB(initAllSchemas) · 진짜 앱 자리(임시 폴더 — 비격리 셀프호스트 모양) ·

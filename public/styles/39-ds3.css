@@ -1,0 +1,420 @@
+/* ══ 39-ds3.css — 디자인 시스템 3판 «잉크와 민트» (#5630, 2026-11-22 원준 «디자인 시스템도 지금 상태 맞게 전부 갈아엎고 싶어») ══
+   2판(01-base.css)의 값은 6월 세일즈덱에서 잰 것이다 — 연한 파랑 바탕(#F6FAFF) · 파랑 실선(#E6ECF5) · 파랑-회색 글자 사다리.
+   그 뒤 브랜드는 «잉크 + 민트»(로고 · 레일) 로, 아이콘은 «물건마다 제 색»(--gi-c-*) 으로 옮겨 갔는데 화면 안쪽은 그대로였다.
+   3판이 바꾸는 것:
+     ① 바탕은 무채 — 연파랑 틴트를 걷고 회색 종이 위에 흰 판. 실선 대신 얕은 그림자가 판을 가른다.
+     ② 주 행동 = 잉크(채운 남색 단추). 파랑은 링크 · 포커스 · 선택에만.
+     ③ 민트 = 살아 있음(도는 세션 · 진행 · 최근 활동). 그 밖의 색은 «물건의 색»(세션 파랑 · 태스크 보라 · 지식 초록 · 폴더 호박)으로 아이콘 타일에만.
+     ④ 글자 무게 셋(500 · 600 · 700) — 800 을 걷는다. 숫자는 크게, 고정폭.
+     ⑤ 모서리 넷(8 · 12 · 16 · 20) · 그림자 셋.
+   범위: .h3-page(프로젝트 화면)가 서 있는 창 — 그 창의 옛 토큰(--bg · --line · --ink-sub …)도 3판 값으로 바뀌어, 다시 쓰는 부품(태스크 목록 · 팝오버)이
+         따로 손대지 않아도 같은 종이 위에 선다. 다른 화면에 먼저 입혀 보려면 그 뿌리에 .ds3 를 준다.
+   ⚠ 라이트 · 다크(명시) · 다크(OS) 세 블록의 토큰 이름이 같아야 한다 — 90-dark.css 와 같은 계약(평문 중복). */
+
+.ds3, .h3-page, body:has(main > .h3-page) {
+  --d3-canvas: #F2F4F7;  --d3-surface: #FFFFFF;  --d3-sunken: #F6F7F9;  --d3-fill: #ECEEF2;
+  --d3-line: #E5E7EC;    --d3-line-2: #D3D8E0;
+  --d3-ink: #15233B;     --d3-ink-2: #3B4658;    --d3-ink-3: #5F6B7E;   --d3-ink-4: #8C95A5;
+  --d3-primary: #15233B; --d3-primary-hover: #26395D; --d3-on-primary: #FFFFFF;
+  --d3-mint: #12B88D;    --d3-mint-ink: #0A7A5E;   --d3-mint-tint: #E0F5EE;
+  --d3-blue: #2D6BF0;    --d3-blue-ink: #1F55CC;   --d3-blue-tint: #E7EEFE;
+  --d3-amber: #E38A00;   --d3-amber-ink: #8A5300;  --d3-amber-tint: #FCEFD8;
+  --d3-red: #E5484D;     --d3-red-ink: #A3282C;    --d3-red-tint: #FDE9E9;
+  --d3-violet: #6B5BE6;  --d3-violet-ink: #4C3DC4; --d3-violet-tint: #EEECFD;
+  --d3-aura-a: rgba(18, 184, 141, .13);  --d3-aura-b: rgba(45, 107, 240, .10);
+  --d3-shadow-1: 0 0 0 1px rgba(21, 35, 59, .055), 0 1px 2px rgba(21, 35, 59, .04);
+  --d3-shadow-2: 0 0 0 1px rgba(21, 35, 59, .06), 0 2px 4px rgba(21, 35, 59, .04), 0 14px 28px -14px rgba(21, 35, 59, .16);
+  --d3-shadow-pop: 0 0 0 1px rgba(21, 35, 59, .08), 0 14px 36px -8px rgba(21, 35, 59, .24);
+  --d3-r2: 8px; --d3-r3: 12px; --d3-r4: 16px; --d3-r5: 20px;
+  /* 옛 토큰 → 3판 값 */
+  --bg: #FFFFFF; --surface: #FFFFFF; --bg-tint: #F6F7F9; --bg-tint-2: #ECEEF2; --bg-punch: #ECEEF2; --bg-note: #F1F3F7; --bg-sel: #EEF2FB; --canvas: #F2F4F7;
+  --line: #E5E7EC; --line-row: #ECEEF2; --line-net: #D3D8E0; --line-net-2: #C3C9D3; --muted-3-line: #C7CCD6;
+  --ink: #15233B; --ink-sub: #3B4658; --muted-head: #566174; --muted: #5F6B7E; --muted-2: #667286; --muted-3: #6B778A;
+  --gray-bg: #F4F5F8; --gray-bg-2: #F1F3F6; --gray-line: #DADDE4; --gray-text: #667286;
+}
+:root[data-theme="dark"].ds3, :root[data-theme="dark"] .ds3, :root[data-theme="dark"] .h3-page, :root[data-theme="dark"] body:has(main > .h3-page) {
+  --d3-canvas: #0B0F18;  --d3-surface: #151B28;  --d3-sunken: #1A2130;  --d3-fill: #222A3A;
+  --d3-line: #252D3D;    --d3-line-2: #333C4F;
+  --d3-ink: #EEF1F6;     --d3-ink-2: #C4CBD8;    --d3-ink-3: #9BA5B6;   --d3-ink-4: #6E788A;
+  --d3-primary: #EEF1F6; --d3-primary-hover: #FFFFFF; --d3-on-primary: #131C2E;
+  --d3-mint: #2BD3A5;    --d3-mint-ink: #6BE3C2;   --d3-mint-tint: rgba(43, 211, 165, .15);
+  --d3-blue: #6E9AF8;    --d3-blue-ink: #A3BFFB;   --d3-blue-tint: rgba(110, 154, 248, .17);
+  --d3-amber: #F0A32B;   --d3-amber-ink: #F4C577;  --d3-amber-tint: rgba(240, 163, 43, .16);
+  --d3-red: #EF6B6F;     --d3-red-ink: #F7A8AA;    --d3-red-tint: rgba(239, 107, 111, .16);
+  --d3-violet: #9A8FF2;  --d3-violet-ink: #BCB4F8; --d3-violet-tint: rgba(154, 143, 242, .18);
+  --d3-aura-a: rgba(43, 211, 165, .10);  --d3-aura-b: rgba(110, 154, 248, .10);
+  --d3-shadow-1: 0 0 0 1px rgba(255, 255, 255, .06);
+  --d3-shadow-2: 0 0 0 1px rgba(255, 255, 255, .10), 0 14px 28px -14px rgba(0, 0, 0, .6);
+  --d3-shadow-pop: 0 0 0 1px rgba(255, 255, 255, .10), 0 14px 36px -8px rgba(0, 0, 0, .7);
+  --d3-r2: 8px; --d3-r3: 12px; --d3-r4: 16px; --d3-r5: 20px;
+  --bg: #151B28; --surface: #1B2231; --bg-tint: #1A2130; --bg-tint-2: #222A3A; --bg-punch: #222A3A; --bg-note: #1C2434; --bg-sel: #1E2942; --canvas: #0B0F18;
+  --line: #252D3D; --line-row: #1F2635; --line-net: #333C4F; --line-net-2: #3E485C; --muted-3-line: #3E485C;
+  --ink: #EEF1F6; --ink-sub: #C4CBD8; --muted-head: #A3ACBC; --muted: #9BA5B6; --muted-2: #939DAF; --muted-3: #8A94A6;
+  --gray-bg: #1A2130; --gray-bg-2: #181F2D; --gray-line: #333C4F; --gray-text: #9BA5B6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]).ds3, :root:not([data-theme="light"]) .ds3, :root:not([data-theme="light"]) .h3-page, :root:not([data-theme="light"]) body:has(main > .h3-page) {
+    --d3-canvas: #0B0F18;  --d3-surface: #151B28;  --d3-sunken: #1A2130;  --d3-fill: #222A3A;
+    --d3-line: #252D3D;    --d3-line-2: #333C4F;
+    --d3-ink: #EEF1F6;     --d3-ink-2: #C4CBD8;    --d3-ink-3: #9BA5B6;   --d3-ink-4: #6E788A;
+    --d3-primary: #EEF1F6; --d3-primary-hover: #FFFFFF; --d3-on-primary: #131C2E;
+    --d3-mint: #2BD3A5;    --d3-mint-ink: #6BE3C2;   --d3-mint-tint: rgba(43, 211, 165, .15);
+    --d3-blue: #6E9AF8;    --d3-blue-ink: #A3BFFB;   --d3-blue-tint: rgba(110, 154, 248, .17);
+    --d3-amber: #F0A32B;   --d3-amber-ink: #F4C577;  --d3-amber-tint: rgba(240, 163, 43, .16);
+    --d3-red: #EF6B6F;     --d3-red-ink: #F7A8AA;    --d3-red-tint: rgba(239, 107, 111, .16);
+    --d3-violet: #9A8FF2;  --d3-violet-ink: #BCB4F8; --d3-violet-tint: rgba(154, 143, 242, .18);
+    --d3-aura-a: rgba(43, 211, 165, .10);  --d3-aura-b: rgba(110, 154, 248, .10);
+    --d3-shadow-1: 0 0 0 1px rgba(255, 255, 255, .06);
+    --d3-shadow-2: 0 0 0 1px rgba(255, 255, 255, .10), 0 14px 28px -14px rgba(0, 0, 0, .6);
+    --d3-shadow-pop: 0 0 0 1px rgba(255, 255, 255, .10), 0 14px 36px -8px rgba(0, 0, 0, .7);
+    --d3-r2: 8px; --d3-r3: 12px; --d3-r4: 16px; --d3-r5: 20px;
+    --bg: #151B28; --surface: #1B2231; --bg-tint: #1A2130; --bg-tint-2: #222A3A; --bg-punch: #222A3A; --bg-note: #1C2434; --bg-sel: #1E2942; --canvas: #0B0F18;
+    --line: #252D3D; --line-row: #1F2635; --line-net: #333C4F; --line-net-2: #3E485C; --muted-3-line: #3E485C;
+    --ink: #EEF1F6; --ink-sub: #C4CBD8; --muted-head: #A3ACBC; --muted: #9BA5B6; --muted-2: #939DAF; --muted-3: #8A94A6;
+    --gray-bg: #1A2130; --gray-bg-2: #181F2D; --gray-line: #333C4F; --gray-text: #9BA5B6;
+  }
+}
+
+/* ── 종이 — 창 바탕은 회색, 맨 위에 브랜드 두 색(민트 · 파랑)의 옅은 빛. 판은 그 위에 흰색으로 뜬다. ── */
+body:has(main > .h3-page) {
+  background:
+    radial-gradient(560px 260px at 8% -90px, var(--d3-aura-a), transparent 72%),
+    radial-gradient(680px 300px at 78% -130px, var(--d3-aura-b), transparent 72%),
+    var(--d3-canvas);
+  background-repeat: no-repeat;
+}
+.pjv-pm-body:has(> .h3-page) { background: var(--d3-canvas); }
+.h3-page { color: var(--d3-ink); font-variant-numeric: tabular-nums; }
+
+/* ── 단추 — 주 행동은 잉크 하나, 나머지는 흰 판 ── */
+.h3-page .btn { height: 32px; padding: 0 12px; border: 0; border-radius: var(--d3-r2); background: var(--d3-surface); box-shadow: var(--d3-shadow-1); color: var(--d3-ink); font-size: 13px; font-weight: 600; }
+.h3-page .btn:hover { background: var(--d3-sunken); }
+.h3-page .btn.btn-ghost { background: transparent; box-shadow: none; color: var(--d3-ink-2); }
+.h3-page .btn.btn-ghost:hover { background: var(--d3-fill); color: var(--d3-ink); }
+.h3-page .btn.btn-primary { background: var(--d3-primary); color: var(--d3-on-primary); box-shadow: none; }
+.h3-page .btn.btn-primary:hover { background: var(--d3-primary-hover); }
+.h3-page .btn.pjh-icon-btn { width: 32px; padding: 0; justify-content: center; }
+.h3-page .btn.pjh-icon-btn.active { background: var(--d3-fill); color: var(--d3-ink); }
+
+/* ── 머리 — 뒤로 줄 · 제목 · 한 줄 속성+사람 ── */
+.h3-page .page-head { padding: 2px 0 0; }
+.h3-page .proj-detail-back { margin-bottom: 26px; }
+.h3-page .proj-detail-backlink { padding-left: 8px; color: var(--d3-ink-3); }
+.h3-page .proj-detail-actions { gap: 8px; }
+.h3-page .pjh-share-btn { gap: 8px; padding: 0 12px 0 8px; }
+.h3-page .proj-detail-titlebar { margin: 0; }
+.h3-page .proj-detail-title, .h3-page .proj-detail-title-input { font-size: 30px; font-weight: 700; letter-spacing: -.03em; line-height: 1.25; color: var(--d3-ink); }
+.h3-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 6px; margin: 12px 0 22px; }
+.h3-meta > .pjh-facts { margin: 0; gap: 6px; }
+.h3-meta > .pjh-people { margin: 0 0 0 4px; padding-left: 14px; border-left: 1px solid var(--d3-line-2); gap: 6px; min-height: 22px; }
+.h3-page .pjh-fact { height: 30px; padding: 0 11px 0 10px; border: 0; border-radius: 999px; background: var(--d3-surface); box-shadow: var(--d3-shadow-1); font-size: 13px; font-weight: 600; color: var(--d3-ink-2); }
+.h3-page .pjh-fact:hover { background: var(--d3-sunken); }
+.h3-page .pjh-fact:has(> .pjv-tm-statuspill) { padding: 0; background: none; box-shadow: none; }
+.h3-page .pjh-fact > .pjv-tm-statuspill { height: 30px; padding: 0 12px 0 10px; border: 0; border-radius: 999px; background: var(--d3-surface); box-shadow: var(--d3-shadow-1); font-size: 13px; font-weight: 700; color: var(--d3-ink); }
+.h3-page .pjh-fact > .pjv-tm-statuspill.inprog { background: var(--d3-amber-tint); color: var(--d3-amber-ink); box-shadow: none; }
+.h3-page .pjh-fact > .pjv-tm-statuspill.done { background: var(--d3-mint-tint); color: var(--d3-mint-ink); box-shadow: none; }
+.h3-page .pjh-fact-more { height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: none; color: var(--d3-ink-3); font-size: 13px; font-weight: 600; }
+.h3-page .pjh-fact-more:hover { background: var(--d3-fill); color: var(--d3-ink); }
+.h3-page .pjh-people-k { font-size: 12.5px; font-weight: 500; color: var(--d3-ink-3); }
+.h3-page .pjh-people-none { font-size: 12.5px; color: var(--d3-ink-4); }
+.h3-page .pjh-people-acc { font-size: 12.5px; font-weight: 500; color: var(--d3-ink-3); }
+.h3-page .pjh-invite { height: 24px; padding: 0 9px; border: 1px dashed var(--d3-line-2); border-radius: 999px; background: none; color: var(--d3-ink-3); font-size: 12px; font-weight: 600; }
+.h3-page .pjh-invite:hover { border-style: solid; border-color: var(--d3-ink-4); color: var(--d3-ink); background: var(--d3-surface); }
+
+/* ── «지금» 띠 — 진행 · 내 차례 · 지금 · 최근 활동 (detail-hub-now.ts) ──
+   이 화면에서 단 하나의 잉크 판. 레일 · 로고와 같은 남색 위에 민트가 «살아 있는 것» 을 말한다. 다크에선 한 층 밝은 남색. */
+.h3-now { --n-bg: #15233B; --n-bg2: #1D3257; --n-ink: #FFFFFF; --n-sub: rgba(255, 255, 255, .64); --n-line: rgba(255, 255, 255, .12); --n-hover: rgba(255, 255, 255, .07); --n-mint: #36E0A8;
+  position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 16px; border-radius: var(--d3-r5); overflow: hidden; color: var(--n-ink);
+  background: radial-gradient(420px 220px at 100% 120%, rgba(54, 224, 168, .20), transparent 70%), linear-gradient(120deg, var(--n-bg), var(--n-bg2)); }
+.h3-nc { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 132px; padding: 18px 22px 16px; outline: 0; }
+.h3-nc + .h3-nc::before { content: ''; position: absolute; left: 0; top: 20px; bottom: 20px; width: 1px; background: var(--n-line); }
+.h3-nc.go { cursor: pointer; transition: background .14s; }
+.h3-nc.go:hover { background: var(--n-hover); }
+.h3-nc.go:focus-visible { box-shadow: inset 0 0 0 2px var(--n-mint); }
+.h3-nc-k { display: flex; align-items: center; gap: 7px; height: 18px; font-size: 12.5px; font-weight: 600; color: var(--n-sub); }
+.h3-nc-v { display: flex; align-items: center; gap: 12px; min-height: 40px; }
+.h3-num { font-size: 32px; font-weight: 700; letter-spacing: -.035em; line-height: 1; color: var(--n-ink); }
+.h3-num > small { margin-left: 4px; font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--n-sub); }
+.h3-nc-s { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: auto; font-size: 12.5px; font-weight: 500; color: var(--n-sub); white-space: nowrap; }
+.h3-nc-s > span { overflow: hidden; text-overflow: ellipsis; }
+.h3-nc-s:not(:has(> span)) { display: block; overflow: hidden; text-overflow: ellipsis; }
+.h3-nc .pjh-ring circle:first-child { stroke: var(--n-line); }
+.h3-nc .pjh-ring circle:last-child { stroke: var(--n-mint); }
+.h3-nc.turn.has .h3-nc-k::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #FFB938; }
+.h3-turn-l { display: flex; flex-direction: column; gap: 2px; margin: auto -8px -4px; }
+.h3-turn-i { display: flex; align-items: center; gap: 8px; min-width: 0; height: 26px; padding: 0 8px; border: 0; border-radius: var(--d3-r2); background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--n-ink); text-align: left; cursor: pointer; }
+.h3-turn-i > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #A99DFF; }
+.h3-turn-i.session > i { background: #FFB938; box-shadow: 0 0 0 3px rgba(255, 185, 56, .22); }
+.h3-turn-i > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h3-turn-i > em { flex: none; font-style: normal; font-size: 12px; font-weight: 600; color: var(--n-sub); opacity: 0; }
+.h3-turn-i:hover { background: var(--n-hover); }
+.h3-turn-i:hover > em, .h3-turn-i:focus-visible > em { opacity: 1; }
+.h3-pulse { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--n-mint); }
+.h3-pulse::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--n-mint); opacity: .3; animation: pjh-breathe 2.8s ease-in-out infinite; }
+.h3-live-f .pj-ppl-face { width: 26px; height: 26px; font-size: 11px; box-shadow: 0 0 0 2px var(--n-bg); }
+.h3-act-f { width: 18px; height: 18px; font-size: 9px; flex: none; }
+.h3-bars { display: block; height: 34px; width: auto; max-width: 100%; }
+.h3-bars rect { fill: var(--n-line); }
+.h3-bars rect.on { fill: var(--n-mint); opacity: .7; }
+.h3-bars rect.on.today { opacity: 1; }
+
+/* ── 위젯 판 ── */
+.h3-page .pjh-grid { gap: 16px; }
+.h3-page .pjh-w { padding: 16px 18px 14px; gap: 10px; border: 0; border-radius: var(--d3-r5); background: var(--d3-surface); box-shadow: var(--d3-shadow-1); transition: box-shadow .18s; }
+.h3-page .pjh-grid:not(.edit) .pjh-w:hover { box-shadow: var(--d3-shadow-2); }
+.h3-page .pjh-wh { height: 30px; gap: 10px; }
+.h3-page .pjh-wh-ic, .pjh-mback.ds3 .pjh-wh-ic { width: 30px; height: 30px; border-radius: 9px; background: var(--d3-fill); color: var(--d3-ink-2); }
+.h3-page .pjh-wh-ic > svg, .pjh-mback.ds3 .pjh-wh-ic > svg { width: 16px; height: 16px; }
+.h3-page .pjh-wh-ic.t-sessions, .pjh-mback.ds3 .pjh-wh-ic.t-sessions { background: var(--d3-blue-tint); color: var(--d3-blue-ink); }
+.h3-page .pjh-wh-ic.t-tasks, .pjh-mback.ds3 .pjh-wh-ic.t-tasks { background: var(--d3-violet-tint); color: var(--d3-violet-ink); }
+.h3-page .pjh-wh-ic.t-knowledge, .pjh-mback.ds3 .pjh-wh-ic.t-knowledge { background: var(--d3-mint-tint); color: var(--d3-mint-ink); }
+.h3-page .pjh-wh-ic.t-folder, .pjh-mback.ds3 .pjh-wh-ic.t-folder { background: var(--d3-amber-tint); color: var(--d3-amber-ink); }
+.h3-page .pjh-wh-name, .pjh-mback.ds3 .pjh-wh-name { font-size: 15px; font-weight: 700; letter-spacing: -.015em; }
+.h3-page .pjh-grid .pjh-wh-sub { display: none; }   /* 수는 «지금» 띠가 한 번 말했다 */
+.h3-page .pjh-hbtn, .h3-page .pjh-open { width: 28px; height: 28px; border-radius: var(--d3-r2); color: var(--d3-ink-3); }
+.h3-page .pjh-hbtn:hover, .h3-page .pjh-open:hover { background: var(--d3-fill); color: var(--d3-ink); }
+.h3-page .pjh-grp { min-height: 26px; font-size: 12.5px; color: var(--d3-ink-3); }
+.h3-page .pjh-grp b { font-weight: 600; }
+
+/* 작은 단추 · 칩 */
+.h3-page .pjh-sbtn { height: 28px; padding: 0 11px; border-radius: var(--d3-r2); background: var(--d3-primary); color: var(--d3-on-primary); font-size: 12.5px; font-weight: 600; }
+.h3-page .pjh-sbtn.ghost { border: 0; background: var(--d3-surface); box-shadow: var(--d3-shadow-1); color: var(--d3-ink-2); }
+.h3-page .pjh-sbtn.ghost:hover { background: var(--d3-sunken); color: var(--d3-ink); }
+.h3-page .pjh-tb { height: 22px; padding: 0 8px; border-radius: 999px; background: var(--d3-fill); color: var(--d3-ink-2); font-size: 12px; font-weight: 500; }
+.h3-page .pjh-tb:hover { color: var(--d3-ink); background: var(--d3-line-2); }
+
+/* ── 세션 ── */
+.h3-page .pjh-sxl { margin: 0 -8px; }
+.h3-page .pjh-sx { min-height: 40px; padding: 0 8px; border-top: 0; border-radius: 10px; font-size: 13.5px; column-gap: 12px; }
+.h3-page .pjh-sx.wide { grid-template-columns: minmax(0, 1fr) auto 24px 62px 104px; }
+.h3-page .pjh-sx:hover { background: var(--d3-sunken); }
+.h3-page .pjh-sx-n { gap: 10px; }
+.h3-page .pjh-sx-n .pjh-sr-n { font-weight: 600; color: var(--d3-ink); }
+.h3-page .pjh-sx.past .pjh-sr-n { font-weight: 500; color: var(--d3-ink-2); }
+.h3-page .pjh-sx-s { display: inline-flex; align-items: center; gap: 6px; justify-self: end; height: 22px; padding: 0 9px; border-radius: 999px; background: var(--d3-fill); font-size: 12px; font-weight: 600; color: var(--d3-ink-3); }
+.h3-page .pjh-sx-s:empty { display: block; padding: 0; background: none; }
+.h3-page .pjh-sx-s > i { display: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.h3-page .pjh-sx-s.k-busy { background: var(--d3-mint-tint); color: var(--d3-mint-ink); }
+.h3-page .pjh-sx-s.k-busy > i { display: block; animation: pjh-busy 1.1s ease-in-out infinite; }
+.h3-page .pjh-sx-s.k-waiting { background: var(--d3-amber-tint); color: var(--d3-amber-ink); }
+.h3-page .pjh-sx-s.k-done { background: var(--d3-blue-tint); color: var(--d3-blue-ink); }
+.h3-page .pjh-sx.wait .pjh-sx-s { color: var(--d3-amber-ink); }
+.h3-page .pjh-sx-t { font-size: 12.5px; color: var(--d3-ink-3); }
+.h3-page .pjh-sx-f .pjv-ava { width: 22px; height: 22px; font-size: 10px; }
+.h3-page .pjh-sx .pjh-sbtn.ghost { background: none; box-shadow: none; color: var(--d3-ink-3); padding: 0 9px; }
+.h3-page .pjh-sx:hover .pjh-sbtn.ghost { background: var(--d3-surface); box-shadow: var(--d3-shadow-1); color: var(--d3-ink); }
+.h3-page .pjh-sx-div { padding: 14px 8px 6px; font-size: 12px; font-weight: 600; color: var(--d3-ink-3); }
+.h3-page .pjh-sx-div::after { content: ''; flex: 1; height: 1px; margin-left: 6px; background: var(--d3-line); }
+.h3-page .pjh-dot { width: 8px; height: 8px; background: var(--d3-ink-4); }
+.h3-page .pjh-dot.off { background: none; border: 1.5px solid var(--d3-line-2); }
+.h3-page .pjh-dot.wait { background: var(--d3-amber); box-shadow: 0 0 0 3px var(--d3-amber-tint); }
+.h3-page .pjh-dot.done { background: var(--d3-blue); opacity: 1; }
+.h3-page .pjh-dot.busy, .h3-page .pjh-pulse { background: var(--d3-mint); }
+
+/* ── 작업 타임라인 — 얼굴이 세로 줄에 걸린다(이름 글자는 얼굴이 말했다) ── */
+.h3-page .pjh-grid .pjh-wfeed { position: relative; }
+.h3-page .pjh-grid .pjh-wk { position: relative; gap: 12px; padding: 6px 8px; border-radius: 10px; }
+.h3-page .pjh-grid .pjh-wk:hover { background: var(--d3-sunken); }
+.h3-page .pjh-grid .pjh-wk > .pjv-ava { position: relative; z-index: 1; width: 22px; height: 22px; font-size: 10px; margin-top: 0; box-shadow: 0 0 0 3px var(--d3-surface); }
+.h3-page .pjh-grid .pjh-wk:hover > .pjv-ava { box-shadow: 0 0 0 3px var(--d3-sunken); }
+.h3-page .pjh-grid .pjh-wk + .pjh-wk::before { content: ''; position: absolute; left: 18.5px; top: -14px; height: 20px; width: 1px; background: var(--d3-line-2); }
+.h3-page .pjh-grid .pjh-wk-x { font-size: 13.5px; font-weight: 600; color: var(--d3-ink); }
+.h3-page .pjh-grid .pjh-wk-w { font-size: 12px; font-weight: 500; color: var(--d3-ink-3); }
+.h3-page .pjh-grid .pjh-wk-who, .h3-page .pjh-grid .pjh-wk-who + .pjh-wk-sep { display: none; }
+.h3-page .pjh-grid .pjh-wk-m { font-size: 12px; color: var(--d3-ink-3); gap: 5px; }
+.h3-page .pjh-grid .pjh-wk-m .pjh-tb { height: 20px; font-size: 11.5px; }
+
+/* ── 태스크 — 프로젝트 탭 목록 그대로, 종이만 바꾼다 ── */
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-tgroup-label { font-size: 13px; font-weight: 600; color: var(--d3-ink-2); }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-tgroup-count { font-size: 12.5px; font-weight: 500; color: var(--d3-ink-3); }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-colhead { visibility: hidden; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-trow-wrap > .pjv-trow { min-height: 38px; border-top: 0; border-radius: 10px; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-trow:hover { background: var(--d3-sunken); }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-addrow { color: var(--d3-ink-3); }
+
+/* ── 본문 ── */
+.h3-page .pjh-read { font-size: 14px; line-height: 1.7; color: var(--d3-ink-2); }
+.h3-page .pjh-read > .md { line-height: 1.7; }
+.h3-page .pjh-read > .md h1 { font-size: 17px; font-weight: 700; letter-spacing: -.02em; color: var(--d3-ink); }
+.h3-page .pjh-read > .md h2 { font-size: 14.5px; font-weight: 700; color: var(--d3-ink); }
+.h3-page .pjh-read > .md h3 { font-size: 14px; font-weight: 600; color: var(--d3-ink); }
+.h3-page .pjh-read > .md p, .h3-page .pjh-read > .md ul, .h3-page .pjh-read > .md ol { color: var(--d3-ink-2); }
+.h3-page .pjh-read > .md blockquote { border-radius: var(--d3-r3); background: var(--d3-sunken); }
+.h3-page .pjh-composer { height: 38px; padding: 0 6px 0 14px; border: 0; border-radius: 999px; background: var(--d3-sunken); box-shadow: inset 0 0 0 1px var(--d3-line); }
+.h3-page .pjh-composer:focus-within { background: var(--d3-surface); box-shadow: inset 0 0 0 1.5px var(--d3-ink-4); }
+.h3-page .pjh-composer .pjh-sbtn { width: 28px; height: 28px; border-radius: 50%; background: var(--d3-primary); color: var(--d3-on-primary); box-shadow: none; }
+
+/* ── 지식 ── */
+.h3-page .pjh-kcol.flat { padding: 0; border: 0; background: none; }
+.h3-page .pjh-grid .pjh-kr { border-top: 0; border-radius: 10px; }
+.h3-page .pjh-grid .pjh-kr:hover { background: var(--d3-sunken); }
+
+/* ── 글 줄이기(원준 2026-11-22 «너무 글이 많으면 안 보고 싶어») — 격자에선 한 줄씩. 자세한 것은 «크게 열기» 에 있다. ── */
+/* 사람 — 얼굴 · ＋ · 두세 글자 */
+.h3-page .pjh-people .pjh-crew { display: inline-flex; }
+.h3-page .pjh-people .pjh-face { width: 26px; height: 26px; font-size: 11px; }
+.h3-page .pjh-people-more { font-size: 12px; font-weight: 600; color: var(--d3-ink-3); }
+.h3-page .pjh-invite { width: 26px; height: 26px; padding: 0; justify-content: center; border-radius: 50%; font-size: 14px; }
+.h3-page .pjh-people-acc { margin-left: 4px; }
+/* 본문 — 한 줄짜리(2×1)에선 단으로 가르지 않고 앞 몇 줄만 */
+.h3-page .pjh-grid .pjh-read.cols2 { display: block; }
+.h3-page .pjh-grid .pjh-read.cols2 > .md { columns: auto; column-rule: 0; max-width: 72ch; }
+.h3-page .pjh-grid .pjh-h1 .pjh-read { -webkit-mask-image: linear-gradient(#000 62%, transparent); mask-image: linear-gradient(#000 62%, transparent); }
+/* 타임라인 — 얼굴 · 한 일 · 때. 종류 · 태스크 줄은 열었을 때 */
+.h3-page .pjh-grid .pjh-wk-m { display: none; }
+.h3-page .pjh-grid .pjh-wk { align-items: center; padding: 5px 8px; }
+.h3-page .pjh-grid .pjh-wk-x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h3-page .pjh-grid .pjh-wk + .pjh-wk::before { top: -10px; height: 14px; }
+/* 지난 세션 — 단추는 아이콘, 글자는 올렸을 때 */
+.h3-page .pjh-sx.past .pjh-sbtn-l { display: none; }
+.h3-page .pjh-sx.past:hover .pjh-sbtn-l, .h3-page .pjh-sx.past .pjh-sbtn:focus-visible .pjh-sbtn-l { display: inline; }
+.h3-page .pjh-sx.past .pjh-sbtn.ghost { color: var(--d3-ink-3); }
+/* 태스크 — «＋ 태스크» 줄은 판에 올렸을 때 */
+.h3-page .pjh-grid .pjv-addrow { opacity: 0; transition: opacity .12s; }
+.h3-page .pjh-grid .pjh-w:hover .pjv-addrow, .h3-page .pjh-grid .pjv-addrow:focus-within { opacity: 1; }
+/* 폴더 — 끌어다 놓기 안내는 끌고 있을 때만(판 전체가 놓는 자리다) */
+.h3-page .pjh-grid .pjh-w:not(.drop-active) .pjh-drop { display: none; }
+
+/* 세션 카드 — 열려 있는 세션(넓은 위젯) */
+.pjh-scs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 2px 8px 6px; }
+.pjh-scs.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pjh-sc { position: relative; display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 11px 14px 12px; border-radius: 14px; background: var(--d3-sunken); box-shadow: inset 0 0 0 1px var(--d3-line); cursor: pointer; outline: 0; transition: background .14s, box-shadow .14s; }
+.pjh-sc:hover { background: var(--d3-surface); box-shadow: var(--d3-shadow-2); }
+.pjh-sc:focus-visible { box-shadow: inset 0 0 0 2px var(--d3-blue); }
+.pjh-sc.wait { background: var(--d3-amber-tint); box-shadow: none; }
+.pjh-sc.busy { background: var(--d3-mint-tint); box-shadow: none; }
+.pjh-sc-h { display: flex; align-items: center; gap: 8px; height: 22px; }
+.pjh-sc .pjh-sx-s { justify-self: auto; background: var(--d3-surface); box-shadow: inset 0 0 0 1px var(--d3-line); }
+.pjh-sc.wait .pjh-sx-s, .pjh-sc.busy .pjh-sx-s { box-shadow: none; }
+.pjh-sc-sp { flex: 1; }
+.pjh-sc-t { font-size: 12px; color: var(--d3-ink-3); white-space: nowrap; }
+.pjh-sc-h .pjv-ava { flex: none; width: 20px; height: 20px; font-size: 9.5px; }
+.pjh-sc-n { margin-top: 2px; font-size: 14px; font-weight: 600; letter-spacing: -.01em; color: var(--d3-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-sc-say { height: 18px; font-size: 12.5px; line-height: 18px; color: var(--d3-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjh-sc-go { position: absolute; right: 10px; bottom: 10px; display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 10px; border-radius: var(--d3-r2); background: var(--d3-primary); color: var(--d3-on-primary); font-size: 12.5px; font-weight: 600; opacity: 0; transform: translateY(2px); transition: opacity .12s, transform .12s; }
+.pjh-sc:hover .pjh-sc-go, .pjh-sc:focus-visible .pjh-sc-go, .pjh-sc-go.on { opacity: 1; transform: none; }
+
+/* 다크 — «지금» 판은 창보다 한 층 밝은 남색 */
+:root[data-theme="dark"] .h3-now { --n-bg: #1A2740; --n-bg2: #20355C; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .h3-now { --n-bg: #1A2740; --n-bg2: #20355C; } }
+
+/* ── 좁은 화면 ── */
+@media (max-width: 900px) {
+  .h3-now { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .h3-nc:nth-child(3)::before { display: none; }
+  .h3-nc:nth-child(n+3) { border-top: 1px solid var(--n-line); }
+  .h3-page .proj-detail-title, .h3-page .proj-detail-title-input { font-size: 24px; }
+  .h3-meta > .pjh-people { margin-left: 0; padding-left: 0; border-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .h3-pulse::after, .h3-page .pjh-sx-s.k-busy > i { animation: none; }
+}
+
+/* ── 다른 화면에 먼저 입혀 보기(뿌리에 .ds3) — 토큰만으로는 안 바뀌는 것: 주 행동 단추가 잉크가 된다 ── */
+.ds3 .btn.btn-primary, .ds3 .btn-primary { background: var(--d3-primary); border-color: var(--d3-primary); color: var(--d3-on-primary); }
+.ds3 .btn.btn-primary:hover, .ds3 .btn-primary:hover { background: var(--d3-primary-hover); border-color: var(--d3-primary-hover); }
+
+/* ══ 다듬기(원준 2026-11-22 «글이 너무 다닥다닥하고 폰트가 너무 심하게 작다 — 눈에 잘 들어오게») ══
+   글자를 한 단씩 키우고(본문 16 · 줄 15 · 곁글 13.5 · 판 이름 17) 줄 사이를 넓힌다. 한 판에 서는 줄 수가 줄어드는 것이 목적이다. */
+.h3-page .pjh-grid { grid-auto-rows: 292px; gap: 18px; }
+.h3-page .pjh-w { padding: 20px 22px 18px; gap: 14px; }
+.h3-page .pjh-wh { height: 32px; gap: 12px; }
+.h3-page .pjh-wh-ic, .pjh-mback.ds3 .pjh-wh-ic { width: 32px; height: 32px; border-radius: 10px; }
+.h3-page .pjh-wh-ic > svg, .pjh-mback.ds3 .pjh-wh-ic > svg { width: 17px; height: 17px; }
+.h3-page .pjh-wh-name, .pjh-mback.ds3 .pjh-wh-name { font-size: 17px; }
+.h3-page .pjh-hbtn, .h3-page .pjh-open { width: 30px; height: 30px; }
+/* 머리 */
+.h3-page .proj-detail-back { margin-bottom: 28px; }
+.h3-page .proj-detail-title, .h3-page .proj-detail-title-input { font-size: 32px; }
+.h3-page .btn { height: 34px; padding: 0 14px; font-size: 14px; }
+.h3-page .btn.pjh-icon-btn { width: 34px; }
+.h3-meta { gap: 8px; margin: 14px 0 24px; }
+.h3-page .pjh-fact, .h3-page .pjh-fact > .pjv-tm-statuspill, .h3-page .pjh-fact-more { height: 34px; font-size: 14px; }
+.h3-page .pjh-fact { padding: 0 13px 0 12px; }
+.h3-page .pjh-fact > .pjv-tm-statuspill { padding: 0 14px 0 12px; }
+.h3-page .pjh-people .pjh-face, .h3-page .pjh-invite { width: 30px; height: 30px; }
+.h3-page .pjh-people .pjh-face { font-size: 12px; }
+.h3-page .pjh-people-acc { font-size: 14px; }
+/* «지금» 띠 — 세 칸(진행 · 내 차례 · 지금) */
+.h3-now { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 18px; }
+.h3-nc { gap: 10px; min-height: 148px; padding: 22px 28px 22px; }
+.h3-nc + .h3-nc::before { top: 24px; bottom: 24px; }
+.h3-nc-k { height: 20px; font-size: 14px; }
+.h3-nc-v { min-height: 44px; gap: 14px; }
+.h3-num { font-size: 38px; }
+.h3-num > small { margin-left: 5px; font-size: 15px; }
+.h3-nc-s { font-size: 14px; }
+.h3-turn-l { gap: 2px; margin: auto -10px -6px; }
+.h3-turn-i { height: 32px; padding: 0 10px; gap: 10px; font-size: 15px; }
+.h3-turn-i > i { width: 8px; height: 8px; }
+.h3-turn-i > em { font-size: 13px; }
+.h3-live-f .pj-ppl-face { width: 30px; height: 30px; font-size: 12px; }
+/* 세션 */
+.h3-page .pjh-sx { min-height: 48px; padding: 0 10px; font-size: 15px; column-gap: 14px; border-radius: 12px; }
+.h3-page .pjh-sx.wide { grid-template-columns: minmax(0, 1fr) auto 26px 72px 108px; }
+.h3-page .pjh-sx-n { gap: 12px; }
+.h3-page .pjh-sx-s { height: 26px; padding: 0 11px; font-size: 13px; }
+.h3-page .pjh-sx-t { font-size: 13.5px; }
+.h3-page .pjh-sx-f .pjv-ava { width: 26px; height: 26px; font-size: 11px; }
+.h3-page .pjh-sx-div { padding: 18px 10px 8px; font-size: 13.5px; }
+.h3-page .pjh-sxl { margin: 0 -10px; }
+.h3-page .pjh-tb { height: 24px; padding: 0 9px; font-size: 13px; }
+.h3-page .pjh-sbtn { height: 30px; padding: 0 12px; font-size: 13.5px; }
+.h3-page .pjh-sbtn > svg { width: 15px; height: 15px; }
+.pjh-scs { gap: 12px; padding: 2px 10px 6px; }
+.pjh-sc { gap: 10px; padding: 14px 16px 16px; border-radius: 16px; }
+.pjh-sc-h { height: 26px; gap: 10px; }
+.pjh-sc-t { font-size: 13px; }
+.pjh-sc-h .pjv-ava { width: 26px; height: 26px; font-size: 11px; }
+.pjh-sc-n { margin-top: 0; font-size: 16px; }
+.pjh-sc-go { right: 12px; bottom: 12px; height: 30px; padding: 0 12px; font-size: 13.5px; }
+/* 태스크 */
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-trow-title { font-size: 15px; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-trow-wrap > .pjv-trow { min-height: 46px; border-radius: 12px; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-tgroup-label { font-size: 14px; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-tgroup-count { font-size: 13.5px; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-tgroup { margin-top: 14px; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-ava { width: 24px; height: 24px; font-size: 10.5px; }
+/* 지식 */
+.h3-page .pjh-grid .pjh-kr { min-height: 46px; padding: 0 10px; gap: 10px; font-size: 15px; border-radius: 12px; }
+.h3-page .pjh-grid .pjh-kn-normal { gap: 2px; margin: 0 -10px; }
+.h3-page .pjh-grid .pjh-kn-rel { height: 24px; padding: 0 9px; border-radius: 999px; background: var(--d3-fill); font-size: 12.5px; font-weight: 600; line-height: 24px; color: var(--d3-ink-3); }
+.h3-page .pjh-grid .pjh-kn-link { font-size: 13.5px; color: var(--d3-blue-ink); }
+.h3-page .pjh-grid .pjh-kn-pct { display: none; }
+/* 폴더 */
+.h3-page .pjh-grid .pjh-fr { min-height: 50px; padding: 0 10px; gap: 12px; border-top: 0; border-radius: 12px; }
+.h3-page .pjh-grid .pjh-fr:hover { background: var(--d3-sunken); }
+.h3-page .pjh-grid .pjh-fr-n { font-size: 15px; }
+.h3-page .pjh-grid .pjh-fr-m { font-size: 13px; color: var(--d3-ink-3); }
+.h3-page .pjh-grid .pjh-fr-r { font-size: 13.5px; color: var(--d3-ink-3); }
+.h3-page .pjh-grid .pjh-fc-n { font-size: 14px; }
+/* 본문 — 읽는 글: 16px · 줄 사이 1.8 · 한 줄 60자 안쪽. 첫 제목은 크게, 문단 사이를 띄운다 */
+.h3-page .pjh-read, .h3-page .pjh-read > .md { font-size: 16px; line-height: 1.8; }
+.h3-page .pjh-grid .pjh-read > .md, .h3-page .pjh-grid .pjh-read.cols2 > .md { max-width: 62ch; }
+.h3-page .pjh-read > .md h1 { font-size: 21px; margin: 0 0 10px; }
+.h3-page .pjh-read > .md h2 { font-size: 18px; margin: 20px 0 6px; }
+.h3-page .pjh-read > .md h3 { font-size: 16.5px; margin: 16px 0 4px; }
+.h3-page .pjh-read > .md > :first-child { font-size: 19px; font-weight: 700; letter-spacing: -.02em; color: var(--d3-ink); margin-bottom: 8px; }
+.h3-page .pjh-read > .md p { margin: 0 0 12px; }
+.h3-page .pjh-read > .md li { margin: 4px 0; }
+.h3-page .pjh-composer { height: 42px; }
+.h3-page .pjh-composer-in { font-size: 14.5px; }
+@media (max-width: 900px) {
+  .h3-now { grid-template-columns: 1fr; }
+  .h3-nc + .h3-nc::before { display: none; }
+  .h3-nc + .h3-nc { border-top: 1px solid var(--n-line); }
+  .h3-nc:nth-child(n+3) { border-top: 1px solid var(--n-line); }
+  .h3-nc { min-height: 0; }
+  .h3-page .proj-detail-title, .h3-page .proj-detail-title-input { font-size: 26px; }
+}
+/* 다듬기 ② — 첫 줄 위 빈 자리 · 잘린 마지막 줄 · 폴더 나무 글자 */
+.h3-page .pjh-read > .md > :first-child { margin-top: 0; line-height: 1.4; }
+.h3-page .pjh-w .pjv-tasks-embedded .pjv-tgroup:first-child { margin-top: 0; }
+.h3-page .pjh-grid .pjh-kn-normal, .h3-page .pjh-grid .pjh-sxl, .h3-page .pjh-grid .pjv-tasks-body, .h3-page .pjh-grid .pjh-frl, .h3-page .pjh-grid .pjh-tree {
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 30px), transparent); mask-image: linear-gradient(#000 calc(100% - 30px), transparent); }
+.h3-page .pjh-grid .pjh-fc.drop { display: none; }
+.h3-page .pjh-grid .pjh-tree-r { height: 34px; padding: 0 10px; gap: 9px; border-radius: 10px; font-size: 14.5px; }
+.h3-page .pjh-grid .pjh-tree-r:hover { background: var(--d3-sunken); }
+.h3-page .pjh-grid .pjh-tree-r.on { background: var(--d3-fill); }
+.h3-page .pjh-grid .pjh-tree-c { font-size: 13px; color: var(--d3-ink-3); }
+.h3-page .pjh-grid .pjh-fc-m { font-size: 12.5px; color: var(--d3-ink-3); }

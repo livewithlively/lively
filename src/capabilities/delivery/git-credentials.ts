@@ -11,6 +11,9 @@ import {
 // #1077 등록 직후 홈 즉시 반영 — materialize(홈 쓰기) + 그 멤버의 격리 계정 해소(ready·provisioned·osUser).
 import { materializeMemberGit } from "../../org/credentials/git-credential-materialize-gateway.js";   // #2165 — DB 를 타는 조각은 게이트웨이 모듈에
 import { secretsEnabled } from "../../org/credentials/secret-box.js";
+import { localGitLeaseDenial, localGitLeaseOf } from "../../org/credentials/git-credential-lease.js";
+import { resolveRepoInject, hostOf } from "../../project/project-provision.js";
+import { logger } from "../../log.js";
 import { actorOf, restOnly, restRead, str } from "./shared.js";
 
 // git 자격 등록(#540) 입력 파싱·적용 — self(me/*)·gateway(org/*) 공용. SSH 는 박스가 키페어 생성(개인키 박스밖 유출 없음),
@@ -105,6 +108,35 @@ export const gitCredentialCapabilities: Capability[] = [
     }, true, {
       host: z.string().optional().describe("삭제할 자격의 git 호스트(기본 github.com) — parseGitHost 가 읽는다"),
     }),
+  // ── 로컬 도구용 리스 — 본인 HTTPS 토큰을 그 사람의 로컬 도구(lively_local_repo_* · `lively repo`)에게 내준다. ──
+  //  누가 · 무엇을 받는지와 그 까닭은 org/credentials/git-credential-lease.ts 머리말. 요지:
+  //   · **REST 전용**(mcp:false) — AI 가 부르는 도구가 아니다. 로컬 도구가 git 을 띄우기 직전에 부르고, 받은 값은 그 git 프로세스의
+  //     환경으로만 넘긴다(파일 · 출력에 남기지 않는다 — kit/cli/repo-worktree-core.mjs gitAuthEnv).
+  //   · 본인 것만 — 레지스트리 주소 + 자격 정책은 노드 provision 과 같은 관문(resolveRepoInject → leaseGitSecretForNode "member")을 탄다.
+  //     여기서 getGitSecret · resolveGitSecret 을 직접 부르면 조직 자격이 개인 머신으로 샌다.
+  //   · 응답이 곧 시크릿이다. REST 호출은 호출 기록(mcp_call_log)에 남지 않는다 — 내준 사실(누가 · 어느 레포 · 어느 열쇠로)만 아래 감사 로그로 남긴다.
+  //  POST 인 까닭: 시크릿을 담은 응답이 GET 캐시 · 주소 기록에 실리지 않게. 저장소를 바꾸지 않으므로 mutates:false(읽기전용 세션도 레포를 읽는다).
+  {
+    name: "me_git_credential_lease", title: "내 git 토큰 받기(로컬 도구 전용)",
+    description: "등록된 레포를 이 컴퓨터에 받을 때 쓸 **내** HTTPS 토큰을 돌려준다 — 로컬 도구(lively_local_repo_worktree · lively_local_repo_pin · `lively repo`)가 git 을 띄우기 직전에 부른다. "
+      + "본인이 등록한 HTTPS 토큰만 내준다(조직 자격 · SSH 개인키는 내주지 않는다). 회수할 수 있는 접속 열쇠로 온 구성원 본인만 부를 수 있다(웹 세션 · 앱 · 작업 토큰 거절).",
+    scope: "context", mutates: false,
+    input: { repo: z.string().describe("레포 이름(repo_list 의 name)") },
+    expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/me/git-credential/lease"], parse: (req) => req.body ?? {} }] },
+    handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+      const denied = localGitLeaseDenial(user);
+      if (denied) throw new HttpError(user?.userId ? 403 : 401, denied);
+      const repo = str(input.repo, "repo", 100).trim();
+      if (!/^(?!\.+$)[A-Za-z0-9._-]{1,100}$/.test(repo)) throw new HttpError(400, "repo 는 레포 이름이어야 합니다");
+      const inj = await resolveRepoInject(repo, user.userId, "member");
+      const lease = localGitLeaseOf(inj.gitUrl, hostOf(inj.gitUrl), inj.secret ?? null);
+      if (lease.credential) {
+        logger.info({ audit: "git_credential_lease", user: user.userId, repo, host: lease.host, token: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null },
+          "git 자격 리스(로컬 도구) — 본인 HTTPS 토큰");
+      }
+      return { repo, ...lease };
+    },
+  },
   restOnly("org_git_credential_get", "게이트웨이 git 계정 조회",
     "게이트웨이(조직 머신 계정) git 자격을 조회한다 — provision 클론에서 멤버 자격이 없을 때 폴백으로 쓰인다. 시크릿은 반환하지 않는다.",
     [{ method: "GET", paths: ["/api/ui/org/git-credential"], parse: () => ({}) }],

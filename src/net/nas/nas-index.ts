@@ -22,7 +22,12 @@ export interface CrawlLimits {
   deadlineMs: number;
 }
 
-export const DEFAULT_LIMITS: CrawlLimits = { maxDirs: 20_000, maxEntries: 200_000, deadlineMs: 10 * 60_000 };
+// 폴더 상한은 한 FTP 계정이 여는 범위 전체가 들어가게 둔다. 잘린 색인은 빠진 폴더의 파일을 «없다»고 답한다
+//  (폴더 20000개 상한에서는 폴더 수만 개짜리 계정의 약 1/3 이 빠졌다).
+//  항목 상한은 올리지 않는다 — 색인은 항목마다 경로 문자열 두 벌(raw·path)을 들고 메모리에 통째로 있고, 구성원마다 따로 캐시된다.
+//  폴더 상한을 먼저 풀어야 했던 계정도 항목(폴더+파일)은 이 안에 들었다. 넘으면 truncated 로 알린다.
+//  시간 상한은 폴더 수 상한을 세션 수(NAS_CRAWL_SESSIONS)로 나눠 훑는 속도에 맞춘다 — 폴더만 올리면 시간 상한에 먼저 걸린다.
+export const DEFAULT_LIMITS: CrawlLimits = { maxDirs: 100_000, maxEntries: 200_000, deadlineMs: 30 * 60_000 };
 
 export interface CrawlResult {
   entries: NasEntry[];
@@ -33,42 +38,82 @@ export interface CrawlResult {
   failedDirs: number;
 }
 
-/** 폴더 하나의 LIST 본문을 주는 함수 — 실제로는 FtpSession.list, 시험에선 가짜. */
+/** 폴더 하나의 LIST 본문을 주는 함수 — 실제로는 FtpSession.list, 시험에선 가짜. 한 lister 는 한 번에 한 폴더만 연다. */
 export type DirLister = (rawDir: string) => Promise<string>;
 
 const joinRaw = (dir: string, name: string): string => (dir === "/" ? `/${name}` : `${dir}/${name}`);
 
-/** root 아래를 너비 우선으로 훑는다. 심볼릭 링크는 따라가지 않는다(순환·chroot 밖 방지). */
-export async function crawl(list: DirLister, root = "/", limits: CrawlLimits = DEFAULT_LIMITS, now: () => number = Date.now): Promise<CrawlResult> {
+const isFatal = (e: unknown): boolean => (e as { fatal?: unknown } | null)?.fatal === true;
+
+/**
+ * root 아래를 너비 우선으로 훑는다. 심볼릭 링크는 따라가지 않는다(순환·chroot 밖 방지).
+ *  lister 를 여러 개 주면 한 큐를 나눠 동시에 연다(FTP 세션 하나는 LIST 를 하나씩만 하므로 세션마다 lister 하나).
+ *  왕복 지연이 LIST 시간을 지배하면 최대 세션 수만큼 빨라진다(실제 속도는 색인 완료 로그의 sessions·ms).
+ *  한 lister 의 접속이 죽으면(fatal) 그 폴더를 큐에 되돌리고 나머지 lister 로 계속한다. 전부 죽으면 마지막 오류로 거부한다 —
+ *  죽은 접속의 실패를 «권한 없는 폴더»로 세면 반쪽 색인이 성공으로 12시간 캐시된다.
+ */
+export async function crawl(listers: DirLister | readonly DirLister[], root = "/", limits: CrawlLimits = DEFAULT_LIMITS, now: () => number = Date.now): Promise<CrawlResult> {
+  const pool = typeof listers === "function" ? [listers] : [...listers];
+  if (!pool.length) throw new Error("crawl: lister 가 하나도 없다");
   const started = now();
   const entries: NasEntry[] = [];
   const queue: string[] = [root];
   let dirs = 0;
   let failedDirs = 0;
   let truncated: string | null = null;
-  while (queue.length) {
-    if (dirs >= limits.maxDirs) { truncated = `폴더 ${limits.maxDirs}개 상한`; break; }
-    if (now() - started > limits.deadlineMs) { truncated = `시간 상한 ${Math.round(limits.deadlineMs / 1000)}초`; break; }
-    const dir = queue.shift()!;
-    dirs++;
-    let items: FtpListEntry[];
-    try {
-      items = parseListing(await list(dir));
-    } catch (e) {
-      // 접속이 죽은 오류면 남은 폴더도 전부 실패한다 — 그걸 «권한 없는 폴더»로 세면 반쪽 색인이 성공으로 12시간 캐시된다
-      if ((e as { fatal?: unknown } | null)?.fatal === true) throw e;
-      failedDirs++;
-      continue;
+  let inflight = 0;
+  let alive = pool.length;
+  let lastFatal: unknown = null;
+  const waiters: Array<() => void> = [];
+  const wakeAll = (): void => { while (waiters.length) waiters.shift()!(); };
+
+  const worker = async (list: DirLister): Promise<void> => {
+    for (;;) {
+      if (truncated !== null) return;
+      if (!queue.length) {
+        // 다른 lister 가 연 폴더에서 하위 폴더가 나올 수 있다 — 진행 중인 것이 다 끝나야 정말 끝이다
+        if (inflight === 0) return;
+        await new Promise<void>((r) => waiters.push(r));
+        continue;
+      }
+      if (dirs >= limits.maxDirs) { truncated = `폴더 ${limits.maxDirs}개 상한`; wakeAll(); return; }
+      if (now() - started > limits.deadlineMs) { truncated = `시간 상한 ${Math.round(limits.deadlineMs / 1000)}초`; wakeAll(); return; }
+      const dir = queue.shift()!;
+      dirs++;
+      inflight++;
+      let items: FtpListEntry[];
+      try {
+        items = parseListing(await list(dir));
+      } catch (e) {
+        inflight--;
+        if (isFatal(e)) {
+          dirs--;
+          queue.unshift(dir);
+          alive--;
+          lastFatal = e;
+          wakeAll();
+          return;
+        }
+        failedDirs++;
+        wakeAll();
+        continue;
+      }
+      inflight--;
+      for (const it of items) {
+        if (it.type !== "file" && it.type !== "dir") continue;
+        // 넣기 전에 본다 — 다른 lister 가 이미 상한을 채웠으면 이 폴더 결과도 더 넣지 않는다
+        if (entries.length >= limits.maxEntries) break;
+        const raw = joinRaw(dir, it.name);
+        entries.push({ raw, path: displayPath(raw), type: it.type, size: it.size, mtime: it.mtime });
+        if (it.type === "dir") queue.push(raw);
+      }
+      if (entries.length >= limits.maxEntries) truncated ??= `항목 ${limits.maxEntries}개 상한`;
+      wakeAll();
     }
-    for (const it of items) {
-      if (it.type !== "file" && it.type !== "dir") continue;
-      const raw = joinRaw(dir, it.name);
-      entries.push({ raw, path: displayPath(raw), type: it.type, size: it.size, mtime: it.mtime });
-      if (it.type === "dir") queue.push(raw);
-      if (entries.length >= limits.maxEntries) break;
-    }
-    if (entries.length >= limits.maxEntries) { truncated = `항목 ${limits.maxEntries}개 상한`; break; }
-  }
+  };
+
+  await Promise.all(pool.map(worker));
+  if (alive === 0) throw lastFatal;
   return { entries, dirs, truncated, failedDirs };
 }
 
@@ -111,6 +156,8 @@ export interface IndexState {
   building: Promise<CrawlResult> | null;
   /** 마지막 실패를 errorText 로 분류한 문구(원문 아님). nas_find 응답의 last_error 로 그대로 나간다. */
   error: string | null;
+  /** 색인을 만드는 도중 NAS 가 바뀌었다 — 그 색인은 완성돼도 낡은 것으로 본다. */
+  staleOnBuild?: boolean;
 }
 
 /**
@@ -123,7 +170,7 @@ const NO_RAW_ERROR: IndexErrorText = () => "색인을 만들지 못했습니다"
 export const INDEX_TTL_MS = 12 * 60 * 60_000;
 /** 동시에 들고 있는 구성원 색인 수 — 넘으면 가장 오래된 것을 버린다(메모리 상한). */
 export const INDEX_MAX_MEMBERS = 10;
-/** 동시에 도는 색인 만들기 수 — 한 번에 여러 명이 처음 부르면 그만큼 FTP 세션이 10분까지 열린다. 넘으면 줄을 선다. */
+/** 동시에 도는 색인 만들기 수 — 한 번에 여러 명이 처음 부르면 그만큼(색인마다 세션 여러 개) FTP 접속이 시간 상한까지 열린다. 넘으면 줄을 선다. */
 export const INDEX_MAX_CONCURRENT_BUILDS = 2;
 
 /**
@@ -168,8 +215,9 @@ export class NasIndexCache {
   build(key: string, run: () => Promise<CrawlResult>): Promise<CrawlResult> {
     const s = this.get(key);
     if (s.building) return s.building;
+    s.staleOnBuild = false; // 이전 build 가 실패해 남은 표시를 새 build 로 넘기지 않는다(그 전의 markStale 은 builtAt=null 로 이미 반영)
     const p = this.slot(run).then(
-      (r) => { s.result = r; s.builtAt = this.now(); s.error = null; return r; },
+      (r) => { s.result = r; s.builtAt = s.staleOnBuild ? null : this.now(); s.error = null; return r; },
       (e: unknown) => { s.error = this.errorText(e); throw e; },
     ).finally(() => { s.building = null; });
     p.catch(() => {}); // 기다리는 쪽이 없을 수 있다(첫 호출이 시간 안에 못 받고 돌아간 경우)
@@ -178,6 +226,14 @@ export class NasIndexCache {
   }
 
   drop(key: string): void { this.states.delete(key); }
+
+  /** NAS 를 바꾼 뒤 부른다 — 다음 검색이 색인을 다시 만든다(그동안은 직전 색인으로 답한다). */
+  markStale(key: string): void {
+    const s = this.states.get(key);
+    if (!s) return;
+    s.builtAt = null;
+    if (s.building) s.staleOnBuild = true;
+  }
 
   // 상한은 키 수로 센다. 진행 중인 키는 버리지 않으므로 잠깐 넘을 수 있다(동시 색인 수만큼).
   // keep = 방금 넣은 키. 아직 builtAt 이 없어 «가장 오래된 것»으로 보이지만, 곧 색인을 만들 자리라 버리면 안 된다.

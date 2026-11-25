@@ -105,7 +105,7 @@ Single source of truth for allowed scopes: **`src/auth/scopes.ts`** (the types u
 | scope | Meaning |
 |---|---|
 | `items` · `context` | Item lookup (legacy — now only a few ops such as the GitHub connection) · context (domain map · repos · taxonomy · teams) |
-| `memory` | Org content — most surfaces, including knowledge · projects/tasks · sources. The default member scopes are `items` · `context` · `memory` |
+| `memory` | Org content — most surfaces, including knowledge · projects/tasks · sources. The default member scopes are `items` · `context` · `memory` · `db` · `code` |
 | `db` (`db:<source>`) | `db_query`/`db_schema` (all sources or a specific source) |
 | `admin` | Data/policy administration (sections · members · WIKI index · tokens · publishing) |
 | `runtime` | **Defines what runs on member machines** — custom hooks · AI tools. Separate from admin (admin ⊉ runtime) |

@@ -444,11 +444,15 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     saveTimer = setTimeout(doSave, Math.min(600, 4000 - waited));
   };
 
+  //  본문의 [[이름]] 을 지식 링크로 — 서버가 이 문서에서 이어 둔 이름(links.outgoing)으로 풀고, 못 푼 것은 «없는 링크» 로 표시한다.
+  //  자기 이름은 넣어 둔다 — 서버는 자기 자신으로의 엣지를 만들지 않는다(knowledge-links resolveWikiLinkTargets).
+  const wikiLinks = { known: new Set<string>([k.name, ...((k.links && k.links.outgoing) || []).map((e: any) => String(e.name))]) };
   if (k.is_folder) {
     body.append(await knFolderChildrenBlock(k));
   } else if (editableDoc) {
     editor = wkTrackEditor(createBlockEditor({
       initial: k.body_md || '',
+      wikiLinks,
       placeholder: "내용 입력 · '/' 블록 메뉴",
       onChange: queueSave,
       onSaveShortcut: () => { clearTimeout(saveTimer); doSave(); },
@@ -457,7 +461,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     (body as any)._getMd = () => editor.getMarkdown();
     body.append(editor.el);
   } else {
-    body.append(el('div', { class: 'md-rendered wk-doc-md' }, renderMarkdown(k.body_md || '')));
+    body.append(el('div', { class: 'md-rendered wk-doc-md' }, renderMarkdown(k.body_md || '', { wikiLinks })));
   }
 
   // MD 원문 토글(⋯ 메뉴) — 편집 가능하면 textarea(완료 시 에디터에 반영), 아니면 읽기 pre.

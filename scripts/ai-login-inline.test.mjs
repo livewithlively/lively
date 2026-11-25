@@ -65,7 +65,7 @@ test("★ 어느 하네스가 «주소·코드로 끝나나» 는 한 곳에서�
   const m = SRC.match(/AI_LOGIN_INLINE[^=]*=\s*Object\.freeze\(\{([^}]*)\}/);
   assert.ok(m, "AI_LOGIN_INLINE 표를 못 찾았다");
   const keys = [...m[1].matchAll(/(\w+)\s*:\s*true/g)].map((x) => x[1]).sort();
-  assert.deepEqual(keys, ["claude", "codex", "grok"],
+  assert.deepEqual(keys, ["claude", "codex", "cursor", "grok"],
     "agy 는 파이프 stdin 거절 + 60초 하드 타임아웃이라 여기 없다(실측 2026-09-01) — 그쪽은 인라인 터미널로 간다");
 });
 

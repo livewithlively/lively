@@ -1,4 +1,4 @@
-// 앱이 선언한 MCP 도구(#5050 앱 v2-40) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱이 선언한 MCP 도구(#5050 앱 v2-40) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/mcp/app-declared-tools.pg-test.mjs
 //
 //  무엇을 보나 — 완료 조건 그대로: **세션 머리글 없는 OAuth 토큰**(진짜 인가 흐름: 요청 → 승인 → 코드 교환)으로 실제 /mcp(express + 인증 +
@@ -14,7 +14,8 @@
 //  E16 실행기 오류 · E17 결과 상한 · E18 scope 없는 토큰 · E20 이름 겹침(먼저 설치된 앱) · E21 공개 주소 모름 ·
 //  E6b 초안이 mcp_tools 칸을 통째로 뺀 공개 앱(공개 판 갈래) · E12b 되돌리기(app_revert)도 이름 검사 · E12c 같은 이름 동시 설치는 하나만 ·
 //  E12d 조직 도구를 앱 도구 이름으로 못 만든다 · E12e 도구 묶음(프리셋) 이름 · E12f 이미 겹친 조직 도구는 고칠 수 있다 · E12g 이름 자리 대기 초과 · E12h 관리 창구의 묶음 심기 겹침 ·
-//  E22 비활성 구성원 · E23 비용 — 선언한 앱이 없으면 MCP 요청마다 쿼리 1번 · 실행기가 없으면 0번
+//  E22 비활성 구성원 · E23 비용 — 선언한 앱이 없으면 MCP 요청마다 쿼리 1번 · 실행기가 없으면 0번 ·
+//  E24 예전 범위 동의(#1644 — 도구만 · scope 만 새로 선언 → consent_required + 동의 주소 + 덮지 못한 것 · 실행기 0 · 구성원에게 없는 scope 는 막지 않음 · 다시 동의 뒤 통과)
 //  G0 · G1 배선 — 정책 · 앱 역할 · 시험 실행기가 실제로 불렸다
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
@@ -498,6 +499,55 @@ try {
   const r21 = await callAppDeclaredTool(refOf("crm", lookupDecl[0]), { q: "x" }, await extraOf(tok.bob));
   process.env.PUBLIC_URL = GW;
   chk("E21 공개 주소를 모르면 동의 주소 없이 «라이블리에서 이 앱을 열면» 으로 안내", r21._meta?.["lively/code"] === "consent_required" && !("lively/consent_url" in (r21._meta ?? {})) && /라이블리에서 이 앱을 열면/.test(textOf(r21)), J(r21));
+
+  // ── E24 예전 범위 동의(#1644) — 동의가 앱의 지금 선언 전체를 덮지 못하면 실행기 전에 거절(동의 주소 · 덮지 못한 것) ──
+  //  이게 틀리면: 앱이 동의 뒤에 권한을 넓혔을 때(ai_runs · scopes 에 db) 앱 서버가 «권한 밖» 으로 막히거나 작업 AI 에서 새 기능만 조용히 빠진다(이슈 본문 · 댓글).
+  {
+    await upsertMember({ id: "nocx", display_name: "컨텍스트없음", state: "active", scopes: ["items", "memory"] }, "pgt");
+    const nocxTok = (await mintToken({ userId: "nocx", memberId: "nocx", scopes: ["items", "memory"] }, "pgt")).token;
+    const SQ = [T("stale_q")];
+    const installP = (perms) => cap("org_app_install").handler({ source: { kind: "inline", files: files("stale", "예전 동의", SQ, { permissions: perms }) } }, P("boss", true), ctx);
+    const staleRef = refOf("stale", appMcpToolsOf({ mcp_tools: SQ })[0]);
+    const callStale = async (t) => callAppDeclaredTool(staleRef, {}, await extraOf(t));
+    const URL24 = `${GW}/ui/#/app-grant/stale?v=pub&from=mcp`;
+
+    await installP({ scopes: ["memory"], tools: ["store_tables"] });
+    await grant("alice", "stale"); await grant("nocx", "stale");
+    const n0 = calls.length;
+    const m0 = await callStale(tok.alice);
+    chk("E24a 동의가 선언 전체와 같으면 종전 그대로 실행기로 간다", !m0.isError && calls.length === n0 + 1 && calls.at(-1)?.tool.name === "stale_q", J(m0));
+
+    await installP({ scopes: ["memory"], tools: ["store_tables", "project_list_v6"] });
+    const n1 = calls.length;
+    const m1 = await callStale(tok.alice);
+    chk("E24b(M1) 도구만 새로 선언 → consent_required · 동의 주소(from=mcp) · 덮지 못한 것(도구 project_list_v6) · 실행기 0",
+      m1.isError === true && m1._meta?.["lively/code"] === "consent_required" && m1._meta?.["lively/consent_url"] === URL24
+        && J(m1._meta?.["lively/missing"]) === J({ scopes: [], tools: ["project_list_v6"] }) && /project_list_v6/.test(textOf(m1)) && textOf(m1).includes(URL24)
+        && /다시 동의/.test(textOf(m1)) && calls.length === n1, J(m1));
+
+    await grant("alice", "stale"); await grant("nocx", "stale");
+    const m4a = await callStale(tok.alice);
+    chk("E24c(M4) 다시 동의하면(선언 전체) 같은 부르기가 실행기로 간다", !m4a.isError && calls.length === n1 + 1, J(m4a));
+
+    await installP({ scopes: ["memory", "context"], tools: ["store_tables", "project_list_v6"] });
+    const n2 = calls.length;
+    const m2 = await callStale(tok.alice);
+    chk("E24d(M2) scope 만 새로 선언(구성원 가짐) → consent_required · 덮지 못한 것(scope context) · 실행기 0",
+      m2._meta?.["lively/code"] === "consent_required" && J(m2._meta?.["lively/missing"]) === J({ scopes: ["context"], tools: [] }) && calls.length === n2, J(m2));
+    const m3 = await callStale(nocxTok);
+    chk("E24e(M3) 그 scope 가 없는 구성원은 막지 않는다 — 다시 동의해도 못 얻는 것은 묻지 않는다(실행기로 간다)",
+      !m3.isError && calls.length === n2 + 1 && calls.at(-1)?.caller.userId === "nocx", J(m3));
+    await grant("alice", "stale");
+    const m4b = await callStale(tok.alice);
+    chk("E24f 다시 동의 뒤 scope 갈래도 실행기로 간다", !m4b.isError && calls.length === n2 + 2 && calls.at(-1)?.caller.userId === "alice", J(m4b));
+    delete process.env.PUBLIC_URL;
+    await installP({ scopes: ["memory", "context"], tools: ["store_tables", "project_list_v6", "store_query"] });
+    const m5 = await callStale(tok.alice);
+    process.env.PUBLIC_URL = GW;
+    chk("E24g 공개 주소를 모르면 동의 주소 없이 안내 — 표지 · 덮지 못한 것은 그대로",
+      m5._meta?.["lively/code"] === "consent_required" && !("lively/consent_url" in (m5._meta ?? {})) && /라이블리에서 이 앱을 열면/.test(textOf(m5))
+        && J(m5._meta?.["lively/missing"]) === J({ scopes: [], tools: ["store_query"] }), J(m5));
+  }
 
   chk("G2 배선 — 시험 실행기가 실제로 불렸다(HTTP 경로 · OAuth 클라이언트 표지)", calls.length >= 8 && calls.some((c) => c.caller.oauthClientId === CID), `calls=${calls.length}`);
   for (const c of [A, B, B2, Dn, O, Bs, RO, IN, AT, A14, NS, A20]) await c.close();

@@ -41,7 +41,7 @@ const trySetTitle = async (name, title, viewer) => {
   catch (e) { return { threw: true, status: e && e.status, msg: String((e && e.message) || e) }; }
 };
 const tryGate = async (name, viewer) => {
-  try { await assertKnowledgeWritable(name, viewer); return { threw: false }; }
+  try { await assertKnowledgeWritable(name, viewer, { userId: viewer }); return { threw: false }; }
   catch (e) { return { threw: true, status: e && e.status }; }
 };
 const titleOf = async (name) => (await itemsPool.query(`SELECT title FROM knowledge WHERE name=$1`, [name])).rows[0]?.title;

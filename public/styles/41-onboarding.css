@@ -176,7 +176,7 @@
      민낯은 «가운데 한 칸» 이라 애초에 그리드가 필요 없다. display:block 이면 숨긴 형제는 그대로 빠지고
      본문만 폭을 다 쓴다 — 셸이 열을 어떻게 바꾸든 무관해진다. */
 #v2-root.ob-bare.has-topbar, #v2-root.ob-bare { display: block; padding-left: 0; }
-#v2-root.ob-bare > .v2-main { width: 100%; height: 100vh; }
+#v2-root.ob-bare > .v2-main { width: 100%; height: calc(100vh - var(--v2-pv-h, 0px)); }   /* --v2-pv-h: 미리보기 띠(#5581) */
 #v2-root.ob-bare .v2-side, #v2-root.ob-bare > .v2-split-x, #v2-root.ob-bare .v2-tabs, #v2-root.ob-bare .v2-tl-btn,
 #v2-root.ob-bare > .v2-rail,
 /* 맨 윗줄(뒤로·앞으로·검색·레일 토글)은 **사이드바 밖**에 산다 — 브라우저는 .v2-topbar, 데스크톱은 창 제목줄
@@ -626,18 +626,18 @@
 .ob-up-btns .ob-btn{margin-top:0}
 .ob-up-stat:empty{display:none}
 
-/* ── 소개 영상(#5550) — 처음 설정 첫 장면 · 사용 가이드의 «소개 영상 보기» (web/v2/welcome-film.ts) ──────────────
-   영상은 늘 어두운 그림이다(테마와 무관) — 그래서 그 위의 조작줄은 테마 토큰이 아니라 흰 잉크(--on-fill)와 검은 스크림만 쓴다.
-   DS-EXCEPTION: 영상 바탕색(#060A13 — 영상 첫 프레임의 바탕과 같은 값)과 영상 위 스크림의 검정 · 흰 알파. 영상이 뜨기 전 · 레터박스에
+/* ── 영상 재생기(#5550) — 처음 설정을 지나 셸에 온 사람에게 뜨는 창 · 사용 가이드의 영상 다시 보기 (web/v2/welcome-film.ts) ──────────────
+   영상은 늘 밝은 제품 화면이다(테마와 무관) — 그 위의 단추 · 조작줄은 테마 토큰이 아니라 흰 잉크(--on-fill)와 검은 스크림만 쓴다.
+   DS-EXCEPTION: 영상 바탕색(#F3F6FB — 영상 첫 프레임의 바탕과 같은 값)과 영상 위 스크림의 검정 · 흰 알파. 영상이 뜨기 전 · 레터박스에
    다른 색이 비치면 테두리가 번쩍인다. 근거: ui-design-system-agent ▸ exception-policy §1 '외부 자산 위의 오버레이'. 2026-11-16, #5550 */
-.wf{position:relative; width:100%; aspect-ratio:16 / 9; border-radius:16px; overflow:hidden; isolation:isolate; background:#060A13; color:var(--on-fill);
+.wf{position:relative; width:100%; aspect-ratio:16 / 9; border-radius:16px; overflow:hidden; isolation:isolate; background:#F3F6FB; color:var(--on-fill);
   box-shadow:0 26px 64px rgba(var(--shadow-ink), .30), 0 0 0 1px rgba(var(--shadow-ink), .14)}
-.wf-v{display:block; width:100%; height:100%; object-fit:cover; background:#060A13; cursor:pointer; outline:none}
+.wf-v{display:block; width:100%; height:100%; object-fit:cover; background:#F3F6FB; cursor:pointer; outline:none}
 .wf-big{position:absolute; inset:0; margin:auto; width:76px; height:76px; border:0; border-radius:50%; display:grid; place-items:center; cursor:pointer;
-  background:rgba(255, 255, 255, .16); color:var(--on-fill); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+  background:rgba(0, 0, 0, .5); color:var(--on-fill); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
   box-shadow:0 10px 30px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .22); opacity:0; pointer-events:none; transform:scale(.92); transition:opacity .18s ease, transform .18s ease, background .12s ease}
 .wf:not(.is-playing) .wf-big{opacity:1; pointer-events:auto; transform:none}
-.wf-big:hover{background:rgba(255, 255, 255, .26)}
+.wf-big:hover{background:rgba(0, 0, 0, .64)}
 .wf-big:focus-visible, .wf-btn:focus-visible, .wf-track:focus-visible, .wf-close:focus-visible{outline:2px solid var(--on-fill); outline-offset:2px}
 .wf-big-ic{width:30px; height:30px; margin-left:3px; fill:currentColor; stroke:currentColor; stroke-width:1.6; stroke-linejoin:round; stroke-linecap:round}
 .wf.is-ended .wf-big-ic{margin-left:0; fill:none; stroke-width:2}
@@ -652,16 +652,28 @@
 .wf-track::before{content:''; position:absolute; left:0; right:0; height:4px; border-radius:999px; background:rgba(255, 255, 255, .28)}
 .wf-fill{position:absolute; left:0; right:0; height:4px; border-radius:999px; background:var(--on-fill); transform:scaleX(0); transform-origin:0 50%}
 .wf-time{flex:none; padding:0 4px; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; opacity:.88}
+/* [소리 켜기] — 음소거로 도는 동안만 오른쪽 위에 뜬다. 한 번 켜면 걷히고, 그 뒤로는 조작줄의 스피커로 켜고 끈다. */
+.wf-unmute{position:absolute; top:12px; right:12px; display:none; align-items:center; gap:6px; height:34px; padding:0 13px 0 10px; border:0; border-radius:999px; cursor:pointer;
+  background:rgba(0, 0, 0, .55); color:var(--on-fill); font:inherit; font-size:12.5px; font-weight:600; -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  box-shadow:0 6px 18px rgba(0, 0, 0, .25), inset 0 0 0 1px rgba(255, 255, 255, .18)}
+.wf-unmute:hover{background:rgba(0, 0, 0, .7)}
+.wf-unmute:focus-visible{outline:2px solid var(--on-fill); outline-offset:2px}
+.wf.is-muted.is-playing .wf-unmute{display:inline-flex}
 .wf:fullscreen{border-radius:0; aspect-ratio:auto; width:100vw; height:100vh}
 .wf:fullscreen .wf-v{object-fit:contain}
 @media (prefers-reduced-motion: reduce){ .wf-big, .wf-bar{transition:none} }
 
-/* 인사 장면 — 영상이 서면 칸을 넓히고(화면 높이가 낮으면 그만큼만), 글과 단추는 종전 폭으로 가운데에 둔다. */
-.ob-qcol.ob-has-film{width:min(880px, 94%, max(480px, calc((100vh - 360px) * 16 / 9))); padding-top:5vh}
-.ob-in-film{margin-bottom:30px}
-.ob-qcol.ob-has-film > :not(.ob-in-film){max-width:560px; margin-left:auto; margin-right:auto}
-@media (prefers-reduced-motion: no-preference){ .ob-in-film{animation:obInRise 250ms ease-out both} }
-@media (max-width: 640px){ .wf{border-radius:12px} .ob-in-film{margin-bottom:22px} .wf-time{display:none} }
+/* (#5598, 상민 2026-11-24) 인사 장면의 안내 카드 — 문장 아래에 카드 5장이 선다. 카드가 서 있는 동안 [계속하기]는 숨는다(카드의 마지막 단추가 대신 누른다). */
+.ob-qcol.ob-has-guide{width:min(600px, 94%); padding-top:0; padding-bottom:24px}
+.ob-qcol.ob-has-guide .ob-in-title{margin-bottom:8px}
+.ob-qcol.ob-has-guide .ob-in-go{display:none}
+.ob-qcol.ob-has-guide .ob-in-p{font-size:14px; line-height:1.6; margin-bottom:4px}
+.ob-in-lead{color:var(--ink)}
+.ob-qcol:not(.ob-has-guide) .ob-in-lead{display:none}   /* 카드를 못 세웠으면 «다섯 장으로 보여 드릴게요» 도 뺀다 */
+.ob-in-guide{margin:12px auto 0; width:min(100%, max(340px, calc(100vh - 350px)))}   /* 낮은 화면에서도 카드의 [다음]이 접히지 않게 높이에 맞춰 줄인다(카드는 너비만큼 높다) */
+.ob-in-guide .sg-card{box-shadow:0 0 0 1px var(--line), 0 18px 44px -24px rgba(var(--shadow-ink), .32)}
+@media (prefers-reduced-motion: no-preference){ .ob-in-guide{animation:obInRise 250ms ease-out both; animation-delay:240ms} }
+@media (max-width: 640px){ .wf{border-radius:12px} .wf-time{display:none} }
 
 /* 다시 보기 창 */
 .wf-modal{position:fixed; inset:0; z-index:1200; display:grid; place-items:center; padding:56px 24px 24px; background:rgba(var(--shadow-ink), .66); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px)}
@@ -669,6 +681,14 @@
 .wf-close{position:absolute; right:0; top:-42px; width:34px; height:34px; border:0; border-radius:50%; display:grid; place-items:center; cursor:pointer; background:rgba(255, 255, 255, .16); color:var(--on-fill)}
 .wf-close:hover{background:rgba(255, 255, 255, .28)}
 .wf-note{margin:0; padding:40px 20px; text-align:center; font-size:14px; color:var(--on-fill)}
+/* 처음 뜨는 창(#5598) — 처음 설정을 지나 셸에 온 사람에게 한 번. 뒤의 워크스페이스가 비쳐 보이게 바탕을 옅게 깔고, 영상 위에 머리말을 세운다. */
+.wf-modal.wf-first{padding-top:92px; background:rgba(var(--shadow-ink), .5); -webkit-backdrop-filter:blur(1.5px); backdrop-filter:blur(1.5px)}
+.wf-first .wf-modal-box{width:min(960px, 100%, calc((100vh - 150px) * 16 / 9))}
+.wf-first .wf{box-shadow:0 30px 80px -20px rgba(var(--shadow-ink), .6)}
+.wf-head{position:absolute; left:2px; right:48px; bottom:calc(100% + 12px); display:flex; flex-direction:column; gap:3px; color:var(--on-fill); text-shadow:0 1px 8px rgba(var(--shadow-ink), .5)}
+.wf-head b{font-size:19px; font-weight:800; letter-spacing:-.02em; color:inherit}
+.wf-head span{font-size:13px; opacity:.86; word-break:keep-all}
+.wf-first .wf-close{top:-44px}
 @media (prefers-reduced-motion: no-preference){ .wf-modal{animation:wfFade .18s ease-out both} .wf-modal-box{animation:wfRise .26s cubic-bezier(.16, 1, .3, 1) both} }
 @keyframes wfFade{ from{opacity:0} to{opacity:1} }
 @keyframes wfRise{ from{opacity:0; transform:translateY(14px) scale(.985)} to{opacity:1; transform:none} }

@@ -423,6 +423,43 @@ try {
       await itemsPool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS tool_ceiling JSONB`);
     }
   }
+
+  // ── #5611 유예 만료 — 세션이 내려가도 훅 토큰은 잠깐 더 산다(내려가는 세션의 SessionEnd 캡처가 그 토큰으로 올린다) ──
+  //  사양: expireTokenSoon 은 만료를 now()+n초로 **당기기만** 한다(늘리지 않는다 · 회수된 토큰은 그대로) · 실제로 당겼을 때만 감사 1건.
+  //   retireSessionTokens 는 MCP 토큰을 즉시 회수하고 훅 토큰만 SESSION_HOOK_END_GRACE_SEC 뒤로 — 유예 중인 훅 토큰은 «살아 있는 세션» 으로 안 센다.
+  {
+    const vfy = async (t) => (await tok.verifyDbToken(t)) != null;
+    const left = async (h) => (await itemsPool.query(
+      `SELECT EXTRACT(EPOCH FROM expires_at - now())::float AS s FROM auth_token WHERE token_hash=$1`, [h])).rows[0]?.s ?? null;
+    const auditExpires = (h) => rowCount(
+      `SELECT count(*)::int AS n FROM org_content_audit WHERE entity='auth_token' AND op='expire' AND entity_key=$1`, [h]);
+    const a = await mint("pgtest-x1");
+    const x1 = { r: await tok.expireTokenSoon(a.tokenHash, 600, ACTOR, SOURCE), alive: await vfy(a.token), left: await left(a.tokenHash), audits: await auditExpires(a.tokenHash) };
+    chk("X1 만료 없는 토큰을 600초 뒤로 → true · 지금은 산다 · 남은 시간 ≈600초 · 감사 1건",
+      x1.r === true && x1.alive && Math.abs(x1.left - 600) < 30 && x1.audits === 1, JSON.stringify(x1));
+    const x2 = { r: await tok.expireTokenSoon(a.tokenHash, 900, ACTOR, SOURCE), left: await left(a.tokenHash), audits: await auditExpires(a.tokenHash) };
+    chk("X2 ★ 더 늦게(900초)는 안 움직인다 → false · 남은 시간 그대로 · 감사도 그대로", x2.r === false && x2.left < 610 && x2.audits === 1, JSON.stringify(x2));
+    const x3 = { r: await tok.expireTokenSoon(a.tokenHash, 0, ACTOR, SOURCE), alive: await vfy(a.token) };
+    chk("X3 0초로 당기면 → true · 그 토큰은 바로 죽는다", x3.r === true && x3.alive === false, JSON.stringify(x3));
+    const b = await mint("pgtest-x4");
+    await tok.revokeToken(b.tokenHash, ACTOR, SOURCE);
+    const x4 = { r: await tok.expireTokenSoon(b.tokenHash, 600, ACTOR, SOURCE), left: await left(b.tokenHash), alive: await vfy(b.token) };
+    chk("X4 회수된 토큰 → false(되살리지도 만료를 적지도 않는다)", x4.r === false && x4.left === null && x4.alive === false, JSON.stringify(x4));
+
+    const prof = await import(`${DIST}/terminal/profiles.js`);
+    const box = "box-pgtest-5611";
+    const hk = await mint(`session-hooks:${box}`), mc = await mint(`session-mcp:${box}`);
+    const idsBefore = await prof.sessionHookTokenIds();
+    const r1 = await prof.retireSessionTokens(box);
+    const x5 = { r1, mcp: await vfy(mc.token), hook: await vfy(hk.token), left: await left(hk.tokenHash), grace: prof.SESSION_HOOK_END_GRACE_SEC };
+    chk("X5 ★ 세션을 내리면 MCP 토큰은 즉시 죽고 훅 토큰은 유예(SESSION_HOOK_END_GRACE_SEC) 동안 산다",
+      r1.revoked === 1 && r1.expiring === 1 && x5.mcp === false && x5.hook === true && Math.abs(x5.left - x5.grace) < 30, JSON.stringify(x5));
+    const idsAfter = await prof.sessionHookTokenIds();
+    chk("X6 유예 중인 훅 토큰은 «살아 있는 세션의 자격» 으로 안 센다(노드 되채우기 판정)", idsBefore.has(box) && !idsAfter.has(box),
+      JSON.stringify({ before: idsBefore.has(box), after: idsAfter.has(box) }));
+    const r2 = await prof.retireSessionTokens(box);
+    chk("X7 두 번 내려도 유예가 늘지 않는다(0·0)", r2.revoked === 0 && r2.expiring === 0 && (await left(hk.tokenHash)) <= x5.left + 1, JSON.stringify(r2));
+  }
 } catch (e) {
   bad("예외", e?.stack || String(e));
 } finally {

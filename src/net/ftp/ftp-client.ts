@@ -1,4 +1,5 @@
-// 최소 FTP 클라이언트 — NAS(vsftpd) 파일명 검색·내려받기 전용(net/nas). 읽기 명령(CWD·LIST·RETR)만 쓴다.
+// 최소 FTP 클라이언트 — NAS(vsftpd) 파일 조작 전용(net/nas). 읽기(CWD·LIST·RETR·SIZE)와 쓰기(STOR·MKD·DELE·RMD·RNFR/RNTO).
+//  할 수 있는 범위는 구성원 본인 FTP 계정의 서버 권한이 정한다.
 //  쓰는 명령이 몇 개뿐이라 의존성을 더하지 않고 node:net 위에 직접 짰다.
 //
 //  ⚠ 평문 FTP 다. 비밀번호가 평문으로 오가므로 게이트웨이와 NAS 가 같은 사설망(VPC peering)에 있을 때만 쓴다.
@@ -6,6 +7,7 @@
 //   엉뚱한 곳에 붙지 않게 하려는 것이고, 데이터 연결이 제어 연결과 다른 호스트로 새는 길(FTP bounce)도 막는다.
 import net from "node:net";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { parsePasvPort, isSafeRawPath } from "./ftp-list.js";
 
 export interface FtpConnectOpts {
@@ -211,6 +213,61 @@ export class FtpSession {
     );
     done.catch(() => {}); // 호출자가 stream 오류를 먼저 받아 done 을 기다리지 않을 수 있다
     return { stream: data, done };
+  }
+
+  /** 파일 크기(바이트). 없거나 폴더면 null(서버 550). */
+  async size(rawPath: string): Promise<number | null> {
+    if (!isSafeRawPath(rawPath)) throw new FtpError("다룰 수 없는 경로입니다");
+    const r = await this.cmd(`SIZE ${rawPath}`);
+    if (r.code === 213) { const n = Number(r.text.trim()); return Number.isFinite(n) ? n : null; }
+    if (r.code === 550) return null;
+    throw new FtpError(`크기를 묻지 못했습니다: ${r.code} ${r.text}`, r.code);
+  }
+
+  /**
+   * 파일 하나를 올린다(같은 이름이 있으면 서버가 덮는다 — 덮을지는 호출자가 size 로 먼저 정한다). 올린 바이트 수를 돌려준다.
+   *  전송이 시작된(150) 뒤 실패하면 retr 와 같은 이유로 세션을 버린다(poison).
+   */
+  async stor(rawPath: string, body: Readable): Promise<number> {
+    if (!isSafeRawPath(rawPath)) throw new FtpError("쓸 수 없는 경로입니다");
+    const data = await this.openData();
+    try {
+      await this.cmdExpect(`STOR ${rawPath}`, [125, 150], "파일을 올리지 못했습니다");
+    } catch (e) {
+      data.destroy();
+      throw e;
+    }
+    let bytes = 0;
+    body.on("data", (c: Buffer) => { bytes += c.length; });
+    try {
+      await pipeline(body, data);
+      await this.expect([226, 250], "업로드가 끝나지 않았습니다");
+    } catch (e) {
+      data.destroy();
+      throw this.poison(e);
+    }
+    return bytes;
+  }
+
+  async mkd(rawPath: string): Promise<void> {
+    if (!isSafeRawPath(rawPath)) throw new FtpError("쓸 수 없는 경로입니다");
+    await this.cmdExpect(`MKD ${rawPath}`, [257], "폴더를 만들지 못했습니다");
+  }
+
+  async dele(rawPath: string): Promise<void> {
+    if (!isSafeRawPath(rawPath)) throw new FtpError("쓸 수 없는 경로입니다");
+    await this.cmdExpect(`DELE ${rawPath}`, [250], "파일을 지우지 못했습니다");
+  }
+
+  async rmd(rawPath: string): Promise<void> {
+    if (!isSafeRawPath(rawPath)) throw new FtpError("쓸 수 없는 경로입니다");
+    await this.cmdExpect(`RMD ${rawPath}`, [250], "폴더를 지우지 못했습니다(비어 있어야 합니다)");
+  }
+
+  async rename(fromRaw: string, toRaw: string): Promise<void> {
+    if (!isSafeRawPath(fromRaw) || !isSafeRawPath(toRaw)) throw new FtpError("쓸 수 없는 경로입니다");
+    await this.cmdExpect(`RNFR ${fromRaw}`, [350], "옮길 대상을 찾지 못했습니다");
+    await this.cmdExpect(`RNTO ${toRaw}`, [250], "옮기지 못했습니다");
   }
 
   async close(): Promise<void> {

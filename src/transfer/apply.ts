@@ -10,6 +10,7 @@
 //  항목이 실패해도 나머지는 계속한다. 무엇을 했는지는 결과(result)에 전부 남겨 되돌리기가 그대로 거꾸로 밟는다.
 //  배치 상태는 전이 조건부(transitionBatch)라 두 사람이 동시에 «적용» 을 눌러도 한 번만 돈다.
 import { itemsPool, q, one } from "../db/client.js";
+import { listCategoryGroups } from "../v6/category-group-store.js";
 import { upsertKnowledge, deleteKnowledge, patchKnowledgeFields, KnowledgeExistsError } from "../v6/knowledge-store.js";
 import { linkKnowledge, linkKnowledgeSource } from "../v6/knowledge-links.js";
 import { createCategory, getCategoryByKey, deleteCategory } from "../v6/category-store.js";
@@ -20,7 +21,7 @@ import { readBundle, bundleContentHash, sha256Hex, type Bundle, type BundleKnowl
 import {
   planImport, resolveDecisions, rewriteWikiLinks, sourceExternalKey, targetContentHash, freeName,
   TARGET_LINK_RELATIONS, TARGET_SOURCE_RELATIONS, UNSORTED,
-  type Plan, type Decisions, type TargetState, type TargetKnowledge, type KnowledgeAction, type ResolvedItem,
+  type Plan, type Decisions, type TargetState, type TargetKnowledge, type KnowledgeAction, type ResolvedItem, groupPlacementNote,
 } from "./plan.js";
 import {
   createBatch, getBatch, getBatchPayload, transitionBatch, expireStalePlans, recoverStuckBatches, getWorkspaceUid, saveBatchProgress,
@@ -57,13 +58,14 @@ async function readTargetKnowledge(names: string[]): Promise<Map<string, TargetK
 
 export async function loadTargetState(bundle: Bundle): Promise<TargetState> {
   const uid = bundle.manifest.origin.workspace_uid;
-  const [workspaceUid, nameRows, catRows, originsKnowledge, originsCategory, originsSource] = await Promise.all([
+  const [workspaceUid, nameRows, catRows, originsKnowledge, originsCategory, originsSource, groupRows] = await Promise.all([
     getWorkspaceUid(),
     q(itemsPool, `SELECT name FROM knowledge`, []),
     q(itemsPool, `SELECT key, name, state FROM category`, []),
     listOrigins(uid, "knowledge"),
     listOrigins(uid, "category"),
     listOrigins(uid, "source"),
+    listCategoryGroups(),   // 살아 있는 묶음(sort→key) — 새 분류는 그중 하나에 들어가야 만들어진다(#1631)
   ]);
   const names = new Set(nameRows.map((r) => String(r.name)));
   const wanted = new Set<string>();
@@ -89,6 +91,7 @@ export async function loadTargetState(bundle: Bundle): Promise<TargetState> {
     workspaceUid, names, knowledge,
     categories: catRows.map((c) => ({ key: String(c.key), name: (c.name as string | null) ?? null, state: String(c.state ?? "active") })),
     originsKnowledge, originsCategory, originsSource, sourceIds, sourcesByExternal,
+    groups: groupRows.map((g) => ({ key: String(g.key), name: (g.name as string | null) ?? null })),
   };
 }
 
@@ -152,7 +155,7 @@ export interface ApplyKnowledgeResult {
 
 export interface ApplyResult {
   knowledge: ApplyKnowledgeResult[];
-  categories_created: Array<{ ref: string; key: string }>;
+  categories_created: Array<{ ref: string; key: string; group?: string | null }>;
   sources_created: number[];
   sources_linked: number;
   links: { created: number; dropped: number };
@@ -217,9 +220,12 @@ export async function applyImport(batchId: number, decisions: Decisions, ctx: Wr
 
     // ⓐ 분류 — 만들 것을 만들고, 맞춘 결과를 기록해 다음 가져오기의 기본값으로 쓴다.
     for (const c of resolved.createCategories) {
-      await createCategory({ key: c.key, name: c.name ?? c.key, description: c.description ?? undefined, should: c.should ?? undefined }, ctx);
-      result.categories_created.push({ ref: c.ref, key: c.key });
+      //  묶음이 있는 워크스페이스에서는 묶음 없이 분류를 못 만든다(#1631) — 계획이 고른 묶음을 싣는다(묶음이 없으면 null → 종전대로).
+      await createCategory({ key: c.key, name: c.name ?? c.key, description: c.description ?? undefined, should: c.should ?? undefined, group: c.group ?? undefined }, ctx);
+      result.categories_created.push({ ref: c.ref, key: c.key, group: c.group });
     }
+    const groupNote = groupPlacementNote(resolved.createCategories, target.groups);
+    if (groupNote) result.notes = [...(result.notes ?? []), groupNote];
     for (const [ref, key] of resolved.categoryMap) {
       await upsertOrigin({ origin_uid: originUid, kind: "category", origin_ref: ref, local_ref: key, origin_hash: null, local_hash: null, batch_id: batchId });
     }

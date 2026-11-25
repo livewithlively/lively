@@ -31,7 +31,7 @@ import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
-import { registerNasDownloadRoute } from "./net/nas/nas-download-route.js";
+import { registerNasDownloadRoute, registerNasUploadRoute } from "./net/nas/nas-download-route.js";
 import { registerTransferRoutes } from "./transfer/routes.js";
 import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
@@ -48,6 +48,7 @@ import { effectiveStoragePolicy, diskThresholds } from "./org/policies/storage-p
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { registerServerExecutor } from "./apps/app-mcp-server-executor.js";   // #5053 앱 선언 MCP 도구의 server 실행기
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
+import { ensureInviteOnlyColumn } from "./v6/project-invite-column.js";   // #5598 롤 창 — 새 칸이 아직 없는 DB
 import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
 import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
@@ -55,6 +56,7 @@ import { shutdownGatewayWorkers } from "./apps/worker-service.js";
 import { shutdownAttachWorkers } from "./terminal/attach-worker-host.js"; // #2228 C안 — attach 워커 일괄 회수
 import { freezeExecTopology } from "./exec-topology.js";   // #2599 T2 — 실행 토폴로지를 부팅 때 한 번 확정
 import { hostCredentialPresent } from "./browser/routes.js";   // #5470 — 브라우저 답 앞단과 routes.ts 가 같은 판정을 쓴다
+import { askSessionForToken, handleAuthedAsk } from "./terminal/harness-io/ask-bridge.js";
 
 // ★ 실행 토폴로지 확정(#2599 T2) — 「이 세션이 어디서 도나」를 여기서 **한 번** 정하고, 그 뒤 어느 코드도
 //  env 를 직접 읽지 않는다. ⚠ 자리는 여기여야 한다: 위 `boot/tenancy-env.js` 가 부팅 중에
@@ -139,6 +141,17 @@ console.log(`[boot] ${installTenantBinding()}`);
 
 const app = express();
 
+// 세션 컨테이너의 안티그래비티 훅이 승인 답을 받는 입구. 런타임 버스는 DB·테넌트 문맥을
+// 쓰지 않는다. 컨테이너 루프백 경로에는 테넌트 서명 헤더가 없으므로 테넌트 미들웨어 앞에 둔다.
+// 본문을 읽기 전에 토큰을 검사하고, 본문의 session 은 토큰이 가리키는 세션으로 덮어쓴다.
+app.post("/api/agent/ask",
+  (req, res, next) => { if (askSessionForToken(String(req.headers["x-lively-ask"] || ""))) next(); else res.status(403).json({ ok: false }); },
+  express.json({ limit: "256kb" }),
+  async (req, res) => {
+    const out = await handleAuthedAsk(String(req.headers["x-lively-ask"] || ""), req.body);
+    res.status(out.status).json(out.body);
+  });
+
 // ★★ 테넌트 컨텍스트를 **가장 바깥**에서 연다(#1437 v1 5단계). 라우터마다 붙이면 새로 만든 라우터가
 //  빠지고, 빠뜨림이 곧 유출인 구조는 사람 규율로 못 지킨다. 웹훅(아래)보다도 앞이다 — 그 경로도
 //  DB 를 쓴다. `LIVELY_TENANT_HEADER_SECRET` 이 없으면 아무것도 하지 않는다(자가호스팅 무회귀).
@@ -175,6 +188,14 @@ app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
 //  보낸 바이트 그대로여야 한다(JSON 이면 전역 파서가 먼저 먹는다). 문은 앞단 기계 헤더(x-lvly-app-front) — 사람 로그인을 타지 않는다(apps/app-front-routes.ts).
 app.use("/api/app-front/server", ...appFrontServerRouter());
 
+// 토큰 검증기 — 바로 아래 NAS 올리기가 전역 파서 앞에서 쓰므로 여기서 만든다(그 뒤의 인증 경로들도 이 하나를 쓴다).
+const verifier = new BearerVerifier();
+// NAS 올리기(PUT /api/ui/me/nas/upload — lively_local_nas_push). 역시 전역 express.json() **이전**: PUT 본문이 그대로 파일 바이트라
+//  `Content-Type: application/json` 이면 전역 파서가 먼저 본문을 먹어, Content-Length 가 없으면 0바이트 파일이 «성공»(200 size 0)으로 남고
+//  덮기(overwrite=1)면 기존 파일이 비워진다(1MB 넘는 JSON 은 413). 문(쿠키·Bearer · context 권한 · 앱 동의 nas_manage · 세션 모드)은 라우트 안에 있다.
+//  내려받기(GET)는 본문이 없어 아래 제자리(registerNasDownloadRoute)에 둔다.
+registerNasUploadRoute(app, verifier);
+
 // 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
 //  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.
 app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
@@ -198,7 +219,6 @@ app.use("/api/ui/transfer/export",
   express.json({ limit: "4mb" }));
 app.use(express.json({ limit: "1mb" }));
 
-const verifier = new BearerVerifier();
 //  #4488 LLM 프록시 — 실행 토큰 · 앱 서버 토큰(고급 길)으로 Anthropic Messages API 를 흘려 보낸다(ai-runs/routes.ts).
 registerLlmProxyRoutes(app, verifier);
 // /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가
@@ -342,8 +362,8 @@ registerProjectV6Routes(app, verifier, {
 });
 // 세션이력 회수·수집(#905 C1) — 트랜스크립트 델타 offset-CAS append + watermark. 캡처 훅(kit)이 POST 한다.
 registerSessionLogRoutes(app, verifier);
-// NAS 파일 내려받기 — 브라우저 세션 쿠키만 받는다(nas_find 링크의 본문은 사람만 연다).
-registerNasDownloadRoute(app);
+// NAS 파일 내려받기 — 브라우저 세션 쿠키와 구성원 AI 세션 토큰(lively_local_nas_pull) 둘 다 받는다.
+registerNasDownloadRoute(app, verifier);
 // 워크스페이스 간 옮기기(#5458) — 파일이 오가는 두 경로(묶음 내려받기 · 올리기). 관리자만. JSON 표면은 capabilities/transfer.ts.
 registerTransferRoutes(app, verifier);
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭의 "CSV 다운로드". capability(res.json 일괄)로는 담을 수
@@ -387,6 +407,11 @@ if (!registry.has("source_vis_policy_list")) {
 // #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
 registerPreviewRoutes(app, verifier);
+
+// #5598 — 요청을 받기 전에 project.invite_only 칸이 이 DB 에 있는지 한 번 잰다(v6/project-invite-column.ts). 매니지드 롤은 새 코드를
+//  띄운 뒤에야 공용 DB 에 새 칸을 만들고, 자체 호스팅도 스키마 체인이 listen 뒤에 돈다 — 재지 않고 받으면 그 사이 첫 프로젝트 조회가
+//  «없는 칸» 으로 실패한다. 없으면 초대제 없이 돌다가 칸이 생기는 대로 스스로 켜진다. DB 가 느려도 부팅을 붙잡지 않는다(3초 상한).
+await Promise.race([ensureInviteOnlyColumn(), new Promise((r) => setTimeout(r, 3_000).unref?.())]).catch(() => undefined);
 
 const server = app.listen(PORT, BIND_HOST, () => {
   logger.info(`Lively gateway listening on ${BIND_HOST}:${PORT}/mcp`);

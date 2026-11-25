@@ -18,6 +18,7 @@ import { openListForm } from './list-forms.js';
 import { pjvPopover } from './popover.js';
 import { openProjectV2Form } from './project-form.js';
 import { pjvProjTeamControl, pjvSetProjStatus, projPatch } from './rows.js';
+import { draftTipFor } from '../lib/proj-access.js';   // #5598 초안 설명 — 초대제인 초안은 «공개됩니다» 라고 말하지 않는다
 import { pjvReloadKeepScroll } from './state.js';
 import { pjvFmtDate, pjvIsOverdue, pjvProjStatusMeta, pjvStatusIconStd } from './status.js';
 import { pjvPriorityControl, pjvSaveProjMembers } from './task-controls.js';
@@ -435,16 +436,24 @@ function pjvProjFactsStrip(p, members, reload) {
   // 초안(#4170) — 세션 첫 지시로 기계가 막 만든 프로젝트. 목록 기본 뷰에서 따로 서 있다는 걸 여기서도 말하고, 제목·본문을
   //  고치지 않고도 올릴 길(«공개하기»)을 준다. 제목이나 본문을 고치면 서버가 저절로 내린다.
   //  #5522 — 초안은 만든 사람과 팀원만 본다. 그래서 단추 이름이 «목록에 올리기» 에서 «공개하기» 로 바뀌었다(누르면 모두에게 보인다).
+  //  #5598 — 초대제인 초안은 풀려도 공개되지 않는다. 그래서 그때는 «공개하기» 가 아니라 «초안 풀기» 다(공개 범위는 옆의 자물쇠 칩이 맡는다).
+  const inviteOnly = p.invite_only === true;
   const draftChip = p.draft === true && p.status !== 'done'
-    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: '세션 첫 지시로 자동 생성된 프로젝트입니다. 나와 초대한 사람에게만 보이고, 작업을 남기거나 제목 · 본문을 정리하면 모두에게 공개됩니다.' },
+    ? el('div', { class: 'pjh-fact pjh-fact-draft', title: draftTipFor(p) },   // 목록의 초안 뱃지와 같은 말(lib/proj-access)
       el('span', { class: 'pjh-draft-k', text: '초안' }),
-      el('button', { class: 'pjh-draft-up', type: 'button', text: '공개하기', title: '초안은 나와 초대한 사람만 봅니다. 누르면 모두에게 보이는 목록에 올라갑니다.', onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
+      el('button', { class: 'pjh-draft-up', type: 'button', text: inviteOnly ? '초안 풀기' : '공개하기',
+        title: inviteOnly ? '초안 표시만 뗍니다. 공개 범위는 바뀌지 않아요 — 계속 초대한 사람만 봅니다.' : '초안은 나와 초대한 사람만 봅니다. 누르면 모두에게 보이는 목록에 올라갑니다.',
+        onclick: (e) => { (e.currentTarget as HTMLButtonElement).disabled = true; projPatch(p.id, { draft: false }, reload); } }))
     : null;
-  return el('div', { class: 'pjh-facts' },
+  //  #5630(원준 2026-11-22 «팀원을 격상») — «누가 보나» 칩과 팀원 칩은 이 띠에서 빠졌다. 사람은 제목 바로 밑 사람 줄
+  //   (people-ui projPeopleRow — 리드 · 함께 · 초대 · 공개 범위)과 오른쪽 위 [공유] 가 맡는다. 띠는 일의 속성만 든다.
+  void members;
+  //  #5630(원준 2026-11-22 «너무 지저분하고 글이 많다») — 값이 없는 속성은 점선 칩으로 늘 세워 두지 않는다. 값이 있는 것만 서고,
+  //   나머지는 끝의 「＋ 속성」 을 눌러야 편다(편 채로 하나를 채우면 다시 그려져도 펴진 채 — FACTS_OPEN).
+  const strip = el('div', { class: 'pjh-facts' + (FACTS_OPEN.has(Number(p.id)) ? ' all' : '') },
     chip(null, null, pjvProjStatusPill(p, reload)),
     draftChip,
     chip('list', p.list_id == null ? '리스트' : null, pjvProjListField(p, reload), p.list_id == null),
-    chip('user', has(members) ? null : '팀원', pjvProjTeamControl(members, (ids) => pjvSaveProjMembers(p.id, ids)), !has(members)),
     chip('cal', p.start_date || p.due_date ? null : '기간', pjvProjDatesField(p, reload), !p.start_date && !p.due_date),
     chip('flag', p.priority ? null : '우선순위', pjvPriorityControl(p, (patch) => projPatch(p.id, patch, reload)), !p.priority, p.priority ? 'pr-' + p.priority : ''),
     chip('tag', has(p.tags) ? null : '태그', tagsCtl, !has(p.tags)),
@@ -455,6 +464,22 @@ function pjvProjFactsStrip(p, members, reload) {
     ...(p.external_url ? [chip(null, null, el('a', { class: 'pjv-proj-extlink', target: '_blank', rel: 'noopener noreferrer',
       href: /^https?:\/\//i.test(String(p.external_url)) ? String(p.external_url) : '#',
       text: (p.external_system === 'clickup' ? 'ClickUp' : (p.external_system || '원본')) + '에서 열기' }))] : []));
+  const emptyN = strip.querySelectorAll(':scope > .pjh-fact.empty').length;
+  if (emptyN) {
+    const more = el('button', { class: 'pjh-fact-more', type: 'button', 'aria-expanded': String(strip.classList.contains('all')) }) as HTMLButtonElement;
+    const paint = (): void => {
+      const open = strip.classList.contains('all');
+      more.textContent = open ? '접기' : '＋ 속성';
+      more.title = open ? '빈 속성 접기' : '리스트 · 기간 · 우선순위 · 태그 · 선행 · 후속 가운데 아직 비어 있는 ' + emptyN + '개를 펴서 채웁니다';
+      more.setAttribute('aria-expanded', String(open));
+    };
+    more.onclick = () => { const open = strip.classList.toggle('all'); if (open) FACTS_OPEN.add(Number(p.id)); else FACTS_OPEN.delete(Number(p.id)); paint(); };
+    paint();
+    strip.append(more);
+  }
+  return strip;
 }
+/** 빈 속성을 펴 둔 프로젝트 — 페이지 수명(다시 그려도 펴진 채). */
+const FACTS_OPEN = new Set<number>();
 
 export { pjvProjFactsStrip, pjvProjMetaPanel };

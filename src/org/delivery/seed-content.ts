@@ -38,6 +38,12 @@ const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → pr
 const PROMOTE_ENABLED = new Set(["session-log-capture",
   "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool", "project-push-turn", "project-push-start"]);
 
+// 같은 소스를 다른 이벤트에 거는 **뒤늦게 더한 판** — 처음 심을 때 켜짐 여부를 본 판(이미 심긴 행)에서 따른다.
+//  · session-log-capture-end(#5611) — 대화 캡처를 SessionEnd 에도 건다. 운영자가 본 판(턴 끝 캡처)을 꺼 두었는데 새 판이 기본값(켬)으로
+//    심기면, 그 조직은 «대화를 올리지 않는다» 고 정했는데 세션이 내려갈 때마다 대화 전문이 올라간다. 처음 심을 때만 따른다 —
+//    그 뒤의 토글은 각 행의 몫이다(관리탭에서 따로 끄고 켠다).
+const SEED_ENABLED_FOLLOWS: Record<string, string> = { "session-log-capture-end": "session-log-capture" };
+
 // 기본 sort 가 옮겨진 시드 훅 — 행의 sort 가 **옛 기본값 그대로**일 때만 새 기본값으로 따라간다.
 //  run-custom 은 sort 가 같은 훅을 동시에 돌린다. 아래 둘은 옛 기본값(0)에서 짝 훅과 같은 묶음이 되어 겹쳐 돌면 안 된다:
 //  · project-pull-turn — 첫 지시에서 project-auto-bind(0)가 프로젝트를 붙인 **뒤에** 받아야 그 턴에 자료가 온다.
@@ -66,9 +72,11 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     try {
       const before = await getOrgHook(h.id);
       if (!before) {
+        const follows = Object.hasOwn(SEED_ENABLED_FOLLOWS, h.id) ? await getOrgHook(SEED_ENABLED_FOLLOWS[h.id]!) : null;
         await upsertOrgHook({
           id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
-          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary, enabled: h.enabled, sort: h.sort,
+          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,
+          enabled: follows ? follows.enabled : h.enabled, sort: h.sort,
         }, ctx);
         res.hooks++;
         continue;

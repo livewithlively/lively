@@ -411,6 +411,11 @@ function installCli() {
   //  ⚠ 이게 빠지면 lively-mcp-local.mjs 의 static import 가 부팅 즉시 죽어 `lively mcp-local` 이 통째로 못 뜬다(#905 회귀).
   const projInitCore = cloneAbs(join("cli", "project-init-core.mjs"));
   if (existsSync(projInitCore)) { copyFileSync(projInitCore, join(lib, "project-init-core.mjs")); chmodSync(join(lib, "project-init-core.mjs"), 0o755); }
+  // NAS 받기 코어 — lively-mcp-local.mjs 의 lively_local_nas_pull 이 dynamic import 한다(없으면 그 툴만 실패).
+  const nasPullCore = cloneAbs(join("cli", "nas-pull-core.mjs"));
+  if (existsSync(nasPullCore)) { copyFileSync(nasPullCore, join(lib, "nas-pull-core.mjs")); chmodSync(join(lib, "nas-pull-core.mjs"), 0o755); }
+  const nasPushCore = cloneAbs(join("cli", "nas-push-core.mjs"));
+  if (existsSync(nasPushCore)) { copyFileSync(nasPushCore, join(lib, "nas-push-core.mjs")); chmodSync(join(lib, "nas-push-core.mjs"), 0o755); }
   // 워크스페이스 회수 코어(#2621) — lively.mjs(`lively reclaim`)가 dynamic import 한다. 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
   //  ⚠ 빠지면 `lively reclaim` 만 ERR_MODULE_NOT_FOUND 로 못 뜬다(dynamic import 라 다른 명령은 정상).
   const reclaimCore = cloneAbs(join("cli", "workspace-reclaim-core.mjs"));
@@ -503,50 +508,76 @@ function agentsMerge(existing, ctx) {
 //   정작 필요한 그 자리에 없다. 표식 줄(CONNECT_MARK)이 있는 파일만 덮고 지운다 — 같은 이름의 사용자 파일은 안 건드린다.
 //  하네스마다 커맨드 파일 꼴이 다르다(harness-registry 의 assets.command.compose 와 같은 구분):
 //   claude·grok·opencode·antigravity = frontmatter(description) + 본문 · codex = 본문만(frontmatter 가 프롬프트로 샌다)
-//   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다).
+//   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다) · skill = 스킬 폴더(<id>/SKILL.md — name·description frontmatter).
+//  ⚠ 코덱스는 **스킬이 정본**이다(2026-11-18 실측, 0.170.0): 커스텀 프롬프트가 빠져 `/prompts:lively-connect` 는 «Unrecognized command» 고,
+//   `$` 선택창에 스킬이 뜬다 → `$lively-connect`·`$lively-disconnect`. 프롬프트 파일(codex 꼴)은 그 기능이 남아 있는 옛 코덱스용으로 계속 깐다.
 export const CONNECT_MARK = "lively-managed: record-scope(#5016)";
 //  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
 //   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
 const directCli = ({ win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) } = {}) => (win && nodeBin !== "node" ? `& "${nodeBin}" "${cliPath}"` : "");
-const CONNECT_IDS = ["lively-connect", "lively-disconnect"];
+//  손잡이는 **/lively-mode 하나**다(상민님 2026-11-25): on · off · readonly, «기억» 은 인자. 알림은 이 이름만 가리킨다.
+//   lively-connect · lively-disconnect 는 같은 일을 하는 별칭으로 계속 깐다 — 이미 나간 안내(공유 안내 · 안내 영상)가 그 이름을 가리킨다.
+const CONNECT_IDS = ["lively-connect", "lively-disconnect", "lively-mode"];
 export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) }) {
   const direct = directCli({ win, nodeBin, cliPath });
   const cli = direct ? `(PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고) ${direct} 를 lively 대신 쓰는` : `lively(PATH 에 없으면 ${shim})`;
   const lv = direct || "lively";
-  //  자리표시 `$ARGUMENTS` 는 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스)에서 두 번 쓰면 «경로(~/w)를, 비었거나 `~/w` 그대로면…»
-  //  처럼 스스로 모순이 된다. 치환 안 하는 하네스를 위해 «달러로 시작하는 글자 그대로면 없는 것» 을 말로만 덧붙인다.
-  const session = "이 세션을 연 폴더(세션 시작 때 라이블리가 «작업 폴더 밖» 안내에 적어 준 폴더 — 없으면 지금 작업 폴더)";
-  const folderRule = `<폴더> 자리에는 사람이 이 커맨드 뒤에 적은 경로가 있으면 그것을, 없으면 ${session}의 절대경로를 넣는다. 사람이 적은 경로: «$ARGUMENTS»`
-    + (win || format === "cursor" || format === "frontmatter" ? " (비었거나 달러 기호로 시작하는 글자 그대로 남아 있으면 적은 경로가 없는 것이다)" : "");
+  //  자리표시 `$ARGUMENTS` 는 본문에 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스 프롬프트)에서 두 번 쓰면 스스로 모순이 된다.
+  //  치환 안 하는 하네스를 위해 «달러로 시작하는 글자 그대로면 없는 것» 을 말로 덧붙인다(스킬 꼴은 자리표시를 아예 뺀다).
+  //  스위치의 기본은 «이 세션만» 이다(상민님 2026-11-18 — kit/cli/lively.mjs cmdOff·cmdOn). 기억시키기(이후 세션까지 · 그 폴더와 그 아래 전부)는
+  //   사람이 따로 골랐을 때만 한다. 세션은 시작 알림이 AI 에게 준 명령(`… off --session <id>`)에 실려 있다 — 코덱스의 셸은 세션 id 를 모른다.
   const cmds = [
-    //  명령은 조직이 정한 방식(작업 폴더에서만 | 어디서나)에 맞춰 목록을 고른다 — 작업 폴더로 등록하거나 제외 목록에서 뺀다(kit/cli/lively.mjs cmdWorkRoot).
-    { id: "lively-connect", description: "지금 폴더에서 라이블리를 켜고 이 세션을 바로 연결합니다(작업 폴더로 등록하거나 제외 목록에서 뺍니다)",
+    { id: "lively-connect", description: "라이블리를 켭니다 — 꺼 둔 세션이면 이 세션을 다시 켜고, 꺼진 폴더면 이 폴더를 켭니다",
       body: [
-        "이 폴더에서 라이블리를 켜라(이 컴퓨터의 작업 폴더로 등록하거나, 제외 폴더면 제외 목록에서 뺀다 — 명령이 알아서 고른다).",
+        "라이블리를 켜라. 사람이 이 커맨드 뒤에 적은 말: «$ARGUMENTS»" + (win || format !== "claude" && format !== "codex" ? " (비었거나 달러 기호로 시작하는 글자 그대로면 적은 말이 없는 것이다)" : ""),
         "",
-        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root add "<폴더>"\``,
-        `   ${folderRule}`,
-        "2. 실행 결과를 사람에게 한두 줄로 전하라. 켜졌으면 «다음 메시지부터 이 폴더에서 라이블리가 연결됩니다» 라고 알려라. «제외 폴더 아래라서 꺼져 있다» 는 답이면 그 제외 폴더 이름과 «그 아래 전부가 켜진다» 는 것을 함께 전하고, 그 폴더를 제외 목록에서 뺄지 사람에게 물어라. 실패했으면 결과에 나온 이유를 그대로 전하라.",
+        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} on\``,
+        "   - 세션 시작 때 라이블리 안내가 `on --session …` 꼴의 켜기 명령을 적어 줬으면 그 명령을 그대로 쓴다.",
+        `   - 사람이 경로를 적었으면 \`${lv} on --remember "<경로>"\` 로 그 폴더를 켠다(그 폴더와 그 아래 전부, 앞으로 여는 세션까지 켜진다고 먼저 말하라).`,
+        "2. 결과가 «꺼 둔 동안의 대화도 올라간다» 며 확인을 요구하면 그 내용을 사람에게 그대로 전하고, 사람이 그래도 켜겠다고 하면 결과에 적힌 `--yes` 명령을 실행하라.",
+        "3. 실행 결과를 사람에게 한두 줄로 전하라. 폴더를 켰으면 «이 폴더와 그 아래에서 여는 세션은 앞으로도 켜진다» 는 것을 함께 전하라. «제외 폴더 아래라서 꺼져 있다» 는 답이면 그 제외 폴더 이름과 «그 아래 전부가 켜진다» 는 것을 전하고, 그 폴더를 제외 목록에서 뺄지 사람에게 물어라. 실패했으면 결과에 나온 이유를 그대로 전하라.",
       ].join("\n") },
-    { id: "lively-disconnect", description: "지금 폴더에서 라이블리를 끕니다(작업 폴더 목록에서 빼거나 제외 목록에 넣습니다)",
+    { id: "lively-disconnect", description: "이 세션에서 라이블리를 끕니다(기본은 이 세션만 — «기억» 을 붙이면 이 폴더와 그 아래를 앞으로도 끕니다)",
       body: [
-        "이 폴더에서 라이블리를 꺼라(이 컴퓨터의 작업 폴더 목록에서 빼거나, «어디서나» 방식이면 제외 목록에 넣는다 — 명령이 알아서 고른다).",
+        "라이블리를 꺼라. 기본은 이 세션만 끄는 것이다. 사람이 이 커맨드 뒤에 적은 말: «$ARGUMENTS»" + (win || format !== "claude" && format !== "codex" ? " (비었거나 달러 기호로 시작하는 글자 그대로면 적은 말이 없는 것이다)" : ""),
         "",
-        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root remove "<폴더>"\``,
-        `   ${folderRule}`,
-        "2. 실행 결과를 사람에게 전하라. «등록된 다른 폴더 아래라서 켜져 있다» 는 답이면 그 폴더 이름과 함께 그대로 전하고, 그 폴더를 뺄지 사람에게 물어라.",
+        `1. 사람이 적은 말이 없으면 셸에서 ${cli} 명령을 실행하라: \`${lv} off\``,
+        "   - 세션 시작 때 라이블리 켜짐 안내가 `off --session …` 꼴의 끄기 명령을 적어 줬으면 그 명령을 그대로 쓴다.",
+        `2. 사람이 «기억»·«앞으로도»·«계속»·remember 같은 말이나 경로를 적었으면, 먼저 «그 폴더와 그 아래 모든 폴더에서, 앞으로 여는 세션까지 꺼진다» 는 것을 말하고 확인받은 뒤 \`${lv} off --remember "<폴더>"\` 를 실행하라. <폴더> 는 사람이 적은 경로, 없으면 이 세션을 연 폴더의 절대경로다.`,
+        "3. 실행 결과를 사람에게 그대로 전하라 — 껐다는 것, 이 세션에만 적용된다는 것, 다시 켜는 법, 이후 세션에도 적용하려면 어떻게 하는지(결과에 적혀 있다). 조직 설정을 바꿔 주겠다고 먼저 나서지 마라.",
+      ].join("\n") },
+    { id: "lively-mode", description: "이 세션의 라이블리를 켜고(on) · 끄고(off) · 읽기전용(readonly)으로 바꿉니다 — «기억» 을 붙이면 이 폴더와 그 아래를 앞으로도 켜거나 끕니다",
+      body: [
+        "라이블리 스위치다 — 이 세션의 라이블리를 on · off · readonly 로 바꾼다. 사람이 이 커맨드 뒤에 적은 말: «$ARGUMENTS»" + (win || format !== "claude" && format !== "codex" ? " (비었거나 달러 기호로 시작하는 글자 그대로면 적은 말이 없는 것이다)" : ""),
+        "",
+        "상태는 셋이다. on(켜짐 — 회사 맥락 · 기록 · 대화 업로드 · 라이블리 도구 전부) · readonly(읽기전용 — 회사 맥락과 읽는 도구만. 기록 · 대화 업로드 · 쓰는 도구는 멈춘다) · off(꺼짐 — 라이블리가 이 세션에서 멈춘다. 인코그니토와 같은 상태다).",
+        "세션 시작 때 라이블리 안내가 `on --session …` · `off --session …` · `readonly --session …` 꼴의 명령을 적어 줬으면 아래 명령 대신 그 꼴을 그대로 쓴다.",
+        "",
+        `1. 적은 말이 없으면 셸에서 ${cli} 명령으로 지금 상태만 확인하라: \`${lv} mode\` — 결과를 한 줄로 전하고 on · off · readonly 중 무엇으로 바꿀지 물어라(묻기 전에 바꾸지 마라).`,
+        `2. off(끄기 · 꺼 줘 · 인코그니토)면 \`${lv} off\` 를, readonly(읽기전용 · 읽기만)면 \`${lv} readonly\` 를, on(켜기 · 다시 켜 · 일반)이면 \`${lv} on\` 을 실행하라.`,
+        "3. 결과가 «… 동안의 대화도 대화 기록에 올라간다» 며 확인을 요구하면 그 내용을 사람에게 그대로 전하고, 사람이 그래도 켜겠다고 하면 결과에 적힌 `--yes` 명령을 실행하라.",
+        `4. «기억»·«앞으로도»·«계속»·remember 같은 말이나 경로가 함께 적혔으면(on · off 만 된다) 먼저 «그 폴더와 그 아래 모든 폴더에서, 앞으로 여는 세션까지 적용된다» 는 것을 말하고 확인받은 뒤 \`${lv} off --remember "<폴더>"\` 또는 \`${lv} on --remember "<폴더>"\` 를 실행하라. <폴더> 는 사람이 적은 경로, 없으면 이 세션을 연 폴더의 절대경로다. readonly 는 기억시킬 수 없다(이 세션만) — 그렇게 전하라.`,
+        "5. 실행 결과를 사람에게 한두 줄로 그대로 전하라 — 무엇으로 바뀌었는지, 이 세션에만 적용된다는 것, 되돌리는 법(결과에 적혀 있다). off · readonly 로 바꾼 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라. 실패했으면 결과에 나온 이유를 그대로 전하라. 조직 설정을 바꿔 주겠다고 먼저 나서지 마라.",
       ].join("\n") },
   ];
   const note = `<!-- ${CONNECT_MARK} — 라이블리 설치기가 쓰는 파일입니다. 고쳐도 다음 업데이트에 덮입니다. -->`;
   return cmds.map((c) => {
     let text;
     if (format === "codex") text = `${note}\n\n${c.body}\n`;
+    //  스킬은 설명이 모델의 목록에 늘 실린다 — 사람이 시켰을 때만 쓰라고 설명에 못박는다(스스로 켜고 끄지 않게).
+    else if (format === "skill") return { id: c.id, file: join(c.id, "SKILL.md"), text: `---\nname: ${JSON.stringify(c.id)}\ndescription: ${JSON.stringify(`${c.description} — 사람이 요청했을 때만 쓴다`)}\n---\n\n${note}\n\n${c.body.replace(/ 사람이 이 커맨드 뒤에 적은 말: «\$ARGUMENTS»[^\n]*/, " (사람이 요청하며 덧붙인 말 — «기억», 경로 등 — 이 있으면 아래에서 그것을 따른다.)")}\n` };
     else if (format === "cursor") text = `${c.description}\n\n${note}\n\n${c.body}\n`;
     else {
       // 클로드는 등록 명령을 미리 허용해 둔다 — 범위 밖에서 «여기 연결» 한 번에 권한 확인이 끼지 않게(이 두 명령만).
       //  윈도우는 셸·경로 표기가 갈려 접두사가 맞는다는 보장이 없어 싣지 않는다(그땐 평소처럼 한 번 묻는다).
-      const verb = c.id === "lively-connect" ? "add" : "remove";
-      const allowed = format === "claude" && !win ? `allowed-tools: Bash(lively work-root ${verb}:*), Bash(${shim} work-root ${verb}:*)\n` : "";
+      //  미리 허용하는 것은 «이 세션만» 까지다(격리 리뷰 2026-11-18): 끄기는 `off` · `off --session <id>` — CLI 가 --session 과
+      //   --remember·경로를 함께 받지 않으므로 이 접두사로는 폴더를 못 끈다. 켜기는 `on` 한 꼴만 — 꺼 둔 세션을 켜는 `--yes`(꺼 둔 동안의
+      //   대화가 올라간다)와 기억시키기(`--remember` — 그 아래 전부·영속)는 하네스의 권한 확인을 거친다.
+      const allowed = format !== "claude" || win ? ""
+        : c.id === "lively-connect" ? `allowed-tools: Bash(lively on), Bash(${shim} on)\n`
+        //  스위치 하나(/lively-mode)도 같은 선이다 — 닫는 쪽(off · readonly — 이 세션만)과 상태 보기, 그리고 `on` 한 꼴까지. `--yes` · `--remember` 는 권한 확인을 거친다.
+        : c.id === "lively-mode" ? `allowed-tools: ${["mode", "on", "off", "off --session:*", "readonly", "readonly --session:*"].flatMap((t) => [`Bash(lively ${t})`, `Bash(${shim} ${t})`]).join(", ")}\n`
+        : `allowed-tools: Bash(lively off), Bash(lively off --session:*), Bash(${shim} off), Bash(${shim} off --session:*)\n`;
       text = `---\ndescription: ${JSON.stringify(c.description)}\n${allowed}---\n\n${note}\n\n${c.body}\n`;
     }
     return { id: c.id, file: `${c.id}.md`, text };
@@ -558,6 +589,7 @@ export function writeConnectCommands(dir, format, label) {
     let wrote = 0;
     for (const f of connectCommandFiles({ format })) {
       const p = join(dir, f.file);
+      mkdirSync(dirname(p), { recursive: true });   // 스킬 꼴은 <id>/SKILL.md 다
       if (existsSync(p)) {
         let cur = "";
         try { cur = readFileSync(p, "utf8"); } catch { /* 못 읽으면 남의 파일로 본다 */ }
@@ -1787,12 +1819,13 @@ async function main() {
       // 기본 훅 3종 + 커스텀 훅 런너(이벤트별 고정 엔트리)를 비파괴 머지(절대경로).
       safeMergeUserSettings(mergeBlocks(userLevelHooksBlock(), runnerHooksBlock()));
       mergeAutoApprove(); // auto-approve(permissions.allow) reconcile
-      writeConnectCommands(join(CLAUDE_DIR, "commands"), "claude", "Claude");   // /lively-connect · /lively-disconnect(#5016)
+      writeConnectCommands(join(CLAUDE_DIR, "commands"), "claude", "Claude");   // /lively-mode(스위치) · 별칭 /lively-connect · /lively-disconnect(#5016)
     },
     codex: () => {
       console.log("  ── Codex ──");
       installCodex(ctx, gatewayMcpUrl());
-      writeConnectCommands(join(CODEX, "prompts"), "codex", "Codex");           // /prompts:lively-connect(#5016)
+      writeConnectCommands(join(CODEX, "skills"), "skill", "Codex");            // $lively-mode · 별칭 $lively-connect · $lively-disconnect(스킬 — 0.170 의 정본)
+      writeConnectCommands(join(CODEX, "prompts"), "codex", "Codex(옛 프롬프트)");  // /prompts:lively-connect(#5016 — 커스텀 프롬프트가 남은 옛 코덱스)
     },
     opencode: () => {
       console.log("  ── OpenCode ──");

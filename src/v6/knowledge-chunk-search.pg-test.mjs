@@ -1,4 +1,4 @@
-// 조각으로 찾기(#5204) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 조각으로 찾기(#5204) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/v6/knowledge-chunk-search.pg-test.mjs
 //
 // 왜 이 계층인가: 약속이 전부 SQL 이 어떤 문서를 어떤 자리로 내놓느냐다 — 벡터 · 공개범위 · 카테고리 · 임계가 한 문장에 묶여 있다. 벡터는 가짜 임베딩 서버가 정한다.

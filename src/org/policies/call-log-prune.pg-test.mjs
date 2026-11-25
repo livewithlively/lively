@@ -1,4 +1,4 @@
-// 호출 감사로그 prune 의 워크스페이스별 실행 — 실제 Postgres 필요(기본 유닛 체인 밖, CI pg-test 잡 · .github/workflows/test.yml 에 등록).
+// 호출 감사로그 prune 의 워크스페이스별 실행 — 실제 Postgres 필요(기본 유닛 체인 밖, CI pg-test 잡 · .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/org/policies/call-log-prune.pg-test.mjs
 //
 // 왜 이 계층인가: prune 의 DELETE 에는 워크스페이스 조건이 없다 — 어느 워크스페이스 행을 지우는지는 풀의 테넌트 바인딩과

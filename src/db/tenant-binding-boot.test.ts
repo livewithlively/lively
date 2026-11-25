@@ -2,8 +2,11 @@ import { strict as assert } from "node:assert";
 import test, { afterEach } from "node:test";
 import { clearTenantResolver, tenantBindingActive } from "./client.js";
 import { installTenantBinding, resolveBindingMode } from "./tenant-binding-boot.js";
+import { withTenant } from "../org/tenant-context.js";
+import { SINGLE_TENANT_ID } from "./tenant-column.js";
+import { installWorkspaceDirKeyResolver, workspaceDirKey } from "../ops/workspace-dir-key.js";
 
-afterEach(() => clearTenantResolver());
+afterEach(() => { clearTenantResolver(); installWorkspaceDirKeyResolver(() => null); });
 const E = (o: Record<string, string> = {}) => o as NodeJS.ProcessEnv;
 const UUID = "11111111-2222-3333-4444-555555555555";
 
@@ -56,4 +59,34 @@ test("request 를 배선하면 켜지고, 컨텍스트가 없으면 null 을 준
   const msg = installTenantBinding(E({ LIVELY_TENANT_BINDING: "rls" }));
   assert.equal(tenantBindingActive(), true);
   assert.match(msg, /요청별/);
+});
+
+// ── 디스크의 레포 클론 자리도 워크스페이스를 따른다(ops/workspace-dir-key.ts) ──────────────────
+//  B1 | off · fixed                                  | 열쇠 없음(프로세스 = 워크스페이스 하나 — 종전 자리)
+//  B2 | request · registry + 컨텍스트의 워크스페이스   | 그 워크스페이스의 id
+//  B3 | registry · primary 컨텍스트 / 컨텍스트 없음    | 열쇠 없음(primary 는 요청 · 정비가 같은 종전 자리를 본다)
+//  B4 | request · 컨텍스트 없음                       | 던지지 않고 «아무 워크스페이스의 것도 아닌 자리»(0 UUID) — 종전(공용) 자리가 아니다
+const WS_A = "aaaaaaaa-1111-2222-3333-444444444444";
+const inWs = (id: string, slug: string) => withTenant({ id, slug }, () => workspaceDirKey());
+
+test("★★ B1 off · fixed 는 워크스페이스 열쇠를 꽂지 않는다 — 클론 자리가 종전 그대로다", () => {
+  installTenantBinding(E());
+  assert.equal(inWs(WS_A, "acme"), null);
+  installTenantBinding(E({ LIVELY_TENANT_BINDING: "rls", LIVELY_TENANT_ID: UUID }));
+  assert.equal(inWs(WS_A, "acme"), null);
+});
+
+test("★★ B2·B4 request — 컨텍스트의 워크스페이스 id 가 열쇠다 · 컨텍스트가 없어도 종전(공용) 자리로 떨어지지 않는다", () => {
+  installTenantBinding(E({ LIVELY_TENANT_BINDING: "rls" }));
+  assert.equal(inWs(WS_A, "acme"), WS_A);
+  assert.equal(inWs(UUID, "other"), UUID, "워크스페이스마다 다른 열쇠");
+  assert.equal(workspaceDirKey(), SINGLE_TENANT_ID, "컨텍스트 밖 — 열쇠 없음(null = 종전 공용 자리)이면 안 된다");
+  assert.notEqual(workspaceDirKey(), WS_A);
+});
+
+test("★★ B2·B3 registry — 비-primary 는 제 id · primary(컨텍스트 없음 · primary 컨텍스트)는 열쇠 없음", () => {
+  installTenantBinding(E({ LIVELY_TENANT_BINDING: "rls", LIVELY_TENANCY_MODE: "registry" }));
+  assert.equal(inWs(WS_A, "team-a"), WS_A);
+  assert.equal(inWs(SINGLE_TENANT_ID, "primary"), null, "정비가 primary 컨텍스트로 와도 종전 자리");
+  assert.equal(workspaceDirKey(), null, "요청은 primary 를 컨텍스트 없이 넘긴다");
 });

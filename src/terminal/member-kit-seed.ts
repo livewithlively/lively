@@ -47,7 +47,8 @@ import { currentTenant } from "../org/tenant-context.js";
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
 
-const MARKER = ".lively/.kit-seeded";
+// 대상 하네스가 늘어나면 옛 마커를 가진 홈도 한 번 다시 배선해야 한다.
+const MARKER = ".lively/.kit-seeded-v2";
 const BUNDLE_TMP = ".lively/kit-bundle.tgz";
 const BUNDLE_MAX_BYTES = 64 * 1024 * 1024;
 const SEED_TIMEOUT_MS = 90_000;
@@ -94,7 +95,7 @@ function registryDeps(): KitSeedDeps | null {
 }
 /** 멤버 홈에 배선할 하네스 — 테넌트 이미지가 싣는 바이너리와 같은 집합(lvly-cloud tenant-image/Dockerfile). 없는 하네스를
  *  적어도 설치기는 설정 파일만 쓰므로 해가 없지만(그 하네스를 띄우면 그때 catalog 의 미설치 안내), 있는 하네스를 빠뜨리면 조용히 반쪽이다. */
-export const SEED_HARNESSES = "claude,codex";
+export const SEED_HARNESSES = "claude,codex,antigravity,cursor";
 
 // 설치 스크립트 — 고정 리터럴(값은 홈 경로뿐, osUser 는 slug 문자셋). tar·node·claude(·codex) 는 테넌트 이미지에 있다.
 //  실패 시 어떤 단계였는지 stderr 로 남긴다(memberSh 가 에러 메시지로 전달).

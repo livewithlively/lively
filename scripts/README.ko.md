@@ -10,11 +10,12 @@
 | ② itest | `scripts/*.itest.mjs` — 실 DB 필요한 통합(스키마 init·세션로그 CAS 등) | `npm run test:itest` · 개별 `node --env-file-if-exists=.env scripts/<x>.itest.mjs` | `ITEMS_DATABASE_URL` (.env) |
 | ③ integration/ | [scripts/integration/](./integration/) — 실 PG·실 게이트웨이 대상 수동 e2e(각 파일 머리에 실행법 주석) | 파일별 수동 | 파일별 상이(PG·실행 중 게이트웨이·시크릿 키) |
 | ④ vis-e2e/ | [scripts/vis-e2e/](./vis-e2e/) — 가시성 축·UI 배선 e2e(전용 README 있음) | `vis-e2e/README.ko.md` 참조 | 실행 중 게이트웨이 |
-| ⑤ pg-test | `src/**/*.pg-test.mjs` — 실 Postgres 통합(유닛 러너 제외). 러너 수집 밖이라 test.yml 에 **파일별 스텝으로 등록해야 돈다**(빠뜨리면 `scripts/pg-test-registered.test.mjs` 가 막는다) | CI(test.yml)가 등록된 파일을 pgvector 서비스로 실행 · 로컬은 `ITEMS_DATABASE_URL=… node <파일>` | 실 PG(pgvector) |
+| ⑤ pg-test | `src/**/*.pg-test.mjs` — 실 Postgres 통합(유닛 수집 제외). 러너가 **`--pg` 로 자동 수집**한다 — 파일만 만들면 된다(test.yml 의 파일별 스텝은 없어졌다 · `pg` 잡이 러너를 부르는지는 `scripts/ci-test-jobs.test.mjs` 가 지킨다) | CI(test.yml `pg` 잡)가 `node scripts/run-tests.mjs --pg --shard=i/N` 을 pgvector 서비스로 실행(조각마다 새 DB) · 로컬은 `ITEMS_DATABASE_URL=… node scripts/run-tests.mjs --pg`, 한 파일은 `ITEMS_DATABASE_URL=… node <파일>` | 버려도 되는 실 PG(pgvector) · 스키마 초기화 |
 | ⑥ 훅 bash | [kit/hooks/test-hooks.sh](../kit/hooks/test-hooks.sh) — 훅 셸 경로 러너 | `kit/hooks/test-hooks.sh` | 없음 |
 
 - ①이 기본 안전망이다 — 테스트 추가는 **파일 생성만**(package.json 등록 금지, 러너가 자동 발견).
 - `*.itest.mjs`·`*.pg-test.mjs` 는 러너 기본 수집에서 제외된다(러너 헤더 주석 참조).
+- **CI 는 한 벌을 여러 잡이 나눠 돈다**(#5603) — `unit` × 6 · `pg` × 4 · `test-windows` × 3 이 저마다 조각 하나(`--shard=i/N`)를 돌고, 필수 체크인 `test` 잡은 유닛·pg 조각이 전부 통과했을 때만 초록이다. 종전엔 한 잡이 차례로 전부 돌아 1,036초였다(빌드 56초 · 유닛 1,211 파일 511초 · PG 106 스텝 429초). `.github/workflows/test.yml` 머리말 참조.
 
 ### 러너 실행 정책 (#1431 — 끝까지 · 병렬)
 종전 러너는 **직렬 + 첫 실패에서 즉시 중단**이라, 실패 1건이 뒤쪽 100여 건을 가리고 10코어에서 1코어만 썼다. 이제:
@@ -36,6 +37,9 @@
 | `--list` / `--itest` / `--build` | 발견 목록만 / ②계층(실 DB — 직렬 고정) / 빌드까지 러너가 실행 |
 | `--scope=kit,desktop` | 지정 면의 `*.test.mjs` 만 수집(src→dist 매핑 생략). **윈도우 CI 가 이걸로 공통 러너를 쓴다** — 그 잡은 `npm ci`·빌드를 안 하므로 dist 를 수집하면 전부 '산출물 없음'이 된다 |
 | `--budget=N` | 유닛 파일당 상한(초). 넘으면 **통과해도 실패**. 기본은 끔 — CI 리눅스 잡이 `--budget=45` 로 켠다 |
+| `--shard=i/N` | 전체를 `N` 조각으로 나눈 `i` 번째만 돈다. 같은 체크아웃에서 `N` 번 부르면 **모든 파일이 정확히 한 번** 돈다(`test-runner-schedule.test.mjs` S7·S8). 균형은 `scripts/test-weights.json` 을 본다 — 표가 낡거나 없어도 균형만 흐트러질 뿐 빠지는 파일은 없다 |
+| `--pg` | ⑤계층: `src/**/*.pg-test.mjs` 를 모아 `ITEMS_DATABASE_URL` 의 DB 에서 직렬로 돈다(주소가 없으면 exit 2) |
+| `--write-weights` | 전부 통과한 전체 실행 뒤, 이번 계층의 파일별 초를 `scripts/test-weights.json` 에 다시 적는다(2초 이상만). `--shard` · 필터와는 함께 못 쓴다 |
 
 ### 파일당 시간 예산 (#2457 — 2026-08-31)
 

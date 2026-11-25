@@ -277,6 +277,14 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
       if (filled.trim()) out.push(filled);
     }
   }
+  // Every workspace gets the shared desktop browser as the default for web tasks.
+  // An organization can provide its own section under this key instead.
+  if (!sections.some((s) => s.section === "desktop-browser-default")) {
+    out.push([
+      "## 웹브라우저 작업",
+      "웹사이트 열기·검색·읽기·화면 확인·양식 입력 등 브라우저 작업을 받으면 먼저 라이블리 MCP의 `browser_status`로 이 세션의 데스크톱 앱 브라우저 연결을 확인한다. 연결돼 있으면 곁칸 [웹]에 나타나는 `browser_*` 도구로 작업한다. 사용자가 다른 브라우저를 명시하거나 곁칸 브라우저로 할 수 없는 경우에만 다른 경로를 쓴다. 연결되지 않았으면 그 상태를 사실대로 알린다.",
+    ].join("\n"));
+  }
   if (writingBlock) out.push(redactString(writingBlock));
   if (opts.team.trim() && !consumedTeam.v) out.push(opts.team.trim()); // ${team} 미사용 시 폴백(마이그레이션으로 org-defaults 에 ${team} 시드 시 in-position)
   return out.join("\n\n");

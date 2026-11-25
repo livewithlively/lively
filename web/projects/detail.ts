@@ -17,10 +17,12 @@ import { mountProjectHub } from './detail-hub.js';
 import { hubIcon } from './detail-hub-kit.js';
 import { HUB_TOOLS, type HubTool } from './detail-hub-layout.js';
 import { pjvProjFactsStrip, pjvProjMetaPanel } from './detail-meta.js';
+import { projPeopleRow, projShareButton } from './people-ui.js';   // #5630 사람 줄 · [공유]
+import { setAccessConfig } from './access-ui.js';   // #5598
 import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
 import { pjvGoTaskWorkspace, pjvOpenTaskFromHub, pjvTasksSection } from './detail-tasks.js';
 import { pjvSelReset } from './selection.js';
-import { clearSortCtx, consumeKeepScroll, pjvRestoreScroll } from './state.js';
+import { clearSortCtx, consumeKeepScroll, pjvReloadKeepScroll, pjvRestoreScroll } from './state.js';
 import { pjvLoadStatusTemplates, pjvRegisterProjList, pjvSetStatusRegistry, pjvStatusReg } from './status.js';
 
 // 프로젝트 상세(v2) #/projects2/p/:id — 헤더(이름·상태 토글·팀원) + 태스크▸하위 트리 + 필요/산출 지식.
@@ -242,7 +244,7 @@ async function renderProjectV2Detail(view, idStr) {
   const { y: keepY, host: keepHost } = consumeKeepScroll(); // 인라인 편집 재렌더·태스크 모달 닫기면 스켈레톤 스킵 + 스크롤 복원(#358·#1233)
   if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
   let data: any;
-  try { data = await api('/api/ui/v6/projects/' + id).then((d) => d && (d.project || d)); }
+  try { data = await api('/api/ui/v6/projects/' + id).then((d) => { setAccessConfig(d && d.access); return d && (d.project || d); }); }   // access — #5598 «누가 보나» 칩의 재료
   catch (e) {
     view.replaceChildren(el('div', { class: 'page-head' }, backLink), errorNote(e, '프로젝트를 불러오지 못했습니다'));
     return;
@@ -270,8 +272,9 @@ async function renderProjectV2Detail(view, idStr) {
   // 프로젝트 세부 설정 — 우측 액션 슬롯. 상태(완료된 프로젝트로/재개)·규칙(터미널 AI 주입)·연결된 지식 팝업.
   const meId = (state.me && (state.me.userId || state.me.email)) || '';
   // 삭제·팀원 수정은 '프로젝트 세부 설정' 팝업으로 이관 — 헤더 우측 액션은 설정 버튼만(권한 경계는 백엔드 403).
-  const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost', text: '⚙ 프로젝트 세부 설정',
-    onclick: () => openProjectSettings(id, p, reload, meId, V6_BASE) });
+  //  #5630 — 아이콘만(이름은 올렸을 때). 오른쪽 위 글자 단추를 [공유][＋ 세션] 둘로 줄인다.
+  const settingsBtn = el('button', { class: 'btn btn-sm btn-ghost pjh-icon-btn', type: 'button', title: '프로젝트 세부 설정', 'aria-label': '프로젝트 세부 설정',
+    onclick: () => openProjectSettings(id, p, reload, meId, V6_BASE) }, hubIcon('gear', 15));
   // '내 컴퓨터에서 작업'은 헤더에서 빼고 터미널 세션의 '＋ 새 세션' 드롭다운으로 이관(내 컴퓨터 / 중앙 컴퓨터 선택) — projectTerminalSection.
   // (코멘트는 헤더 버튼이 아니라 본문↔태스크 사이의 '코멘트' 섹션이 진입점 — projectCommentsSection. 클릭=드로어.)
   // 제목줄 — 이름(클릭해 수정)+상태칩(좌), 세부설정(우).
@@ -321,12 +324,17 @@ async function renderProjectV2Detail(view, idStr) {
       }
       location.hash = href;
     } }, hubIcon('sessNew', 14), el('span', { text: '세션' }));   // #4233(원준 2026-10-04): 새 세션 = 말풍선과 더하기
-  backRow.append(el('div', { class: 'proj-detail-actions' }, newSessBtn, hubActions, settingsBtn));
+  //  #5630 — 오른쪽 위 맨 앞 [얼굴 묶음 공유](세션 문패의 [공유] 와 같은 자리). 저장하면 스크롤을 지킨 채 다시 그린다.
+  const reloadKeepPpl = () => pjvReloadKeepScroll(reload);
+  backRow.append(el('div', { class: 'proj-detail-actions' }, projShareButton(p, members, reloadKeepPpl), newSessBtn, hubActions, settingsBtn));
   head.append(el('div', { class: 'proj-detail-titlebar' },
     // 상태 배지(타이틀 오른쪽) 제거 — 아래 메타행의 상태 필드(클릭해 변경)와 중복이라 그쪽만 남긴다.
     el('div', { class: 'proj-detail-titlebox' }, titleEl)));
-  // 속성 띠(#3916) — 예전 2열 메타 패널(pjvProjMetaPanel)의 컨트롤을 칩 한 줄로. 컨트롤·저장 경로는 동일.
-  head.append(pjvProjFactsStrip(p, members, reload));
+  //  #5630 3판 — 제목 밑 한 줄 = 속성(상태 · 리스트 · …) + 사람(리드 · 함께 · [＋ 초대] · 누가 보나). 그 밑이 «지금» 띠(허브가 채운다).
+  //   예전엔 사람 줄과 속성 띠가 두 줄이었다 — 한 줄로 합쳐 제목과 위젯 사이를 줄인다.
+  head.append(el('div', { class: 'h3-meta' }, pjvProjFactsStrip(p, members, reload), projPeopleRow(p, members, reloadKeepPpl)));
+  const nowHost = el('div', { class: 'h3-now-host' });
+  head.append(nowHost);
 
   // ── 상세 본문 = 도구 위젯 허브(#3916, 2026-09-14) ──
   //  예전엔 본문+코멘트 · 지식 · 태스크 · 세션 · 폴더 · 타임라인 카드 여섯이 같은 무게로 세로 나열(≈2,000px)됐다. 이제 3열 격자의
@@ -337,9 +345,11 @@ async function renderProjectV2Detail(view, idStr) {
   const segs = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const focus = (!inModal && segs[0] === 'projects2' && segs[1] === 'p' && segs[2] === idStr && (HUB_TOOLS as string[]).includes(segs[3] || '')) ? segs[3] as HubTool : null;
   const hubHost = el('div', { class: 'pjh-host' });
-  view.replaceChildren(head, hubHost);
+  //  #5630 3판 — 새 디자인 언어(ds3) 를 이 화면부터. .h3-page 가 서 있는 동안 이 창의 토큰이 통째로 3판 값이 된다(39-ds3.css).
+  const pageEl = el('div', { class: 'h3-page' }, head, hubHost);
+  view.replaceChildren(pageEl);
   mountProjectHub(hubHost, {
-    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions, meId,
+    id, p, members, reload, base: V6_BASE, inModal, focus, actionsHost: hubActions, nowHost, meId,
     openTask: (tid) => pjvOpenTaskFromHub(tid, reload),          // #4165 줄 → 태스크 모달(본문 먼저)
     goTask: (t) => pjvGoTaskWorkspace(id, t, reload),             // #4165 줄 호버 → 작업 공간(세션)
     // #4135 5판 — 태스크 위젯은 프로젝트 탭 목록을 옵션(묶음·줄 수·열)과 함께 그대로 쓴다 · 세션 위젯의 「＋ 새 세션」「세션 기록」.
@@ -365,7 +375,7 @@ async function renderProjectV2Detail(view, idStr) {
     },
   });
   // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
-  if (keepY != null) pjvRestoreScroll(keepY, keepHost); else applyReveal(Array.from(view.children).slice(1));
+  if (keepY != null) pjvRestoreScroll(keepY, keepHost); else applyReveal([hubHost]);
 }
 
 

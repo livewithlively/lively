@@ -1,4 +1,4 @@
-// server 실행기 — 앱 선언 MCP 도구를 앱 서버 라우트로(#5053 앱 v2-42) PG 통합 시험 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// server 실행기 — 앱 선언 MCP 도구를 앱 서버 라우트로(#5053 앱 v2-42) PG 통합 시험 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-server-call.pg-test.mjs
 //
 //  무엇을 보나 — 한 줄 끝까지: **세션 머리글 없는 OAuth 토큰**(진짜 인가 흐름)으로 실제 /mcp 에 붙어 server 도구를 부르면 → server 실행기 → 게이트웨이가

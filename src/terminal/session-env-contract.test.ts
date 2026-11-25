@@ -19,7 +19,7 @@ import {
   SESSION_ENV_GROUPS, KEEP_CMNDS, sudoersEnvKeep, envKeepPolicy, declaredEnvNames,
   renderSudoersEnvKeepBlock, spliceSudoers, SUDOERS_BEGIN, SUDOERS_END,
 } from "./session-env-contract.js";
-import { HARNESSES, modeEnvArgs, themeEnvArgs, harnessThemeEnvArgs } from "./catalog.js";
+import { HARNESSES, modeEnvArgs, themeEnvArgs, harnessThemeEnvArgs, harnessStateEnvArgs } from "./catalog.js";
 import { safeCacheEnv, homeRelocateEnv } from "../ops/build-cache.js";
 import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
 import { SESSION_LABEL_SOURCE_ENV } from "../sessions/session-label-source.js";
@@ -158,6 +158,14 @@ for (const h of HARNESSES) {
 assert.ok(harnessNames.size > 0,
   `어느 하네스도 테마 env 를 내지 않는다(훑은 하네스: ${fmt(HARNESSES.map((h) => h.key))}) — 하네스 테마 축이 헛돈다`);
 
+// ── 축 ①-b2: 하네스 상태 자리 env (#5648 — 세션 컨테이너 안에서만 싣는다. 하네스 표를 순회해 얻는다) ──
+const stateNames = new Set<string>();
+for (const h of HARNESSES) {
+  for (const inside of [true, false]) for (const n of namesFromDashE(harnessStateEnvArgs(h.key, { inSessionContainer: inside }))) stateNames.add(n);
+}
+// ★ 배선 — codex 는 세션 컨테이너 안에서 SQLite 자리를 받는다. 0건이면 이 축이 헛돈다.
+assert.ok(stateNames.size > 0, "어느 하네스도 상태 자리 env 를 내지 않는다 — 하네스 상태 축이 헛돈다");
+
 // ── 축 ①-c: 공유 빌드 캐시 (Record 의 키가 곧 env 이름) ────────────────────────
 const cacheNames = new Set<string>([...Object.keys(safeCacheEnv("/tmp/x")), ...Object.keys(homeRelocateEnv("/tmp/x"))]);
 assert.ok(Object.keys(safeCacheEnv("/tmp/x")).length > 0, "safeCacheEnv 가 빈 객체다 — 캐시 축이 헛돈다");
@@ -227,6 +235,7 @@ const addAxis = (axis: string, names: Iterable<string>): void => {
 };
 addAxis("실행모드/테마(순수함수)", pureNames);
 addAxis("하네스 테마(순수함수)", harnessNames);
+addAxis("하네스 상태 자리(순수함수)", stateNames);
 addAxis("공유 빌드 캐시(값의 출처)", cacheNames);
 addAxis("주입 코드 스캔", scannedNames);
 addAxis("세션 종류 상수", [SESSION_KIND_ENV]);

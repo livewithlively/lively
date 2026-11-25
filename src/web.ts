@@ -9,6 +9,7 @@ import express from "express";
 import { runSchedulerTickOnce } from "./scheduler/engine.js";
 import { seedDefaultContent } from "./org/delivery/seed-content.js";
 import { requireAppTool } from "./apps/principal.js";
+import { appRegrantError } from "./apps/app-consent-gap.js";   // #1644 — 앱 주체의 scope 가 예전 범위 동의라 막힌 것이면 «다시 동의»
 import { pruneCallLog } from "./org/policies/call-log-prune.js";
 import { getRuntimeConfig } from "./org/store/runtime-config.js";
 import { backfillSessionStates } from "./sessions/session-state-backfill.js";
@@ -106,9 +107,28 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     next();
   };
 
+  //  능력 REST 마운트의 scope 게이트 — requireScope 와 같되, 앱 주체(앱 서버 · 앱 토큰)가 앱이 지금 선언한 scope 를 동의가 예전 범위라 못 쓰면
+  //   «다시 동의» 로 말한다(#1644 — 403 · code consent_required · consent_url · missing). 앱 서버는 그 까닭과 동의할 곳을 사람에게 그대로 전한다.
+  //   판정은 막힌 길에서만 읽는다(apps/app-consent-gap) — 통과하는 요청의 비용은 그대로. 읽기가 실패하면 종전 글 그대로.
+  const requireCapScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {
+    const user = userOf(req);
+    if (!user || !user.userId) { res.status(401).json({ error: "unauthenticated" }); return; }
+    if (scope && !(Array.isArray(user.scopes) && user.scopes.includes(scope))) {
+      const plain = (): void => { res.status(403).json({ error: `forbidden: '${scope}' 권한이 필요합니다` }); };
+      if (!user.appId) { plain(); return; }
+      void appRegrantError(user, { scope }).catch(() => null).then((e) => {
+        if (res.headersSent) return;
+        if (!e) { plain(); return; }
+        res.status(e.status).json({ ...(e.body ?? {}), error: e.message });
+      }).catch(() => undefined);
+      return;
+    }
+    next();
+  };
+
   const mw = (scope: Scope | null): express.RequestHandler[] => [authResolve, requireScope(scope)];
   /** 능력 REST 마운트 전용 — 앱 서버 토큰을 «그 구성원 ∩ 앱 동의» 주체로 바꿔 받는 유일한 자리. */
-  const mwCap = (scope: Scope | null): express.RequestHandler[] => [authCap, requireScope(scope)];
+  const mwCap = (scope: Scope | null): express.RequestHandler[] => [authCap, requireCapScope(scope)];
 
   // ── 테넌트 하우스키핑 틱(#1437 중앙 모드) ──────────────────────────────────
   // 요청별 테넌시에서는 부팅 하우스키핑·스케줄러가 전부 꺼진다(요청 밖엔 테넌트 컨텍스트가 없다 —

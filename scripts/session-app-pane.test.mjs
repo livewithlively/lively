@@ -147,7 +147,8 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   const PARTS = read("web/v2/panes-parts.ts");
   const PANES = read("web/v2/panes.ts");
   const PANE = read("web/v2/session-app-pane.ts");
-  ok(/^const DERIVED_TABS: ReadonlySet<string> = new Set\(\[SESSAPP_TAB\]\);/m.test(PANES), "S10-1 붙은 앱 탭은 배치에 저장하지 않는 탭이다");
+  //  #5713 — «요청» 탭(SESSASK_TAB)도 같은 표에 든다(지금 보는 세션에서 나오는 탭).
+  ok(/^const DERIVED_TABS: ReadonlySet<string> = new Set\(\[SESSAPP_TAB, SESSASK_TAB\]\);/m.test(PANES), "S10-1 붙은 앱 탭은 배치에 저장하지 않는 탭이다");
   ok(/^\s*lay = stripDerived\(lay\);/m.test(PANES) && /^\s*const saved = stripDerived\(lay\);/m.test(PANES), "S10-1 배치를 읽을 때도 쓸 때도 걷는다");
   ok(/^\s*for \(const pane of panes\.values\(\)\) \{ const p = pane\.parts\.get\(key\); if \(p\?\.onTabClose\) \{ p\.onTabClose\(\); return; \} \}/m.test(PANES), "S10-2 탭의 × 는 부품의 뜻(떼기)을 먼저 따른다");
   ok(/onTabClose: \(\) => \{/.test(PANE) && /detachAppFromSession\(s, cur\.app_id\)/.test(PANE), "S10-2 붙은 앱 탭의 × = 이 세션에서 떼기");

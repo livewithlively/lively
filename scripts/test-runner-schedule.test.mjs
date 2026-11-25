@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HEAD_BYTES, isSoloTest, mayStart, readHead, soloLast } from "./test-runner-schedule.mjs";
+import { HEAD_BYTES, isSoloTest, mayStart, parseShard, readHead, shardFiles, soloLast } from "./test-runner-schedule.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..");
@@ -118,6 +118,88 @@ try {
     /process\.stdout\.write\(\w+,\s*\w+\)/.test(block) && !/console\.log/.test(block)
       ? ok("S6 --list 는 한 번에 쓰고 다 비운 뒤 끝낸다")
       : bad("S6 --list 쓰기", block.slice(0, 300) || "--list 갈래를 못 찾았다");
+  }
+
+  // ── S7 조각(#5603) — 어떻게 나누든 **모든 파일이 정확히 한 조각에** 든다. 빠지는 파일이 하나라도 있으면 CI 는 초록인데 그 시험은 안 돈다 ──
+  for (const [label, text, want] of [
+    ["2/6", "2/6", { index: 2, total: 6 }],
+    ["1/1", "1/1", { index: 1, total: 1 }],
+    ["경계 6/6", "6/6", { index: 6, total: 6 }],
+    ["0 번 조각은 없다", "0/6", null],
+    ["조각 수를 넘는 번호", "7/6", null],
+    ["조각 0개", "1/0", null],
+    ["숫자가 아니다", "a/b", null],
+    ["한쪽만", "3", null],
+    ["음수", "-1/3", null],
+    ["빈 값", "", null],
+    ["undefined", undefined, null],
+  ]) eq(`S7 parseShard ${label}`, parseShard(text), want);
+  {
+    const files = Array.from({ length: 53 }, (_, i) => `d${i % 7}/f${String(i).padStart(2, "0")}.test.mjs`);
+    const heavy = { [files[3]]: 40, [files[11]]: 30, [files[12]]: 30, [files[40]]: 25 };
+    const costOf = (f) => heavy[f] ?? 1;
+    for (const total of [1, 2, 3, 6, 53]) {
+      const parts = shardFiles(files, total, costOf);
+      eq(`S7 ${total}조각 — 합치면 전체(겹침·빠짐 없음)`, [parts.length, parts.flat().sort()], [total, [...files].sort()]);
+      eq(`S7 ${total}조각 — 조각 안 순서는 받은 순서`, parts.every((p) => p.every((f, i) => i === 0 || files.indexOf(p[i - 1]) < files.indexOf(f))), true);
+    }
+    eq("S7 같은 입력이면 같은 나눔(잡마다 따로 계산한다)", shardFiles(files, 6, costOf), shardFiles([...files], 6, costOf));
+    //  균형 — 무거운 넷(125초)이 한 조각에 몰리면 그 조각이 벽시계를 잡는다. 가장 무거운 조각이 «평균 + 가장 큰 한 건» 을 넘지 않는다.
+    const loads = shardFiles(files, 4, costOf).map((p) => p.reduce((s, f) => s + costOf(f), 0));
+    const sum = loads.reduce((a, b) => a + b, 0);
+    Math.max(...loads) <= sum / 4 + 40 && Math.max(...loads) - Math.min(...loads) <= 40
+      ? ok(`S7 무거운 파일을 조각에 고루 얹는다(${loads.join(" · ")})`) : bad("S7 균형", loads.join(" · "));
+    //  비용표가 틀려도(0 · 음수 · 숫자 아님) 파일은 빠지지 않는다 — 표는 균형만 정한다.
+    const broken = shardFiles(files, 6, (f) => (files.indexOf(f) % 3 === 0 ? NaN : files.indexOf(f) % 3 === 1 ? -5 : 0));
+    eq("S7 깨진 비용표 — 그래도 합치면 전체", broken.flat().sort(), [...files].sort());
+    eq("S7 파일보다 조각이 많으면 남는 조각은 빈다(러너가 그 조각을 실패로 본다)", shardFiles(files.slice(0, 2), 3, costOf).map((p) => p.length), [1, 1, 0]);
+  }
+  // ── S8 실제 러너 — `--list --shard=i/N` 을 N 번 부른 합이 `--list` 와 같다(유닛 · pg 두 계층 다). 규칙만 재면 러너가 안 써도 초록이다 ──
+  {
+    const runner = join(HERE, "run-tests.mjs");
+    const list = (...args) => {
+      const r = spawnSync(process.execPath, [runner, "--list", ...args], { encoding: "utf8", timeout: 120_000 });
+      return r.status === 0 ? r.stdout.split("\n").filter(Boolean) : [`(exit ${r.status}) ${String(r.stderr).slice(0, 200)}`];
+    };
+    for (const [label, mode, total] of [["유닛", [], 6], ["pg", ["--pg"], 4]]) {
+      const all = list(...mode);
+      const parts = Array.from({ length: total }, (_, i) => list(...mode, `--shard=${i + 1}/${total}`));
+      const dup = parts.flat().filter((f, i, a) => a.indexOf(f) !== i);
+      all.length > total && dup.length === 0 && JSON.stringify(parts.flat().sort()) === JSON.stringify([...all].sort())
+        ? ok(`S8 ${label} ${all.length}개 — ${total}조각의 합이 전체와 같다(${parts.map((p) => p.length).join(" · ")})`)
+        : bad(`S8 ${label} 조각의 합`, `전체 ${all.length} · 조각 ${parts.map((p) => p.length).join("+")} · 겹침 ${dup.slice(0, 3).join(",")} · ${all[0]}`);
+      parts.every((p) => p.length > 0) ? ok(`S8 ${label} — 빈 조각이 없다`) : bad(`S8 ${label} 빈 조각`, parts.map((p) => p.length).join(" · "));
+    }
+    const badShard = spawnSync(process.execPath, [runner, "--list", "--shard=7/6"], { encoding: "utf8", timeout: 60_000 });
+    eq("S8 잘못된 조각 번호는 0건 초록이 아니라 죽는다(exit 2)", badShard.status, 2);
+  }
+
+  // ── S9 시간표(--write-weights) — 조각 균형의 밑천. 느린 파일만 적고 · 다른 계층의 몫은 건드리지 않고 · 일부 실행으로는 안 덮는다 ──
+  {
+    const root = join(box, "tree2");
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    mkdirSync(join(root, "kit", "testlib"), { recursive: true });
+    for (const f of ["run-tests.mjs", "test-runner-env.mjs", "test-runner-schedule.mjs", "testguard-real-home.mjs"]) copyFileSync(join(HERE, f), join(root, "scripts", f));
+    writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
+    writeFileSync(join(root, "kit", "testlib", "test-isolation-lint.test.mjs"), "process.exit(0);\n");
+    writeFileSync(join(root, "kit", "slow.test.mjs"), "await new Promise((r) => setTimeout(r, 2200));\n");
+    writeFileSync(join(root, "kit", "fast.test.mjs"), "// 곧바로 끝난다\n");
+    const table = join(root, "scripts", "test-weights.json");
+    //  옛 표: 다른 계층(pg)의 몫 하나 · 이제는 빨라진 파일의 낡은 몫 하나.
+    const seed = { "kit/fast.test.mjs": 30, "src/x.pg-test.mjs": 9 };
+    writeFileSync(table, JSON.stringify(seed));
+    const run = (...args) => spawnSync(process.execPath, [join(root, "scripts", "run-tests.mjs"), "--scope=kit", ...args], { encoding: "utf8", timeout: 120_000 });
+    const read = () => JSON.parse(readFileSync(table, "utf8"));
+    eq("S9 조각 실행은 표를 못 쓴다(exit 2 · 표 그대로)", [run("--write-weights", "--shard=1/2").status, read()], [2, seed]);
+    eq("S9 필터 건 실행은 표를 못 쓴다(exit 2 · 표 그대로)", [run("--write-weights", "slow").status, read()], [2, seed]);
+    const r = run("--write-weights", "-j", "4");
+    const after = read();
+    eq("S9 전체 실행 — 느린 파일은 적고 · 빨라진 파일의 낡은 몫은 지우고 · 다른 계층의 몫은 둔다",
+      [r.status, Object.keys(after).sort(), after["kit/slow.test.mjs"] >= 2, after["src/x.pg-test.mjs"]],
+      [0, ["kit/slow.test.mjs", "src/x.pg-test.mjs"], true, 9]);
+    //  그 표로 나누면 느린 파일이 든 조각에는 다른 파일이 안 얹힌다(가벼운 둘은 다른 조각으로).
+    const parts = [1, 2].map((i) => String(run("--list", `--shard=${i}/2`).stdout).split("\n").filter(Boolean).map((p) => p.split(/[\\/]/).pop()));
+    eq("S9 러너가 그 표를 읽어 나눈다 — 무거운 파일 혼자 한 조각", parts.map((p) => p.sort()), [["slow.test.mjs"], ["fast.test.mjs", "test-isolation-lint.test.mjs"]]);
   }
 } finally {
   rmSync(box, { recursive: true, force: true, maxRetries: 3 });

@@ -316,6 +316,9 @@ export interface ConvSearchResult {
   marks: string[];
   /** 친 번호 가운데 이 세션이 묶인 프로젝트·맡은 태스크의 번호(#4530 «4530» 으로 그 프로젝트의 세션 찾기) — 없으면 빈 목록. */
   nums: number[];
+  /** 이 세션이 맡은 태스크 번호 — 세션 머리줄이 이름 뒤에 적는 `#번호` 와 같은 값(sessionTaskIdsFor 와 같은 판정). 화면 결과 줄이
+   *  이 번호를 늘 보인다(#5607 «번호가 안 보여서 그게 그건지 알기 어렵다»). 맡은 태스크가 없거나 잇지 못했으면 null. */
+  task_no: number | null;
   /** 뜻이 비슷한 정도(0~1, 소수 둘째 자리) — 세션 요약 카드와 검색어의 뜻을 견준 값(#4530 «뜻으로 찾기»). 견주지 못했으면 없다.
    *  글자로는 안 맞고 **뜻으로만** 온 줄은 fields 가 비고 best 가 없다 — 화면이 «뜻이 비슷함» 이라고 말한다. */
   sem?: number;
@@ -626,8 +629,12 @@ interface IdentRow { node_id: string; session_id: string; owner: string | null; 
 /**
  * 그 번호들에 묶인 세션(볼 수 있는 것만 · 최근 것부터 200개까지).
  *  · 프로젝트 번호 — 지금 그 프로젝트에 묶여 있는 세션(«이 대화의 지금 프로젝트» — 세션 목록과 같은 한 벌, convProjectIdSql).
- *  · 태스크 번호 — 그 태스크를 맡은 실행 세션(execution_session_task)이 돌린 대화. 실행 세션 id 는 박스 id 라, 그 박스가 돌린 대화
+ *  · 태스크 번호 — 그 태스크를 맡은 실행 세션이 돌린 대화. 실행 세션 id 는 박스 id 라, 그 박스가 돌린 대화
  *    (org_session_conv · org_session_state.claude_session_id)로 편다(기록만 남은 행은 id 자체가 대화 id 다).
+ *    ★ «맡은 태스크» 는 sessionsOfTasks(v6/session-task.ts)와 같은 두 자리다 — execution_session.task_id(지금 하는 것) ∪
+ *     execution_session_task(#4135 순서 목록). 순서 목록 행은 태스크를 **여럿** 담은 세션에만 생긴다 — 태스크 하나인 세션(거의 전부)은
+ *     task_id 한 칸뿐이다. 종전엔 순서 목록만 봐서 세션 머리줄의 `#번호` 로 그 세션을 못 찾았다(#5607 매니지드 실측: 그 태스크를 맡은
+ *     세션이 0건). 시험도 순서 목록에만 행을 넣어 초록이었다.
  */
 async function identSessions(input: ConvSearchInput, nums: number[]): Promise<IdentRow[]> {
   if (!nums.length) return [];
@@ -650,13 +657,16 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
      bytask AS (
        SELECT vis.node_id, vis.session_id, b.num
          FROM (SELECT c.conv, t.task_id AS num
-                 FROM execution_session_task t
+                 FROM (SELECT es.id AS session_id, es.task_id FROM execution_session es WHERE es.task_id = ANY(${nP}::int[])
+                       UNION SELECT x.session_id, x.task_id FROM execution_session_task x WHERE x.task_id = ANY(${nP}::int[])) t
+                 -- 찾히는 번호 = 줄에 서는 번호(convTaskNos · sessionTaskIdsFor 와 같은 판정): 태스크·서브태스크 · 휴지통 아님.
+                 --  안 맞추면 휴지통 태스크 번호로 세션이 «맞는 결과» 로 뜨는데 그 줄에는 번호가 없다(격리 리뷰).
+                 JOIN project tk ON tk.id = t.task_id AND tk.level IN ('task','subtask') AND tk.trashed_at IS NULL
                  JOIN LATERAL (
                    SELECT t.session_id AS conv
                    UNION SELECT oc.conv_uuid FROM org_session_conv oc WHERE oc.box_id = t.session_id
                    UNION SELECT st.claude_session_id FROM org_session_state st WHERE st.id = t.session_id AND st.claude_session_id IS NOT NULL
-                 ) c ON true
-                WHERE t.task_id = ANY(${nP}::int[])) b
+                 ) c ON true) b
          JOIN vis ON vis.session_id = b.conv),
      hit AS (
        SELECT u.node_id, u.session_id, array_agg(DISTINCT u.num) AS nums
@@ -683,6 +693,30 @@ async function identSessions(input: ConvSearchInput, nums: number[]): Promise<Id
     last_seen: x.last_seen ? new Date(x.last_seen as string).toISOString() : null,
     nums: (Array.isArray(x.nums) ? x.nums : []).map(Number).filter((n) => Number.isFinite(n)),
   }));
+}
+
+/**
+ * 대화마다 그 대화를 돌린 실행 세션이 **지금 맡은 태스크 번호**(#5607) — 세션 머리줄이 이름 뒤에 적는 `#번호` 와 같은 값이다
+ *  (terminal/routes.ts 가 sessionTaskIdsFor 로 싣는 taskNo — 같은 판정: 태스크·서브태스크 · 휴지통 아님). 검색 결과 줄이 이 번호를
+ *  늘 보여야 «#176 으로 찾았는데 이게 그건가» 를 다시 묻지 않는다. 셸 목록에 없는 세션(오래된 것 · 남의 것)도 번호가 선다.
+ *  대화 → 실행 세션은 identSessions bytask 의 거꾸로다: 대화 id 그 자체(기록만 남은 행) · 그 대화를 돌린 박스(org_session_conv) ·
+ *  상태 미러(org_session_state). 한 대화를 여러 박스가 돌렸으면(되살리기는 박스 id 가 새로 난다) 가장 최근에 본 박스의 것.
+ *  볼 수 있는가는 묻지 않는다 — 이미 결과에 선(볼 수 있는) 대화만 받고, 돌려주는 것은 번호뿐이다(세션 머리줄이 보이는 그 번호).
+ */
+async function convTaskNos(convIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const ids = [...new Set(convIds.filter((x) => typeof x === "string" && x))];
+  if (!ids.length) return out;
+  const r = await boundedQuery(
+    `SELECT DISTINCT ON (m.conv) m.conv, es.task_id
+       FROM (SELECT u AS conv, u AS box FROM unnest($1::text[]) u
+             UNION SELECT oc.conv_uuid, oc.box_id FROM org_session_conv oc WHERE oc.conv_uuid = ANY($1::text[])
+             UNION SELECT st.claude_session_id, st.id FROM org_session_state st WHERE st.claude_session_id = ANY($1::text[])) m
+       JOIN execution_session es ON es.id = m.box AND es.task_id IS NOT NULL
+       JOIN project t ON t.id = es.task_id AND t.level IN ('task','subtask') AND t.trashed_at IS NULL
+      ORDER BY m.conv, es.last_seen DESC, es.updated_at DESC`, [ids], CONV_SIDE_TIMEOUT_MS);
+  for (const x of r.rows) out.set(String(x.conv), Number(x.task_id));
+  return out;
 }
 
 // ── 뜻으로 찾기(#4530 검색 품질, 원준 2026-10-05 «결국 세션을 해야함 … 다를 전부 하도록») ─────────────────────────
@@ -851,6 +885,7 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
       best: b?.msg ?? null, top: x.top, fields: x.fields, edit: b?.edit ?? null,
       tier: x.tier, missing: x.missing, loose: x.loose, alias: x.alias, marks: b?.marks ?? [],
       nums: (numsOf.get(aggKey(x.agg)) ?? []).filter((n) => numList.includes(n)),
+      task_no: null,
       ...(sim.has(aggKey(x.agg)) ? { sem: Math.round(sim.get(aggKey(x.agg))! * 100) / 100 } : {}),
       project: x.agg.project,
     };
@@ -867,12 +902,18 @@ export async function searchConversations(input: ConvSearchInput): Promise<{ res
     node_id: r.node_id, session_id: r.session_id,
     name: (r.label && r.label.trim()) || sessionNameFromPrompt(String(r.title ?? "")) || null,
     title: r.title, hits: 0, at: r.last_seen, best: null, top: false, fields: [], edit: null,
-    tier: "weak", missing: [], loose: [], alias: [], marks: [], nums: [], sem: Math.round(r.sim * 100) / 100, project: r.project,
+    tier: "weak", missing: [], loose: [], alias: [], marks: [], nums: [], task_no: null, sem: Math.round(r.sim * 100) / 100, project: r.project,
   });
   const front = semOnly.filter((r) => r.sim >= CONV_SEM_FRONT).map(semRow);
   const firstWeak = results.findIndex((r) => r.tier === "weak");
   results.splice(firstWeak < 0 ? results.length : firstWeak, 0, ...front);
   for (const r of semOnly) if (r.sim < CONV_SEM_FRONT) results.push(semRow(r));
+  //  줄마다 그 세션이 맡은 태스크 번호(#5607) — 실을 줄이 정해진 뒤 한 번에 잰다(최대 limit + 뜻 줄). 덤이다: 늦거나 실패하면 번호 없이 답한다.
+  const taskNos = await convTaskNos(results.map((r) => r.session_id)).catch((e) => {
+    if ((e as { code?: string })?.code !== "57014") console.warn(`[conv-search] 태스크 번호 싣기 실패 — 번호 없이: ${String((e as Error)?.message ?? e).slice(0, 160)}`);
+    return new Map<string, number>();
+  });
+  for (const r of results) r.task_no = taskNos.get(r.session_id) ?? null;
   return { results, total: ranked.total, weak: ranked.weak + semOnly.length, capped: first.rows >= first.cap, cap: first.cap, loosened: [...looseIdx].map((i) => terms[i]!.t) };
 }
 
