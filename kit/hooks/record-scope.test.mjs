@@ -1062,7 +1062,8 @@ if (!WIN) {
     check("R1b 읽는 라이블리 도구 · 로컬 조작 도구 · 그 밖의 도구는 막지 않는다", dec(r) !== "deny" && dec(l) !== "deny" && dec(b) !== "deny", JSON.stringify({ r, l, b }));
     const mcp = reqs.filter((x) => x.url === "/mcp");
     check("R1c 판정 목록은 게이트웨이에 읽기전용 헤더로 한 번만 묻는다(그 뒤는 사본)", mcp.length === 1 && mcp[0].headers["x-lively-mode"] === "readonly" && mcp[0].headers.authorization === "Bearer tk", JSON.stringify(mcp.map((x) => x.headers["x-lively-mode"])));
-    const cx = await withGateway(async (gw) => runHook("run-custom.mjs", ["PreToolUse", "--harness", "codex"], env(gw), tool("r1", "mcp__lively__knowledge_save")));
+    //  코덱스의 세션 폴더는 훅 입력의 cwd 다(CLAUDE_PROJECT_DIR 를 안 본다) — 안 실으면 시험을 돌린 자리로 판정이 샌다.
+    const cx = await withGateway(async (gw) => runHook("run-custom.mjs", ["PreToolUse", "--harness", "codex"], env(gw), { ...tool("r1", "mcp__lively__knowledge_save"), cwd: work }));
     check("R1d 코덱스도 같은 꼴로 막고 $lively-mode 를 가리킨다", dec(cx) === "deny" && why(cx).includes("$lively-mode on"), cx);
     const other = await withGateway(async (gw) => runHook("run-custom.mjs", ["PreToolUse"], env(gw), tool("r1-other", "mcp__lively__knowledge_save")));
     check("R1e 같은 폴더의 다른 세션은 막지 않는다(대조군 — 세션에만 걸린다)", dec(other) !== "deny", other);
