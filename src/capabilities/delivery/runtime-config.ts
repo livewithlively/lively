@@ -39,6 +39,7 @@ import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
 import { actorOf, restOnly, restRead, restWork, str } from "./shared.js";
+import { isAdmin } from "../principal.js";
 import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
@@ -865,9 +866,12 @@ export const runtimeConfigCapabilities: Capability[] = [
   //  여기선 그 op 의 **검증을 그대로** 태우되 받는 키를 주입 축으로 좁힌다. 남겨 둔 관리자 몫 둘:
   //   · hooks.self_update — 구성원 **컴퓨터의 키트**를 바꾸는 스위치(워크스페이스 밖에 닿는다, DANGEROUS_SCOPES 와 같은 근거)
   //   · work_roots — 구성원 컴퓨터의 디렉터리 경로(비-admin 에겐 조회도 안 한다, 위 org_runtime_config 주석)
+  //  #5801(상민 2026-11-25) — 관리자 몫 하나 더: writeback_notice(응답을 마칠 때 AI 에 보내는 글). 주입 문구(org_update_section)와
+  //   같은 근거다 — 모든 구성원의 AI 세션에 지시문으로 들어가는 **글**은 관리자만 고친다. 켜고 끄는 스위치는 그대로 구성원 몫.
   restWork("org_injection_update", "AI 전달(세션 주입) 설정 수정",
-    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·세션 종료 너지 문구·기록 인정 툴(write_tools)·" +
-    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
+    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·기록 인정 툴(write_tools)·" +
+    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 세션 종료 너지 문구(writeback_notice)는 AI 에 주입되는 글이라 관리자만 바꾼다" +
+    "(지금 값 그대로 보내는 것은 받는다). 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
     [{ method: "POST", paths: ["/api/ui/org/injection-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const src = (input ?? {}) as Record<string, unknown>;
@@ -876,6 +880,14 @@ export const runtimeConfigCapabilities: Capability[] = [
       const cur = await getRuntimeConfig();
       const out: Record<string, unknown> = {};
       for (const k of INJECTION_KEYS) if (src[k] !== undefined) out[k] = src[k];
+      //  글(너지 문구)은 관리자만 — 화면이 지금 값을 함께 실어 보내는 저장은 그대로 넘긴다(self_update 와 같은 규칙). null · '' = 기본값.
+      if (out.writeback_notice !== undefined && !isAdmin(user)) {
+        const norm = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+        if (norm(out.writeback_notice) !== norm(cur.writeback_notice)) {
+          throw new HttpError(403, "응답을 마칠 때 보내는 기록 요청 문구는 모든 AI 세션에 주입되는 글이라 관리자만 바꿉니다");
+        }
+        delete out.writeback_notice;
+      }
       if (out.hooks !== undefined) {
         const h = out.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
@@ -895,7 +907,7 @@ export const runtimeConfigCapabilities: Capability[] = [
     }, {
       hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 주입 시점 on/off"),
       inject_ontology_guide: z.boolean().optional().describe("제품 가이드(라이블리 사용법) 주입 on/off"),
-      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값"),
+      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값. 바꾸는 것은 관리자만"),
       write_tools: z.array(z.string()).optional().describe("기록 인정 툴 이름(접두사 없이) — 비우면 기본 목록"),
       pull_tools: z.array(z.string()).optional().describe("외부 인입으로 볼 MCP 툴 이름 prefix — 비우면 기능 끔"),
     }),

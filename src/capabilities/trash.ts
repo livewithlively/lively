@@ -12,6 +12,7 @@ import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
 import { canSeeProjectRowVis, projectVisFor, type ProjectVis, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
+import { INJECTED_DOC_ADMIN_ONLY } from "./knowledge/shared.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
 
 const ENTITIES = TRASH_ENTITIES;   // knowledge · project · category · source(#3778) — 목록·복원·미리보기·파기가 같은 집합을 본다
@@ -194,6 +195,10 @@ const contentRestore: Capability = {
     if (!(await canRestore(before, input.entity, ctx?.viewer ?? null))) {
       throw new HttpError(404, `복원할 삭제 스냅샷이 없습니다(entity=${input.entity}, key=${input.key})`);
     }
+    // #5801 — 지운 세션 주입 문구를 되살리면 다시 모든 AI 세션에 주입된다. 저장 · 삭제와 같은 문(관리자)을 지난다.
+    if (input.entity === "knowledge" && (before as Record<string, unknown>).injection === "always" && !isAdmin(user)) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
+    }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     let item: unknown;
     if (input.entity === "knowledge") item = await restoreKnowledge(before, writeCtx);
@@ -263,6 +268,10 @@ const contentPurge: Capability = {
       throw new HttpError(404, `휴지통에 없는 항목입니다(entity=${input.entity}, key=${input.key})`);
     }
     if (!(await isDeletedNow(input.entity, input.key))) throw new HttpError(409, "지금 삭제 상태가 아닙니다 — 살아 있는 항목은 먼저 지워야 완전히 지울 수 있어요");
+    // #5801 — 지운 세션 주입 문구의 스냅샷을 비우면 관리자가 되살릴 길과 이력이 사라진다. 복원과 같은 문(관리자).
+    if (input.entity === "knowledge" && (before as Record<string, unknown>).injection === "always" && !isAdmin(user)) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
+    }
     const scrubbed = await purgeDeleted(input.entity, input.key);
     await auditOrgContent(input.entity, input.key, "purge", null, { scrubbed_rows: scrubbed },
       { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" });

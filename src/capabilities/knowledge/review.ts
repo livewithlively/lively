@@ -100,7 +100,7 @@ export const knowledgeRevisionReview: Capability = {
     //   안 보이는 문서의 제안도 상세와 같은 글로 답한다 — 아래 쓰기 판정의 글(«지식 '<이름>' 없음»)은 요청에 없던 이름을 번호만으로 알려 준다.
     if (await knowledgeGoneInAppContext(String(got.revision.name), ctx?.viewer ?? null)
       || !(await canSeeKnowledge(String(got.revision.name), ctx?.viewer ?? null))) throw new HttpError(404, "수정 제안 없음");
-    await assertKnowledgeWritable(got.revision.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(got.revision.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return input.decision === "approve"
       ? await approveRevision(Number(input.id), writeCtx)
