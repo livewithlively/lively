@@ -115,6 +115,7 @@ export const CAPABILITY_PERMISSIONS: Readonly<Record<Permission, readonly string
   // 구성원 · 팀 · 공개범위 정책 · DB 소스 · 앱 설치 · 런타임 설정 · 감사 · 이관
   admin: [
     "org_update_section", "org_delete_section", "org_reorder_sections",   // 세션 주입 문구 — 관리자만 바꾼다(#5801)
+    "org_db_source_access", "org_db_source_access_set",                  // DB 소스를 조회할 수 있는 사람 · 팀(대상 지정)
     "org_member_upsert", "org_member_reset_password", "org_member_remove", "org_runtime_update", "org_context_job_runner_fill",
     "org_record_scope_get", "org_record_scope_set", "org_storage_status", "org_workspace_status", "org_workspace_analyze", "org_workspace_reclaim",
     "org_canary_status", "org_canary_run", "org_canary_probes", "org_db_sources", "org_db_source_upsert", "org_db_source_remove",

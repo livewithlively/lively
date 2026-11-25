@@ -95,7 +95,8 @@ export function canAccessProject(user: LivelyUser, project: string): boolean {
 //   'db:<source>' → 특정 소스만 허용(세밀화)
 export function canAccessDbSource(user: LivelyUser, source: string): boolean {
   //  #5799 — 역할을 받은 구성원에게 DB 소스는 **기본 불가**다(결정 2026-11-25: 등록한 관리자도 자동으로는 조회하지 못한다).
-  //   소스마다 사람 · 팀을 지정하는 단계가 들어오기 전까지는 내장 self 소스만 관리자에게 열린다(아래 #604 와 같은 예외).
+  //   소스마다 지정한 사람 · 팀만 본다 — 그 판정은 DB 를 읽어야 해서 org/store/db-source-grants.ts dbSourceAllowed 가 한다
+  //   (db_sources · db_schema · db_query 는 그것을 부른다). 이 동기 함수가 답할 수 있는 것은 내장 self 소스뿐이다(아래 #604 와 같은 예외).
   //   옛 구성원은 아래 종전 판정 그대로다.
   if (user.grants) return source === SELF_SOURCE && permits(user, "admin", { perm: "admin", level: "write" });
   if (user.scopes.includes("db") || user.scopes.includes(`db:${source}`)) return true;
