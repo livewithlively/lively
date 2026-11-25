@@ -104,7 +104,8 @@ Single source of truth for allowed scopes: **`src/auth/scopes.ts`** (the types u
 
 | scope | Meaning |
 |---|---|
-| `items` · `context` | Item lookup (legacy — now only a few ops such as the GitHub connection) · context (domain map · repos · taxonomy · teams) |
+| `items` | External-app tool calls — the call scope of the http_proxy presets (Slack · GitHub · Google, etc.) and MCP proxies (Notion · Linear), for both read and write tools — plus the GitHub connection. Despite the name, this is not "item lookup" |
+| `context` | Domain map · repo registry · categories · teams, plus delegation (`delegate_*`) · agent jobs · NAS files |
 | `memory` | Org content — most surfaces, including knowledge · projects/tasks · sources. The default member scopes are `items` · `context` · `memory` · `db` · `code` |
 | `db` (`db:<source>`) | `db_query`/`db_schema` (all sources or a specific source) |
 | `admin` | Data/policy administration (sections · members · WIKI index · tokens · publishing) |
@@ -113,6 +114,29 @@ Single source of truth for allowed scopes: **`src/auth/scopes.ts`** (the types u
 
 - **Static tokens (`AUTH_TOKENS_JSON`) are refused for admin/runtime actions** (`DANGEROUS_SCOPES`) — no fleet code/policy changes with an unrevocable token (kill-switch). Only DB tokens (`auth_token`, instant revoke) can exercise admin rights.
 - Web `mw()` treats unknown scopes as **fail-closed (403)** — this closes the hole where a missing branch lets a request "pass on authentication alone".
+
+### New permission model (in transition, #5799)
+
+The seven scopes above are being replaced by **10 feature areas × a level (read · write) + 4 roles**. The enforcement points (MCP and REST adapters · the app screen bridge · external-app tools) share one decision, `permits`: **only a principal that carries the new `grants`** is judged by the new rule, while a principal with old scopes only is judged exactly as before. No auth path attaches `grants` yet (that comes with role storage), so runtime decisions are still unchanged.
+
+| Permission | UI name | Covers |
+|---|---|---|
+| `content` | 맥락 | Knowledge · sources · projects · tasks · categories · domain map · shared-folder files |
+| `pipeline` | 맥락 관리 | Collectors · distillers · classifiers · managers · schedules · alerts · embeddings · AI delivery |
+| `external` | 외부 앱 | External-app tool calls (granted per app) |
+| `code` | 코드 | Reading repo revisions · the repo registry (granted per repo) |
+| `session` | 세션 | Web terminal sessions · browser tools |
+| `run` | 원격 실행 | Delegation · agent jobs · preview environments |
+| `db` | DB | DB queries (granted per source — denied by default) |
+| `admin` | 관리 | Members · teams · visibility policy · DB sources · app installation |
+| `secrets` | 자격 | Tokens · service logins · OAuth app registration |
+| `harness` | 하네스 설정 | Custom hooks · AI tool definitions · harness assets |
+
+- Definitions · translation from the old scopes · roles (guest · member · admin · owner): **`src/auth/permissions.ts`**. Capability → permission table: **`src/capabilities/permission-map.ts`**.
+- The level is derived from whether the capability mutates the context store (`capMutates`). Targets (DB sources · repos · external apps) are not encoded in the permission name; people and teams are granted on the target.
+- **When you add a capability that has a scope, add one line to the table** — otherwise `permission-map.test` fails and names it.
+- That test checks every capability against every combination of old scopes: what an old scope allowed is still allowed after translation, and nothing widens toward the dangerous permissions. Capabilities that are narrowed on purpose are listed in `NARROWED` with the reason.
+- `cap-permission.test` checks that a principal with old scopes only gets **exactly the same** decision as before for every capability × all 128 scope subsets. When you add an enforcement point, do not call `scopes.includes(...)` directly; use `permits(user, oldScope, need)` (or `capAllowed` · `isAdmin` · `canManageWorkspace`).
 
 ## Running
 

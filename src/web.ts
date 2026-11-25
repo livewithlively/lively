@@ -25,7 +25,10 @@ import { registerNotifyRoutes } from "./v6/notify-routes.js";
 import { registerBrowserRoutes } from "./browser/routes.js";   // #4993 AI·사람 공용 브라우저 — 화면 쪽 스트림·답
 import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
-import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
+import { restMounts, isReadOnlyBlocked, capAllowed } from "./capabilities/index.js";
+import type { Capability } from "./capabilities/types.js";
+import { LEGACY_DEFAULT } from "./capabilities/permission-map.js";
+import { permits, type Need } from "./auth/permissions.js";
 import { viewerOf } from "./capabilities/principal.js";
 import { runWithAppReadScope, assertAppContextSafeTool } from "./apps/app-context.js";   // #5100 앱 맥락 범위 — 앱 토큰 REST 호출을 그 앱의 읽기 범위 안에서
 import { wrap, HttpError } from "./http/rest-util.js";
@@ -106,10 +109,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   const authCap = sessionOrBearer(verifier, { appServer: true });
 
   // scope 게이트(세션·bearer 공통). null=인증만. fail-closed(미인증 401 / 권한부족 403).
-  const requireScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {
+  //  #5799 — need 는 그 scope 의 새 꼴(영역 × 보기 · 고치기). 새 권한이 실린 주체는 need 로, 옛 scope 만 가진 주체는 종전 그대로 scope 로 잰다
+  //   (auth/permissions.ts permits). need 를 안 주면 그 scope 의 본줄기 권한 고치기 — 새 라우트가 모르고 느슨해지지 않게 닫는 쪽이다.
+  const requireScope = (scope: Scope | null, need?: Need): express.RequestHandler => (req, res, next) => {
     const user = userOf(req);
     if (!user || !user.userId) { res.status(401).json({ error: "unauthenticated" }); return; }
-    if (scope && !(Array.isArray(user.scopes) && user.scopes.includes(scope))) {
+    if (scope && !permits(user, scope, need ?? { perm: LEGACY_DEFAULT[scope], level: "write" })) {
       res.status(403).json({ error: `forbidden: '${scope}' 권한이 필요합니다` }); return;
     }
     next();
@@ -118,10 +123,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  능력 REST 마운트의 scope 게이트 — requireScope 와 같되, 앱 주체(앱 서버 · 앱 토큰)가 앱이 지금 선언한 scope 를 동의가 예전 범위라 못 쓰면
   //   «다시 동의» 로 말한다(#1644 — 403 · code consent_required · consent_url · missing). 앱 서버는 그 까닭과 동의할 곳을 사람에게 그대로 전한다.
   //   판정은 막힌 길에서만 읽는다(apps/app-consent-gap) — 통과하는 요청의 비용은 그대로. 읽기가 실패하면 종전 글 그대로.
-  const requireCapScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {
+  const requireCapScope = (cap: Capability): express.RequestHandler => (req, res, next) => {
     const user = userOf(req);
     if (!user || !user.userId) { res.status(401).json({ error: "unauthenticated" }); return; }
-    if (scope && !(Array.isArray(user.scopes) && user.scopes.includes(scope))) {
+    //  #5799 — 판정은 capAllowed 가 한다(새 권한이 실린 주체는 영역 × 보기 · 고치기, 옛 scope 만 가진 주체는 종전 그대로).
+    const scope = cap.scope;
+    if (scope && !capAllowed(user, cap)) {
       const plain = (): void => { res.status(403).json({ error: `forbidden: '${scope}' 권한이 필요합니다` }); };
       if (!user.appId) { plain(); return; }
       void appRegrantError(user, { scope }).catch(() => null).then((e) => {
@@ -134,9 +141,9 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     next();
   };
 
-  const mw = (scope: Scope | null): express.RequestHandler[] => [authResolve, requireScope(scope)];
+  const mw = (scope: Scope | null, need?: Need): express.RequestHandler[] => [authResolve, requireScope(scope, need)];
   /** 능력 REST 마운트 전용 — 앱 서버 토큰을 «그 구성원 ∩ 앱 동의» 주체로 바꿔 받는 유일한 자리. */
-  const mwCap = (scope: Scope | null): express.RequestHandler[] => [authCap, requireCapScope(scope)];
+  const mwCap = (cap: Capability): express.RequestHandler[] => [authCap, requireCapScope(cap)];
 
   // ── 테넌트 하우스키핑 틱(#1437 중앙 모드) ──────────────────────────────────
   // 요청별 테넌시에서는 부팅 하우스키핑·스케줄러가 전부 꺼진다(요청 밖엔 테넌트 컨텍스트가 없다 —
@@ -414,7 +421,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const input = mount.parse(req); // 기존 qstr/qint/parseMappingBody 검증 그대로(HttpError → wrap)
       const user = userOf(req);
       // B3 defense-in-depth: 미들웨어(mw)에 더해 핸들러 경계에서도 scope 재확인(단일층 의존 제거).
-      if (cap.scope && !(Array.isArray(user.scopes) && user.scopes.includes(cap.scope))) {
+      if (!capAllowed(user, cap)) {
         throw new HttpError(403, `forbidden: '${cap.scope}' 권한이 필요합니다`);
       }
       // B5: 회수 불가한 정적 토큰(AUTH_TOKENS_JSON)으로는 fleet 제어·정책 변경(admin/runtime) 금지(세션·DB 토큰은 허용).
@@ -451,8 +458,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       })));
     });
     for (const path of mount.paths) {
-      if (mount.method === "GET") app.get(path, ...mwCap(cap.scope), handler);
-      else app.post(path, ...mwCap(cap.scope), handler);
+      if (mount.method === "GET") app.get(path, ...mwCap(cap), handler);
+      else app.post(path, ...mwCap(cap), handler);
     }
   }
 
@@ -517,12 +524,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   // ── 알림 실시간 스트림(#1842) — 앱이 물고 있으면 세션이 끝나는 그 순간 배너가 뜬다(SSE). ──
   //  capability(JSON 응답 전제) 로는 못 만드는 표면이라 라우트로 직접 연다. 인증은 다른 표면과 같은 미들웨어.
   //  #4054 — 받는 자리는 «워크스페이스 + 사람»(notify-scope.ts). 다른 워크스페이스는 `?all=1`(데스크톱 앱)일 때만.
-  registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "",
+  registerNotifyRoutes(app, mw("memory", { perm: "content", level: "read" }), (req) => userOf(req)?.userId || "",
     (req, me, all) => resolveNotifyRoutes(userOf(req), me, all));
 
   // ── AI 와 사람이 같이 쓰는 브라우저(#4993) — 데스크톱 앱 화면이 명령을 받는 스트림(SSE) + 답·상태 자리. ──
   //  AI 쪽 표면은 capability(browser_*), 이건 화면 쪽 배관이다(src/browser/routes.ts 머리말).
-  registerBrowserRoutes(app, mw("memory"), (req) => userOf(req));   // #4993 — 툴과 같은 문(memory · 알림 스트림과 같다)
+  registerBrowserRoutes(app, mw("memory", { perm: "session", level: "write" }), (req) => userOf(req));   // #4993 — 툴과 같은 문(memory · 알림 스트림과 같다)
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

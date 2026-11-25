@@ -17,7 +17,8 @@
 //   ⑦ 그 판의 입력 스키마로 인자 검사 ⑧ 실행기. 오류는 전부 도구 오류(isError)로 돌려주고 호출 기록(mcp_call_log)엔 그 앱으로 남는다.
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveUser, requireScope, type LivelyUser } from "../context.js";
+import { resolveUser, type LivelyUser } from "../context.js";
+import { permits } from "../auth/permissions.js";
 import { getApp, getActiveGrant, listActiveGrants } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
@@ -39,6 +40,8 @@ import { logger } from "../log.js";
 
 /** 앱 도구를 부르는 데 토큰이 가져야 하는 scope — 조직 콘텐츠(지식 · 과업 · 자료)와 같은 축(docs/architecture.ko.md · 명세 §6). */
 export const APP_MCP_CALL_SCOPE = "memory";
+/** 같은 것의 새 요구(#5799) — «맥락» 고치기. 새 권한이 실린 주체는 이것으로, 옛 scope 만 가진 주체는 위 이름으로 잰다(permits). */
+export const APP_MCP_CALL_NEED = { perm: "content", level: "write" } as const;
 
 interface ToolText { type: "text"; text: string }
 interface ToolResult { content: ToolText[]; isError?: boolean; _meta?: Record<string, unknown>; [k: string]: unknown }
@@ -101,7 +104,7 @@ export function listedAppsFor(rows: readonly McpToolAppRow[], who: Viewer, readO
  *  실행기가 하나도 없으면 DB 를 보기 전에 0 — 그 코어에선 어떤 선언도 목록에 못 선다.
  */
 export async function registerAppDeclaredTools(server: McpServer, user: LivelyUser | undefined, opts: { readOnly: boolean }): Promise<number> {
-  if (!user?.userId || user.appId || user.appServer || !(user.scopes ?? []).includes(APP_MCP_CALL_SCOPE)) return 0;
+  if (!user?.userId || user.appId || user.appServer || !permits(user, APP_MCP_CALL_SCOPE, APP_MCP_CALL_NEED)) return 0;
   if (!appMcpExecutorKinds().length) return 0;
   const rows = await listMcpToolApps();
   if (!rows.length) return 0;
@@ -141,8 +144,7 @@ interface CallRef { appId: string; name: string; contract: string; readOnly: boo
 export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra: unknown): Promise<ToolResult> {
   const user = resolveUser(extra);
   if (user.appId || user.appServer) return toolError("앱 토큰으로는 앱이 선언한 도구를 부를 수 없습니다", "app_token");
-  try { requireScope(user, APP_MCP_CALL_SCOPE); }
-  catch { return toolError(`이 연결(토큰)에는 앱 도구를 부를 권한(scope '${APP_MCP_CALL_SCOPE}')이 없습니다`, "scope"); }
+  if (!permits(user, APP_MCP_CALL_SCOPE, APP_MCP_CALL_NEED)) return toolError(`이 연결(토큰)에는 앱 도구를 부를 권한(scope '${APP_MCP_CALL_SCOPE}')이 없습니다`, "scope");
   const who = viewerOf(user);
   const gone = (): ToolResult => toolError(`앱 '${ref.appId}' 의 도구 '${ref.name}' 을(를) 지금은 쓸 수 없습니다 — 도구 목록을 다시 받아 주세요`, "tool_unavailable");
 

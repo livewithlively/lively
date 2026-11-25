@@ -103,7 +103,8 @@
 
 | scope | 의미 |
 |---|---|
-| `items` · `context` | 아이템 조회(레거시 — 지금은 GitHub 연결 등 일부만) · 컨텍스트(도메인맵·레포·분류축·팀) |
+| `items` | 외부 앱 도구 호출 — 슬랙·깃허브·구글 등 http_proxy 프리셋과 MCP 프록시(노션·리니어)의 호출 scope(조회·쓰기 도구 모두) + GitHub 연결. 이름과 달리 «아이템 조회» 가 아니다 |
+| `context` | 도메인맵·레포 등록부·분류축·팀 + 작업 위탁(`delegate_*`)·에이전트 작업·NAS 파일 |
 | `memory` | 조직 콘텐츠 — 지식·프로젝트/과업·자료 등 대부분의 표면. 구성원 기본 scope 는 `items`·`context`·`memory`·`db`·`code` |
 | `db` (`db:<source>`) | `db_query`/`db_schema`(전 소스 또는 특정 소스) |
 | `admin` | 데이터/정책 관리(섹션·구성원·WIKI 인덱스·토큰·발행) |
@@ -112,6 +113,29 @@
 
 - **정적 토큰(`AUTH_TOKENS_JSON`)은 admin/runtime 행위 거부**(`DANGEROUS_SCOPES`) — 회수 불가 토큰으로 fleet 코드/정책 변경 금지(kill-switch). DB 토큰(`auth_token`, revoke 즉시)만 관리 권한 행사.
 - 웹 `mw()`는 미지 scope 를 **fail-closed(403)** — 분기 누락으로 "인증만으로 통과"하는 권한 구멍 차단.
+
+### 새 권한 체계 (전환 중, #5799)
+
+위 7개 scope 를 **기능 영역 10개 × 수준(보기·고치기) + 역할 4개**로 바꾸는 중이다. 강제 지점(MCP·REST 어댑터·앱 화면 다리·외부 앱 도구)은 `permits` 한 판정을 쓴다: **새 권한(`grants`)이 실린 주체만** 새 규칙을 받고, 옛 scope 만 가진 주체는 종전 그대로 위 scope 로 판정받는다. 지금은 어느 인증 경로도 `grants` 를 싣지 않으므로(역할 저장 단계에서 싣는다) 실행 중 판정은 아직 종전과 같다.
+
+| 권한 | 화면 이름 | 덮는 것 |
+|---|---|---|
+| `content` | 맥락 | 지식·자료·프로젝트·태스크·분류체계·도메인맵·공유폴더 파일 |
+| `pipeline` | 맥락 관리 | 수집·증류·분류·관리기·예약·경보·임베딩·AI 전달 |
+| `external` | 외부 앱 | 외부 앱 도구 호출(앱별 지정) |
+| `code` | 코드 | 레포 판 읽기·레포 등록부(레포별 지정) |
+| `session` | 세션 | 웹 터미널 세션·브라우저 도구 |
+| `run` | 원격 실행 | 작업 위탁·에이전트 작업·프리뷰 환경 |
+| `db` | DB | DB 조회(소스별 지정 — 기본 불가) |
+| `admin` | 관리 | 구성원·팀·공개범위 정책·DB 소스·앱 설치 |
+| `secrets` | 자격 | 토큰·서비스 로그인·OAuth 앱 등록 |
+| `harness` | 하네스 설정 | 커스텀 훅·AI 도구 정의·하네스 자산 |
+
+- 정의·옛 scope 번역·역할(게스트·구성원·관리자·소유자): **`src/auth/permissions.ts`**. 기능 → 권한 배정표: **`src/capabilities/permission-map.ts`**.
+- 수준은 기능이 컨텍스트를 바꾸는가(`capMutates`)에서 파생한다. 대상(DB 소스·레포·외부 앱)은 권한 이름에 붙이지 않고 대상 쪽에 사람·팀을 지정한다.
+- **scope 가 있는 capability 를 새로 만들면 배정표에 한 줄을 더한다** — 빠뜨리면 `permission-map.test` 가 이름을 짚어 실패한다.
+- 그 시험이 전 기능 × 옛 scope 조합으로 «옛 scope 로 되던 일이 번역 뒤에도 되는가 · 위험 권한 쪽으로 넓어지지 않는가» 를 잰다. 일부러 좁히는 기능은 `NARROWED` 에 이유와 함께 적는다.
+- `cap-permission.test` 는 옛 scope 만 가진 주체가 전 기능 × 부분집합 128가지에서 종전과 **정확히 같은** 판정을 받는지 잰다. 새 강제 지점을 만들 때는 `scopes.includes(...)` 를 직접 쓰지 말고 `permits(user, 옛scope, 요구)`(또는 `capAllowed`·`isAdmin`·`canManageWorkspace`)를 쓴다.
 
 ## 실행
 
