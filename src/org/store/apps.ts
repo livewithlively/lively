@@ -7,6 +7,8 @@ import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
 import { currentTenant } from "../tenant-context.js";
 import { audit, type WriteCtx } from "./audit.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
+import { mergeOrgGrant, parseOrgGrant, type OrgGrant } from "../../apps/grant.js";
 
 type Q = pg.Pool | pg.PoolClient;
 
@@ -45,6 +47,8 @@ export interface OrgApp {
   origin_app_id: string | null;
   /** #4785 앱 폴더 상한(GiB) — null = 무제한(기본). 거는 것은 CP 의 쿼터 정비다(apps/app-folder-quota.ts 머리말). 선택 칸 — 옛 행 · 시험 리터럴엔 없다. */
   folder_limit_gb?: number | null;
+  /** 조직 동의 — 관리자가 구성원 모두를 대신해 한 동의(그때의 선언). null = 없음(기본 — 사람마다 동의한다). 선택 칸 — 옛 행 · 시험 리터럴엔 없다. */
+  org_grant?: OrgGrant | null;
 }
 export type AppEditMode = "all" | "members";
 export type AppVisibility = "all" | "me";
@@ -53,6 +57,8 @@ export interface AppComponentRow { app_id: string; kind: string; ref: string; or
 export interface AppGrantRow {
   app_id: string; member_id: string; scopes: string[]; tools: string[];
   granted_at: string; granted_by: string | null; revoked_at: string | null;
+  /** 조직 동의(org_app.org_grant)가 들어 있는 동의 — 본인 동의 행이 없거나, 있어도 조직 동의와 합쳐졌다(apps/grant.mergeOrgGrant). */
+  org_granted?: true;
 }
 
 function rowToApp(r: Record<string, unknown>): OrgApp {
@@ -78,6 +84,7 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     build_session: r.build_session == null ? null : String(r.build_session),
     origin_app_id: r.origin_app_id == null ? null : String(r.origin_app_id),
     folder_limit_gb: r.folder_limit_gb == null ? null : Number(r.folder_limit_gb),
+    org_grant: parseOrgGrant(r.org_grant),
   };
 }
 
@@ -700,16 +707,85 @@ export async function revokeAllGrantsForMember(memberId: string): Promise<number
   return r.rowCount ?? 0;
 }
 
-/** 활성(미회수) grant. 앱 세션 스폰·appToolAllowed 가 소비. */
+/**
+ * 활성(미회수) grant — 본인 동의에 조직 동의(org_app.org_grant)를 합친 것(apps/grant.mergeOrgGrant). 앱 세션 스폰·appToolAllowed 가 소비.
+ *  동의를 읽는 자리는 모두 이 함수를 지나므로(토큰 발급 · 도구 관문 · «다시 동의» 판정 · 앱 폴더 · 앱 선언 MCP 도구 …) 조직 동의는 여기 한 곳에서만 합친다.
+ *  조직 동의가 없는 앱(기본)은 종전과 같은 행이 그대로 나온다.
+ */
 export async function getActiveGrant(appId: string, memberId: string): Promise<AppGrantRow | null> {
+  const [mine, org] = await Promise.all([getMemberGrant(appId, memberId), orgGrantFor(appId, memberId)]);
+  return mergeOrgGrant(appId, memberId, mine, org);
+}
+
+/** 본인 동의 행만(조직 동의를 합치지 않는다) — «이 사람이 스스로 준 것» 을 봐야 하는 자리(다시 동의 때 이어 갈 선택 권한 · 동의 철회의 답). */
+export async function getMemberGrant(appId: string, memberId: string): Promise<AppGrantRow | null> {
   const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);
   return r.rows[0] ? rowToGrant(r.rows[0]) : null;
 }
 
-/** 한 멤버의 활성 grant 전부 — 앱 폴더 목록(#4673 홈 탐색기 root=apps)이 «동의한 앱» 을 한 번에 가린다. 부분 인덱스 org_app_grant_member_idx 가 받친다. */
+//  조직 동의가 이 사람에게 닿나 — **활성인 사람 구성원** 일 때만. 본인 동의는 구성원이 비활성 · 삭제될 때 거둬지는데(revokeAllGrantsForMember), 조직 동의는
+//   앱에 붙은 것이라 사람이 떠나도 남는다. 그래서 읽을 때 사람을 본다 — 떠난 사람 · 구성원이 아닌 주체(멤버 없는 앱 서버 토큰의 user id)에게는
+//   동의가 없는 것이다. 사람이 아닌 행(kind agent · system — 에이전트 · 플랫폼 운영 계정 · 세션 호스트)에도 닿지 않는다: 조직 동의는 «구성원 모두» 를
+//   대신하는 것이고, 그 행들은 종전대로 스스로 한 동의(me_app_grant)만 갖는다(격리 리뷰). 구성원 조회는 지금 맥락의 워크스페이스로 못박는다
+//   (store/members.getMember 와 같은 까닭 — #1879).
+const activeMemberSql = (param: string): string =>
+  `EXISTS (SELECT 1 FROM org_member m WHERE m.id=${param} AND m.state='active' AND m.kind='human' AND m.tenant_id = ${TENANT_DEFAULT_EXPR})`;
+
+//  롤 창(새 게이트웨이가 먼저 뜨고 마이그레이션이 끝에 도는 배포)에는 org_grant 칸이 아직 없다 — 그때 동의 읽기가 «없는 칸»(42703)으로 깨지면
+//   앱 호출이 전부 막힌다. 칸이 없으면 조직 동의가 없는 것이다(종전 판정 그대로 · 닫힌 쪽). 없는 칸이 **이 칸** 일 때만 물러선다 — 다른 오류는 그대로 던진다.
+//   (to_jsonb(a) -> 'org_grant' 로 칸 이름을 피하지 않는 까닭: 이 읽기는 요청마다 도는 자리라 앱 행 전체(매니페스트)를 JSON 으로 만들지 않는다.)
+const orgGrantColumnMissing = (e: unknown): boolean => {
+  const err = e as { code?: string; message?: string };
+  return err?.code === "42703" && /org_grant/.test(String(err.message ?? ""));
+};
+
+async function orgGrantFor(appId: string, memberId: string): Promise<OrgGrant | null> {
+  try {
+    const r = await itemsPool.query(`SELECT a.org_grant FROM org_app a WHERE a.id=$1 AND a.org_grant IS NOT NULL AND ${activeMemberSql("$2")}`, [appId, memberId]);
+    return r.rows[0] ? parseOrgGrant(r.rows[0].org_grant) : null;
+  } catch (e) {
+    if (orgGrantColumnMissing(e)) return null;
+    throw e;
+  }
+}
+
+/**
+ * 한 멤버의 활성 grant 전부 — 앱 폴더 목록(#4673 홈 탐색기 root=apps)이 «동의한 앱» 을 한 번에 가린다. 부분 인덱스 org_app_grant_member_idx 가 받친다.
+ *  조직 동의가 있는 앱도 든다(본인 동의와 합쳐서 · 본인 동의가 없으면 조직 동의만으로). 그 앱이 이 사람에게 보이나는 부르는 쪽이 종전대로 가린다.
+ */
 export async function listActiveGrants(memberId: string): Promise<AppGrantRow[]> {
-  const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE member_id=$1 AND revoked_at IS NULL`, [memberId]);
-  return r.rows.map(rowToGrant);
+  const [mineRows, orgRows] = await Promise.all([
+    itemsPool.query(`SELECT * FROM org_app_grant WHERE member_id=$1 AND revoked_at IS NULL`, [memberId]),
+    itemsPool.query(`SELECT a.id, a.org_grant FROM org_app a WHERE a.org_grant IS NOT NULL AND ${activeMemberSql("$1")}`, [memberId])
+      .catch((e) => { if (orgGrantColumnMissing(e)) return { rows: [] as Record<string, unknown>[] }; throw e; }),
+  ]);
+  const mine = mineRows.rows.map(rowToGrant);
+  if (!orgRows.rows.length) return mine;
+  const byApp = new Map(mine.map((g) => [g.app_id, g]));
+  for (const row of orgRows.rows) {
+    const appId = String(row.id);
+    const merged = mergeOrgGrant(appId, memberId, byApp.get(appId) ?? null, parseOrgGrant(row.org_grant));
+    if (merged) byApp.set(appId, merged);
+  }
+  return [...byApp.values()];
+}
+
+/**
+ * 조직 동의를 적거나(grant) 거둔다(null) — 관리자가 구성원 모두를 대신해 이 앱에 동의한다. 적는 값은 부르는 쪽이 그 앱의 공개 판 선언에서 푼 것
+ *  (capabilities/apps org_app_grant_set). 앱이 없으면 null. 감사 기록(org_app update)이 남는다.
+ */
+export async function setOrgGrant(id: string, grant: { scopes: string[]; tools: string[] } | null, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(id);
+  if (!before) return null;
+  //  granted_at 은 DB 시계로 적는다(본인 동의의 granted_at 과 같은 시계) — JSONB 안이라 글로 굳힌다.
+  await itemsPool.query(
+    `UPDATE org_app SET org_grant = CASE WHEN $2::jsonb IS NULL THEN NULL
+                                         ELSE $2::jsonb || jsonb_build_object('granted_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'granted_by', $3::text) END,
+                        updated_at=now(), updated_by=$3 WHERE id=$1`,
+    [id, grant ? JSON.stringify({ scopes: grant.scopes, tools: grant.tools }) : null, ctx.actor ?? null]);
+  const after = await getApp(id);
+  await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
+  return after;
 }
 
 // ── 앱 활동(mcp_call_log.app 집계, design D3-5 관측 전용) ──────────────────────

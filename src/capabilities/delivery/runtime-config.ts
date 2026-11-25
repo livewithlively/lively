@@ -1,4 +1,5 @@
 // delivery ▸ runtime-config — 런타임 설정(훅 on/off·work-roots·너지·정책·임베딩) 조회/수정.
+import { WRITING_RULE_IDS, WRITING_RULE_LEVELS, WRITING_LIMIT_BOUNDS, WRITING_SURFACES, type WritingFormatPatch } from "../../org/policies/writing-format.js";
 import type { Capability, CapabilityCtx } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
@@ -39,6 +40,7 @@ import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.
 import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
 import { actorOf, restOnly, restRead, restWork, str } from "./shared.js";
+import { isAdmin } from "../principal.js";
 import { WORKER_POLICY_MAX, type WorkerPolicyPatch } from "../../apps/worker-policy.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
@@ -73,6 +75,27 @@ export function runnerFillRefusal(id: string, m: { state?: string | null; kind?:
   if (m.kind !== "human") return `'${id}' 는 사람 구성원이 아닙니다(${m.kind ?? "종류 모름"})`;
   return null;
 }
+
+// 서술 형식 patch 의 입력 검사 — MCP 입력 스키마와 REST 핸들러가 **이 한 객체**를 쓴다.
+//  REST 는 zod 를 거치지 않아 종전엔 모양(객체/null)만 봤다. 그래서 apply_to:"knowledge" · forbid_terms:"X" 처럼 배열이 아닌 값이
+//  200 으로 저장되며 [] 로 접혔다 — 형식을 적용할 표면이 전부 꺼지거나 금지어 목록이 지워진다(2026-10-14 리뷰 F 재현).
+//  두 표면이 다른 검사를 들면 한쪽에서만 막히는 값이 생기므로 정의를 하나로 둔다.
+const WRITING_FORMAT_PATCH = z.object({
+  enabled: z.boolean().optional().describe("켜면 지식·작업기록·프로젝트 저장 응답에 형식 위반 안내(style)가 실리고, reject 로 정한 규칙에 걸린 에이전트 저장은 422 로 거부된다(사람의 웹 편집은 안내만). 증류기 산출도 에이전트 저장이라 거부 대상이다. 기본 꺼짐"),
+  apply_to: z.array(z.enum(WRITING_SURFACES)).optional().describe("형식을 적용할 표면 — knowledge·activity·project(기본 전부). 전체 교체"),
+  register: z.enum(["plain", "polite", "any"]).optional().describe("문체 — plain=평서 '~다'체 · polite='~습니다'체 · any=문체 검사 안 함"),
+  limits: z.object({
+    title_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.title_max_chars[0]).max(WRITING_LIMIT_BOUNDS.title_max_chars[1]).nullable().optional().describe("제목 상한(글자). 기본 60. null=기본값으로"),
+    activity_title_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.activity_title_max_chars[0]).max(WRITING_LIMIT_BOUNDS.activity_title_max_chars[1]).nullable().optional().describe("작업기록 제목 상한(글자). 기본 80"),
+    body_max_chars: z.number().int().min(WRITING_LIMIT_BOUNDS.body_max_chars[0]).max(WRITING_LIMIT_BOUNDS.body_max_chars[1]).nullable().optional().describe("본문 권장 상한(글자). 기본 8000 — 넘으면 나누라고 안내"),
+    bold_max: z.number().int().min(WRITING_LIMIT_BOUNDS.bold_max[0]).max(WRITING_LIMIT_BOUNDS.bold_max[1]).nullable().optional().describe("문서당 볼드 개수 상한. 기본 10"),
+    symbol_max: z.number().int().min(WRITING_LIMIT_BOUNDS.symbol_max[0]).max(WRITING_LIMIT_BOUNDS.symbol_max[1]).nullable().optional().describe("문서당 강조 기호(🔴⚠✅ 등) 상한. 기본 3"),
+  }).optional(),
+  forbid_terms: z.array(z.string()).optional().describe("서술에 쓰지 않을 말(대소문자 무시 부분일치) — 전체 교체. 예: 작성 도구 이름·개인 호칭"),
+  rules: z.record(z.enum(WRITING_RULE_IDS), z.enum(WRITING_RULE_LEVELS)).optional().describe("규칙별 수준 — off(끔)·warn(저장하고 안내)·reject(에이전트 저장 거부). 기존 값과 병합. 규칙 id: " + WRITING_RULE_IDS.join(", ")),
+  default_level: z.enum(WRITING_RULE_LEVELS).optional().describe("rules 에 없는 규칙의 수준(off|warn|reject). 기본 warn"),
+  guide_md: z.string().optional().describe("작성 AI 에게 보여 줄 문체 가이드(마크다운). 빈 문자열 = 기본 가이드로 복귀"),
+});
 
 export const runtimeConfigCapabilities: Capability[] = [
   // ── 발행(검증 + 산출 확인) ──
@@ -131,6 +154,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         delegate_policy?: DelegatePolicyPatch;
         context_job_policy?: ContextJobPolicyPatch;
+        writing_format?: WritingFormatPatch | null;
         worker_policy?: WorkerPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
@@ -345,6 +369,11 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_unknown_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=상태를 모르는 세션을 끄지 않음)`);
           patchIn.node_stop_unknown_minutes = Math.floor(n);
         }
+        if (s.node_stop_stale_minutes !== undefined) {
+          const n = Number(s.node_stop_stale_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_stale_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=상태를 모르는 세션을 끄지 않음)`);
+          patchIn.node_stop_stale_minutes = Math.floor(n);
+        }
         patch.session_reclaim_policy = patchIn;
       }
       // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
@@ -389,6 +418,16 @@ export const runtimeConfigCapabilities: Capability[] = [
           patchIn.runner_member = s.runner_member as string | null;
         }
         patch.context_job_policy = patchIn;
+      }
+      // 서술 형식 — null 은 «제품 기본값으로 되돌림». MCP 입력 스키마와 같은 검사(WRITING_FORMAT_PATCH)를 거친다.
+      //  칸 하나라도 틀리면 저장하지 않고 400 — 틀린 칸을 store 의 병합이 [] 로 접거나 버리게 두면 조직의 형식이 말없이 바뀐다.
+      if (input.writing_format !== undefined) {
+        const r = WRITING_FORMAT_PATCH.nullable().safeParse(input.writing_format);
+        if (!r.success) {
+          throw new HttpError(400, "writing_format 이 올바르지 않습니다(객체 또는 null) — " + r.error.issues.slice(0, 5)
+            .map((i) => `${["writing_format", ...i.path].join(".")}: ${i.message}`).join(" · "));
+        }
+        patch.writing_format = r.data as WritingFormatPatch | null;
       }
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -796,6 +835,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         node_stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 턴이 끝나고 아무도 안 보는 채 이 분이 지나면 그 컴퓨터의 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 30"),
         node_stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다(질문은 남겨 다시 열 때 보여 준다). 0=끔. 기본 180"),
         node_stop_unknown_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 상태를 모르는 세션(턴 끝 보고에 예약 셈이 없음 · 마지막 보고가 작업 중에서 멈춤)의 안전망. 마지막 활동·안 보기 시작 뒤 이 분이 지나면 끈다(살아 있는 셸 작업·도는 턴·질문은 집행 직전에 다시 재서 지킨다). 0=끔. 기본 1440"),
+        node_stop_stale_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5623) — 오래 남은 세션(마지막 보고가 «백그라운드 작업 있음» 에서 굳음 · 대화 id 없음)을 다시 보는 간격(분). 아무도 안 본 지 이만큼 지나면: 실제로 도는 작업이 없으면 끄고, 있거나 대화 id 가 없으면 그 세션에 확인 글을 보낸다. 0 = 끔(그 세션은 남는다). 기본 1440"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택). ⚠ 두 축은 스코프가 다르다(#2509): 유휴는 워크스페이스별로, 압박은 박스 전역으로 한 번 돈다 — pressure_* 를 켠다는 것은 «박스가 벼랑에 서면 이 워크스페이스 세션도 걷어도 좋다»는 동의다"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),
@@ -806,6 +846,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       context_job_policy: z.object({
         runner_member: z.string().nullable().optional().describe("「수집 · 증류」의 자동 실행 잡(증류: 자료 → 지식 · 카테고리 붙이기, 그리고 관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
       }).optional().describe("「수집 · 증류」 자동 실행 잡의 실행 신원(#4012 T1 · #3994 D1). 워크스페이스가 정한 멤버 한 명의 자격으로 증류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
+      writing_format: WRITING_FORMAT_PATCH.nullable().optional().describe("조직 서술 형식 — AI 가 저장하는 지식의 제목·첫 줄 결론·강조·금지어·문체. 조직이 바꾼 칸만 저장되고 나머지는 제품 기본값을 따른다. null=전부 기본값으로"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
       //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
       worker_policy: z.object({
@@ -876,9 +917,12 @@ export const runtimeConfigCapabilities: Capability[] = [
   //  여기선 그 op 의 **검증을 그대로** 태우되 받는 키를 주입 축으로 좁힌다. 남겨 둔 관리자 몫 둘:
   //   · hooks.self_update — 구성원 **컴퓨터의 키트**를 바꾸는 스위치(워크스페이스 밖에 닿는다, DANGEROUS_SCOPES 와 같은 근거)
   //   · work_roots — 구성원 컴퓨터의 디렉터리 경로(비-admin 에겐 조회도 안 한다, 위 org_runtime_config 주석)
+  //  #5801(상민 2026-11-25) — 관리자 몫 하나 더: writeback_notice(응답을 마칠 때 AI 에 보내는 글). 주입 문구(org_update_section)와
+  //   같은 근거다 — 모든 구성원의 AI 세션에 지시문으로 들어가는 **글**은 관리자만 고친다. 켜고 끄는 스위치는 그대로 구성원 몫.
   restWork("org_injection_update", "AI 전달(세션 주입) 설정 수정",
-    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·세션 종료 너지 문구·기록 인정 툴(write_tools)·" +
-    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
+    "세션 주입 시점 on/off(session_preload·work_flag·stop_writeback_gate)·제품 가이드 주입·기록 인정 툴(write_tools)·" +
+    "외부 인입 툴(pull_tools)을 저장한다. 워크스페이스 구성원 누구나. 세션 종료 너지 문구(writeback_notice)는 AI 에 주입되는 글이라 관리자만 바꾼다" +
+    "(지금 값 그대로 보내는 것은 받는다). 키트 자동 업데이트(self_update)·work_roots·보안 필드는 org_runtime_update(관리자).",
     [{ method: "POST", paths: ["/api/ui/org/injection-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const src = (input ?? {}) as Record<string, unknown>;
@@ -887,6 +931,14 @@ export const runtimeConfigCapabilities: Capability[] = [
       const cur = await getRuntimeConfig();
       const out: Record<string, unknown> = {};
       for (const k of INJECTION_KEYS) if (src[k] !== undefined) out[k] = src[k];
+      //  글(너지 문구)은 관리자만 — 화면이 지금 값을 함께 실어 보내는 저장은 그대로 넘긴다(self_update 와 같은 규칙). null · '' = 기본값.
+      if (out.writeback_notice !== undefined && !isAdmin(user)) {
+        const norm = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+        if (norm(out.writeback_notice) !== norm(cur.writeback_notice)) {
+          throw new HttpError(403, "응답을 마칠 때 보내는 기록 요청 문구는 모든 AI 세션에 주입되는 글이라 관리자만 바꿉니다");
+        }
+        delete out.writeback_notice;
+      }
       if (out.hooks !== undefined) {
         const h = out.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
@@ -906,7 +958,7 @@ export const runtimeConfigCapabilities: Capability[] = [
     }, {
       hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean() }).partial().optional().describe("세션 주입 시점 on/off"),
       inject_ontology_guide: z.boolean().optional().describe("제품 가이드(라이블리 사용법) 주입 on/off"),
-      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값"),
+      writeback_notice: z.string().nullable().optional().describe("세션 종료 너지 문구 — null/'' = 기본값. 바꾸는 것은 관리자만"),
       write_tools: z.array(z.string()).optional().describe("기록 인정 툴 이름(접두사 없이) — 비우면 기본 목록"),
       pull_tools: z.array(z.string()).optional().describe("외부 인입으로 볼 MCP 툴 이름 prefix — 비우면 기능 끔"),
     }),

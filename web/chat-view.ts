@@ -22,7 +22,7 @@ import { el, renderInline, renderMarkdown, toast } from './core.js';
 import { toolGroupSummary } from './chat-tool-group.js';
 import { scanDiff, type DiffScan } from './chat-diff.js';
 import { CHAT_FONT_KEY, fontScale, parseFontStep } from './chat-font.js';
-import { bindCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
+import { bindCtx, registerCtx } from './v2/ctx-registry.js';   // #3784 대화 덩이 우클릭(답·질문·코드)
 import { copyText } from './v2/ctx-menu.js';
 import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 // #4707 tui 문법 — 글자 규칙(chat-tui.ts)과 웹 터미널 설정(lib/term-prefs.ts)은 DOM 없는 모듈이 쥔다. 여기는 칠하기만 한다.
@@ -30,6 +30,29 @@ import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens
 import { caretShape, ccWheelRows, isWheelNotch, newCcWheel, newWheelTickAcc, parseTermPrefs, TERM_PREFS_KEY, termFace, termWheelTicks, type TermPrefs } from './lib/term-prefs.js';
 import { routeKey, type FocusSpot } from './lib/chat-keys.js';   // #4797 터미널처럼 — 이 화면이 보이면 글쇠가 입력칸으로
 import { isDark } from './theme.js';
+import { PANE_LINK_EVENT, uiPaneLink, webPaneLink } from './lib/ui-link.js';   // #5583 자료 링크는 곁칸에서(셸 탭을 하나 더 열지 않게)
+import { fileNameOf, linkifyChat, pathLinkOf } from './lib/chat-links.js';   // #5650 답 글의 파일 경로·지식 이름도 링크로(터미널과 같은 판정)
+
+//  #5650 답 글 속 링크 우클릭(원준 2026-11-24 «호버하고 우클릭하면 그부분 복사나 붙여넣기가 편하게 · 우클릭하면 링크 뜨고»).
+//   보이는 글은 파일 이름·지식 이름뿐이라 실제 경로·주소는 여기서 꺼내 준다. 열기는 맨클릭과 같은 길(a.click()).
+const copied = (what: string) => (ok: boolean): void => { if (ok) toast(what + ' 복사했습니다'); };
+const shortHint = (s: string): string => (s.length > 26 ? '…' + s.slice(-25) : s);
+registerCtx('chat-link', (hit) => {
+  const a = hit.el as HTMLAnchorElement;
+  const path = a.getAttribute('data-path') || '';
+  const kn = a.getAttribute('data-kn') || '';
+  const href = a.getAttribute('href') ? a.href : '';
+  const rows: Array<{ label: string; icon?: string; hint?: string; run: () => void }> = [
+    { label: '열기', icon: 'eye', hint: path ? '뷰어 탭' : kn ? '지식 탭' : '', run: () => a.click() },
+  ];
+  if (path) {
+    rows.push({ label: '경로 복사', icon: 'copy', hint: shortHint(path), run: () => void copyText(path).then(copied('경로를')) });
+    rows.push({ label: '파일 이름 복사', icon: 'copy', hint: fileNameOf(path), run: () => void copyText(fileNameOf(path)).then(copied('파일 이름을')) });
+  }
+  if (kn) rows.push({ label: '지식 이름 복사', icon: 'copy', hint: shortHint(kn), run: () => void copyText(kn).then(copied('지식 이름을')) });
+  if (href) rows.push({ label: '링크 복사', icon: 'link', hint: shortHint(href.replace(/^https?:\/\//, '')), run: () => void copyText(href).then(copied('링크를')) });
+  return { title: path ? fileNameOf(path) : kn || (a.textContent || '').trim().slice(0, 40), sub: path || (kn ? '지식' : href), rows };
+});
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
 export interface ToolLabel { label: string; detail?: string }
@@ -83,6 +106,8 @@ export interface ChatViewOpts {
   compose?: { chips?: HTMLElement | null; button?: HTMLElement | null; fileInput?: HTMLElement | null };
   /** 글자가 없어도 보낼 수 있는 다른 입력(예: 이미 끝난 파일 첨부)이 있나. */
   canSendEmpty?: () => boolean;
+  /** #5650 답 글 속 **세션 폴더 기준 경로**(`docs/a.md`)를 열 세션 id — 세션 화면만 준다. 없으면 프로젝트 경로만 링크가 된다. */
+  pathSession?: () => string;
 }
 
 /** 한 턴을 그리는 동안 들고 있는 것 — 조각(스트리밍)과 완성본이 **같은 글**이라 겹치지 않게 하는 게 핵심. */
@@ -648,6 +673,11 @@ const fmtDur = (ms: number): string => {
   return `${Math.floor(m / 60)}시간 ${m % 60}분`;
 };
 
+/** 다른 출처의 주소인가(#5650 — 대화창의 남의 사이트 링크는 새 탭으로). 못 읽으면 false(종전 이동). */
+export function isCrossOrigin(url: string): boolean {
+  try { return new URL(url, location.href).origin !== location.origin; } catch (_) { return false; }
+}
+
 /** 사람이 마지막으로 손댄(누름·초점) tui 대화창 — 대화창이 둘 보일 때 «터미널처럼 받는 키»(#4797)를 어느 쪽이 받을지 가른다. */
 let lastTouchedChat: HTMLElement | null = null;
 
@@ -657,6 +687,37 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   const desktop = style === 'desktop';
   const tui = style === 'tui';
   const list = el('div', { class: 'livc-list' });
+  //  #5583 자료 링크(우리 화면의 #/f · #/k/ — AI 가 file_url 로 준 꼴)는 새 탭이 아니라 곁칸에서(원준 2026-11-22). 종전엔 셸 해시가 바뀌어
+  //   셸 탭이 하나 늘며 그리로 넘어갔다. 곁칸(v2/panes.ts onPaneLink)이 받으면 handled 를 켜고, **그때만** 기본 이동을 막는다 — 곁칸이 없는
+  //   화면이면 종전대로. ⌘/Ctrl/Shift/Alt+클릭은 사람이 고른 열기(새 탭 · 셸 새 탭)라 건드리지 않는다.
+  list.addEventListener('click', (e: MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    //  #5650 파일 경로(답 글 속 — lib/chat-links)는 터미널 경로와 같은 길: 곁칸 [자료] + 뷰어. 곁칸이 없으면 프로젝트 경로는 href(#/f)로,
+    //   세션 폴더 경로는 열 자리가 없다고 알린다.
+    const pa = (e.target as HTMLElement | null)?.closest?.('a[data-path]') as HTMLAnchorElement | null;
+    const pl = pa && list.contains(pa) ? pathLinkOf(pa) : null;   // 못 읽는 경로면 아래 일반 링크 길로
+    if (pa && pl) {
+      const detail = { link: { kind: 'path' as const, url: pa.getAttribute('href') ? pa.href : '', ...pl, sid: opts.pathSession ? opts.pathSession() : '' }, handled: false };
+      pa.dispatchEvent(new CustomEvent(PANE_LINK_EVENT, { bubbles: true, detail }));
+      e.preventDefault();
+      if (detail.handled) return;
+      //  곁칸이 없는 화면 — 보던 화면을 떠나지 않게 자료 보기는 새 탭으로(리뷰 지적: 기본 이동이 이 탭을 #/f 로 넘겼다).
+      if (pa.getAttribute('href')) window.open(pa.href, '_blank', 'noopener');
+      else toast('세션 화면에서 열 수 있습니다. 이 경로는 세션 폴더 기준입니다.');
+      return;
+    }
+    const a = (e.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!a || !list.contains(a)) return;
+    const href = a.getAttribute('href') || '';
+    const link = uiPaneLink(href, location.href) || webPaneLink(href, location.href);   // #5699 남의 사이트·미리보기도 곁칸 후보
+    if (!link) return;
+    const detail = { link, handled: false };
+    a.dispatchEvent(new CustomEvent(PANE_LINK_EVENT, { bubbles: true, detail }));
+    if (detail.handled) { e.preventDefault(); return; }
+    //  #5650 곁칸이 안 받은 **남의 사이트**(브라우저 — iframe 이 막힌다)는 새 탭으로. 종전엔 링크의 기본 이동이 이 탭(라이블리)을
+    //   그 사이트로 넘겼다 — 보던 세션 화면이 사라진다.
+    if (link.kind === 'web' && isCrossOrigin(link.url)) { e.preventDefault(); window.open(link.url, '_blank', 'noopener'); }
+  });
   //  tui — Claude Code 의 입력줄엔 자리표시 글이 없다(`❯ ` 뒤가 빈 줄). 무엇을 하는 칸인지는 aria-label 로만 남긴다.
   const placeholderOf = (s: string): string => (tui ? '' : s);
   const input = el('textarea', { class: 'livc-input', rows: '1', placeholder: placeholderOf(opts.placeholder), 'aria-label': opts.placeholder }) as HTMLTextAreaElement;
@@ -671,7 +732,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   //   표는 칸 수에 따라 꼴(상자/세로)이 바뀐다 — 칸 수가 바뀌면(창 크기 · 숨었던 대화창이 드러남 — 숨은 동안엔 폭을 못 잰다) 그 글만
   //   다시 그린다(아래 ResizeObserver). Claude Code 도 창 크기가 바뀌면 표를 다시 그린다.
   const tableMds = new Map<HTMLElement, string>();
-  const renderBody = (s: string): HTMLElement => {
+  const renderBody = (s: string): HTMLElement => linkifyChat(renderBodyRaw(s), !!opts.pathSession);   // #5650 경로·지식 이름 링크
+  const renderBodyRaw = (s: string): HTMLElement => {
     if (!tui) return renderMarkdown(s);
     const cols = textCols();
     const md = tuiMarkdown(s, cols);
@@ -861,7 +923,10 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     root.style.setProperty('--tui-fg', face.foreground);
     root.style.setProperty('--tui-cursor', face.cursor);
     root.style.setProperty('--tui-sel', face.selectionBackground);
-    root.style.setProperty('--tui-link', face.blue);   // Claude Code 는 링크를 터미널의 ANSI 파랑으로 찍는다(실측)
+    //  #5650 터미널과 한 규칙 — 링크는 파랑 + 밑줄(standalone/terminal.ts LINK_BLUE), 코드는 파랑이 아닌 색(CODE_COLOR).
+    //   종전 링크 색(ANSI 파랑)은 라이트 판에서 거의 남색이라 링크로 안 읽혔고(원준 2026-11-25 «색이 애매»), 코드가 오히려 파랬다.
+    root.style.setProperty('--tui-link', face.dark ? '#60A5FA' : '#2563EB');
+    root.style.setProperty('--tui-code', face.dark ? '#E7A36B' : '#A04F12');
     root.dataset.tuiScheme = face.dark ? 'dark' : 'light';
     root.dataset.tuiCaret = caretShape(termPrefs.cursorStyle);
     applyCell();
@@ -925,7 +990,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       for (const [md, src] of [...tableMds]) {
         if (!md.isConnected) { tableMds.delete(md); continue; }
         if (Number(md.dataset.cols) === cols) continue;
-        const next = tuiMarkdown(src, cols);
+        const next = linkifyChat(tuiMarkdown(src, cols), !!opts.pathSession);   // #5650 다시 그린 표에도 링크
         next.dataset.cols = String(cols);
         const host0 = md.parentElement;
         md.replaceWith(next);

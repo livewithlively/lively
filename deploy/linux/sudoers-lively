@@ -118,6 +118,12 @@ lively ALL=(LIVELY_BOX_MEMBERS,LIVELY_BROKERS) NOPASSWD: /opt/lively/libexec/box
 #      `{"theme":"dark|light"}` JSON). 미보존이면 격리 세션에서만 테마가 안 걸린다. ⚠ 하네스 테마 표(catalog.ts HARNESS_THEME)에 env 방식 하네스를
 #      더하면 여기 함께 더한다(시험이 강제).
 #
+#  ✖ 세션 컨테이너 전용 — 하네스 상태 DB 자리  [never]
+#      CODEX_SQLITE_HOME
+#      #5648 — 매니지드 세션 컨테이너 안에서만 싣는다(catalog.ts harnessStateEnvArgs · sessions.ts inside). 그 경로는 sudo 를 안 탄다. 셀프호스트
+#      격리(sudo → box-spawn)에는 애초에 싣지 않는다 — 멤버 홈이 로컬 파일시스템이라 SQLite 잠금이 서고, codex 의 SQLite(기억·목표 포함)를 홈에 두는 종전 동작이
+#      맞다.
+#
 #  ✖ 비격리 전용 — 보존 금지  [never]
 #      CLAUDE_CONFIG_DIR LIVELY_TOKEN LIVELY_MCP_TOKEN
 #      셋 다 코어가 **비격리 분기에서만** 싣는다(sessions.ts else). 격리 세션은 uid 로 홈이 갈려 이 값들이 필요 없다 — CLAUDE_CONFIG_DIR 은 멤버 자기

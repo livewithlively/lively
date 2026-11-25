@@ -14,6 +14,8 @@ export interface NodeStopRuleOverride {
   done_minutes?: number | null;
   asking_minutes?: number | null;
   unknown_minutes?: number | null;
+  /** #5623 — 오래 남은 세션 확인 간격 */
+  stale_minutes?: number | null;
 }
 
 /** 이 컴퓨터에 실제로 적용되는 값과 각 값의 출처. */
@@ -22,14 +24,15 @@ export interface NodeStopRuleEffective {
   doneMin: number;
   askingMin: number;
   unknownMin: number;
-  source: { enabled: NodeStopRuleSource; done: NodeStopRuleSource; asking: NodeStopRuleSource; unknown: NodeStopRuleSource };
+  staleMin: number;
+  source: { enabled: NodeStopRuleSource; done: NodeStopRuleSource; asking: NodeStopRuleSource; unknown: NodeStopRuleSource; stale: NodeStopRuleSource };
 }
 export type NodeStopRuleSource = "node" | "workspace";
 
 type WorkspaceNodeStop = Pick<SessionReclaimPolicy,
-  "node_stop_enabled" | "node_stop_done_minutes" | "node_stop_asking_minutes" | "node_stop_unknown_minutes">;
+  "node_stop_enabled" | "node_stop_done_minutes" | "node_stop_asking_minutes" | "node_stop_unknown_minutes" | "node_stop_stale_minutes">;
 
-const MINUTE_KEYS = ["done_minutes", "asking_minutes", "unknown_minutes"] as const;
+const MINUTE_KEYS = ["done_minutes", "asking_minutes", "unknown_minutes", "stale_minutes"] as const;
 
 /** 분 값 하나 — 정수 0~43200 이면 그 값, 아니면 undefined(«이 칸 없음»). DB 의 깨진 값이 판정에 새지 않게 읽을 때도 거른다. */
 function minuteOf(v: unknown): number | undefined {
@@ -88,7 +91,8 @@ export function effectiveNodeStopRule(ws: WorkspaceNodeStop, o: NodeStopRuleOver
   const [doneMin, sDone] = pick(o?.done_minutes, ws.node_stop_done_minutes);
   const [askingMin, sAsking] = pick(o?.asking_minutes, ws.node_stop_asking_minutes);
   const [unknownMin, sUnknown] = pick(o?.unknown_minutes, ws.node_stop_unknown_minutes);
-  return { enabled, doneMin, askingMin, unknownMin, source: { enabled: sEnabled, done: sDone, asking: sAsking, unknown: sUnknown } };
+  const [staleMin, sStale] = pick(o?.stale_minutes, ws.node_stop_stale_minutes);
+  return { enabled, doneMin, askingMin, unknownMin, staleMin, source: { enabled: sEnabled, done: sDone, asking: sAsking, unknown: sUnknown, stale: sStale } };
 }
 
 /**

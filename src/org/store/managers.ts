@@ -99,6 +99,16 @@ export async function upsertFindingRow(
 }
 
 /**
+ * 모순 쌍의 정규 방향 — a=least, b=greatest(DB 정렬 규칙). 발견 행(target_ref=a · dedup_key=b)과 관리기 링크(a→b)가 이 순서를 쓴다.
+ *  JS 비교로 대신하지 않는다 — 정렬 규칙(예: en_US 는 '-' 를 첫 단계에서 건너뛴다)이 달라 링크 방향과 어긋날 수 있다.
+ *  보고·반려 도구가 링크의 거는 끝(a)과 받는 끝(b)에 서로 다른 문턱을 걸 때도 이것으로 끝을 가른다(delivery/managers.ts).
+ */
+export async function contradictionPair(x: string, y: string, db: Pick<PoolClient, "query"> = itemsPool): Promise<{ a: string; b: string }> {
+  const r = await db.query(`SELECT least($1::text, $2::text) AS a, greatest($1::text, $2::text) AS b`, [x, y]);
+  return r.rows[0] as { a: string; b: string };
+}
+
+/**
  * 모순(contradiction) 보고 — 발견 저장과 contradicts 링크(origin 'manager:<key>')를 한 트랜잭션에서 한다.
  *
  *  쌍 키는 서버가 정한다: target_ref=least, dedup_key=greatest(DB 정렬 규칙 — 후보 SQL 의 o.name > k.name 과 같은 비교).
@@ -113,8 +123,7 @@ export async function reportContradiction(
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
-    const pair = (await client.query(`SELECT least($1::text, $2::text) AS a, greatest($1::text, $2::text) AS b`,
-      [f.target_ref, f.dedup_key ?? ""])).rows[0] as { a: string; b: string };
+    const pair = await contradictionPair(f.target_ref, f.dedup_key ?? "", client);
     //  같은 쌍의 기존 행을 먼저 잠근다 — 동시에 도는 반려(resolveFinding)와 이 보고가 같은 행에서 줄을 선다.
     const prior = (await client.query(
       `SELECT target_ref, dedup_key, state FROM org_manager_finding

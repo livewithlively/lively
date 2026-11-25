@@ -45,7 +45,7 @@ export type LivAskTarget =
   | { target: "collector"; collector_id: number; field: string }
   | { target: "vault"; vault_kind: string; vault_scope: string };
 
-/** 저장된 요청의 모양(LivSecretAsk 의 판정에 필요한 부분). */
+/** 저장된 요청의 모양(자격 요청 payload — asks/kinds/secret.ts SecretAskPayload — 의 판정에 필요한 부분). */
 export interface LivAskLike {
   kind?: string; at?: string; target?: string;
   collector_id?: number; field?: string; vault_kind?: string; vault_scope?: string;

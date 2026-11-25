@@ -324,6 +324,10 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  #1639 unattended — 이 작업의 사람 신원이 사람이 보지 않는 자리(위탁 · 상시 세션 · 작업 AI)에서 왔다. 그 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended).
   //   시작할 때 정해지고 바뀌지 않는다 · 작업이 시작한 작업은 물려받는다. ⚠ 칸 묶음(LIGHT)에 넣지 않고 그 작업일 때만 적고 따로 읽는다(apps/app-jobs-store.ts 머리말 — 롤 창).
   await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false;`);
+  //  #1782 automation — 사람이 시키지 않은 작업(슬랙 다리가 워크플로 · 봇 글을 run_as 구성원 이름으로 시작한 것 · 앱 v2 #121 앱 정기 작업). 그 돌기 신원으로는
+  //   개인 구독을 쓰지 못한다 — 공용 시트 · 워크스페이스 API 키만(ai-runs/plan.subscriptionRefusal · 공용 시트는 상민 2026-11-22 부터 받는다). 시작할 때 정해지고 작업이 시작한 작업은 물려받는다.
+  //   unattended 와 같은 까닭으로 칸 묶음(LIGHT) 밖에 두고 그 작업일 때만 적는다(롤 창).
+  await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS automation BOOLEAN NOT NULL DEFAULT false;`);
   //  org_app_call(#5053 앱 v2-42) — 게이트웨이가 앱 서버의 라우트 하나를 **동기로** 부른 한 건(지금은 앱이 선언한 MCP 도구 · run.kind "server").
   //   흐름: dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원) → done · failed
   //   (게이트웨이가 답을 다 받았을 때 · 하우스키핑이 끝맺지 못한 줄을 닫는다). 판정은 apps/app-server-call-plan.ts · 흐름은 apps/app-server-call.ts.
@@ -564,6 +568,11 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   실제로 거는 것은 CP 의 5분 쿼터 정비다(JuiceFS `/<워크스페이스>/apps/<앱>` — lvly-cloud appfolderquota.ts). 이 열은 «원하는 상한» 이고,
   //   지금 걸려 있는 값은 아래 사용량 행(limit_gb)이 말한다.
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS folder_limit_gb INT;`);
+
+  //  조직 동의 — 관리자가 워크스페이스 구성원 모두를 대신해 한 앱 동의({scopes, tools, granted_at, granted_by} · 그때의 공개 판 선언). NULL = 없음(기본 —
+  //   사람마다 동의한다). 동의를 읽는 자리(store/apps getActiveGrant)가 본인 동의(org_app_grant)에 이것을 합친다. 앱 행에 두는 까닭: 앱마다 하나뿐이고,
+  //   앱이 지워지면 같이 사라지며, 설치 · 업데이트는 이 칸을 건드리지 않아(적어 둔 선언이 그대로 남아) «앱이 그 뒤에 넓어졌나» 를 견줄 수 있다.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS org_grant JSONB;`);
 
   // ── org_app_folder_usage — 앱 폴더 사용량(#4785) ──
   //  CP 가 5분마다 JuiceFS 쿼터 목록에서 읽어 보낸다(app_folder_usage_report). limit_gb = 잰 때 걸려 있던 상한(NULL = 무제한).

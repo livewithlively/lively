@@ -23,6 +23,11 @@
 //       null 로 나간다. 저장된 값과 특권 조회는 그대로
 //   L16 REST 입력 — superseded_by 는 MCP 입력과 같은 길이 상한(64)
 //   L15 supersedes(후속 쪽 표시) — 본문만 다시 저장해도 유지 · null 로 비움 · 되돌리기로 이전 값
+//   L17 되돌리기 — 포인터 없이 superseded 인 옛 행(기능 이전·배포 중 옛 버전이 만든 것)의 전환을 되돌리면 400 이 아니라
+//       포인터 없이 superseded 로 되살린다(그 스냅샷이 원래 그랬다). 칸이 생기기 전 스냅샷(superseded_by 키 없음)도 같다.
+//       스냅샷에 후속이 있는데 그 후속이 사라졌으면 L12 대로 400 이다(포인터 없이 강제로 되살리지 않는다)
+//   L18 후속은 참조만 한다 — 후속에는 문서 자신을 바꾸는 쓰기 게이트가 아니라 곁가지 게이트(공개범위만)를 건다.
+//       세션 주입 문구(injection='always')도 관리자·비관리자 모두 후속으로 걸 수 있다(그 문서는 바뀌지 않는다)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -214,6 +219,51 @@ try {
   await kst.deleteKnowledge(US, { actor: ME, source: "web" });
   const un3 = await attempt(() => undo.handler({ skip: [] }, user(UA), web(UA)));
   chk("L12 그 사이 후속이 지워졌으면 400 · 그대로 archived", !un3.ok && un3.status === 400 && (await row(U1)).lifecycle === "archived", show({ un3, r: await row(U1) }));
+
+  // ── L17 포인터 없는 옛 superseded 행의 되돌리기 ──
+  const UB = "pgt-lc-undo-legacy", X17 = k("x17");
+  const lastAuditId = async (name) => (await q(`SELECT id FROM org_content_audit WHERE entity='knowledge' AND entity_key=$1 AND op='set_lifecycle' ORDER BY id DESC LIMIT 1`, [name]))[0].id;
+  await mk(X17);
+  for (const s of ["g1", "g2", "g3"]) {
+    await mk(k(s));
+    await q(`UPDATE knowledge SET lifecycle='superseded', superseded_by=NULL WHERE name=$1`, [k(s)]);
+  }
+  //  (a) 옛 행을 보관한 전환을 되돌린다 — 스냅샷 before = { superseded, superseded_by: null }
+  const g1 = await lc(k("g1"), "archived", undefined, UB, web);
+  chk("L17 전제: 옛 행을 웹에서 보관", g1.ok && (await row(k("g1"))).lifecycle === "archived", show(g1));
+  const un17a = await attempt(() => undo.handler({ skip: [] }, user(UB), web(UB)));
+  chk("L17 옛 행의 보관을 되돌리면 포인터 없이 superseded",
+    un17a.ok && show(await row(k("g1"))) === show({ lifecycle: "superseded", superseded_by: null, supersedes: null }), show(un17a.ok ? await row(k("g1")) : un17a));
+  //  (b) 옛 행에 후속을 붙인 전환을 되돌린다 — 붙이기 전(포인터 없음)으로
+  const g2 = await lc(k("g2"), "superseded", X17, UB, web);
+  chk("L17 전제: 옛 행에 후속을 붙인다", g2.ok && (await row(k("g2"))).superseded_by === X17, show(g2));
+  const un17b = await attempt(() => undo.handler({ skip: [] }, user(UB), web(UB)));
+  chk("L17 후속 붙이기를 되돌리면 포인터 없는 superseded 로",
+    un17b.ok && show(await row(k("g2"))) === show({ lifecycle: "superseded", superseded_by: null, supersedes: null }), show(un17b.ok ? await row(k("g2")) : un17b));
+  //  (c) 칸이 생기기 전 스냅샷 — before 에 superseded_by 키가 없다
+  const g3 = await lc(k("g3"), "archived", undefined, UB, web);
+  chk("L17 전제: 다른 옛 행을 웹에서 보관", g3.ok, show(g3));
+  await q(`UPDATE org_content_audit SET before = before - 'superseded_by' WHERE id=$1`, [await lastAuditId(k("g3"))]);
+  const un17c = await attempt(() => undo.handler({ skip: [] }, user(UB), web(UB)));
+  chk("L17 칸이 생기기 전 스냅샷도 포인터 없이 superseded",
+    un17c.ok && show(await row(k("g3"))) === show({ lifecycle: "superseded", superseded_by: null, supersedes: null }), show(un17c.ok ? await row(k("g3")) : un17c));
+  //  (d) 새 전환은 이 길을 못 탄다 — 도구로는 여전히 후속 없이 superseded 로 못 바꾼다
+  const g4 = await lc(k("g1"), "superseded", undefined, UB, web);
+  chk("L17 도구로는 여전히 후속 없이 superseded = 400", !g4.ok && g4.status === 400, show(g4));
+
+  // ── L18 후속은 참조만 — 주입 문구도 후속으로 걸 수 있다 ──
+  const INJ = k("inj"), IO = k("io"), IA = k("ia");
+  await mk(INJ); await mk(IO); await mk(IA);
+  await q(`UPDATE knowledge SET injection='always' WHERE name=$1`, [INJ]);
+  const admin = (id) => ({ ...user(id), scopes: ["admin"] });
+  const l18 = await lc(IO, "superseded", INJ, OTHER);
+  chk("L18 비관리자도 주입 문구를 후속으로 건다", l18.ok && (await row(IO)).superseded_by === INJ, show(l18.ok ? await row(IO) : l18));
+  const l18a = await attempt(() => setLc.handler({ name: IA, lifecycle: "superseded", superseded_by: INJ }, admin("pgt-lc-admin"), mcp("pgt-lc-admin")));
+  chk("L18 관리자도 주입 문구를 후속으로 건다", l18a.ok && (await row(IA)).superseded_by === INJ, show(l18a.ok ? await row(IA) : l18a));
+  const inj = (await q(`SELECT injection, lifecycle, version FROM knowledge WHERE name=$1`, [INJ]))[0];
+  chk("L18 후속(주입 문구)은 그대로", inj.injection === "always" && inj.lifecycle === "active" && Number(inj.version) === 1, show(inj));
+  const l18n = await lc(INJ, "archived", undefined, OTHER);
+  chk("L18 주입 문구 자신의 전환은 여전히 관리자만(403)", !l18n.ok && l18n.status === 403, show(l18n));
 
   // ── L13 · L14 공개범위 — 지식 축을 켜고 후속을 members(대상 없음)로 잠근다 ──
   const V1 = k("v1"), VH = k("vh"), VO = k("vo"), VL = k("vl");

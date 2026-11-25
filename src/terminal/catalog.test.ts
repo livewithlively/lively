@@ -4,7 +4,7 @@ import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from "nod
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv , harnessResumeCommand, REGISTRY_PRIMARY_SLUG, harnessLaunchArgv, launchProbeLines } from "./catalog.js";
+import { HARNESSES, harnessSettingsArgv, harnessThemeArgv, harnessThemeEnvArgs, paneLaunchArgv, installTenantSlugResolver, roots, sharedRoot, codexAppServerPaneArgv, chatRuntimePaneArgv , harnessResumeCommand, REGISTRY_PRIMARY_SLUG, harnessLaunchArgv, launchProbeLines, harnessStateEnvArgs, CODEX_SQLITE_HOME_IN_CONTAINER } from "./catalog.js";
 
 test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그가 보존한다", () => {
   const c = HARNESSES.find((h) => h.key === "codex")!;
@@ -14,8 +14,12 @@ test("Codex 현행 5.6 모델과 모델별 추론강도 차이를 카탈로그�
   assert.ok(!c.effortsByModel?.["gpt-5.6-luna"]?.includes("ultra"));
   //  #5332 — 0.166.0 `codex debug models` 실측: 6.1-sol·6-sol·6-luna 가 생기고 5.5·5.4·5.4-mini 는 빠졌다(고르면 «unavailable»).
   assert.ok(models.includes("gpt-6-sol") && models.includes("gpt-6-luna"));
-  //  #5332 2차 — 배포된 codex(0.157.1)가 못 받는 모델은 목록에 두지 않는다(매 턴 400 model_not_found).
-  assert.ok(!models.includes("gpt-6.1-sol"), "0.157.1 은 gpt-6.1-sol 을 모른다");
+  // 중앙 이미지 0.172.0과 같은 모델·강도 계약을 새 세션 및 기존 세션 선택기에 제공한다.
+  for (const model of ["gpt-6.1-sol", "gpt-6.1-terra"]) {
+    assert.ok(models.includes(model), model);
+    assert.deepEqual(c.effortsByModel?.[model], ["low", "medium", "high", "xhigh", "max", "ultra"]);
+    assert.equal(c.runtimeCmd?.both?.(model, "ultra"), `/model ${model} --reasoning=ultra`);
+  }
   assert.ok(!models.some((m) => m === "gpt-5.5" || m.startsWith("gpt-5.4")));
   assert.ok(!c.effortsByModel?.["gpt-6-luna"]?.includes("ultra"));
   //  모든 모델이 강도 목록을 갖는다 — 없으면 화면이 강도 칸을 못 좁힌다.
@@ -357,6 +361,37 @@ test("harnessThemeEnvArgs: win32 에서는 JSON env(opencode)만 빼고 단순 e
   assert.ok(harnessThemeEnvArgs("opencode", "dark").length > 0, "다른 표면에선 종전대로 나간다");
   assert.deepEqual(harnessThemeEnvArgs("opencode", "dark", "win32"), []);
   assert.deepEqual(harnessThemeEnvArgs("codex", "light", "win32"), ["-e", "FORCE_COLOR=1"]);
+});
+
+// ── #5648 — Codex 의 SQLite 자리는 세션 컨테이너 안(컨테이너마다 따로)으로 ─────────────────────────────
+//  매니지드 실측(2026-11-21): 멤버 홈(~/.codex)은 세션 컨테이너마다 9p 로 붙은 **공유** 저장소다. codex 0.157.1 은 거기에
+//  WAL SQLite(thread_history_1·logs_2·state_5 …)를 두는데, 다른 샌드박스의 codex 들이 같은 파일을 동시에 쓰면 WAL 공유 메모리
+//  (-shm)가 샌드박스를 건너 맞지 않아 파일이 깨진다(quick_check: thread_history_1·logs_2 «malformed»). 그 뒤 이어 열기는
+//  «thread/resume failed … database disk image is malformed» 로 죽고, 런처 ②가 새 대화로 떨어진다(사람 눈엔 «내 세션이 아님»).
+//  같은 자리에서 CODEX_SQLITE_HOME 만 컨테이너 안 빈 폴더로 주면 rollout 파일로부터 대화를 다시 세워 이어 열기가 된다(실측).
+//  엣지 표 — 하네스 × 세션 컨테이너 안인가:
+test("harnessStateEnvArgs (#5648): codex 세션 컨테이너 → 컨테이너 안 SQLite 자리 · 그 밖 → 아무것도 안 싣는다", () => {
+  const rows: Array<[string, boolean, string[]]> = [
+    ["codex", true, ["-e", `CODEX_SQLITE_HOME=${CODEX_SQLITE_HOME_IN_CONTAINER}`]],   // 매니지드 세션 컨테이너 — 공유 홈 밖으로
+    ["codex", false, []],        // 셀프호스트·노드 — 로컬 파일시스템이라 SQLite 잠금이 선다 · 종전대로 홈에 둔다(무회귀)
+    ["claude", true, []],        // SQLite 를 안 쓴다(대화 = jsonl)
+    ["opencode", true, []],      // 이 결함의 범위 밖(종료 규칙도 제외 하네스) — 실측 없이 얹지 않는다
+    ["antigravity", true, []],
+    ["grok", true, []],
+    ["shell", true, []],
+    ["", true, []],
+  ];
+  for (const [h, inside, want] of rows) {
+    assert.deepEqual(harnessStateEnvArgs(h, { inSessionContainer: inside }), want, `${h || "(빈 하네스)"} inside=${inside}`);
+  }
+  //  자리는 **컨테이너마다 따로**인 곳이어야 한다 — 홈·공유 폴더(/home · /work)면 같은 결함이 그대로 남는다.
+  assert.match(CODEX_SQLITE_HOME_IN_CONTAINER, /^\/tmp\//);
+});
+
+test("harnessStateEnvArgs (#5648): sessions.ts 가 세션 컨테이너 판정(inside)으로 실제로 싣는다(배선)", () => {
+  const src = readFileSync(new URL("../../src/terminal/sessions.ts", import.meta.url), "utf8");
+  assert.match(src, /args\.push\(\.\.\.harnessStateEnvArgs\(harness\.key, \{ inSessionContainer: inside \}\)\)/,
+    "createSession 이 harnessStateEnvArgs 를 inside 로 부르지 않는다 — 새 codex 세션이 여전히 공유 홈의 SQLite 를 쓴다");
 });
 
 // ── 대화 런타임 세션의 pane (#2439, 2026-09-01) ────────────────────────────────────

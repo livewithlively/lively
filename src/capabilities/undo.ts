@@ -14,6 +14,10 @@ import { HttpError } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { listContentAudit, type ContentAuditRow } from "../org/store.js";
+import { anyInjectedDoc } from "../org/store/sections.js";
+import { isAdmin } from "./principal.js";
+import { permits } from "../auth/permissions.js";
+import { INJECTED_DOC_ADMIN_ONLY } from "./knowledge/shared.js";
 import {
   updateProject, updateProjectStatus, setProjectFolder, restoreProject, deleteProject, deleteTaskNode,
   updateTask, updateTaskStatus, setProjectMembers, setProjectRepos,
@@ -131,7 +135,11 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
     const s = rec(d === "before" ? r.before : r.after);
     //  스냅샷의 후속으로 다시 전환한다 — 그 사이 후속이 지워졌거나 active 가 아니면 400 을 그대로 낸다(포인터 없이 되살리지 않는다).
     const supersededBy = s.lifecycle === "superseded" && "superseded_by" in s ? (s.superseded_by as string | null) : undefined;
-    await setKnowledgeLifecycle(String(r.entity_key), String(s.lifecycle), ctx, { supersededBy });
+    //  스냅샷 자체가 포인터 없는 superseded 면(이 칸 이전·배포 중 옛 버전이 만든 옛 행 — 칸이 없는 옛 스냅샷 포함) 그 상태 그대로
+    //   포인터 없이 되살린다. 막으면 옛 행을 보관하거나 후속을 붙인 전환을 되돌릴 길이 없다(400). 칸이 없는 스냅샷에 지금 포인터가
+    //   있으면 종전처럼 그 포인터를 둔다(supersededBy=undefined 는 «지금 포인터 유지»).
+    const allowNoPointer = s.lifecycle === "superseded" && !s.superseded_by;
+    await setKnowledgeLifecycle(String(r.entity_key), String(s.lifecycle), ctx, { supersededBy, allowNoPointer });
   },
   set_wiki: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
@@ -274,7 +282,18 @@ function applier(r: Row): Apply | undefined {
 // 카테고리 되돌리기는 context 권한(content_restore 와 동일 정합) — 없으면 그 행은 건너뛴다.
 function scopeOk(r: Row, user: LivelyUser): boolean {
   if (r.entity !== "category") return true;
-  return ((user?.scopes ?? []) as string[]).includes("context");
+  //  #5799 — 새 권한이 실린 주체에게는 분류체계도 «맥락» 이다(trash.ts 의 카테고리 복원과 같은 판정).
+  return permits(user, "context", { perm: "content", level: "write" });
+}
+
+// #5801 — 세션 주입 문구(injection='always' 행)에 닿는 되돌리기 · 다시 실행은 관리자만. 이 op 은 감사 스냅샷을 스토어에 바로
+//  다시 쓰므로 지식 쓰기 게이트(knowledge/shared.ts)를 지나지 않는다. 두 가지를 본다: ① 지금 그 이름의 행이 주입 문구인가
+//  ② 다시 쓸 스냅샷이 주입 문구였나(지운 주입 문구를 되살리거나, 일반 지식을 주입 문구로 바꿔 쓰는 길 — 격리 리뷰 B1 · B2).
+//  구성원이 권한을 좁히기 전에 남긴 편집 기록이 그 재료가 된다.
+async function touchesInjectedDoc(r: Row): Promise<boolean> {
+  if (r.entity !== "knowledge") return false;
+  if (rec(r.before).injection === "always" || rec(r.after).injection === "always") return true;
+  return anyInjectedDoc([String(r.entity_key ?? "")]);
 }
 
 const contentUndo: Capability = {
@@ -315,6 +334,7 @@ const contentUndo: Capability = {
       if (!row) throw new HttpError(404, "다시 실행할 작업을 찾지 못했습니다(내 웹 작업 최근 500건 밖이거나 남의 작업)");
       const fn = applier(row);
       if (!fn || !scopeOk(row, user)) throw new HttpError(400, "이 작업은 다시 실행을 지원하지 않습니다");
+      if (!isAdmin(user) && await touchesInjectedDoc(row)) throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
       await fn(row, "after", writeCtx);
       return { ok: true, redone: { id: Number(row.id), entity: row.entity, key: row.entity_key, op: row.op, label: rowLabel(row) } };
     }
@@ -327,6 +347,7 @@ const contentUndo: Capability = {
       if (row.source === "undo") continue; // 이중 안전망(채널 필터가 이미 제외)
       const fn = applier(row);
       if (!fn || !scopeOk(row, user)) continue;
+      if (!isAdmin(user) && await touchesInjectedDoc(row)) continue;   // 권한 밖 작업은 건너뛰고 그다음 옛 작업으로(scopeOk 와 같은 규칙)
       await fn(row, "before", writeCtx);
       return { ok: true, undone: { id: Number(row.id), entity: row.entity, key: row.entity_key, op: row.op, label: rowLabel(row) } };
     }

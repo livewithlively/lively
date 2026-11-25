@@ -197,12 +197,21 @@ test("O1 관리탭 선택지 — 초대제가 먼저, 둘", async () => {
 const read = (p: string) => readFileSync(p, "utf8");
 
 test("W1 배선 — 목록 줄 · 칸반 · 「리스트」 뷰 · 속성 띠 · 문패가 한 부품을 쓴다", () => {
-  assert.match(read("web/projects/rows.ts"), /const accessTag = projAccessTag\(p, \{ compact: true \}\);[\s\S]{0,200}caret, lead, title, accessTag, draftTag,/);
-  assert.match(read("web/projects/board.ts"), /const kbAcc = projAccessTag\(p, \{ compact: true \}\);/);
+  //  #5630(원준 2026-11-22) — 목록의 «누가 보나» 알약(나만 · N명과 공유)은 걷었다. 목록 · 칸반 · 「리스트」 뷰는 사람 한 벌(people-ui projPeopleStack — 얼굴만)을 쓴다.
+  assert.ok(!/projAccessTag/.test(read("web/projects/rows.ts")), "표 줄에 알약이 없다");
+  assert.match(read("web/projects/rows.ts"), /caret, lead, title, draftTag,/);
+  assert.match(read("web/projects/rows.ts"), /projPeopleStack\(/);
+  assert.ok(!/projAccessTag/.test(read("web/projects/board.ts")), "칸반 카드에 알약이 없다");
+  assert.match(read("web/projects/board.ts"), /const kbPpl = projPeopleStack\(p, \{ max: 4, size: 's' \}\);/);
   assert.match(read("web/projects/board.ts"), /setAccessConfig\(d && d\.access\)/, "보드가 목록 응답의 access 를 받아 둔다");
-  assert.match(read("web/projects/session-list.ts"), /const acc = projAccessTag\(it\.proj, \{ compact: true \}\);/);
-  assert.match(read("web/projects/detail-meta.ts"), /let accChip = projAccessChip\(p, members \|\| \[\], reloadKeep\);/);
-  assert.match(read("web/projects/detail-meta.ts"), /pjvProjStatusPill\(p, reload\)\),[\s\S]{0,260}accChip,\s*draftChip,/, "칩은 상태 다음 · 초안 앞");
+  assert.ok(!/projAccessTag/.test(read("web/projects/session-list.ts")), "「리스트」 뷰에 알약이 없다");
+  assert.match(read("web/projects/session-list.ts"), /peopleCell: \(it\) => projPeopleStack\(it\.proj, \{ max: 4 \}\),/);
+  //  프로젝트 화면 — 속성 띠의 «누가 보나» 칩 · 팀원 칩 대신 제목 밑 사람 줄 + 오른쪽 위 [공유](같은 공유 창).
+  assert.ok(!/projAccessChip/.test(read("web/projects/detail-meta.ts")), "속성 띠에 «누가 보나» 칩이 없다");
+  assert.match(read("web/projects/detail.ts"), /class: 'h3-meta' \}, pjvProjFactsStrip\(p, members, reload\), projPeopleRow\(p, members, reloadKeepPpl\)\)/);
+  assert.match(read("web/projects/detail.ts"), /projShareButton\(p, members, reloadKeepPpl\), newSessBtn,/);
+  //  얼굴만 — 자물쇠 · 이름 글자를 그리지 않는다.
+  assert.ok(!/ICONS\.lock|pj-ppl-lock/.test(read("web/projects/people-ui.ts")), "사람 한 벌에 자물쇠가 없다");
   assert.match(read("web/projects/detail.ts"), /setAccessConfig\(d && d\.access\)/, "주소로 바로 연 프로젝트 화면도 설정을 받는다");
   assert.match(read("web/v2/panes.ts"), /loose \? null : doorAccess\(p\)\)\),/);
   assert.match(read("web/v2/panes.ts"), /openProjectSharePopover\(btn, detail\.project,/);

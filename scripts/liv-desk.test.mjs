@@ -60,7 +60,11 @@ const PANES = code(read("web/v2/panes.ts"));
 const PARTS = code(read("web/v2/panes-parts.ts"));
 const DESK = code(read("web/v2/panes-liv.ts"));
 const CHAT = code(read("web/session-chat.ts"));
-const DOCK = code(read("web/liv-ask-dock.ts"));
+//  #5713 — 물음 카드는 리브 전용에서 세션 요청으로 옮겼다(web/asks/* · 곁칸 «요청» 칸 · 요청 화면). 리브 쪽에는 물음 자리가 없다.
+const ASK_REG = code(read("web/asks/registry.ts"));
+const ASK_KINDS = ["secret", "choice", "upload"].map((k) => code(read(`web/asks/kind-${k}.ts`))).join("\n");
+const ASK_PANE = code(read("web/v2/session-ask-pane.ts"));
+const MAIN_SRC = code(read("web/v2/main.ts"));   // 아래 배선 절의 MAIN 과 같은 글 — 그 선언보다 앞에서 쓰려고 따로 읽는다
 const BOARD = code(read("web/liv.ts"));
 const OPEN = code(read("web/v2/liv-open.ts"));
 const OWN = code(read("web/v2/connect-own-ai.ts"));
@@ -75,24 +79,27 @@ check(/\{ type: 'livdesk', name: '리브', icon: 'liv', pickable: false,/.test(P
 check(/\{ type: 'liv', name: '프로젝트 대화', icon: 'liv',/.test(PARTS), "W7 ★ 옛 «리브»(프로젝트 대화)의 이름이 그대로다 — «리브» 가 둘이다");
 check(/if \(type === 'livdesk'\) return livDeskPart\(ctx\);/.test(PARTS), "W2 livdesk 부품이 만들어진다");
 
-check(/const livDock = opts\.livAsks \? mountLivAskDock\(liveDock, \{/.test(CHAT), "W3 ★ 물음이 입력칸 바로 위(liveDock)에 안 뜬다");
-check(/dock\.append\(host\);/.test(DOCK) && /livAskCard\(st\.secretAsk, hooks\)/.test(DOCK), "W3 물음 자리가 그 칸에 물음 카드를 그린다");
-check(/if \(livAskKeep\(host, st\.secretAsk\)\) return;/.test(DOCK), "W3 사람이 치는 중이거나 같은 물음이면 다시 그리지 않는다(값이 사라진다)");
-check(/if \(!livAskKeep\(askHost, st\.secretAsk\)\) \{/.test(BOARD), "W3 리브 화면(단독)도 같은 물음이면 다시 그리지 않는다");
-// W3′(2026-10-26 실측) — 6초 되묻기마다 카드를 갈아 끼워 복수 선택(노션·슬랙)이 몇 초 뒤 풀렸다. 같은 물음 판정은 카드에 찍은 표로 한다.
-check(/card\.dataset\.ask = JSON\.stringify\(ask\);/.test(CARDS) && /cur\.dataset\.ask === JSON\.stringify\(ask\)/.test(CARDS),
-  "W3′ ★ 같은 물음이면 카드를 그대로 둔다 — 갈아 끼우면 고른 선택지가 6초마다 풀린다");
+check(!/mountLivAskDock|livAsks|placeLivAsk/.test(CHAT) && !/livAsks/.test(MAIN_SRC), "W3 ★ 물음 카드가 리브 세션 대화창에만 뜬다 — 어느 세션이든 곁칸 «요청» 칸에 떠야 한다(#5713)");
+check(/\{ type: 'sessask', name: '요청', icon: 'ask', pickable: false,/.test(PARTS) && /if \(type === 'sessask'\) return sessAskPart\(ctx\);/.test(PARTS),
+  "W3 곁칸 «요청» 칸이 있다 · [+] 로 못 넣는다(요청이 걸리면 셸이 세운다)");
+check(/const DERIVED_TABS: ReadonlySet<string> = new Set\(\[SESSAPP_TAB, SESSASK_TAB\]\);/.test(PANES), "W3 «요청» 탭은 배치에 저장하지 않는다(요청이 없는 세션에 빈 탭이 서지 않게)");
+check(/if \(added\.length \|\| !had \|\| \(wanted && asks\.some\(\(a\) => a\.id === wanted\)\)\) \{ bringUp\(z, SESSASK_TAB\); return; \}/.test(PANES),
+  "W3 ★ 요청이 새로 걸렸거나 열린 요청이 있는 세션을 막 열었으면 «요청» 탭을 켠다 — 안 켜면 사람은 AI 가 왜 멈췄는지 모른다");
+check(/syncAskCards\(list, asks, hooks\);/.test(ASK_PANE), "W3 «요청» 칸이 요청 카드를 그린다");
+// W3′(2026-10-26 실측) — 6초 되묻기마다 카드를 갈아 끼워 복수 선택(노션·슬랙)이 몇 초 뒤 풀렸다. 같은 요청의 카드는 건드리지 않는다.
+check(/if \(!id \|\| want\.get\(id\) !== c\.dataset\.askSig\) c\.remove\(\); else have\.set\(id, c\);/.test(ASK_REG) && /let node = have\.get\(a\.id\);\s*if \(!node\) \{/.test(ASK_REG),
+  "W3′ ★ 같은 요청이면 카드를 그대로 둔다 — 갈아 끼우면 고른 선택지 · 치던 값이 지워진다");
 // W3″(2026-10-26 실측) — 물음 카드가 .liv-card(«리브가 세팅한 것» 띠 · 여백 없음)를 빌려 써서 터미널 위에서 깨졌다. 틀은 .liv-ask 가 진다.
 const LIV_CSS = read("public/styles/35-liv.css");
-check(!/class: 'liv-card liv-ask'/.test(CARDS) && /\n\.liv-ask \{[^}]*border: 1px solid[^}]*padding:[^}]*\}/.test(LIV_CSS),
+check(!/class: 'liv-card liv-ask'/.test(ASK_KINDS) && /\n\.liv-ask \{[^}]*border: 1px solid[^}]*padding:[^}]*\}/.test(LIV_CSS),
   "W3″ ★ 물음 카드는 .liv-card 를 빌리지 않고 제 틀(테두리·여백)을 진다");
 // #5059 — 선택지는 btn-ghost 대신 제 카드(.liv-pick)가 바탕·테두리를 진다. 어느 쪽이든 «브라우저 기본 회색 단추» 가 되면 안 된다.
-check(/class: 'liv-pick', type: 'button'/.test(CARDS) && /\n\.liv-pick \{[^}]*border: 1px solid[^}]*background: var\(--bg\)[^}]*\}/.test(LIV_CSS),
+check(/class: 'liv-pick', type: 'button'/.test(ASK_KINDS) && /\n\.liv-pick \{[^}]*border: 1px solid[^}]*background: var\(--bg\)[^}]*\}/.test(LIV_CSS),
   "W3″ 선택지는 바탕·테두리가 있는 카드(.liv-pick) — 없으면 브라우저 기본 회색 버튼이 된다");
-check(/svcTile\(svc, o\.label, true\)/.test(CARDS), "#5059 앱 선택지는 [외부 앱 연결]과 같은 공식 로고 타일을 단다");
-check(!/livAskCard/.test(DESK), "W3 ★ 오른쪽 «리브» 칸이 물음 카드를 또 그린다 — 입력칸이 두 자리에 서면 어디에 넣을지 헷갈린다");
-check(/askLine\.hidden = !st\.secretAsk;/.test(DESK), "W3 오른쪽 칸은 «입력칸 위에서 기다린다» 한 줄만");
-check(/livAskCard\(st\.secretAsk, hooks\)/.test(BOARD), "W3 리브 화면(단독)은 물음 카드를 그린다(로컬 AI 링크로 온 사람이 넣는 자리)");
+check(/svcTile\(svc, o\.label, true\)/.test(ASK_KINDS), "#5059 앱 선택지는 [외부 앱 연결]과 같은 공식 로고 타일을 단다");
+check(!/askCard|syncAskCards|secretAsk/.test(DESK), "W3 ★ 오른쪽 «리브» 칸이 요청 카드를 또 그린다 — 입력칸이 두 자리에 서면 어디에 넣을지 헷갈린다");
+check(!/askCard|syncAskCards|secretAsk/.test(BOARD), "W3 리브 화면(단독)은 요청 카드를 그리지 않는다 — 로컬 AI 링크는 요청 화면(#/ask)으로 간다");
+check(/if \(board\) \{\s*const to = askHash\(\);/.test(MAIN_SRC), "W3 ★ 옛 로컬 AI 링크(#/liv?board=1)가 요청 화면으로 안 넘어간다 — 물음 카드가 없는 리브 화면에서 막힌다");
 
 check(/const r = await openLiv\(\{ job: 'connect', fromWelcome: !!o\.fromWelcome \}\);/.test(OWN), "W4 ★ 연결 문이 리브에게 맡기지 않는다");
 check(/if \(r\.created\) \{\s*rememberCreated\(r\.session\);\s*if \(r\.initialPrompt\) rememberFirstPrompt\(id, String\(r\.initialPrompt\)\);/.test(OPEN), "W4 새로 열었으면 첫 지시를 먼저 그린다");
@@ -133,7 +140,6 @@ check(/const other = tabsApi\?\.find\(to\);\s*if \(other && other !== tab\) \{ t
 check(/const livId = projectId > 0 \? knownLivSessionId\(\) : await livSessionIdWithin\(1500\);/.test(MAIN), "W9 ★ 세션 화면이 리브 id 물음을 끝없이 기다린다(느리면 빈 화면)");
 check(/void livSessionId\(\{ fresh: true \}\);\s*const href = '#\/s\/' \+ encodeURIComponent\(sid\);/.test(MAIN), "W9 되살린 뒤 리브 id 를 새로 안 묻는다(30초 동안 리브 세션을 못 알아본다)");
 //   (#4940) 보기는 본 창과 같이 일반 세션 — 대화 고정(chatHome)을 주지 않는다(상민님 2026-10-23 «그냥 터미널로 열면 되잖아»).
-check(/const soloLiv = isLivSessionId\(/.test(MAIN) && /\.\.\.\(soloLiv \? \{ livAsks: true \} : \{\}\),/.test(MAIN), "W9 팝아웃 창의 리브 세션이 물음 자리로 안 열린다");
 check(!/soloLiv \? \{ chatHome: true/.test(MAIN), "W9 ★ 팝아웃 창의 리브 세션이 대화 고정으로 열린다 — 하네스가 떠도 터미널로 안 넘어간다");
 check(/if \(inflight\) return inflight;/.test(OPEN), "W9 묻는 중이면 그 답을 기다린다(되살린 뒤 옛 id 로 그리지 않게)");
 
@@ -141,7 +147,9 @@ check(/if \(inflight\) return inflight;/.test(OPEN), "W9 묻는 중이면 그 �
 check(/return e\.send \? e\.send\(text\) : false;/.test(SESSIN), "W3 보내기 다리 — 보낼 수 없는 화면이면 거짓");
 check(/if \(destroyed \|\| mode !== 'chat' \|\| view\.input\.disabled \|\| view\.input\.value\.trim\(\) \|\| attachments\.busy\(\) \|\| attachments\.tail\(\)\) return false;/.test(CHAT),
   "W3 ★ 터미널 쪽이거나 사람이 쓰던 글이 있어도 보낸다(쓰던 글이 사라진다 · 사람이 고칠 틈 없이 Enter)");
-check(/if \(destroyed \|\| sendHere\(text\)\) return;[\s\S]{0,200}?void openLiv\(\{ text, onlyExisting: true \}\)/.test(CHAT), "W9 물음 카드의 한 마디 — 보낼 수 없으면 입력칸을 건드리지 않고 서버로(있는 리브 세션에만) 넣는다");
+//  (#5713) 요청 카드의 한 마디 — 그 세션 대화창이 떠 있으면 거기로(사람이 보낸 말과 같은 길), 아니면 서버가 그 세션에 넣는다. 둘 다 못 하면 사람에게 알린다.
+check(/if \(ask\.session_id && sendIntoSession\(\[ask\.session_id\], say\)\) \{/.test(ASK_REG) && /const t = await tellAsk\(ask\.id\);\s*if \(t\.delivered\)/.test(ASK_REG) && /else askToast\(manualSay\(say\), 15000\);/.test(ASK_REG),
+  "W9 요청 카드의 한 마디 — 대화창이 떠 있으면 거기로 · 아니면 서버로 · 둘 다 안 되면 사람에게 «AI 에게 전해 주세요»");
 check(/if \(id && sendIntoSession\(\[id\], text\)\) return true;[\s\S]*?const r = await openLiv\(\{ text, onlyExisting: true \}\);/.test(DESK), "W3 오른쪽 칸의 말 — 대화창이 있으면 거기로, 없으면 서버가 리브 세션에 넣는다");
 check(/const r = await openLiv\(\{ text, onlyExisting: true \}\);/.test(DESK), "W9 ★ 곁칸 카드의 맞장구가 리브 세션이 사라진 사이 새 리브 세션의 첫 지시가 된다");
 check(!/takeUnsentDraft/.test(DESK), "W9 곁칸이 남겨 둔 글을 직접 걷는다(넣기 성공 전에 걷으면 말이 사라진다 — 담기는 openLiv 한 곳에서)");

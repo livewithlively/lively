@@ -61,6 +61,7 @@ check(sh("builder", "wiki") === "wiki" && sh("", "sess") === "sess", "B5 앱 화
     //  화면 대장의 첫 칸마다 — 그 화면의 사이드바 주인(이유는 lib/side-owner 머리말).
     const EXPECT = {
       "": "section", dashboard: "section", welcome: "section", "app-open": "section", "app-grant": "section", p: "section", s: "section", open: "section",   // #4769 설치한 앱의 문(경유지) — 구역 사이드바 그대로
+      ask: "section",   // #5713 요청 주소(그 세션 화면으로 넘기는 경유지 · 못 찾으면 요청 카드) — 구역 사이드바 그대로
       i: "none", full: "none", app: "none", learn: "none", inbox: "none", liv: "none", connect: "none", archive: "none", trash: "none",   // #5568 지난 세션 · 휴지통도 앱
       taxonomy: "taxonomy", sources: "sources", f: "sources", builder: "builder",
     };

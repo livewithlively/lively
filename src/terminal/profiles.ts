@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
 import { getMember } from "../org/store/members.js";
-import { mintToken, listTokens, revokeToken } from "../org/store/tokens.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
+import { mintToken, listTokens, revokeToken, expireTokenSoon } from "../org/store/tokens.js";   // #2165 — 배럴(org/store.js) 대신 좁은 모듈: 배럴을 타면 커넥터·수집기·토큰소스가 통째로 노드 번들에 실린다
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists, memberSlug } from "./terminal-isolation.js";
@@ -202,7 +202,8 @@ const SESSION_MCP_TOKEN_LABEL = "session-mcp:";
 export async function sessionHookTokenIds(): Promise<Set<string>> {
   const out = new Set<string>();
   for (const t of await listTokens()) {
-    if (!t.revoked_at && t.label && t.label.startsWith(SESSION_TOKEN_LABEL)) out.add(t.label.slice(SESSION_TOKEN_LABEL.length));
+    //  만료가 걸린 훅 토큰은 **내려간 세션의 유예분**이다(retireSessionTokens · #5611) — 살아 있는 세션의 자격으로 세지 않는다.
+    if (!t.revoked_at && !t.expires_at && t.label && t.label.startsWith(SESSION_TOKEN_LABEL)) out.add(t.label.slice(SESSION_TOKEN_LABEL.length));
   }
   return out;
 }
@@ -227,6 +228,29 @@ async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Pro
  */
 export async function revokeSessionHookToken(boxId: string): Promise<number> {
   return revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`, `${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "killSession");
+}
+/** 세션이 내려간 뒤 훅 토큰이 더 사는 시간(초) — 세션 기록 캡처의 «뒤에서 올리는 판» 이 스스로 접는 시간(BG_HARD_MS 15분)과 같다. */
+export const SESSION_HOOK_END_GRACE_SEC = 15 * 60;
+/**
+ * 세션을 **내릴 때**(사람의 보관·끄기 · 자동 끄기 · 박스 kill) — MCP 자격은 즉시 회수하고, 훅 자격은
+ *  SESSION_HOOK_END_GRACE_SEC 뒤에 죽도록 만료를 당긴다(#5611).
+ *
+ * 왜 훅만 유예하나: 세션이 내려가며 뜨는 SessionEnd 훅(session-log-capture-end)이 **이 훅 토큰으로** 훅 목록을 받고
+ *  끊긴 턴·한도로 끝난 턴의 마지막 답을 중앙 기록에 올린다. 종전처럼 kill 직후 회수하면 러너의 목록 조회부터 401 이라
+ *  아무 훅도 안 돌았다(실측 2026-11-20 매니지드: 보관 직후 30초 동안 중앙 기록 0바이트 그대로 · SessionEnd 목록 캐시 미갱신).
+ *  훅 토큰은 세션 최소권한(admin/runtime 제외)이고 그 세션에서 뜬 프로세스만 들고 있다. MCP 토큰(구성원 권한 그대로)은 유예할 이유가 없다.
+ *
+ * 생성 실패 정리·과업 세션 회수처럼 «훅이 올릴 대화가 없는» 자리는 종전대로 revokeSessionHookToken(즉시)을 쓴다.
+ */
+export async function retireSessionTokens(boxId: string): Promise<{ revoked: number; expiring: number }> {
+  const hook = `${SESSION_TOKEN_LABEL}${boxId}`, mcp = `${SESSION_MCP_TOKEN_LABEL}${boxId}`;
+  let revoked = 0, expiring = 0;
+  for (const t of await listTokens()) {
+    if (t.revoked_at || !t.label) continue;
+    if (t.label === mcp) { if (await revokeToken(t.token_hash, "killSession", "terminal-sessions") === "revoked") revoked++; }
+    else if (t.label === hook) { if (await expireTokenSoon(t.token_hash, SESSION_HOOK_END_GRACE_SEC, "killSession", "terminal-sessions")) expiring++; }
+  }
+  return { revoked, expiring };
 }
 export async function mintSessionHookToken(memberId: string, boxId: string): Promise<string | null> {
   const member = await getMember(memberId);
@@ -336,6 +360,9 @@ const HARNESS_CRED: Record<string, string> = {
 //  /api/ui/me/welcome 이 폴링하는 자리라 파일 표만 쓰고, 프로브는 사람이 «로그인했어요» 를 누른 그 순간에만 돈다.
 const HARNESS_PROBE: Record<string, string[]> = {
   antigravity: ["models"],
+  // Cursor 2026.11.19: `agent status` 는 로그아웃 상태에도 exit 0 이다.
+  // JSON 의 isAuthenticated 가 true 인 경우에만 성공으로 판정한다.
+  cursor: ["status", "--format", "json", "|", "grep", "-Eq", "'\"isAuthenticated\"[[:space:]]*:[[:space:]]*true'"],
 };
 const PROBE_TIMEOUT_MS = 25_000;   // 네트워크 왕복(실측 4.3초)의 여유배 — 넘으면 '미로그인'이 아니라 **모름**이다
 

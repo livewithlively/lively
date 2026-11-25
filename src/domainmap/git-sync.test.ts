@@ -24,6 +24,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseDiff, sanitizeName, repoClonePath, reposDir, withCloneLock, CloneBusyError, CLONE_LOCK_STALE_MS } from "./git-sync.js";
+import { installWorkspaceDirKeyResolver } from "../ops/workspace-dir-key.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -134,5 +135,34 @@ t("repoClonePath 은 reposDir 하위 단일 세그먼트(경로탈출 불가)", 
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// ── 스캐너 클론 자리도 워크스페이스마다 따로 ──────────────────────────────────
+//  S1 | 열쇠 없음            | reposDir/<name>                     (단일 워크스페이스 · primary — 종전 자리)
+//  S2 | 열쇠 A · 열쇠 B      | reposDir/@ws/<id>/<name> — 같은 이름이어도 서로 다른 자리 · 종전 자리와도 다르다
+//  S3 | 열쇠 꼴이 틀림       | 던진다(종전 자리로 떨어지지 않는다)
+const WA = "aaaaaaaa-1111-2222-3333-444444444444", WB = "bbbbbbbb-1111-2222-3333-444444444444";
+t("S1 열쇠가 없으면 스캐너 클론은 종전 자리", () => {
+  installWorkspaceDirKeyResolver(() => null);
+  assert.equal(repoClonePath("app"), reposDir() + "/app");
+});
+t("S2 열쇠가 있으면 워크스페이스마다 다른 자리 — 같은 이름이어도 겹치지 않는다", () => {
+  try {
+    installWorkspaceDirKeyResolver(() => WA);
+    const a = repoClonePath("app");
+    installWorkspaceDirKeyResolver(() => WB);
+    const b = repoClonePath("app");
+    assert.equal(a, `${reposDir()}/@ws/${WA}/app`);
+    assert.equal(b, `${reposDir()}/@ws/${WB}/app`);
+    assert.notEqual(a, b);
+    assert.notEqual(a, reposDir() + "/app");
+    assert.equal(repoClonePath("../../etc"), `${reposDir()}/@ws/${WB}/.._.._etc`, "이름 정리는 그대로다");
+  } finally { installWorkspaceDirKeyResolver(() => null); }
+});
+t("S3 열쇠 꼴이 틀리면 던진다", () => {
+  try {
+    installWorkspaceDirKeyResolver(() => "../escape");
+    assert.throws(() => repoClonePath("app"), /UUID 꼴이 아닙니다/);
+  } finally { installWorkspaceDirKeyResolver(() => null); }
+});
 
 console.log(`\n${pass} passed`);

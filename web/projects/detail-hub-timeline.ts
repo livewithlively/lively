@@ -223,17 +223,8 @@ export const fillTimeline: Fill = (ctx, f, body, foot, sub) => {
       }
       if (w <= 1) { body.append(feed(sorted, pickInModal)); footAll(); return; }
       if (h <= 1) { body.append(lanes(sorted, w >= 3 ? 3 : 2, 3, pickInModal)); footAll(); return; }
-      if (w >= 3) {
-        const side = el('div', { class: 'pjh-side pjh-wside', 'data-mscroll': 'tl-side' }) as HTMLElement;
-        if (!tools.sel || !sorted.some((a) => String(a.id) === tools.sel)) tools.sel = String(sorted[0].id);
-        const wrap = el('div', { class: 'pjh-mtwo', style: 'grid-template-columns:minmax(0,1fr) 300px' });
-        const bd = board(sorted, boardMaxCols(954 - 300 - 16), pickInPlace(wrap as HTMLElement, side));
-        wrap.append(el('div', { class: 'pjh-mmain' }, bd), side);
-        body.append(wrap);
-        paintSide(side, sorted.find((a) => String(a.id) === tools.sel) || null);
-        footAll();
-        return;
-      }
+      //  #5630 — 격자 위젯에는 «고른 작업» 옆 칸을 세우지 않는다(글이 길게 깔려 판을 눌렀다). 줄을 누르면 모달에서 속을 본다.
+      if (w >= 3) { body.append(board(sorted, boardMaxCols(954), pickInModal)); footAll(); return; }
       body.append(board(sorted, boardMaxCols(617), pickInModal));
       footAll();
       return;

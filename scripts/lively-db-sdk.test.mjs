@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { pgTable, bigint, numeric, timestamp, text, integer } from "drizzle-orm/pg-core";
 import { eq, sql } from "drizzle-orm";
 import {
-  createLivelyDb, livelyIdentity, livelyMember, livelyJobs, withIdentity, livelyErrorOf, encodeParam, decodeRows, decodeObjects, parsePgArray, generateDrizzleSchema, LivelyDbError,
+  createLivelyDb, livelyIdentity, livelyMember, livelyJobs, withIdentity, livelyErrorOf, livelyConsentOf, encodeParam, decodeRows, decodeObjects, parsePgArray, generateDrizzleSchema, LivelyDbError,
 } from "../public/sdk/lively-db.mjs";
 
 /** 게이트웨이 흉내 — 부른 것(경로·헤더·본문)을 남기고 정해 둔 응답을 돌려준다. */
@@ -313,4 +313,30 @@ test("S14 livelyJobs — 앱 서버 토큰 + 들어온 신원으로 /api/ui/app-
   const j2 = livelyJobs({ url: "https://w.example", token: "tok", fetch });
   await new Promise((ok) => livelyIdentity()({ headers: { "x-lively-identity": "lvjr1.5.zzzz" } }, {}, () => { j2.get(5).then(ok); }));
   assert.equal(calls.at(-1).headers["x-lively-identity"], "lvjr1.5.zzzz", "작업 안에서 시작한 작업 · 조회는 돌기 신원을 싣는다");
+});
+
+test("S16 #1644 «다시 동의» — 403 consent_required 면 livelyConsentOf 가 동의할 곳 · 동의에 없는 것을 꺼낸다(Drizzle 이 감싸도 · 작업 · 직접 부른 본문) · 아니면 null", async () => {
+  const URL_ = "https://gw.example/ui/#/app-grant/crm?v=pub&from=mcp";
+  const refusal = { error: "앱 'crm' 의 사용 동의가 예전 범위라 'db' 권한을 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다", code: "consent_required", consent_url: URL_, missing: { scopes: ["db"], tools: ["db_query"] } };
+  const g = gateway({ status: 403, body: refusal });
+  const { db } = createLivelyDb({ url: "http://gw", token: "t", fetch: g.fetch });
+  let seen = null;
+  await assert.rejects(db.select().from(contacts), (e) => { seen = e; return true; });
+  assert.equal(livelyErrorOf(seen)?.code, "consent_required", "LivelyDbError.code 가 body.code");
+  assert.deepEqual(livelyConsentOf(seen), { message: refusal.error, consentUrl: URL_, missing: { scopes: ["db"], tools: ["db_query"] } });
+  //  작업 SDK 도 같은 오류 꼴이다.
+  const jobs = livelyJobs({ url: "https://w.example", token: "tok", fetch: async () => new Response(JSON.stringify(refusal), { status: 403 }) });
+  await assert.rejects(jobs.start("/x"), (e) => livelyConsentOf(e)?.consentUrl === URL_);
+  //  직접 부른 게이트웨이 응답 본문(ai-runs 를 fetch 로 부르는 앱).
+  assert.equal(livelyConsentOf(refusal)?.consentUrl, URL_);
+  //  동의가 없는 거절(missing 없음) · 공개 주소를 모르는 게이트웨이(consent_url 없음) · 주소 꼴이 아닌 값.
+  assert.deepEqual(livelyConsentOf({ error: "동의가 없습니다", code: "consent_required" }), { message: "동의가 없습니다", consentUrl: null, missing: null });
+  assert.equal(livelyConsentOf({ code: "consent_required", consent_url: "javascript:alert(1)" })?.consentUrl, null, "http(s) 주소만 전한다");
+  //  다른 거절 · 다른 오류 · 빈 값은 null.
+  const g2 = gateway({ status: 409, body: { error: "제약", pg_code: "23505" } });
+  const d2 = createLivelyDb({ url: "http://gw", token: "t", fetch: g2.fetch });
+  await assert.rejects(d2.db.select().from(contacts), (e) => livelyConsentOf(e) === null && livelyErrorOf(e)?.code === undefined);
+  assert.equal(livelyConsentOf(new Error("다른 오류")), null);
+  assert.equal(livelyConsentOf(undefined), null);
+  assert.equal(livelyConsentOf({ code: "account_unavailable" }), null);
 });

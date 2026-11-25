@@ -19,7 +19,7 @@
 //  실행(멤버 자리에서 띄우고 로그를 읽는 것)은 호출자가 하고, 그래야 이 표를 하네스 바이너리 없이 검사할 수 있다.
 
 /** 이 통로로 로그인할 수 있는 하네스. 그 외는 종전 안내(터미널)로 간다 — 지어내지 않는다. */
-export const AI_LOGIN_HARNESSES = ["codex", "claude", "grok"] as const;
+export const AI_LOGIN_HARNESSES = ["codex", "claude", "grok", "cursor"] as const;
 export type AiLoginHarness = (typeof AI_LOGIN_HARNESSES)[number];
 
 export function isAiLoginHarness(k: string): k is AiLoginHarness {
@@ -30,6 +30,7 @@ export function isAiLoginHarness(k: string): k is AiLoginHarness {
 export function aiLoginArgv(h: AiLoginHarness): string[] {
   if (h === "codex") return ["codex", "login", "--device-auth"];
   if (h === "grok") return ["grok", "login", "--device-auth"];
+  if (h === "cursor") return ["agent", "login"];
   return ["claude", "auth", "login"];
 }
 
@@ -41,7 +42,7 @@ export function aiLoginArgv(h: AiLoginHarness): string[] {
  *   실측 2026-08-31 — grok 은 codex 와 출력 모양이 같다:
  *     `https://accounts.x.ai/oauth2/device?user_code=CWWP-W2NG` + 한 줄에 `CWWP-W2NG` + "Waiting for authorization…"
  */
-const SHOWS_CODE: Record<AiLoginHarness, boolean> = { codex: true, grok: true, claude: false };
+const SHOWS_CODE: Record<AiLoginHarness, boolean> = { codex: true, grok: true, claude: false, cursor: false };
 
 /** 로그인 프로세스가 끝났음을 로그에 남기는 표식 — 러너가 붙인다(종료코드까지). */
 export const EXIT_MARK = "LVLY_LOGIN_EXIT";
@@ -77,7 +78,7 @@ export function stripAnsi(s: string): string {
 /** 사람이 브라우저에서 열 주소만 고른다 — 로그인 도메인이 아닌 주소(문서 링크 등)에 낚이지 않게 한다. */
 function pickUrl(text: string): string | undefined {
   const all = text.match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
-  const login = all.find((u) => /(auth\.openai\.com|chatgpt\.com|claude\.com|anthropic\.com|accounts\.x\.ai|auth\.x\.ai)/i.test(u));
+  const login = all.find((u) => /(auth\.openai\.com|chatgpt\.com|claude\.com|anthropic\.com|accounts\.x\.ai|auth\.x\.ai|cursor\.com)/i.test(u));
   return login ?? all[0];
 }
 

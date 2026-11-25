@@ -150,7 +150,7 @@ export const membersCapabilities: Capability[] = [
       identities: z.array(z.object({ system: z.string(), external_id: z.string(), email: z.string().optional(), instance: z.string().optional(), display_name: z.string().optional() })).optional().describe("외부 계정 연결(slack/clickup 등)"),
       body_md: z.string().optional().describe("개인 레이어(세션 컨텍스트에 실림)"),
       state: z.enum(["active", "inactive"]).optional(),
-      scopes: z.array(z.string()).optional().describe("권한 scope: items|context|memory|db|code|admin|runtime"),
+      scopes: z.array(z.string()).optional().describe("권한 scope: items|context|memory|db|code|admin|runtime. 새 구성원을 만들며 생략하면 기본 권한(items · context · memory · db · code), 기존 구성원이면 그대로 둔다"),
       sort: z.number().optional(),
     }),
   // ── 구성원 비밀번호 재설정 — 임시 비번(관리자가 정하거나 자동 발급). 첫 로그인 후 변경 권장(must_change). ──

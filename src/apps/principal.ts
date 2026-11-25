@@ -130,6 +130,12 @@ export async function requireAppTool(user: LivelyUser, toolName: string): Promis
     throw new HttpError(403, `이 작업은 '${toolName}' 도구를 쓸 수 없습니다(앱이 이 작업에 허용한 도구 밖 — 매니페스트 ai.tools)`);
   }
   if (!(await appToolAllowed(user, toolName))) {
+    //  #1644 — 앱이 지금 선언한 도구인데 그 사람의 동의가 예전 범위라 막힌 것이면 «다시 동의» 로 말한다(앱 화면 다리 #4225 와 같은 글 ·
+    //   code consent_required · 동의할 곳). 앱 서버는 그 까닭과 주소를 사람에게 그대로 전할 수 있다. 선언 밖 도구는 종전 «권한 밖» 그대로.
+    //   막힌 길에서만 읽는다(앱 · 판 · 동의 · 구성원) — 통과하는 호출의 비용은 그대로다. 순환을 피해 부를 때 가져온다.
+    const { appRegrantError } = await import("./app-consent-gap.js");
+    const regrant = await appRegrantError(user, { tool: toolName });
+    if (regrant) throw regrant;
     throw new HttpError(403, `이 앱 세션은 '${toolName}' 도구를 쓸 수 없습니다(앱 권한 밖)`);
   }
 }

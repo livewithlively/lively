@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
-import { isScope } from "../../auth/scopes.js";
+import { isScope, DANGEROUS_SCOPES, SAFE_SCOPES } from "../../auth/scopes.js";
 import { audit, sha256 } from "./audit.js";
 
 // ── auth_token (DB 기반 bearer) ──
@@ -28,6 +28,16 @@ export async function mintToken(input: {
   //  '발급 당시 무엇이었나'를 읽고, 이 플래그를 끄면 그 값이 그대로 상한으로 돌아온다.
   followMemberScopes?: boolean;
   /**
+   * 비위험 권한 추종(#5712) — 위험 scope(admin · runtime)를 뺀 나머지는 박제하지 않고 **구성원의 지금 권한**을 따른다. 위험 scope 는
+   *  발급 때 실은 것(scopes 인자)만, 구성원이 지금도 갖고 있을 때 유효하다. **사람이 자기 컴퓨터를 연결해 받는 로그인 토큰**에 켠다
+   *  (lively login · 데스크톱 앱 = device-cli · 설치 탭 본인 발급 · 관리자가 scope 를 고르지 않고 구워 준 토큰). 규칙 본문은
+   *  computeEffectiveScopes. memberId 와 함께만 — 없으면 던진다(따를 구성원이 없다).
+   *  ★ 칸(auth_token.follow_safe_scopes)이 아직 없는 롤 창(새 게이트웨이가 먼저 · 마이그레이션은 끝에)에는 **이 표시 없이** 굽는다 —
+   *   로그인이 «없는 칸» 으로 깨지지 않게. 그 토큰은 종전처럼 발급 때 권한에 묶이고(닫힌 쪽), 칸이 생기는 순간의 백필(schema/core.ts)이
+   *   라벨로 찾아 표시를 단다. 실제로 달았는지는 응답의 followSafeScopes 가 말한다.
+   */
+  followSafeScopes?: boolean;
+  /**
    * #4891 — 이 앱 토큰의 주체를 앱 서버 급으로(검증이 LivelyUser.appServer 를 켠다): 능력 API · /mcp 에서만 통하고(auth/http-auth) 무조건
    *  통과 도구(EXEMPT)가 꺼진다(apps/principal). appId 와 함께만 — 없으면 던진다.
    */
@@ -39,9 +49,10 @@ export async function mintToken(input: {
    *   깨지지 않게. 상한을 실은 발급은 그때 실패한다(작업이 돌지 않는다 — 닫힌 쪽).
    */
   toolCeiling?: readonly string[] | null;
-}, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null }> {
+}, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null; followSafeScopes: boolean }> {
   if (input.appServerPrincipal === true && !input.appId) throw new Error("앱 서버 급 토큰은 앱 토큰(appId)이어야 한다");
   if (input.toolCeiling != null && !input.appId) throw new Error("도구 상한은 앱 토큰(appId)에만 건다");
+  if (input.followSafeScopes === true && !input.memberId) throw new Error("비위험 권한 추종은 구성원 토큰(memberId)에만 건다");
   const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
   const tokenHash = sha256(token);
@@ -49,24 +60,47 @@ export async function mintToken(input: {
     ? Math.floor(input.expiresInSec) : null;
   // 만료는 DB now() 기준으로 계산한다 — 검증(verifyDbToken)도 DB now() 라 시계가 하나로 유지된다.
   const ceiling = input.toolCeiling != null ? JSON.stringify([...input.toolCeiling]) : null;
-  const r = await exec.query(
+  //  follow_safe_scopes 칸도 tool_ceiling 처럼 **켤 때만** 적는다(롤 창에 다른 토큰의 발급이 «없는 칸» 으로 깨지지 않게).
+  const insert = (withFollowSafe: boolean) => exec.query(
     `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by,
-                            client_id, resource, app_id, expires_at, follow_member_scopes, app_server_principal${ceiling != null ? ", tool_ceiling" : ""})
+                            client_id, resource, app_id, expires_at, follow_member_scopes, app_server_principal${ceiling != null ? ", tool_ceiling" : ""}${withFollowSafe ? ", follow_safe_scopes" : ""})
        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$11,
-              now() + ($10::int * interval '1 second'), $12, $13${ceiling != null ? ", $14::jsonb" : ""})
+              now() + ($10::int * interval '1 second'), $12, $13${ceiling != null ? ", $14::jsonb" : ""}${withFollowSafe ? ", true" : ""})
      RETURNING expires_at`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null,
      input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl), input.appId ?? null,
      input.followMemberScopes === true, input.appServerPrincipal === true, ...(ceiling != null ? [ceiling] : [])],
   );
+  let followSafe = input.followSafeScopes === true;
+  let r: pg.QueryResult;
+  if (!followSafe) {
+    r = await insert(false);
+  } else {
+    //  칸이 아직 없으면(42703 — 롤 창) 표시 없이 다시 굽는다. 트랜잭션 안(client)에서는 실패한 문장이 트랜잭션 전체를 못 쓰게 만들므로
+    //   SAVEPOINT 로 그 문장만 되돌린다(디바이스 로그인은 consume 과 발급이 한 트랜잭션이다 — #880).
+    const SP = "mint_follow_safe";
+    if (client) await client.query(`SAVEPOINT ${SP}`);
+    try {
+      r = await insert(true);
+      if (client) await client.query(`RELEASE SAVEPOINT ${SP}`);
+    } catch (e) {
+      //  없는 칸이 **이 칸**일 때만 물러선다 — 다른 칸(tool_ceiling 등)이 없어서 난 42703 을 이 칸 탓으로 읽지 않는다.
+      const err = e as { code?: string; message?: string };
+      if (err?.code !== "42703" || !/follow_safe_scopes/.test(String(err.message ?? ""))) throw e;
+      if (client) await client.query(`ROLLBACK TO SAVEPOINT ${SP}`);
+      followSafe = false;
+      r = await insert(false);
+    }
+  }
   await audit("auth_token", input.userId, "mint",
     null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId,
             clientId: input.clientId ?? null, resource: input.resource ?? null,
             followMemberScopes: input.followMemberScopes === true,
+            ...(input.followSafeScopes === true ? { followSafeScopes: followSafe } : {}),
             ...(input.toolCeiling != null ? { toolCeiling: [...input.toolCeiling] } : {}) }, actor, source, client);
   const expiresAt = (r.rows[0] as { expires_at: string | null } | undefined)?.expires_at ?? null;
-  return { token, tokenHash, expiresAt: expiresAt ? new Date(expiresAt) : null };
+  return { token, tokenHash, expiresAt: expiresAt ? new Date(expiresAt) : null, followSafeScopes: followSafe };
 }
 
 export interface TokenMeta {
@@ -78,11 +112,21 @@ export interface TokenMeta {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  /** 만료 시각(없으면 null = 만료 없음). 세션 훅 토큰은 null 로 굽고, 세션이 내려가면 expireTokenSoon 이 유예 뒤로 당긴다(#5611). */
+  expires_at: string | null;
+  /**
+   * 이 토큰이 구성원의 지금 권한을 따르나 — 'all' = 전부(세션 · 박스 토큰 #2174) · 'safe' = 위험 scope 를 뺀 나머지(로그인 토큰 #5712 —
+   *  위험 scope 는 scopes 에 든 것만) · null = 따르지 않음(scopes 가 상한). 따르는 토큰의 scopes 는 «발급 때 무엇이었나» 기록이다.
+   */
+  follows_member: "all" | "safe" | null;
 }
 
 export async function listTokens(): Promise<TokenMeta[]> {
+  //  follow_safe_scopes 는 칸 이름으로 고르지 않는다(verifyDbToken 의 tool_ceiling 과 같은 까닭 — 롤 창에 목록이 «없는 칸» 으로 깨지지 않게).
   const r = await itemsPool.query(
-    `SELECT token_hash, user_id, scopes, label, member_id, created_at, last_used_at, revoked_at
+    `SELECT token_hash, user_id, scopes, label, member_id, created_at, last_used_at, revoked_at, expires_at,
+            CASE WHEN follow_member_scopes THEN 'all'
+                 WHEN (to_jsonb(auth_token) -> 'follow_safe_scopes') = 'true'::jsonb THEN 'safe' END AS follows_member
        FROM auth_token ORDER BY created_at DESC`,
   );
   return r.rows as TokenMeta[];
@@ -116,6 +160,25 @@ export async function revokeToken(tokenHash: string, actor?: string, source?: st
   // 0건 — '이미 회수됨'인지 '그런 토큰 없음'인지는 여기서만 갈 수 있다(UPDATE 술어가 둘을 같이 떨군다).
   const e = await exec.query(`SELECT 1 FROM auth_token WHERE token_hash=$1`, [tokenHash]);
   return (e.rowCount ?? 0) > 0 ? "already-revoked" : "not-found";
+}
+
+// 유예 뒤에 죽게 한다(#5611) — 즉시 회수(revokeToken)와 달리 만료 시각을 **now() + inSec** 로 당긴다.
+//  왜: 세션이 내려갈 때 뜨는 SessionEnd 훅(session-log-capture-end)이 그 세션의 훅 토큰으로 마지막 답을 올린다.
+//   종전처럼 kill 직후 회수하면 훅 목록 조회부터 401 이라 아무것도 안 돈다(실측 2026-11-20 매니지드 — 보관 뒤 중앙 기록 0바이트 그대로).
+//  만료 판정은 verifyDbToken 이 DB now() 로 하므로 게이트웨이가 재시작해도 이 약속은 지켜진다(타이머가 아니다).
+//  ★ 수명을 **줄이는 쪽으로만** 움직인다 — 이미 그보다 일찍 죽게 돼 있거나 회수된 토큰은 건드리지 않는다(0건 = false).
+export async function expireTokenSoon(tokenHash: string, inSec: number, actor?: string, source?: string): Promise<boolean> {
+  const sec = Number.isFinite(inSec) && inSec > 0 ? Math.floor(inSec) : 0;
+  const r = await itemsPool.query(
+    `UPDATE auth_token SET expires_at = now() + ($2::int * interval '1 second')
+      WHERE token_hash=$1 AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > now() + ($2::int * interval '1 second'))
+      RETURNING expires_at`,
+    [tokenHash, String(sec)],
+  );
+  if ((r.rowCount ?? 0) === 0) return false;
+  await audit("auth_token", tokenHash, "expire", null, { expires_at: (r.rows[0] as { expires_at: unknown }).expires_at }, actor, source);
+  return true;
 }
 
 // ── 회수 핸들(#2646) ──────────────────────────────────────────────────────────
@@ -183,6 +246,7 @@ export function computeEffectiveScopes(opts: {
   appId?: string | null;
   appLive?: boolean | null;   // 앱 enabled ∧ status='active'. null = 앱 행 없음/조회 불가(거부).
   followMemberScopes?: boolean;   // 세션·박스 토큰(우리가 굽는 것) — scope 를 박제하지 않고 멤버를 따른다.
+  followSafeScopes?: boolean;     // 로그인 토큰(#5712) — 위험 scope 를 뺀 나머지만 멤버를 따른다. 위험 scope 는 토큰에 실린 것만.
 }): string[] | null {
   // B4: 허용 scope 만(JSONB 손상·마이그레이션·위조로 admin/runtime 섞여 들어와도 여기서 떨군다).
   const tokenScopes = opts.tokenScopes.filter(isScope);
@@ -198,9 +262,21 @@ export function computeEffectiveScopes(opts: {
   //   쓰는 토큰은 사람이 직접 들고 다니는 것이 아니라 **박스 홈(~/.lively/token)에 심긴 것**이라, 관리자가
   //   권한을 올려도 그 파일이 다시 심길 때까지 세션은 옛 권한이었다. 재프로비저닝이 그 파일까지 닿지 못하면
   //   (2026-08-28 실측 — 격리 박스에서 토큰만 안 갱신됨) 올린 권한이 영영 도달하지 않는다.
-  //  적용 범위는 발급부가 정한다 — 우리가 굽는 세션·박스 토큰만. OAuth·device-auth 발급분은 **켜지 않는다**:
+  //  적용 범위는 발급부가 정한다 — 우리가 굽는 세션·박스 토큰만. OAuth 발급분은 **어느 추종도 켜지 않는다**:
   //   그건 사람이 동의 화면에서 본 범위가 계약이라, 나중에 조용히 넓어지면 그 동의가 거짓이 된다.
   if (opts.followMemberScopes) return memberScopes;
+  // 비위험 권한 추종(#5712) — 사람이 자기 컴퓨터를 연결해 받은 로그인 토큰(lively login · 데스크톱 앱 · 설치 탭 본인 발급).
+  //  위험 scope 를 뺀 나머지는 **멤버 라이브 scope 그대로**, 위험 scope(admin · runtime)는 **토큰에 실린 것만**(멤버가 지금도 가질 때).
+  //  왜 필요한가(2026-11-23): 관리자가 구성원 권한을 바꿔도 그 사람 컴퓨터의 토큰은 발급 때 권한에 묶여 있어, 올린 권한을 쓰려면
+  //   `lively login` 을 다시 해야 했다. 세션 시작 훅은 키트를 새로 받지만 토큰은 새로 받지 않는다 — 사람은 왜 안 되는지 알 길이 없다.
+  //   구성원 편집 화면은 «변경 시 활성 토큰에도 즉시 반영» 이라고 말하는데, 그 말이 내릴 때만 참이었다.
+  //  왜 위험 scope 는 따르지 않나: 연결 승인 화면의 «AI 에게 관리자 기능 허용» 은 기본이 끔이고 켤 때 비밀번호를 다시 확인한다.
+  //   그 답(끔)을 한 사람의 토큰이 나중에 관리자로 승격됐다고 저절로 관리자 기능을 얻으면, 그 화면에서 한 답이 거짓이 된다.
+  //   승인 화면은 비위험 권한의 목록을 보여 주지 않는다(«이 컴퓨터를 연결할까요?») — 그래서 그쪽은 따라가도 본 것과 어긋나지 않는다.
+  if (opts.followSafeScopes) {
+    const issued = new Set(tokenScopes);
+    return memberScopes.filter((s) => !DANGEROUS_SCOPES.has(s) || issued.has(s));
+  }
   const allowed = new Set(memberScopes);
   return tokenScopes.filter((s) => allowed.has(s));
 }
@@ -220,6 +296,13 @@ export interface DbTokenIdentity {
   appServer?: true;
   /** 도구 상한(auth_token.tool_ceiling). 걸린 토큰만 싣는다 — LivelyUser.toolCeiling 으로 그대로 간다(bearer.ts). */
   toolCeiling?: string[];
+  /**
+   * 이 토큰이 구성원의 비위험 권한을 따르는 토큰인가(#5712) — 그런 토큰만 싣는다. LivelyUser.followsMemberSafe 로 그대로 간다(bearer.ts).
+   *  판정은 **그때의 권한 견주기가 아니라 토큰의 성질**이다: 추종 표시(follow_member_scopes · follow_safe_scopes)가 켜졌거나, 발급 상한에
+   *  비위험 scope 가 전부 들어 있다(그 토큰은 교집합만으로 이미 구성원의 비위험 권한을 그대로 따른다 — 컨트롤플레인이 굽는 꼴).
+   *  관리자가 scope 를 골라 구운 토큰은 그때 구성원 권한과 우연히 같았더라도 여기 들지 않는다. OAuth 발급분 · 앱 토큰도 들지 않는다.
+   */
+  followsMemberSafe?: true;
 }
 
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
@@ -242,6 +325,8 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
               --  이 인증 쿼리가 «없는 칸» 으로 깨지지 않게(칸이 없으면 NULL — 그 칸을 단 토큰도 없다). 칸이 모든 배포에 생긴 뒤에는
               --  t.tool_ceiling 으로 바꿔도 된다(롤 창이 지난 다음 정리 때 — 인증 핫패스에서 행 전체를 JSON 으로 만들지 않게).
               to_jsonb(t) -> 'tool_ceiling' AS tool_ceiling,
+              -- 비위험 권한 추종(#5712)도 같은 까닭으로 행에서 꺼낸다(칸이 없으면 NULL = 따르지 않음 — 종전 판정 그대로).
+              to_jsonb(t) -> 'follow_safe_scopes' AS follow_safe_scopes,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
         WHERE t.token_hash=$1 AND t.revoked_at IS NULL
@@ -251,7 +336,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const row = r.rows[0] as {
       user_id: string; member_id: string | null; email: string | null;
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
-      follow_member_scopes: boolean | null;
+      follow_member_scopes: boolean | null; follow_safe_scopes: unknown;
       client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
       app_live: boolean | null; app_server_principal: boolean | null; tool_ceiling: unknown;
     } | undefined;
@@ -261,14 +346,19 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const strArr = (v: unknown, fb: string[]): string[] =>
       Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : fb;
     // 유효 권한 = intersection(토큰 scope, 멤버 scope). 멤버가 '라이브 상한' — 비활성/삭제면 거부.
+    const tokenScopes = strArr(row.token_scopes, []);
+    //  OAuth 발급분(client_id)과 앱 토큰(app_id)에는 켜져 있어도 듣지 않는다 — 그 둘의 범위는 동의 화면 · 앱 동의가 정한다
+    //   (발급부가 켜지 않지만, 칸이 잘못 켜진 행이 범위를 넓히지 못하게 여기서도 막는다).
+    const followSafeScopes = row.follow_safe_scopes === true && !row.client_id && !row.app_id;
     const scopes = computeEffectiveScopes({
       memberId: row.member_id,
       memberState: row.member_state,
-      tokenScopes: strArr(row.token_scopes, []),
+      tokenScopes,
       memberScopes: strArr(row.member_scopes, []),
       appId: row.app_id,
       appLive: row.app_live,
       followMemberScopes: row.follow_member_scopes === true,
+      followSafeScopes,
     });
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
     //  #4891 — 앱 서버 급 표시는 앱 토큰에만 뜻이 있다. 앱 없이 켜져 있으면(있어선 안 되는 행) 받지 않는다 — 앱 도구 게이트가 안 걸린다.
@@ -280,6 +370,10 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const toolCeiling = ceilingRaw == null ? null
       : Array.isArray(ceilingRaw) && ceilingRaw.every((x) => typeof x === "string") ? (ceilingRaw as string[]) : [];
     if (toolCeiling != null && !row.app_id) return null;
+    //  구성원의 비위험 권한을 따르는 토큰인가(DbTokenIdentity.followsMemberSafe 머리말) — 구성원 토큰이고 OAuth · 앱 토큰이 아닐 때만.
+    const held = new Set(tokenScopes);
+    const followsMemberSafe = !!row.member_id && !row.client_id && !row.app_id
+      && (row.follow_member_scopes === true || followSafeScopes || SAFE_SCOPES.every((s) => held.has(s)));
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
     return {
@@ -289,6 +383,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       appId: row.app_id ?? null,
       ...(appServer ? { appServer: true as const } : {}),
       ...(toolCeiling != null ? { toolCeiling } : {}),
+      ...(followsMemberSafe ? { followsMemberSafe: true as const } : {}),
       // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
       expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
     };
