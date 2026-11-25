@@ -72,6 +72,21 @@ export async function initDbAccessPolicies(pool: Pool): Promise<void> {
     ${ensureCheck("org_db_table_policy", { org_db_table_policy_mode_chk: "mode IN ('allow','deny')" })}
   `);
 
+  // ── org_db_source_grant — 이 DB 소스를 조회할 수 있는 사람 · 팀(#5799 새 권한 체계의 «대상 지정»). ──
+  //  **기본 불가**(결정 2026-11-25): 역할을 받은 구성원은 여기 적힌 소스만 조회한다 — 소스를 등록한 관리자도 자동으로는 못 본다.
+  //  subject_id = 구성원 id 또는 팀 id(글). 팀으로 지정하면 팀 편집이 곧 권한 편집이 된다(v6/team-store.ts anyTeamGrant 가 이 표도 센다).
+  //  옛 구성원(역할 없음)은 이 표를 보지 않는다 — 종전 그대로 db scope 가 전 소스를 연다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_db_source_grant(
+      source TEXT NOT NULL,
+      subject_kind TEXT NOT NULL DEFAULT 'member',
+      subject_id TEXT NOT NULL,
+      granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      granted_by TEXT,
+      PRIMARY KEY (source, subject_kind, subject_id));
+    ${ensureCheck("org_db_source_grant", { org_db_source_grant_kind_chk: "subject_kind IN ('member','team')" })}
+  `);
+
   // ── org_db_column_mask — 개인정보 컬럼 마스킹 정책(웹 관리, 컴플라이언스, #186). 라이브 스키마 위 오버레이. ──
   //  집행은 게이트웨이가 결정론적으로(고객 DB 무수정): 게이트1(AST 파생차단)+게이트2(출처기반 결과 마스킹, src/db/firewall.ts·tools/db.ts).
   //  style: full(전체) | partial(부분) | email(로컬부) | hash(sha256) | null(널) | age(생년월일 → 월 첫날 기준 만나이).

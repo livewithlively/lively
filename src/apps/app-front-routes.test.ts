@@ -20,7 +20,7 @@ const redeemH = () => ({ "x-lvly-app-front": signAppFront(SECRET, { op: "redeem"
 
 const member = (id: string, over: Partial<OrgMember> = {}): OrgMember => ({
   id, kind: "human", display_name: id.toUpperCase(), nickname: null, use_nickname: false, email: `${id}@x.io`, identities: [], body_md: "",
-  avatar: null, avatar_char: null, avatar_color: null, state: "active", scopes: [], sort: 0, version: 1, updated_at: null, updated_by: null, ...over,
+  avatar: null, avatar_char: null, avatar_color: null, state: "active", scopes: [], role: null, grants: {}, sort: 0, version: 1, updated_at: null, updated_by: null, ...over,
 });
 const app = (id: string, over: Partial<OrgApp> & { visibility?: string } = {}): OrgApp => ({
   id, title: "장표", version: "1", manifest: { csp: { connect_domains: ["api.example.com"] } }, source: {}, content_hash: null, status: "active", enabled: true,

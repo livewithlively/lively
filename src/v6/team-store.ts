@@ -13,7 +13,13 @@ export interface TeamRow {
   id: number; key: string; name: string | null; description: string | null;
   body_md: string | null; lead_member_id: string | null;
   state: string; sort: number; created_at: string; updated_at: string;
+  /** 종류(#5799) — team = 소속 팀 · group = 권한 그룹(접근 판정은 같고 보이는 자리만 다르다). */
+  kind?: TeamKind;
 }
+export type TeamKind = "team" | "group";
+export const isTeamKind = (s: unknown): s is TeamKind => s === "team" || s === "group";
+/** 종류 칸을 행에서 꺼내는 식 — 칸 이름으로 고르지 않는다(롤 창에 칸이 아직 없어도 팀 조회가 깨지지 않게 · 없으면 소속 팀). ref = 표 이름 또는 별칭. */
+const KIND = (ref: string): string => `COALESCE(to_jsonb(${ref}) ->> 'kind', 'team') AS kind`;
 
 export interface TeamMemberRow {
   member_id: string; role: string; sort: number;
@@ -34,13 +40,13 @@ export interface TeamListRow extends TeamRow { member_count: number }
 export async function listTeams(opts?: { includeArchived?: boolean }): Promise<TeamListRow[]> {
   const where = opts?.includeArchived ? "" : `WHERE state <> 'archived'`;
   return q(itemsPool, `
-    SELECT ${TEAM_COLS.split(",").map((c) => "t." + c.trim()).join(", ")},
+    SELECT ${TEAM_COLS.split(",").map((c) => "t." + c.trim()).join(", ")}, ${KIND("t")},
       (SELECT COUNT(*) FROM team_member tm WHERE tm.team_id=t.id)::int AS member_count
     FROM team t ${where} ORDER BY t.sort, t.name NULLS LAST, t.key`);
 }
 
 export async function getTeam(id: number): Promise<TeamDetail | undefined> {
-  const team: TeamRow | undefined = await one(itemsPool, `SELECT ${TEAM_COLS} FROM team WHERE id=$1`, [id]);
+  const team: TeamRow | undefined = await one(itemsPool, `SELECT ${TEAM_COLS}, ${KIND("team")} FROM team WHERE id=$1`, [id]);
   if (!team) return undefined;
   const members: TeamMemberRow[] = await q(itemsPool, `
     SELECT tm.member_id, tm.role, tm.sort, m.display_name
@@ -67,7 +73,8 @@ export async function anyTeamGrant(): Promise<boolean> {
     `SELECT 1 WHERE EXISTS(SELECT 1 FROM project_list_team)
                OR EXISTS(SELECT 1 FROM project_folder_member WHERE subject_kind='team')
                OR EXISTS(SELECT 1 FROM knowledge_member WHERE subject_kind='team')
-               OR EXISTS(SELECT 1 FROM source_member WHERE subject_kind='team') LIMIT 1`);
+               OR EXISTS(SELECT 1 FROM source_member WHERE subject_kind='team')
+               OR EXISTS(SELECT 1 FROM org_db_source_grant WHERE subject_kind='team') LIMIT 1`);
   return (r.rowCount ?? 0) > 0;
 }
 
@@ -101,6 +108,15 @@ export async function updateTeam(
     WHERE id=$1 RETURNING ${TEAM_COLS}`,
     [id, patch.key ?? null, patch.name ?? null, patch.description ?? null, patch.body_md ?? null,
      patch.lead_member_id ?? null, patch.lead_member_id === null, patch.state ?? null]);
+  await auditTeam(String(id), "update", before, row, ctx);
+  return row;
+}
+
+/** 팀 종류 바꾸기(#5799) — 만들기 · 고치기와 따로 쓴다(그 문장들에 칸을 넣으면 롤 창에 칸 없는 DB 에서 팀 저장이 전부 깨진다). */
+export async function setTeamKind(id: number, kind: TeamKind, ctx?: WriteCtx): Promise<TeamRow> {
+  const before: TeamRow | undefined = await one(itemsPool, `SELECT ${TEAM_COLS}, ${KIND("team")} FROM team WHERE id=$1`, [id]);
+  if (!before) throw new Error(`팀 #${id} 없음`);
+  const row: TeamRow = await one(itemsPool, `UPDATE team SET kind=$2, updated_at=now() WHERE id=$1 RETURNING ${TEAM_COLS}, ${KIND("team")}`, [id, kind]);
   await auditTeam(String(id), "update", before, row, ctx);
   return row;
 }
@@ -147,7 +163,7 @@ export async function setTeamMembers(
 export async function memberTeams(memberId: string): Promise<TeamRow[]> {
   if (!memberId) return [];
   return q(itemsPool, `
-    SELECT ${TEAM_COLS.split(",").map((c) => "t." + c.trim()).join(", ")}
+    SELECT ${TEAM_COLS.split(",").map((c) => "t." + c.trim()).join(", ")}, ${KIND("t")}
     FROM team_member tm JOIN team t ON t.id=tm.team_id
     WHERE tm.member_id=$1 AND t.state='active' ORDER BY t.sort, t.key`, [memberId]);
 }

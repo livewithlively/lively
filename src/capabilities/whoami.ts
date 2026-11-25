@@ -6,6 +6,7 @@
 //   (아바타·개인 규칙 본문 등 표시용·대용량 필드 제외). 웹 게이트(me)는 지금 형태 그대로 둔다.
 //  scope=null(인증만) — 남의 신원은 절대 반환하지 않는다(principal = bearer 토큰 주체로 고정, 입력 인자 없음).
 import type { Capability } from "./types.js";
+import { isAdmin } from "./principal.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import { getMember, getOrgProfile, getUiSurface } from "../org/store.js";
@@ -52,7 +53,8 @@ const me: Capability = {
       avatar: member?.avatar ?? null, // 우측 상단 '내 프로필' 아바타(없으면 이니셜+색상 폴백)
       avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null, // 이미지 없을 때 커스텀 글자/배경색
 
-      teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      //  #5799 — 소속 팀만(권한 그룹은 소속이 아니다 — 접근을 묶으려고 만든 것이라 프로필에 비치지 않는다).
+      teams: teams.filter((t) => t.kind !== "group").map((t) => ({ id: t.id, key: t.key, name: t.name })),
       // 실행 모드(#1007+) — 이 요청이 어느 모드로 게이트되는가(단일 x-lively-mode 헤더 파생, 어댑터가 ctx 에 주입).
       //  웹/AI 가 '모드가 실제로 켜졌는지' 확인하는 관측 지점. read_only 는 하위호환 유지.
       mode: ctx?.incognito ? "incognito" : ctx?.readOnly ? "readonly" : "normal",
@@ -154,8 +156,12 @@ const whoami: Capability = {
       registered: !!member,
       // ── 권한 ── scopes = 이 요청 토큰의 **실효** 권한(멤버 정의와 교집합일 수 있다 — 다르면 member_scopes 와 대조).
       scopes,
-      is_admin: scopes.includes("admin"),
+      is_admin: isAdmin(user),
       member_scopes: member?.scopes ?? null,
+      // ── 새 권한(#5799) ── role = 그 사람의 역할(없으면 null — scopes 로 판정받는 옛 구성원). grants = 이 요청의 **실효** 새 권한
+      //  (영역마다 read|write · 역할을 받은 구성원만 — 토큰 · 앱 동의로 좁아졌을 수 있다). 둘 다 null 이면 위 scopes 가 판정한다.
+      role: member?.role ?? null,
+      grants: user?.grants ?? null,
       // ── 외부 시스템에서 나를 가리키는 키(클릭업 assignee·슬랙 user·깃랩 계정 …) ──
       identities: isApp ? [] : (member?.identities ?? []).map((i) => ({
         system: i.system, instance: i.instance ?? null, external_id: i.external_id,
@@ -165,7 +171,9 @@ const whoami: Capability = {
       //  하네스의 whoami 는 늘 로드되는 배관이라 base64 그림을 실으면 세션 컨텍스트를 잡아먹는다(me 를 MCP 에 안 여는 이유와 같다).
       ...(isApp ? { avatar: member?.avatar ?? null, avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null } : {}),
       // ── 소속 ── (#4233: 팀별 소유/이해관계 카테고리는 분류 담당 개념과 함께 걷었다)
-      teams: isApp ? [] : teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      //  teams = 소속 팀 · groups = 권한 그룹(#5799 — 접근 판정은 둘이 같다. 보이는 자리만 다르다).
+      teams: isApp ? [] : teams.filter((t) => t.kind !== "group").map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      groups: isApp ? [] : teams.filter((t) => t.kind === "group").map((t) => ({ id: t.id, key: t.key, name: t.name })),
       // ── 이 요청의 접속 신원(게이트웨이가 헤더에서 본 것이 권위 — 자기보고 아님) ──
       session: {
         harness: ctx?.agent ?? null,        // x-lively-harness / User-Agent → claude-code·codex …(#182)

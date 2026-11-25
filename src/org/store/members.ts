@@ -1,9 +1,10 @@
 // org_member — 구성원 CRUD + jsonb 부속(온보딩 보고·하네스 관측 스냅샷·머신 별명·로컬 토글 지시)
 //  + person/person_identity 동기화. (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
-import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
+import { IDENTITY_GLOBAL_DEFAULT_EXPR, TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { DEFAULT_MEMBER_SCOPES } from "../../auth/scopes.js";
+import { isRole, sanitizeGrants, grantsToLegacyScopes, mergeGrants, ROLE_GRANTS, type Role, type Grants } from "../../auth/permissions.js";
 import { logger } from "../../log.js";
 import {
   parseScopePref, defaultScopePref, applyLocalScopeChange as applyScopeChange, defaultOrgRecordScope,
@@ -50,7 +51,11 @@ export interface OrgMember {
   avatar_char: string | null; // 이미지 없을 때 쓸 커스텀 글자(1~3자). null=이름 이니셜 자동.
   avatar_color: string | null; // 이미지 없을 때 쓸 커스텀 배경색(#rrggbb). null=id 해시색 자동.
   state: "active" | "inactive";
-  scopes: string[]; // 권한(발급 토큰의 scope)
+  scopes: string[]; // 권한(발급 토큰의 scope). 역할이 있는 구성원이면 새 권한을 옛 이름으로 비춘 사본이다(판정은 role · grants 로).
+  /** 역할(#5799) — null 이면 옛 구성원(scopes 로 판정). */
+  role: Role | null;
+  /** 역할 위에 개별로 얹은 권한. 역할이 없으면 뜻이 없다(늘 빈 객체). */
+  grants: Grants;
   sort: number;
   version: number;
   updated_at: string | null;
@@ -73,6 +78,8 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     avatar_color: (row.avatar_color as string) ?? null,
     state: row.state as OrgMember["state"],
     scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
+    role: isRole(row.role) ? row.role : null,
+    grants: isRole(row.role) ? sanitizeGrants(row.grants) : {},
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
     updated_at: (row.updated_at as string) ?? null,
@@ -80,7 +87,9 @@ function mapMember(row: Record<string, unknown>): OrgMember {
   };
 }
 
-const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by";
+//  role · grants 는 칸 이름으로 고르지 않고 행에서 꺼낸다 — 롤 창에 칸이 아직 없어도 이 조회가 깨지지 않게(없으면 NULL = 옛 구성원).
+//   그래서 이 목록은 **별칭 없는 `FROM org_member`** 에서만 쓴다.
+const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by, to_jsonb(org_member) -> 'role' AS role, to_jsonb(org_member) -> 'grants' AS grants";
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);
@@ -151,8 +160,16 @@ export async function listActiveAdminIds(): Promise<string[]> {
 export async function getMember(id: string): Promise<OrgMember | null> {
   //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
   //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
+  //  ★ 단 맥락 행이 없으면 신원 전역 자리(IDENTITY_GLOBAL_DEFAULT_EXPR)를 본다. 셀프호스트 다중 워크스페이스는 org_member 를
+  //   그 자리에 못박으므로(db/tenant-column.ts IDENTITY_GLOBAL_TABLES), 맥락식만으로는 둘째 워크스페이스 맥락에서 **모든 사람이
+  //   null** 이 된다 — 그러면 그 맥락에서 배차한 위탁은 의뢰자가 비활성으로 읽혀 setup-token 리스 없이 뜬다(node/task-scheduler.ts leaseEnvFor).
+  //   맥락 행을 먼저 고르므로 맥락 행이 있으면 맥락식과 같은 행이고, 매니지드는 RLS 가 전역 자리 행을 걸러 맥락식과 같다.
+  //   ⚠ 맥락 행 우선을 뒤집지 마라 — 정책 걸린 표에서 소유자 접속이 RLS 를 건너뛰면 남의 테넌트 행을 고르게 된다.
+  //   회귀 넷: src/org/store/get-member-tenant.pg-test.mjs.
   const r = await itemsPool.query(
-    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`, [id]);
+    `SELECT ${MEMBER_COLS} FROM org_member WHERE id=$1
+        AND tenant_id IN (${TENANT_DEFAULT_EXPR}, ${IDENTITY_GLOBAL_DEFAULT_EXPR})
+      ORDER BY (tenant_id = ${TENANT_DEFAULT_EXPR}) DESC LIMIT 1`, [id]);
   return r.rows[0] ? mapMember(r.rows[0]) : null;
 }
 
@@ -867,14 +884,50 @@ export interface MemberInput {
   avatar_color?: string | null; // 커스텀 배경색(#rrggbb). undefined=보존, null/''=해시색 자동으로 되돌림.
   state?: "active" | "inactive";
   scopes?: string[];
+  /**
+   * 역할(#5799). undefined=보존 · null=역할을 걷어 옛 구성원으로(scopes 가 다시 판정한다) · 값=그 역할로.
+   *  역할을 주면 scopes 칸은 새 권한을 옛 이름으로 비춘 사본으로 덮인다 — scopes 를 함께 주지 않는다(주면 오류).
+   */
+  role?: Role | null;
+  /** 역할 위에 얹을 개별 권한. undefined=보존. 역할이 없는 구성원에게는 줄 수 없다. */
+  grants?: Grants;
   sort?: number;
+}
+
+/**
+ * 역할 · 개별 권한 입력을 «저장할 값» 으로 푼다(순수 — 시험 대상).
+ *  · 역할이 정해지면 scopes 는 그 권한의 사본이다. · 역할을 걷으면(null) 개별 권한도 걷고, scopes 는 준 값(없으면 지금 값)이 다시 권한이 된다.
+ *  · scopes 만 준 저장(옛 화면 · 옛 클라이언트)은 역할이 있는 구성원이면 **사본과 같을 때만** 받는다 — 옛 화면이 구성원을 통째로 다시
+ *    보내는 저장으로 역할이 조용히 사라지지 않게. 다른 값이면 오류(역할을 먼저 걷으라고 말한다).
+ */
+export function resolveMemberAccess(
+  before: { role: Role | null; grants: Grants; scopes: string[] } | null,
+  input: { role?: Role | null; grants?: Grants; scopes?: string[] },
+): { role: Role | null; grants: Grants | null; scopes: string[] } {
+  const role = input.role === undefined ? (before?.role ?? null) : input.role;
+  if (role === null) {
+    if (input.grants !== undefined && Object.keys(input.grants).length) throw new Error("개별 권한은 역할이 있는 구성원에게만 줄 수 있습니다 — role 을 함께 주세요");
+    return { role: null, grants: null, scopes: input.scopes ?? before?.scopes ?? [...DEFAULT_MEMBER_SCOPES] };
+  }
+  const extras = sanitizeGrants(input.grants ?? (input.role === undefined ? before?.grants : undefined) ?? {});
+  const mirror = grantsToLegacyScopes(mergeGrants(ROLE_GRANTS[role], extras));
+  if (input.scopes !== undefined) {
+    const same = input.scopes.length === mirror.length && [...input.scopes].sort().join(" ") === [...mirror].sort().join(" ");
+    if (!same) {
+      throw new Error(input.role === undefined
+        ? "이 구성원은 역할로 권한을 받습니다 — scopes 로는 바꿀 수 없습니다(role 을 바꾸거나, role 을 null 로 걷은 뒤 scopes 를 주세요)"
+        : "role 과 scopes 를 함께 줄 수 없습니다 — 역할을 주면 scopes 는 그 사본으로 정해집니다");
+    }
+  }
+  return { role, grants: extras, scopes: mirror };
 }
 
 export async function upsertMember(m: MemberInput, actor?: string, source?: string): Promise<OrgMember> {
   const before = await getMember(m.id);
   const kind = m.kind ?? before?.kind ?? "human";
   const identities = m.identities ?? before?.identities ?? [];
-  const scopes = m.scopes ?? before?.scopes ?? [...DEFAULT_MEMBER_SCOPES];
+  const access = resolveMemberAccess(before, m);
+  const scopes = access.scopes;
   // avatar: undefined=보존, 그 외(null/''/문자열)=그대로 적용(빈값이면 null 로 정규화 → 이니셜 폴백).
   const avatar = m.avatar === undefined ? (before?.avatar ?? null) : (m.avatar || null);
   // 커스텀 글자(최대 3자)·배경색 — undefined=보존, 그 외=정규화. 색은 클라이언트 style 에 주입되므로 #rrggbb 형식만 허용(그 외 무시=null).
@@ -897,6 +950,13 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
      JSON.stringify(identities), m.body_md ?? before?.body_md ?? "", avatar, avatarChar, avatarColor,
      m.state ?? before?.state ?? "active", JSON.stringify(scopes), m.sort ?? before?.sort ?? 0, actor ?? null],
   );
+  //  역할 · 개별 권한(#5799) — 바뀔 때만 따로 쓴다. 위 INSERT 문에 칸을 넣지 않는 까닭: 롤 창에 칸이 아직 없으면 역할과 무관한 구성원 저장까지
+  //   전부 깨진다. 역할을 건드리지 않는 저장은 이 문장을 돌리지 않는다.
+  if ((before?.role ?? null) !== access.role || JSON.stringify(before?.role ? before.grants : null) !== JSON.stringify(access.grants)) {
+    await itemsPool.query(
+      `UPDATE org_member SET role=$2, grants=$3::jsonb WHERE id=$1 AND tenant_id = ${TENANT_DEFAULT_EXPR}`,
+      [m.id, access.role, access.grants === null ? null : JSON.stringify(access.grants)]);
+  }
   const after = await getMember(m.id);
   await audit("org_member", m.id, before ? "update" : "insert", before, after, actor, source);
   //  #1631(원준 2026-09-13) — **사람이 아닌 구성원은 로그인할 수 없다.** 계정 서버가 테넌트마다 심는 운영 구성원(admin,
