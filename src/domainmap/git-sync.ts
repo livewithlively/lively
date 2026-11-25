@@ -13,15 +13,18 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdirSync, openSync, writeSync, closeSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { resolveGitSecret, hostOf, prepareGitAuth } from "../org/credentials/git-credential-store.js";
 import { stateDir } from "../ops/state-dir.js";
+import { workspaceDirSegments } from "../ops/workspace-dir-key.js";
 
 const execFileP = promisify(execFile);
 
 export interface GitOpts {
   /** 모든 git op 의 하드 타임아웃(ms). webhook 60_000 / git-pull 180_000 — 호출부 상수. */
   timeoutMs: number;
+  /** 표준출력 상한(바이트). 기본 16MB — 넘으면 execFile 이 ERR_CHILD_PROCESS_STDIO_MAXBUFFER 로 던진다. */
+  maxBuffer?: number;
 }
 
 // 클론 캐시 디렉 — 서비스 유저 쓰기가능 런타임 루트(#618 stateDir, 기본 <cwd>/data/repos) 하위.
@@ -38,11 +41,17 @@ export function sanitizeName(name: unknown): string {
 }
 
 // 클론 경로(캐시) — reposDir/sanitizeName 단일 조합. 부트스트랩(scheduler) 등 다른 곳도 같은 경로를 재사용(공식 1곳).
+//  워크스페이스 열쇠가 있으면 `reposDir/@ws/<워크스페이스 id>/<name>`(ops/workspace-dir-key.ts) — 이름만으로 자리를 잡으면 게이트웨이 하나가
+//  여러 워크스페이스를 서비스할 때 다른 워크스페이스가 같은 이름으로 등록한 레포가 먼저 받아 둔 클론을 fetch 해 그 코드를 제 것으로 읽는다
+//  (ensureClone 은 있는 클론이면 주소를 다시 보지 않는다). 열쇠가 없으면(단일 워크스페이스 · primary) 종전 자리 그대로다.
 export function repoClonePath(repoName: string): string {
   const safe = sanitizeName(repoName);
   if (!safe) throw new Error("invalid repo name for clone dir");
-  return join(reposDir(), safe);
+  return join(reposDir(), ...workspaceDirSegments(), safe);
 }
+
+/** git 표준출력 기본 상한(바이트). */
+export const GIT_MAX_BUFFER = 16 * 1024 * 1024;
 
 // Run git with execFile (argv array — NEVER a shell string, no injection). SHAs
 // are validated by the caller; paths in output come from git (trusted). A
@@ -51,7 +60,7 @@ export function repoClonePath(repoName: string): string {
 //  GIT_TERMINAL_PROMPT=0 항상 — 무자격(앰비언트) 폴백이어도 프롬프트로 매달리지 않고 즉시 실패.
 export async function git(args: string[], cwd: string | undefined, extraEnv: Record<string, string> | undefined, opts: GitOpts) {
   return execFileP("git", args, {
-    cwd, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024,
+    cwd, timeout: opts.timeoutMs, maxBuffer: opts.maxBuffer ?? GIT_MAX_BUFFER,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(extraEnv ?? {}) },
   });
 }
@@ -80,10 +89,10 @@ export class CloneBusyError extends Error {
 }
 
 function cloneLockPath(repoName: string): string {
-  const safe = sanitizeName(repoName);
-  if (!safe) throw new Error("invalid repo name for clone dir");
-  // 클론 디렉터리 옆에 둔다 — 첫 clone 전에는 클론 디렉터리가 없다.
-  return join(reposDir(), `.${safe}.fetch.lock`);
+  // 클론 디렉터리 옆에 둔다 — 첫 clone 전에는 클론 디렉터리가 없다. 자리는 클론 자리(repoClonePath)를 그대로 따른다:
+  //  워크스페이스 열쇠가 있으면 reposDir/@ws/<id>/ 밑이다. reposDir 바로 밑에 두면 두 워크스페이스의 같은 이름 레포가 클론은
+  //  따로인데 잠금을 나눠, 한쪽 fetch 가 남의 웹훅을 «clone busy» 로 돌려보내고 git-pull · touch 유도를 건너뛰게 한다.
+  return join(dirname(repoClonePath(repoName)), `.${sanitizeName(repoName)}.fetch.lock`);
 }
 
 function lockAgeMs(path: string): number | null {
@@ -97,7 +106,7 @@ function lockAgeMs(path: string): number | null {
 /** 레포별 파일 잠금 아래에서 fn 을 돈다. waitMs 안에 못 얻으면 CloneBusyError. */
 export async function withCloneLock<T>(repoName: string, fn: () => Promise<T>, waitMs: number = CLONE_LOCK_WAIT_MS): Promise<T> {
   const path = cloneLockPath(repoName);
-  mkdirSync(reposDir(), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });   // 워크스페이스 자리(@ws/<id>)는 첫 clone 전에 없을 수 있다
   const token = randomUUID();
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -128,7 +137,7 @@ export async function withCloneLock<T>(repoName: string, fn: () => Promise<T>, w
 //  ⚠ onGitError 는 clone/fetch try 안에서만 — prepareGitAuth 실패는 종전대로 raw 전파(번역 대상 아님).
 export async function ensureClone(repoName: string, gitUrl: string, opts: EnsureCloneOpts): Promise<string> {
   const cloneDir = repoClonePath(repoName);
-  const dir = reposDir();
+  const dir = dirname(cloneDir);
   const secret = await resolveGitSecret(null, hostOf(gitUrl) ?? "github.com").catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {

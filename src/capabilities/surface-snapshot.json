@@ -367,7 +367,7 @@
  },
  {
   "name": "org_update_section",
-  "scope": "memory",
+  "scope": "admin",
   "mcp": true,
   "mutates": true,
   "rest": [
@@ -377,7 +377,7 @@
  },
  {
   "name": "org_delete_section",
-  "scope": "memory",
+  "scope": "admin",
   "mcp": true,
   "mutates": true,
   "rest": [
@@ -387,7 +387,7 @@
  },
  {
   "name": "org_reorder_sections",
-  "scope": "memory",
+  "scope": "admin",
   "mcp": true,
   "mutates": true,
   "rest": [
@@ -403,7 +403,7 @@
   "rest": [
    "POST /api/ui/org/member"
   ],
-  "input_hash": "ecdfe30c90cb0004"
+  "input_hash": "4ea9f07e509c403d"
  },
  {
   "name": "org_member_reset_password",
@@ -433,7 +433,7 @@
   "rest": [
    "POST /api/ui/org/token"
   ],
-  "input_hash": "fb87b54b720db2ca"
+  "input_hash": "68ad3047692135f0"
  },
  {
   "name": "org_session_mint",
@@ -813,7 +813,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "c575a297d502a50f"
+  "input_hash": "46a64b332b4f9706"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -833,7 +833,7 @@
   "rest": [
    "POST /api/ui/org/injection-config"
   ],
-  "input_hash": "4442a5a6f6164db4"
+  "input_hash": "2601c3ba92f48ae4"
  },
  {
   "name": "org_record_scope_get",
@@ -1533,7 +1533,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "d0ff19f5f78f9ebd"
+  "input_hash": "aae7e7b31cf119b7"
  },
  {
   "name": "me_liv_profile_get",
@@ -1544,46 +1544,6 @@
    "GET /api/ui/me/liv-profile"
   ],
   "input_hash": "6c9f16e97bc4049d"
- },
- {
-  "name": "me_liv_ask_secret",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-secret-ask"
-  ],
-  "input_hash": "4dd74cb8d1f7d3ab"
- },
- {
-  "name": "me_liv_put_secret",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-secret"
-  ],
-  "input_hash": "d88e2cad56f58113"
- },
- {
-  "name": "me_liv_ask_choice",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-choice-ask"
-  ],
-  "input_hash": "075764db659fd915"
- },
- {
-  "name": "me_liv_answer",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-answer"
-  ],
-  "input_hash": "9e7578dfd73f3b4a"
  },
  {
   "name": "me_liv_record_answer",
@@ -1606,16 +1566,6 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "me_liv_ask_upload",
-  "scope": null,
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv-upload-ask"
-  ],
-  "input_hash": "8e55d1d5c440991e"
- },
- {
   "name": "me_liv_session",
   "scope": null,
   "mcp": false,
@@ -1634,16 +1584,6 @@
    "POST /api/ui/me/liv/open"
   ],
   "input_hash": "1964b38072182cb5"
- },
- {
-  "name": "me_liv_ask_dismiss",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/liv/ask-dismiss"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "me_welcome_get",
@@ -2674,7 +2614,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "c59fc05d3452876d"
+  "input_hash": "a951a00ca9f8071a"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -4035,6 +3975,16 @@
   "input_hash": "c55c5e0068a50942"
  },
  {
+  "name": "org_app_job_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:app_id/jobs/:job"
+  ],
+  "input_hash": "634b9817ae495a72"
+ },
+ {
   "name": "list_unmapped",
   "scope": "context",
   "mcp": true,
@@ -4143,6 +4093,126 @@
    "POST /api/ui/terminal/sessions/:id/task"
   ],
   "input_hash": "27ed2a5e56e475a4"
+ },
+ {
+  "name": "session_ask_secret",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/open/secret"
+  ],
+  "input_hash": "05ba00360ed1908b"
+ },
+ {
+  "name": "me_liv_ask_secret",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-secret-ask"
+  ],
+  "input_hash": "05ba00360ed1908b"
+ },
+ {
+  "name": "session_ask_choice",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/open/choice"
+  ],
+  "input_hash": "8f4b37d57a0ce7dd"
+ },
+ {
+  "name": "me_liv_ask_choice",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-choice-ask"
+  ],
+  "input_hash": "8f4b37d57a0ce7dd"
+ },
+ {
+  "name": "session_ask_upload",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/open/upload"
+  ],
+  "input_hash": "fa45298594876612"
+ },
+ {
+  "name": "me_liv_ask_upload",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-upload-ask"
+  ],
+  "input_hash": "fa45298594876612"
+ },
+ {
+  "name": "session_ask_status",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/asks/status"
+  ],
+  "input_hash": "bc57d88769a0a0bb"
+ },
+ {
+  "name": "session_ask_list",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/asks"
+  ],
+  "input_hash": "be2e912f84c38c6c"
+ },
+ {
+  "name": "session_ask_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/asks/item/:id"
+  ],
+  "input_hash": "4784247d7c2b2dd6"
+ },
+ {
+  "name": "session_ask_submit",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/item/:id/submit"
+  ],
+  "input_hash": "74d0ba67a7bab74b"
+ },
+ {
+  "name": "session_ask_dismiss",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/item/:id/dismiss"
+  ],
+  "input_hash": "4784247d7c2b2dd6"
+ },
+ {
+  "name": "session_ask_tell",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asks/item/:id/tell"
+  ],
+  "input_hash": "0b8e3033ef0e8277"
  },
  {
   "name": "collect_claude_run",
@@ -4333,6 +4403,46 @@
    "GET /api/ui/repos/:repo/branches"
   ],
   "input_hash": "57db86da49b40ff6"
+ },
+ {
+  "name": "repo_refs",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/refs"
+  ],
+  "input_hash": "bf92efba23a66769"
+ },
+ {
+  "name": "repo_diff",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/diff"
+  ],
+  "input_hash": "1f79aee6783f8954"
+ },
+ {
+  "name": "repo_file",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/file"
+  ],
+  "input_hash": "a2e1bcc3bce6ccbc"
+ },
+ {
+  "name": "repo_grep",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/grep"
+  ],
+  "input_hash": "1a26d5f167372a71"
  },
  {
   "name": "stack_profile_list",
@@ -4633,6 +4743,46 @@
    "POST /api/ui/org/slack/oauth-complete"
   ],
   "input_hash": "c186cbfc4573638d"
+ },
+ {
+  "name": "org_slack_bridges",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/slack/bridges"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_slack_bridge_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/slack/bridge"
+  ],
+  "input_hash": "000a39fdec7595ae"
+ },
+ {
+  "name": "org_slack_bridge_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/slack/bridge/remove"
+  ],
+  "input_hash": "042d930a3591565f"
+ },
+ {
+  "name": "slack_bridge_call",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/slack-bridge/call"
+  ],
+  "input_hash": "c7bd11b4bc9f7b89"
  },
  {
   "name": "org_notion_collect",
@@ -5222,7 +5372,7 @@
   "rest": [
    "POST /api/ui/apps/:id/grant"
   ],
-  "input_hash": "2b26d1171bc83fae"
+  "input_hash": "4d69d99e554ba50f"
  },
  {
   "name": "me_app_revoke",
@@ -5233,6 +5383,16 @@
    "POST /api/ui/apps/:id/revoke"
   ],
   "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_grant_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/org-grant"
+  ],
+  "input_hash": "f97044cfafbaa7be"
  },
  {
   "name": "org_app_install",

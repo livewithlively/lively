@@ -128,6 +128,34 @@ export function buildSlackAppManifest(redirectUrls: string[]): Record<string, un
     settings: { org_deploy_enabled: false, socket_mode_enabled: false, token_rotation_enabled: false },
   };
 }
+/** #1782 슬랙 다리용 봇 권한 — 답하기(chat:write) · 받기(채널 · 비공개 채널 · DM 글, 태그) · 사람 매핑(users:read.email) · 받음 표시(reactions:write). */
+export const SLACK_BRIDGE_BOT_SCOPES = [
+  "chat:write", "channels:history", "groups:history", "im:history", "app_mentions:read", "users:read", "users:read.email", "reactions:write",
+] as const;
+/** #1782 슬랙 다리가 구독하는 봇 이벤트 — 소켓 모드라 요청 주소(request_url)가 필요 없다. */
+export const SLACK_BRIDGE_BOT_EVENTS = ["app_mention", "message.channels", "message.groups", "message.im"] as const;
+
+/**
+ * #1782 슬랙 다리용 앱 매니페스트 — buildSlackAppManifest 의 다른 갈래. 소켓 모드 · 이벤트 구독 · 상호작용(버튼)을 켜고, OAuth 돌아올 주소는 두지 않는다
+ *  (봇 토큰은 [Install to Workspace] 로 받는다). 게이트웨이가 바깥으로 나가는 연결만 쓰므로 사내 IP 로 막아 둔 게이트웨이에서도 된다.
+ *  앱 수준 토큰(xapp- · connections:write)은 매니페스트로 만들 수 없다 — 만든 뒤 Basic Information ▸ App-Level Tokens 에서 사람이 만든다.
+ */
+export function buildSlackBridgeManifest(): Record<string, unknown> {
+  return {
+    display_information: {
+      name: "Lively Bridge",
+      description: "라이블리 앱이 슬랙 글을 받아 답합니다.",
+      background_color: "#1f2937",
+    },
+    features: { bot_user: { display_name: "lively-bridge", always_online: true } },
+    oauth_config: { scopes: { bot: [...SLACK_BRIDGE_BOT_SCOPES] } },
+    settings: {
+      event_subscriptions: { bot_events: [...SLACK_BRIDGE_BOT_EVENTS] },
+      interactivity: { is_enabled: true },
+      org_deploy_enabled: false, socket_mode_enabled: true, token_rotation_enabled: false,
+    },
+  };
+}
 /**
  * 슬랙이 매니페스트에 거는 규칙 중 우리가 채우는 칸의 것(docs.slack.dev/reference/app-manifest). 길이는 **UTF-8 바이트**로 잰다 —
  *  문서는 «characters» 라 적지만 실측은 바이트였다(한글 한 글자 = 3). 어긴 칸마다 한 줄, 없으면 빈 배열.

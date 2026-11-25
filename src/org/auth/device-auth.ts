@@ -7,6 +7,8 @@
 //  · verifier 를 **먼저** 검증(타이머 갱신 전) → device_code 만 든 제3자가 남의 타이머를 grief 못 함.
 //  · 원자적 consume: UPDATE…WHERE status='approved' RETURNING + mintToken 을 한 BEGIN/COMMIT → double-mint·orphan 토큰 0.
 //  · 발급 scope = member LIVE ∩ approver_scopes ∩ (control-plane? 전체 : 비위험) — token/self 와 동형(증폭 불가).
+//  · 비위험 권한은 구성원의 지금 권한을 따른다(#5712 auth_token.follow_safe_scopes) — 승인 자격이 구성원을 따라도 되는 자격
+//    (웹 세션 · 이미 따르는 토큰)일 때만. 위험 scope 는 위 발급 scope 에 실린 것만 — «관리자 기능 허용» 의 답이 그대로 남는다.
 //  · GC: reaper + lazy delete-on-read(스케줄러 off 인스턴스 대비).
 
 import crypto from "node:crypto";
@@ -14,7 +16,7 @@ import { itemsPool } from "../../db/client.js";
 import { mintToken, getMember } from "../store.js";
 import { isScope } from "../../auth/scopes.js";
 // 해시·PKCE·scope 교집합은 OAuth 인가서버(#1473 T2)와 **공유**한다 — 같은 보안 계약을 두 벌로 두지 않는다.
-import { sha256Hex as sha256, s256, grantableScopes } from "./grant-util.js";
+import { sha256Hex as sha256, s256, grantableScopes, ceilingWithSafeFollow, ceilingFollowsSafe } from "./grant-util.js";
 import { HttpError } from "../../http-error.js";
 
 const EXPIRES_IN = 900;   // device_code TTL(초). RFC 권장 900~1800.
@@ -138,8 +140,10 @@ export async function pollDeviceAuth(deviceCode: string, codeVerifier: string): 
     }
     const approver = Array.isArray(c.approver_scopes) ? (c.approver_scopes as unknown[]).filter((x): x is string => typeof x === "string") : [];
     const scopes = grantableScopes({ memberScopes: mem.scopes, allowed: approver, allowDangerous: c.include_control_plane });
+    // 비위험 권한 추종(#5712) — 승인 때 «구성원을 따른다» 표지가 실렸으면(grant-util.ceilingFollowsSafe) 이 토큰은 비위험 권한에서 구성원의 지금 권한을 따른다.
+    //  scopes 는 발급 때의 기록으로 남고(관리 화면 · 감사), 위험 scope 는 여기 실린 것만 유효하다(computeEffectiveScopes).
     const { token } = await mintToken(
-      { userId: c.member_id, scopes, label: "device-cli", memberId: c.member_id },
+      { userId: c.member_id, scopes, label: "device-cli", memberId: c.member_id, followSafeScopes: ceilingFollowsSafe(approver) },
       c.member_id, "device-login", client,
     );
     await client.query("COMMIT");
@@ -177,14 +181,17 @@ export async function lookupDeviceAuth(userCode: string): Promise<LookupResult |
 }
 
 // ④ approve — 세션(비-정적) 전용. 승인자 scope 스냅샷 기록 + control-plane opt-in(멤버가 보유 시만 유효).
-export async function approveDeviceAuth(userCode: string, memberId: string, approverScopes: string[], includeControlPlane: boolean): Promise<boolean> {
+//  followSafe(#5712) — 승인 자격이 구성원을 따라도 되는 자격이면(부르는 쪽이 grant-util.credentialFollowsMember 로 판정) 상한에
+//   «구성원을 따른다» 표지를 함께 적는다(grant-util.ceilingWithSafeFollow). 생략 · false 면 종전대로 승인자 scope 만 적는다.
+export async function approveDeviceAuth(userCode: string, memberId: string, approverScopes: string[], includeControlPlane: boolean, followSafe = false): Promise<boolean> {
   const uc = normalizeUserCode(userCode);
   if (uc.length !== 8) return false;
+  const ceiling = followSafe ? ceilingWithSafeFollow(approverScopes) : approverScopes.filter(isScope);
   const r = await itemsPool.query(
     `UPDATE pending_device_auth
         SET member_id=$2, approver_scopes=$3::jsonb, include_control_plane=$4, status='approved', approved_at=now()
       WHERE user_code=$1 AND status='pending' AND expires_at > now()`,
-    [uc, memberId, JSON.stringify(approverScopes.filter(isScope)), includeControlPlane],
+    [uc, memberId, JSON.stringify(ceiling), includeControlPlane],
   );
   return (r.rowCount ?? 0) === 1;
 }

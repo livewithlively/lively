@@ -85,7 +85,8 @@ async function mkTranscript(name, content) {
 const reset = () => { SERVER = {}; appends = []; requests = []; POST_DELAY_MS = 0; POST_FAIL = []; CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" }; };
 //  ⑧ 뒤에서 올리는 판의 잠금·사본은 os.tmpdir() 에 생긴다 — 시험마다 따로 둔 TMPDIR 로 가둬 남의 판과 섞이지 않게 한다.
 const bgTmp = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-slog-bg-"));
-const BG_ENV = { TMPDIR: bgTmp, TMP: bgTmp, TEMP: bgTmp };
+//  뒤의 판이 끝에 닿은 뒤 기다리는 시간(⑨, 운영 3초)은 시험에선 줄인다 — 늦게 적힌 줄 시험만 그 시간 안에 적는다.
+const BG_ENV = { TMPDIR: bgTmp, TMP: bgTmp, TEMP: bgTmp, LIVELY_LOGCAP_BG_QUIET_MS: "700" };
 const waitFor = async (cond, ms, what) => {
   const t0 = Date.now();
   while (!cond()) { if (Date.now() - t0 > ms) throw new Error(`${ms}ms 안에 안 됨 — ${what}`); await new Promise((r) => setTimeout(r, 50)); }
@@ -335,6 +336,75 @@ try {
     await waitFor(() => SERVER.s19?.bytes === size, 30_000, `일시 오류 뒤 끝까지 — 지금 ${SERVER.s19?.bytes}/${size}`);
     await waitFor(() => bgLeft().length === 0, 5_000, "잠금이 풀린다");
     ok("⑧ 일시 오류(503)는 잠시 뒤 서버 워터마크부터 다시 해서 끝까지");
+  }
+
+  // ── ⑨ #5611 후속 — Stop 이 안 뜬 턴 끝(사람이 끊음 · 사용 한도)도 세션이 내려갈 때(SessionEnd) 올린다 ──
+  //  실측(2026-11-20 맥미니): 턴마다 한도로 끝난 세션·끊고 둔 세션은 Stop 이 한 번도 안 떠 중앙 기록이 0바이트였다 —
+  //  보관한 뒤 대화창이 통째로 비었다. tmux 를 내려도 Claude Code 는 SessionEnd 훅을 띄운다(reason "other").
+  const END = (sid, tp) => ({ session_id: sid, transcript_path: tp, cwd: root, hook_event_name: "SessionEnd", reason: "other" });
+  {
+    reset();
+    const first = U("첫 질문") + A("첫 답");
+    const tp = await mkTranscript("t20.jsonl", first + U("둘째 질문") + A("답하다 끊긴 부분"));   // 끊긴 턴 — Stop 이 안 떴다
+    SERVER.s20 = { bytes: Buffer.byteLength(first), chunks: [{ at: 0, body: Buffer.from(first) }] };
+    const size = fs.statSync(tp).size;
+    POST_DELAY_MS = 800;    // 훅이 앞에서 올렸다면 이 응답을 기다리느라 늦게 끝난다
+    await runHook(END("s20", tp), { env: BG_ENV });
+    assert.equal(appends.length, 0, "🔴 내려가는 중엔 훅이 앞에서 올리지 않고 뒤의 판에 맡긴다(하네스 종료를 붙잡지 않는다)");
+    await waitFor(() => SERVER.s20?.bytes === size, 15_000, `끊긴 턴까지 — 지금 ${SERVER.s20?.bytes}/${size}`);
+    assert.ok(serverText("s20").endsWith(U("둘째 질문") + A("답하다 끊긴 부분")), "🔴 끊긴 턴의 질문과 답이 중앙 기록 끝에 있어야 한다");
+    await waitFor(() => bgLeft().length === 0, 10_000, "잠금이 풀린다");
+    ok("⑨ 끊긴 턴(Stop 없음) — 세션이 내려갈 때 뒤의 판이 마저 올린다");
+  }
+  {
+    reset();
+    const tp = await mkTranscript("t21.jsonl", U("질문") + A("You've hit your limit · resets 6am") + U("또 질문") + A("You've hit your limit · resets 6am"));
+    const size = fs.statSync(tp).size;
+    await runHook(END("s21", tp), { env: BG_ENV });
+    await waitFor(() => SERVER.s21?.bytes === size, 15_000, `처음부터 끝까지 — 지금 ${SERVER.s21?.bytes}/${size}`);
+    assert.equal(serverText("s21"), fs.readFileSync(tp, "utf8"), "🔴 한 번도 안 올라간 대화는 처음부터 다 올린다");
+    await waitFor(() => bgLeft().length === 0, 10_000, "잠금이 풀린다");
+    ok("⑨ 턴마다 한도로 끝나 한 번도 안 올라간 대화 — 내려갈 때 처음부터 다 올린다");
+  }
+  {
+    reset();
+    const tp = await mkTranscript("t22.jsonl", U("질문") + A("진행 중 문장"));
+    await runHook(END("s22", tp), { env: BG_ENV });
+    await waitFor(() => SERVER.s22?.bytes === fs.statSync(tp).size, 15_000, "첫 몫");
+    await new Promise((r) => setTimeout(r, 250));                // 종료하는 하네스가 마지막 줄을 늦게 적는다(기다림 700ms 안)
+    fs.appendFileSync(tp, A("늦게 적힌 마지막 답"));
+    const size = fs.statSync(tp).size;
+    await waitFor(() => SERVER.s22?.bytes === size, 15_000, `늦게 적힌 줄까지 — 지금 ${SERVER.s22?.bytes}/${size}`);
+    assert.ok(serverText("s22").endsWith(A("늦게 적힌 마지막 답")), "🔴 뒤의 판은 끝에 닿은 뒤 잠깐 기다렸다 다시 잰다");
+    await waitFor(() => bgLeft().length === 0, 10_000, "잠금이 풀린다");
+    ok("⑨ 종료하며 늦게 적힌 마지막 줄 — 뒤의 판이 잠깐 기다렸다 잇는다");
+  }
+  {
+    reset(); CAPTURE.enabled = false;
+    const tp = await mkTranscript("t23.jsonl", U("질문") + A("답"));
+    await runHook(END("s23", tp), { env: BG_ENV });
+    await waitFor(() => requests.length >= 1 && bgLeft().length === 0, 10_000, "정책을 물은 뒤 접는다");
+    assert.equal(appends.length, 0, "🔴 조직이 껐으면 내려갈 때도 안 보낸다");
+    ok("⑨ 내려갈 때도 조직 스위치(capture.enabled)를 따른다");
+  }
+  {
+    reset();
+    const tp = await mkTranscript("t24.jsonl", U("질문") + A("답"));
+    for (const env of [{ LIVELY_MODE: "readonly" }, { LIVELY_MODE: "incognito" }]) {
+      await runHook(END("s24", tp), { env: { ...BG_ENV, ...env } });
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(requests.length, 0, "🔴 읽기전용·인코그니토는 내려갈 때도 게이트웨이를 한 번도 안 부른다");
+    assert.equal(bgLeft().length, 0, "뒤의 판도 띄우지 않는다");
+    ok("⑨ 읽기전용·인코그니토 — 내려갈 때도 아무것도 안 한다");
+  }
+  {
+    reset();
+    const tp = await mkTranscript("t25.jsonl", U("질문") + A("뒤에서 못 돌리는 자리"));
+    await runHook(END("s25", tp), { env: { ...BG_ENV, LIVELY_LOGCAP_BG_OFF: "1" } });
+    assert.equal(SERVER.s25?.bytes, fs.statSync(tp).size, "🔴 뒤에서 못 돌리면 내려갈 때도 앞에서 끝까지 올린다");
+    assert.equal(bgLeft().length, 0, "뒤에서 도는 판을 띄우지 않았다");
+    ok("⑨ 뒤에서 못 돌리는 자리 — 내려갈 때 앞에서 올린다");
   }
 
   console.log(`\n${pass} passed`);

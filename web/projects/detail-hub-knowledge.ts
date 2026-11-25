@@ -12,7 +12,7 @@ import { searchSnippet } from './detail-hub-model.js';
 const knName = (k: any): string => String(k.name || k.knowledge_name || '');
 const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
 
-export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
+export const fillKnowledge: Fill = (ctx, f, body, foot, sub, acts) => {
   const { o, P, pid } = ctx;
   const w = f.w, h = f.h;
   const kn = P.knowledge || {};
@@ -120,7 +120,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
   // ── 크기별 본문 ──
   const recHost = el('div', { class: 'pjh-krec' });
   // 빈 «필요» 의 문장 — 추천이 있으면 그걸 가리키고, 없으면 검색을 가리킨다(추천이 올 때 바꾼다).
-  const emptyReq = el('div', { class: 'pjh-stat', text: '아직 없어요 — 위에서 찾아 연결하면 다음 세션부터 읽고 시작합니다.' });
+  const emptyReq = el('div', { class: 'pjh-stat', text: '아직 없어요. 찾아서 연결하면 다음 세션이 읽고 시작해요.' });
   const footTxt = footText('필요 ' + req.length + ' · 산출 ' + prod.length);
   // 추천은 의미검색이라 늦게 온다(실측 20~30초) — 그동안 «찾는 중» 한 줄을 두어 나중에 줄이 생기는 게 갑작스럽지 않게.
   recHost.append(el('div', { class: 'pjh-stat pjh-krec-wait', text: '추천 지식을 찾는 중…' }));
@@ -130,14 +130,23 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     recHost.replaceChildren();
     if (!fresh.length) return;
     footTxt.textContent = '필요 ' + req.length + ' · 산출 ' + prod.length + ' · 추천 ' + fresh.length;   // 바닥의 수 = 화면에 선 추천 줄 수(시안)
-    emptyReq.textContent = '아직 없어요 — 아래 추천을 연결하거나 위에서 찾으세요.';
+    emptyReq.textContent = '아직 없어요. 아래 추천을 연결해 보세요.';
     if (label) recHost.append(el('div', { class: 'pjh-grp sub' }, el('b', { text: '추천' }), el('span', { class: 'pjh-grp-n', text: String(fresh.length) }), el('span', { class: 'pjh-grp-h', text: '· 연결하면 다음 세션부터 읽고 시작' })));
     for (const m of fresh) recHost.append(rrow(m));
   });
   const modal = !!f.modal;   // 모달 — 흐름(필요 → 프로젝트 → 산출)은 카드 요약을 끝까지, 옆 칸은 찾기 + 추천 전부
   const sidePane = !modal && w >= 3 && h >= 2;
-  const flowView = w >= 2 && h >= 2 && !sidePane && !modal;   // 2×2 — 위 검색 상자 대신 «필요 지식 찾기» 점선 카드(누르면 그 자리에 검색)
-  if (!sidePane && !flowView && !modal) body.append(searchBox());
+  //  #5630 — 검색 상자를 늘 세워 두지 않는다. 머리의 돋보기를 누르면 그 자리에 선다(흐름 뷰의 «＋ 필요 지식 찾기» 와 같은 문).
+  if (!modal && !sidePane) {
+    const find = el('button', { class: 'pjh-hbtn', type: 'button', title: '필요한 지식 찾아 연결하기', 'aria-label': '지식 찾기' }, hubIcon('search', 15));
+    find.onclick = (e) => {
+      e.stopPropagation();
+      let inp = body.querySelector('.pjh-search-in') as HTMLInputElement | null;
+      if (!inp) { body.prepend(searchBox()); inp = body.querySelector('.pjh-search-in') as HTMLInputElement | null; }
+      if (inp) inp.focus();
+    };
+    acts.prepend(find);
+  }
   body.append(results, normal);
 
   if (w <= 1 && h <= 1) {
@@ -147,8 +156,9 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
     normal.append(recHost); paintRecs(1, false);
   } else if (w <= 1) {
     // 1×N — 필요·산출을 프로젝트 탭 섹션과 같은 tint 카드 둘로(필요 파랑 · 산출 민트)
-    const reqBox = el('div', { class: 'pjh-kcol' }, grp('필요', req.length, '세션이 읽고 시작'), ...req.map((k) => kcard(k, 'required')), req.length ? null : emptyReq, recHost);
-    const prodBox = el('div', { class: 'pjh-kcol prod' }, grp('산출', prod.length, '이 프로젝트가 만든 것'), ...prod.map((k) => kcard(k, 'produced')),
+    //  #5630 — 색 상자 속 카드 대신 줄(아이콘 · 제목). 묶음 이름이 이미 «필요 · 산출» 을 말하므로 줄 끝의 관계 칩은 CSS 가 감춘다.
+    const reqBox = el('div', { class: 'pjh-kcol flat' }, grp('필요', req.length, '세션이 읽고 시작'), ...req.map((k) => krow(k, 'required')), req.length ? null : emptyReq, recHost);
+    const prodBox = el('div', { class: 'pjh-kcol prod flat' }, grp('산출', prod.length, '이 프로젝트가 만든 것'), ...prod.map((k) => krow(k, 'produced')),
       prod.length ? null : el('div', { class: 'pjh-stat', text: '작업이 진행되면 여기에 쌓입니다.' }));
     normal.append(reqBox, prodBox);
     paintRecs(2);

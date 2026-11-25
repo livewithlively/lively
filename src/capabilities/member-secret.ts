@@ -65,7 +65,7 @@ function metaOf(v: unknown): Record<string, unknown> {
 }
 
 /**
- * 본인 금고에 자격을 넣는 **유일한 길** — me_credential_set 과 리브 안전 입력칸(me_liv_put_secret)이 같이 부른다.
+ * 본인 금고에 자격을 넣는 **유일한 길** — me_credential_set 과 세션 요청의 안전 입력칸(session_ask_submit — asks/kinds/secret.ts)이 같이 부른다.
  *  두 입구가 따로 저장하면 값 검사·암호화 키 확인·저장 뒤 부작용(Zotero 도구 묶음) 중 하나가 한쪽에서 빠진다.
  *  owner 는 인자로 받지 않는다 — 언제나 memberId 본인 칸이다(남의 칸에 넣는 건 관리자 org_credential_set 의 일).
  *  meta 는 교체다(병합 아님). 값만 바꾸려는 호출자는 기존 meta·label 을 읽어 넘긴다.

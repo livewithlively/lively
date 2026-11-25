@@ -15,6 +15,7 @@ import { runDistillInject, runDistillHeadless } from "./actions/distill.js";
 import { runAgentInject, runAgentHeadless } from "./actions/agent.js";
 import { runCanaryJob } from "./actions/canary.js"; // #1657 상류 회귀 탐지
 import { runProjectGc } from "./actions/project-gc.js";
+import { runAppServerJob } from "./actions/app-server-job.js"; // 앱 v2 #121 앱 정기 작업의 server 갈래
 import { GC_DEFAULTS } from "./actions/project-gc-plan.js";
 import { HEADLESS_KEYS } from "../node/headless-harness.js"; // #1884 헤드리스 하네스 선택지(표에서 파생)
 
@@ -142,6 +143,13 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "cap", label: "단계별 후보 상한", kind: "text", hint: `한 단계의 후보가 이보다 많으면 그 단계는 멈추고 요약에 halted 로 남기며 운영 경보를 보낸다(기준값 오입력 방지). 기본 ${GC_DEFAULTS.cap}.` },
   ], run: runProjectGc },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [], run: runEnsureManagedSessions },
+  // 앱 v2 #121 — 앱 매니페스트 jobs[].run.kind "server" 가 까는 잡(앱 설치만 만든다 · id = app:<앱>:<key>). 정한 때에 앱 서버 라우트를 백그라운드 작업으로 부른다.
+  //  누구로 도나 · 표시 · skipped/error 가름은 actions/app-server-job.ts 머리말. run_as 는 org_app_job_set 으로 정한다(재설치가 덮지 않는다).
+  { key: "app_server_job", label: "앱 정기 작업 (앱 서버 라우트 — 앱 설치가 깐다)", params: [
+    { name: "app_id", label: "앱", kind: "text", hint: "앱 설치가 채운다." },
+    { name: "route", label: "앱 라우트", kind: "text", hint: "앱 설치가 채운다(매니페스트 jobs[].run.route)." },
+    { name: "run_as", label: "누구로 (구성원 id)", kind: "text", hint: "비우면 앱 책임자 → 설치한 사람 → 잡을 만든 사람. org_app_job_set 으로 정한다." },
+  ], run: runAppServerJob },
   // #1036 프리뷰 환경 — 유휴 TTL 회수 + auto 트리거 stage 재-merge(작업 브랜치 갱신 반영). 정지된 건 안 켬(온디맨드).
   { key: "preview_reconcile", label: "프리뷰 환경 reconcile (유휴 회수 + auto stage 재-merge)", params: [], run: runPreviewReconcile },
 ];

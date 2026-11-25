@@ -1,4 +1,4 @@
-// 온보딩 «AI 잇기» 4종 실배선 — 클로드·챗지피티·제미나이·그록 (#1879).
+// 온보딩 «AI 잇기» 실배선 — 클로드·챗지피티·제미나이·커서·그록 (#1879).
 //
 // 왜 소스를 읽는 테스트가 섞여 있나: 이 배선의 고장은 **오류를 내지 않는다**. 판정이 어긋나면 화면이
 //  조용히 «아직 로그인이 안 보여요» 를 반복할 뿐이고(제미나이가 정확히 그랬다), 런타임으로 잡으려면
@@ -30,17 +30,17 @@ const WELCOME = readFileSync(
 const CONNECT = readFileSync(
   new URL("../capabilities/delivery/liv-chat.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 
-/** 사람에게 로그인하게 하는 AI 넷 → 하네스 key. (#4970) 처음 설정의 «AI 고르기» 표는 걷혔다 — 로그인은 [내 설정 ▸ AI 계정 연결]에서 하고,
- *  외부 앱 연결 세션은 그중 로그인된 첫 번째로 뜬다. 이 넷이 «이어졌나» 를 답하지 못하면 연결 세션이 영영 «AI 없음» 으로 떨어진다. */
+/** 사람에게 로그인하게 하는 AI → 하네스 key. (#4970) 처음 설정의 «AI 고르기» 표는 걷혔다 — 로그인은 [내 설정 ▸ AI 계정 연결]에서 하고,
+ *  외부 앱 연결 세션은 그중 로그인된 첫 번째로 뜬다. 이 목록이 «이어졌나» 를 답하지 못하면 연결 세션이 영영 «AI 없음» 으로 떨어진다. */
 function onboardingAiMap(): Record<string, string> {
-  return { Claude: "claude", ChatGPT: "codex", Gemini: "antigravity", Grok: "grok" };
+  return { Claude: "claude", ChatGPT: "codex", Gemini: "antigravity", Cursor: "cursor", Grok: "grok" };
 }
 
 // ── 고르게 한 넷이 실제로 이어지는가 (이 프로젝트의 본론) ─────────────────────
 
-t("① 로그인하게 하는 넷은 전부 실재하는 하네스다", () => {
+t("① 로그인하게 하는 AI 는 전부 실재하는 하네스다", () => {
   const map = onboardingAiMap();
-  assert.deepEqual(Object.keys(map).sort(), ["ChatGPT", "Claude", "Gemini", "Grok"]);
+  assert.deepEqual(Object.keys(map).sort(), ["ChatGPT", "Claude", "Cursor", "Gemini", "Grok"]);
   for (const [label, key] of Object.entries(map)) {
     assert.ok(HARNESSES.some((h) => h.key === key), `${label} → ${key} 가 카탈로그에 없다`);
   }
@@ -60,6 +60,14 @@ t("③ 제미나이(antigravity)는 프로브로 잰다 — 자격 파일이 없
     "agy 가 자격 파일을 남긴다고 판정하고 있다 — ~/.gemini 트리엔 자격 파일이 없다(실측)");
   assert.deepEqual([...(harnessLoginProbe("antigravity") ?? [])], ["models"],
     "실측된 프로브는 `agy models` 다 — 로그인 exit 0 / 미로그인 exit 1");
+});
+
+t("③b Cursor 는 status 종료코드가 아닌 JSON 인증 필드로 잰다", () => {
+  assert.equal(harnessHasCredential("cursor"), false);
+  const probe = (harnessLoginProbe("cursor") ?? []).join(" ");
+  assert.match(probe, /status --format json/);
+  assert.match(probe, /isAuthenticated/);
+  assert.match(probe, /grep -Eq/);
 });
 
 t("④ 고르게 한 넷은 전부 **실측된** 로그인 절차를 갖는다", () => {

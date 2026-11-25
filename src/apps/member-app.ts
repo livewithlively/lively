@@ -43,6 +43,19 @@ export function memberAppViolations(m: LivelyAppManifest): string[] {
 export interface Editor { userId: string; scopes?: readonly string[] }
 
 /**
+ * 이 사람이 이 앱의 **설치된 판** 서버를 올릴 수 있나(app_server_deploy). 순수 — null = 된다 · 문자열 = 안 되는 이유.
+ *  서버 올리기는 지금 판을 빌드해 올릴 뿐 판(매니페스트 · 코드)을 바꾸지 않는다. 그래서 확장 기능(정기 작업 · 서버 worker · 나갈 곳 등 —
+ *  관리자만 org_app_install 로 설치한다)이 든 앱도 **관리자는** 올린다 — editDenial 의 «확장 앱은 app_save 로 못 고친다» 는 구성원 저장(app_save)이
+ *  그 전개물을 다룰 수 없어서이지 서버 빌드를 막으려던 것이 아니다(앱 v2 #121: server 정기 작업은 web.server 를 요구하는데, jobs 가 든 앱은
+ *  이 관문 때문에 관리자도 서버를 못 올렸다). 그 밖(구성원 · 빌트인 · 저장된 설명을 못 읽는 앱)은 고치기 권한(editDenial)과 같다.
+ */
+export function serverDeployDenial(app: OrgApp, who: Editor, currentManifest: LivelyAppManifest | null): string | null {
+  const admin = (who.scopes ?? []).includes("admin");
+  if (admin && currentManifest && !isBuiltinSource(app.source) && memberAppViolations(currentManifest).length) return null;
+  return editDenial(app, who, currentManifest);
+}
+
+/**
  * 이 사람이 **이미 있는** 이 앱을 app_save 로 고칠 수 있나. 순수.
  *  반환 null = 된다 · 문자열 = 안 되는 이유(사람에게 그대로 보인다).
  */

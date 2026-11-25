@@ -8,6 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { sessionOrBearer } from "../../auth/http-auth.js";
 import type { BearerVerifier } from "../../auth/bearer.js";
 import type { LivelyUser } from "../../context.js";
+import { permits } from "../../auth/permissions.js";
 import { HttpError } from "../../http-error.js";
 import { requireAppTool } from "../../apps/principal.js";
 import { incognitoFromHeaders, readOnlyFromHeaders } from "../../org/auth/agent-identity.js";
@@ -42,7 +43,8 @@ export function contentDisposition(display: string): string {
 async function nasCaller(req: express.Request, res: express.Response, gate: { tool: string; mutates: boolean }): Promise<{ user: LivelyUser; via: "agent" | "browser" } | null> {
   const user = (req.auth?.extra ?? null) as LivelyUser | null;
   if (!user?.userId) { res.status(401).json({ error: "라이블리 인증이 필요합니다" }); return null; }
-  if (!Array.isArray(user.scopes) || !user.scopes.includes("context")) {
+  //  #5799 — nas_find · nas_list · nas_manage 와 같은 권한(«맥락»): 내려받기는 보기, 올리기는 고치기.
+  if (!permits(user, "context", { perm: "content", level: gate.mutates ? "write" : "read" })) {
     res.status(403).json({ error: "이 토큰으로는 NAS 파일을 다룰 수 없습니다(context 권한 필요)" });
     return null;
   }

@@ -290,6 +290,9 @@ await t("U1 동의 주소 — #/app-grant/<앱>?v=<판>&from=mcp · 공개 주�
   assert.equal(appConsentUrl("https://ws.app.lvly.io/", "policy-wiki", "pub"), "https://ws.app.lvly.io/ui/#/app-grant/policy-wiki?v=pub&from=mcp");
   assert.equal(appConsentUrl("http://127.0.0.1:1", "a b", "draft"), "http://127.0.0.1:1/ui/#/app-grant/a%20b?v=draft&from=mcp");
   assert.equal(appConsentUrl(null, "x", "pub"), null);
+  //  #1644 앱 화면에서 온 앱 서버 호출 — from 없이(동의 뒤 화면이 그 앱 주소로 돌아간다). 생략하면 종전 그대로 from=mcp.
+  assert.equal(appConsentUrl("https://ws.app.lvly.io", "policy-wiki", "draft", null), "https://ws.app.lvly.io/ui/#/app-grant/policy-wiki?v=draft");
+  assert.equal(appConsentUrl("https://ws.app.lvly.io", "policy-wiki", "pub", "mcp"), "https://ws.app.lvly.io/ui/#/app-grant/policy-wiki?v=pub&from=mcp");
 });
 
 // ── 매니페스트 칸 ──

@@ -22,9 +22,10 @@ import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/chan
 import type { AwsCreds } from "../net/aws/aws-sigv4.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { EXT_PREFIX, markExternalTool } from "../org/policies/tool-log.js";
-import { resolveUser, requireScope } from "../context.js";
+import { resolveUser, requireNeed } from "../context.js";
+import { needForExternalTool } from "../capabilities/permission-map.js";
 import { requireAppTool } from "../apps/principal.js";
-import { isScope } from "../auth/scopes.js";
+import { isScope, type Scope } from "../auth/scopes.js";
 import { jsonSchemaToZodShape, buildProxyAuthHeaders, proxyAuthFallback, CALLABLE_SCOPES } from "./dynamic-tools.js";
 import { logger } from "../log.js";
 
@@ -260,7 +261,7 @@ export async function registerProxiedMcpTools(server: McpServer): Promise<void> 
       logger.warn({ server: srv.name, scope: srv.scope }, "허용되지 않은 호출 scope 의 프록시 MCP — 등록 제외(scope 미지정/무효)");
       continue;
     }
-    const callScope = srv.scope as string;
+    const callScope = srv.scope as Scope;   // proxyScopeAllowed 가 방금 isScope 로 확인했다
     const serverDefault = (srv.level === "L0" || srv.level === "L1" || srv.level === "L2") ? srv.level : "L1";
     for (const tool of (srv.tools_snapshot ?? [])) {
       if (!tool || typeof tool.name !== "string") continue;
@@ -280,7 +281,7 @@ export async function registerProxiedMcpTools(server: McpServer): Promise<void> 
           },
           async (args: Record<string, unknown>, extra: unknown) => {
             const u = resolveUser(extra);
-            requireScope(u, callScope);          // scope 게이트(멤버 권한)
+            requireNeed(u, needForExternalTool(callScope, toolLevel), callScope);   // 권한 게이트(#5799 — 외부 앱 · 조회 등급은 보기로 충분)
             await requireAppTool(u, toolName);   // #1780: 앱 세션이면 ext_tools allowlist 로 축소(일반 세션 통과)
             try {
               const r = await callUpstream(srv, tool.name, args ?? {}, u.userId, toolLevel);

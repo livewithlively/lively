@@ -80,8 +80,12 @@ async function statOf(abs: string, osUser: string | null): Promise<{ size: numbe
   if (osUser) {
     const st = await memberStat(osUser, abs);
     if (!st?.file) return null;
-    // 멤버 소유 파일의 mtime 은 게이트웨이가 stat 못 할 수 있다 — 되면 쓰고, 안 되면 null(occurred_at 은 비운다).
-    const m = await fsp.stat(abs).then((s) => s.mtime.toISOString()).catch(() => null);
+    // 멤버 소유 파일의 mtime 은 게이트웨이가 stat 못 할 수 있다(매니지드는 아예 다른 기계의 저장소다) — 멤버 경계가 잰 값을
+    //  먼저 쓴다(#5790: 그 값이 없어 매니지드 자료 행의 occurred_at 이 비었고, 세션 결과물 등록이 «이미 있나» 를 못 갈랐다).
+    //  옛 멤버 경계(mtime 미보고)면 종전대로 게이트웨이 stat → 안 되면 null(occurred_at 은 비운다).
+    const m = typeof st.mtime === "number" && Number.isFinite(st.mtime) && st.mtime > 0
+      ? new Date(st.mtime).toISOString()
+      : await fsp.stat(abs).then((s) => s.mtime.toISOString()).catch(() => null);
     return { size: st.size, mtime: m };
   }
   const st = await fsp.stat(abs).catch(() => null);

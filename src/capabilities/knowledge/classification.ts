@@ -8,7 +8,7 @@ import {
   linkKnowledgeCategory, unlinkKnowledgeCategory, listUnmappedKnowledge, listProposedClassifications,
   proposeKnowledgeCategory, linkKnowledge, unlinkKnowledge,
 } from "../../v6/knowledge-store.js";
-import { assertKnowledgeWritable, classificationInfo } from "./shared.js";
+import { assertKnowledgeAnnotatable, assertKnowledgeWritable, classificationInfo } from "./shared.js";
 
 // ── 미분류 지식 인박스(#982) — 카테고리 0건 active 지식. list_unmapped(코드유닛)의 지식판. 분류기(classify_knowledge 크론)·사람이 드레인. ──
 const knowledgeUnmappedInput = { limit: z.number().int().positive().max(200).optional() };
@@ -73,7 +73,7 @@ export const knowledgeLinkCategory: Capability = {
       } }],
   },
   handler: async (input: KnowledgeLinkCategoryInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     if (input.unlink) { await unlinkKnowledgeCategory(input.name, input.categoryId, writeCtx); return { unlinked: true }; }
     await linkKnowledgeCategory(input.name, input.categoryId, input.state, writeCtx);
@@ -114,7 +114,7 @@ export const knowledgeProposeCategory: Capability = {
       } }],
   },
   handler: async (input: KnowledgeProposeCategoryInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     const r = await proposeKnowledgeCategory(input.name, input.categoryId,
       { evidence: input.evidence, confidence: input.confidence, state: input.state }, writeCtx);
@@ -156,10 +156,10 @@ export const knowledgeLink: Capability = {
       } }],
   },
   handler: async (input: KnowledgeLinkInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     // 링크는 **양쪽 끝**을 본다 — 한쪽만 보면 안 보이는 문서로 엣지를 걸어 놓고, 내 문서의 백링크 목록에서
     //  그 제목을 읽는 우회로가 열린다(그리고 남의 문서에 내 엣지를 꽂는 오염이기도 하다).
-    await assertKnowledgeWritable(input.to, ctx?.viewer ?? null);
+    await assertKnowledgeAnnotatable(input.to, ctx?.viewer ?? null);   // 받는 쪽은 바뀌지 않는다 — 내 문서에서 주입 문구로 거는 링크는 구성원도 건다(#5801)
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     if (input.unlink) { await unlinkKnowledge(input.name, input.to, input.relation, writeCtx); return { unlinked: true }; }
     await linkKnowledge(input.name, input.to, input.relation, writeCtx);

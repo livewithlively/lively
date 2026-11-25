@@ -3,18 +3,31 @@
 //  ⚠ org_manager_finding_report 는 **AI 가 쓰는 도구**다(모순·코드괴리 판정 배치가 결과를 되돌려 적는 경로).
 //   나머지는 사람 화면용. 둘을 같은 파일에 두되 성격이 다름을 명시한다.
 import type { Capability, CapabilityCtx } from "../types.js";
-import { assertKnowledgeWritable } from "../knowledge/shared.js";
+import { assertKnowledgeAnnotatable, assertKnowledgeWritable } from "../knowledge/shared.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import {
   listManagers, getManager, upsertManager, removeManager,
-  listFindings, resolveFinding, upsertFinding, reportContradiction, managerOverview, applyFindings,
+  listFindings, resolveFinding, upsertFinding, reportContradiction, contradictionPair, managerOverview, applyFindings,
   MANAGER_KIND_LABEL, type ManagerKind,
 } from "../../org/store/managers.js";
 import { runManagerByRef, applyFinding } from "../../org/manage/run-manager.js";
 import { itemsPool } from "../../db/client.js";
 import { actorOf, restWork, str } from "./shared.js";
+
+/**
+ * 관리기 모순 링크를 걸거나(보고) 해제할(반려) 수 있나 — knowledge_link 와 같은 비대칭 문턱(classification.ts).
+ *  관리기 링크는 늘 정규 방향 a→b(a=least · b=greatest, contradictionPair)로만 걸리므로 끝이 정해진다.
+ *  · 거는 끝(a): 쓰기 게이트 — 그 문서의 링크를 바꾸는 쪽이라 공개범위에 더해 세션 주입 문구는 관리자만.
+ *  · 받는 끝(b): 곁가지 게이트 — 받는 문서는 바뀌지 않으므로 공개범위만(구성원도 주입 문구로 거는 링크는 건다).
+ *  판정 실패(없음 · 안 보임 · 관리자 전용)는 던지지 않고 false — 호출부는 발견만 처리하고 링크는 두거나 만들지 않는다.
+ */
+async function managerLinkAllowed(x: string, y: string, user: LivelyUser, ctx?: CapabilityCtx): Promise<boolean> {
+  const viewer = ctx?.viewer ?? null;
+  const { a, b } = await contradictionPair(x, y);
+  return Promise.all([assertKnowledgeWritable(a, viewer, user), assertKnowledgeAnnotatable(b, viewer)]).then(() => true, () => false);
+}
 
 export const managersCapabilities: Capability[] = [
   restWork("org_manager_list", "관리기 목록",
@@ -118,7 +131,7 @@ export const managersCapabilities: Capability[] = [
     }),
 
   restWork("org_manager_finding_resolve", "발견 처리(승인·반려·해결)",
-    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다 · 모순이면 처리하는 사람이 두 지식을 모두 쓸 수 있을 때만 관리기가 건 contradicts 링크도 해제하고, 해제한 링크 수를 links_dismissed 로 돌려준다) · resolved=사람이 직접 고침. " +
+    "발견을 닫는다. accepted=조치안을 적용하고 닫음 · rejected=오탐(다음 주기에 되살아나지 않는다 · 모순이면 처리하는 사람이 그 링크를 knowledge_link 로 해제할 수 있을 때만 — 거는 쪽 지식은 쓸 수 있고 받는 쪽은 볼 수 있을 때 — 관리기가 건 contradicts 링크도 해제하고, 해제한 링크 수를 links_dismissed 로 돌려준다) · resolved=사람이 직접 고침. " +
     "apply=true 면 accepted 시 조치안(예: 분류 이동)을 실제로 적용한다 — 되돌릴 수 있는 조치만 수행된다.",
     [{ method: "POST", paths: ["/api/ui/org/manager-findings/:id/resolve"], parse: (req) => ({
       id: Number((req.params as Record<string, string>)?.id), ...(req.body as object ?? {}),
@@ -141,16 +154,14 @@ export const managersCapabilities: Capability[] = [
         if (!finding) throw new HttpError(404, "발견을 찾을 수 없습니다");
         return { finding, applied: r === "applied", result: r };
       }
-      //  모순 반려는 그 쌍의 관리기 링크를 해제한다 — 링크 해제(knowledge_link unlink)와 같은 양 끝 판정을 통과할 때만.
-      //   못 보는 지식이 낀 쌍은 발견만 반려한다(이 길이 링크 쓰기 게이트를 돌아가지 않게).
+      //  모순 반려는 그 쌍의 관리기 링크를 해제한다 — 링크 해제(knowledge_link unlink)와 같은 양 끝 판정(managerLinkAllowed)을 통과할 때만.
+      //   못 보는 지식이 낀 쌍 · 거는 끝이 주입 문구인데 관리자가 아닌 사람은 발견만 반려한다(이 길이 링크 쓰기 게이트를 돌아가지 않게).
       let allowDismiss = true;
       if (state === "rejected") {
         const cur = (await itemsPool.query(`SELECT kind, target_kind, target_ref, dedup_key FROM org_manager_finding WHERE id=$1`, [id])).rows[0] as
           { kind: string; target_kind: string; target_ref: string; dedup_key: string } | undefined;
         if (cur?.kind === "contradiction" && cur.target_kind === "knowledge" && cur.dedup_key) {
-          const viewer = ctx?.viewer ?? null;
-          allowDismiss = await Promise.all([assertKnowledgeWritable(cur.target_ref, viewer), assertKnowledgeWritable(cur.dedup_key, viewer)])
-            .then(() => true, () => false);
+          allowDismiss = await managerLinkAllowed(cur.target_ref, cur.dedup_key, user, ctx);
         }
       }
       const row = await resolveFinding(id, state, actorOf(user), resolution, { source, allowDismiss });
@@ -205,13 +216,11 @@ export const managersCapabilities: Capability[] = [
         proposed_action: (input.proposed_action ?? undefined) as Record<string, unknown> | undefined,
       };
       //  모순은 두 지식의 쌍이다 — 방향을 서버가 정하고 contradicts 링크까지 한 번에(reportContradiction 머리말).
-      //  링크는 보고한 사람이 두 지식을 다 쓸 수 있을 때만 만든다(knowledge_link 와 같은 양 끝 판정). 판정 배치는 의뢰자의 신원으로
-      //   보고하므로 의뢰자가 못 보는 쌍은 발견만 남는다. 응답에 링크 여부를 싣지 않는다 — 안 보이는·없는 이름이 «링크 안 됨» 으로
-      //   갈리면 존재가 샌다.
+      //  링크는 보고한 사람이 knowledge_link 와 같은 양 끝 판정(managerLinkAllowed — 거는 끝은 쓰기, 받는 끝은 공개범위)을 넘을 때만
+      //   만든다. 판정 배치는 의뢰자의 신원으로 보고하므로 의뢰자가 못 보는 쌍은 발견만 남는다. 응답에 링크 여부를 싣지 않는다 —
+      //   안 보이는·없는 이름이 «링크 안 됨» 으로 갈리면 존재가 샌다.
       if (m.kind === "contradiction" && f.target_kind === "knowledge" && f.dedup_key && f.dedup_key !== f.target_ref) {
-        const viewer = ctx?.viewer ?? null;
-        const allowLink = await Promise.all([assertKnowledgeWritable(f.target_ref, viewer), assertKnowledgeWritable(f.dedup_key, viewer)])
-          .then(() => true, () => false);
+        const allowLink = await managerLinkAllowed(f.target_ref, f.dedup_key, user, ctx);
         const r = await reportContradiction(m, f, { actor: actorOf(user), source: ctx?.source ?? "mcp", allowLink });
         return { result: r.result };
       }

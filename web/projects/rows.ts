@@ -11,9 +11,9 @@
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
 import { api, busy, el, personFace, toast } from '../core.js';
+import { projPeopleStack } from './people-ui.js';   // #5630 사람 한 벌
 import { DRAFT_LABEL, isDraftProj } from '../lib/proj-draft.js';
 import { draftTipFor } from '../lib/proj-access.js';   // #5598 초대제인 초안은 «공개됩니다» 라고 말하지 않는다
-import { projAccessTag } from './access-ui.js';        // #5598 «누가 보나» 표시
 import { trashProjectFlow } from '../session-actions.js';   // #3778 — 프로젝트 삭제 = 휴지통으로(어느 화면이든 같은 길)
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import {
@@ -306,12 +306,18 @@ function pjvProjStatusDot(p, reload) {
 // 팀원 셀 — 멤버 페이스파일(클릭→전체 구성원 검색·다중토글 팝오버). 프로젝트의 '담당자'를 대체한다.
 //  currentMembers=[{member_id,display_name}](보드 listProjects 가 채움). applyIds(ids)= 저장(프로젝트 행) 또는 드래프트 갱신(추가행).
 //  태스크의 pjvAssigneeControl 과 같은 결(팝오버·아바타·체크) + 검색 인풋으로 전체 구성원에서 고른다.
-function pjvProjTeamControl(currentMembers, applyIds) {
+//  #5630(원준 2026-11-22 «팀원을 격상») — lead(만든 사람)를 주면 칸이 «사람 한 벌»(people-ui projPeopleStack)로 선다:
+//   리드 얼굴(테두리) + 함께 얼굴 + 이름 글, 닫힌 프로젝트는 자물쇠. 누르면 종전과 같은 팀원 고르기 창. 리드는 늘 있으니 칸이 비지 않는다.
+function pjvProjTeamControl(currentMembers, applyIds, lead?: string, proj?: any) {
   let members = (currentMembers || []).map((m) => ({ id: m.member_id, name: m.display_name || m.member_id }));
   const btn = el('button', { class: 'pjv-cell-btn', type: 'button', title: '팀원' });
   function render() {
-    btn.className = 'pjv-cell-btn' + (members.length ? '' : ' empty');
-    if (members.length) {
+    btn.className = 'pjv-cell-btn' + (members.length || lead ? '' : ' empty') + (lead ? ' pjv-ppl-btn' : '');
+    if (lead) {
+      const stack = projPeopleStack({ ...(proj || {}), created_by: lead, members: members.map((m) => ({ member_id: m.id, display_name: m.name })) }, { max: 3, size: 's' });
+      btn.replaceChildren(...(stack ? [stack] : []));
+      btn.title = '리드와 함께하는 사람 — 눌러서 함께할 사람을 넣고 뺍니다';
+    } else if (members.length) {
       const faces = el('span', { class: 'pjv-asg-faces' });
       for (const m of members.slice(0, 3)) faces.append(personFace(m.id, 'pjv-ava', m.name));
       if (members.length > 3) faces.append(el('span', { class: 'pjv-ava pjv-ava-more', text: '+' + (members.length - 3) }));
@@ -505,10 +511,10 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
   const draftTag = pjvIsDraft(p) ? el('span', { class: 'pj-draft-tag', title: draftTipFor(p), text: DRAFT_LABEL }) : null;
   //  #5598 «누가 보나» — 닫힌 프로젝트는 자물쇠와 «나만» · «N명과 공유», 초대제 워크스페이스의 열린 프로젝트는 지구본. 이름 바로 뒤에 선다
   //   (이름을 읽는 눈이 그대로 읽게 — 멀리 떨어진 칸에 두면 «이게 공유되고 있나» 를 찾아야 한다).
-  const accessTag = projAccessTag(p, { compact: true });
+  //  #5630 — 이름 뒤 알약은 걷었다. 누가 보는지는 바로 옆 「사람」 칸(자물쇠 + 리드 + 함께)이 말한다.
   const titleCell = el('div', { class: 'pjv-trow-title-cell' },
     select ? null : pjvRowCheck('project', p, { reload }),
-    caret, lead, title, accessTag, draftTag,
+    caret, lead, title, draftTag,
     subcountEl,
     ptagsEl,
     select ? null : pjvRowActions([
@@ -526,7 +532,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
 
   const row = el('div', { class: 'pjv-trow pjv-proj-row' },
     titleCell,
-    el('div', { class: 'pjv-tcell', 'data-col': 'team' }, pjvProjTeamControl(p.members || [], (ids) => pjvSaveProjMembers(p.id, ids))),
+    el('div', { class: 'pjv-tcell', 'data-col': 'team' }, pjvProjTeamControl(p.members || [], (ids) => pjvSaveProjMembers(p.id, ids), String(p.created_by || '') || undefined, p)),
     el('div', { class: 'pjv-tcell', 'data-col': 'due' }, pjvDueControl(p, (patch) => projPatch(p.id, patch, reload))),
     el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'start' }, el('span', { class: 'pjv-fval', text: p.start_date ? pjvFmtDate(p.start_date) : '' })),
     el('div', { class: 'pjv-tcell pjv-datecell', 'data-col': 'created' }, el('span', { class: 'pjv-fval', text: p.created_at ? pjvFmtDate(p.created_at) : '' })),
@@ -692,7 +698,7 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   if (withCols) {
     head = el('div', { class: 'pjv-tgroup-head pjv-tgroup-head-cols ' + meta.cls },
       el('div', { class: 'pjv-trow-title-cell' }, headCheck(), dot, labelEl, countEl, gcaret, pjvNameResizeHandle()),
-      pjvStdColHead('proj', 'team', '팀원'),
+      pjvStdColHead('proj', 'team', '사람'),   // #5630 — 리드 + 함께(종전 «팀원» 은 만든 사람을 빼고 그려 칸이 대개 비었다)
       pjvStdColHead('proj', 'due', '마감일'),
       pjvStdColHead('proj', 'start', '시작일'),
       pjvStdColHead('proj', 'created', '생성일'),

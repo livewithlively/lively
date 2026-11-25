@@ -24,6 +24,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseDiff, sanitizeName, repoClonePath, reposDir, withCloneLock, CloneBusyError, CLONE_LOCK_STALE_MS } from "./git-sync.js";
+import { installWorkspaceDirKeyResolver } from "../ops/workspace-dir-key.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -130,6 +131,73 @@ t("repoClonePath 은 reposDir 하위 단일 세그먼트(경로탈출 불가)", 
       assert.equal(existsSync(lockFile), false);
     });
   } finally {
+    if (prevDir === undefined) delete process.env.DOMAINMAP_REPOS_DIR; else process.env.DOMAINMAP_REPOS_DIR = prevDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ── 스캐너 클론 자리도 워크스페이스마다 따로 ──────────────────────────────────
+//  S1 | 열쇠 없음            | reposDir/<name>                     (단일 워크스페이스 · primary — 종전 자리)
+//  S2 | 열쇠 A · 열쇠 B      | reposDir/@ws/<id>/<name> — 같은 이름이어도 서로 다른 자리 · 종전 자리와도 다르다
+//  S3 | 열쇠 꼴이 틀림       | 던진다(종전 자리로 떨어지지 않는다)
+const WA = "aaaaaaaa-1111-2222-3333-444444444444", WB = "bbbbbbbb-1111-2222-3333-444444444444";
+t("S1 열쇠가 없으면 스캐너 클론은 종전 자리", () => {
+  installWorkspaceDirKeyResolver(() => null);
+  assert.equal(repoClonePath("app"), reposDir() + "/app");
+});
+t("S2 열쇠가 있으면 워크스페이스마다 다른 자리 — 같은 이름이어도 겹치지 않는다", () => {
+  try {
+    installWorkspaceDirKeyResolver(() => WA);
+    const a = repoClonePath("app");
+    installWorkspaceDirKeyResolver(() => WB);
+    const b = repoClonePath("app");
+    assert.equal(a, `${reposDir()}/@ws/${WA}/app`);
+    assert.equal(b, `${reposDir()}/@ws/${WB}/app`);
+    assert.notEqual(a, b);
+    assert.notEqual(a, reposDir() + "/app");
+    assert.equal(repoClonePath("../../etc"), `${reposDir()}/@ws/${WB}/.._.._etc`, "이름 정리는 그대로다");
+  } finally { installWorkspaceDirKeyResolver(() => null); }
+});
+t("S3 열쇠 꼴이 틀리면 던진다", () => {
+  try {
+    installWorkspaceDirKeyResolver(() => "../escape");
+    assert.throws(() => repoClonePath("app"), /UUID 꼴이 아닙니다/);
+  } finally { installWorkspaceDirKeyResolver(() => null); }
+});
+
+// ── 잠금 자리도 클론 자리를 따른다(워크스페이스마다 따로) ──────────────────────
+//  S4 | 열쇠 A 가 「app」 잠금을 쥔 동안 열쇠 B 의 「app」 | 막히지 않는다 — 잠금은 각 클론 자리 옆(@ws/<id>/.app.fetch.lock)
+//  S5 | 같은 열쇠의 「app」 두 번                          | 여전히 서로 막는다(CloneBusyError)
+//  두 워크스페이스가 같은 이름 레포를 가지면 클론은 따로인데 잠금이 공용 자리(reposDir/.app.fetch.lock)면, 한쪽의 fetch 가 남의
+//   웹훅을 200(clone busy)으로 돌려보내고 git-pull 을 건너뛰게 한다 — 남의 레포 때문에 내 구조 변경이 밀린다.
+{
+  const prevDir = process.env.DOMAINMAP_REPOS_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "clone-lock-ws-"));
+  process.env.DOMAINMAP_REPOS_DIR = dir;
+  const at = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+  try {
+    await at("S4 다른 워크스페이스의 같은 이름 레포는 잠금을 나누지 않는다 · 잠금은 그 클론 자리 옆", async () => {
+      installWorkspaceDirKeyResolver(() => WA);
+      let inner: unknown;
+      let lockOfA = false;
+      await withCloneLock("app", async () => {
+        lockOfA = existsSync(join(dir, "@ws", WA, ".app.fetch.lock"));
+        installWorkspaceDirKeyResolver(() => WB);
+        inner = await withCloneLock("app", async () => "b", 150).catch((e) => e);
+        installWorkspaceDirKeyResolver(() => WA);
+      });
+      assert.equal(inner, "b", `B 는 A 의 잠금에 막히지 않아야 한다: ${String(inner)}`);
+      assert.ok(lockOfA, "A 의 잠금 파일은 A 의 클론 자리 옆(@ws/<A>/.app.fetch.lock)");
+      assert.equal(existsSync(join(dir, ".app.fetch.lock")), false, "공용 자리에 잠금을 두지 않는다");
+    });
+    await at("S5 같은 워크스페이스 안에서는 여전히 서로 막는다", async () => {
+      installWorkspaceDirKeyResolver(() => WB);
+      let inner: unknown;
+      await withCloneLock("app", async () => { inner = await withCloneLock("app", async () => "x", 150).catch((e) => e); });
+      assert.ok(inner instanceof CloneBusyError, String(inner));
+    });
+  } finally {
+    installWorkspaceDirKeyResolver(() => null);
     if (prevDir === undefined) delete process.env.DOMAINMAP_REPOS_DIR; else process.env.DOMAINMAP_REPOS_DIR = prevDir;
     rmSync(dir, { recursive: true, force: true });
   }

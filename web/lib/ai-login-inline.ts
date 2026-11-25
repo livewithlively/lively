@@ -25,7 +25,7 @@ import { sessionTermUrl } from './session-open.js';
  *   실측(#2477): grok 을 목록에만 켜고 스테퍼를 안 만들어, 버튼을 눌러도 아무 일도 안 일어났다(오류도 없다).
  */
 export const AI_LOGIN_INLINE: Readonly<Record<string, true>> = Object.freeze({
-  codex: true, claude: true, grok: true,
+  codex: true, claude: true, grok: true, cursor: true,
 });
 
 export function isInlineCardHarness(h: string): boolean {

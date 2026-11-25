@@ -1,6 +1,7 @@
 // 작업(Activity) capability (P3) — activity_log(기록) + activity_list(조회). scope='memory'(공유 조직 작업,
 //  memory_*/ctx_* 와 동일). 핸들러는 thin — 입력 파싱 후 activity/store 의 store 호출.
 //  author_person=ctx.actor(토큰 신원=누가), author_agent='어떤 AI'(호출자가 명시 — 모델/하네스 id). 사람×AI 집계의 축.
+import { checkWriting, isHumanWriter, rejectWriting } from "./writing-style.js";
 import { z } from "zod";
 import { logActivity, listActivities, dashPeople, listDashMembers, getWatch, setWatch } from "../activity/store.js";
 import type { Capability } from "./types.js";
@@ -144,6 +145,17 @@ const activityLog: Capability = {
         }
       }
     }
+    // 서술 형식 — reject 규칙에 걸린 에이전트 기록은 남기지 않는다(사람의 웹 입력은 안내만). 판정은 서버에서 하므로
+    //  키트·훅이 갱신되지 않은 세션의 기록에도 걸린다.
+    //  외부 좌표(system + id)가 있는 기록은 판정하지 않는다 — PM 미러(클릭업 코멘트 · 상태 변경)다. 제목 · 본문은 그 시스템에서
+    //  사람이 쓴 글을 옮긴 것이고 원본은 거기 남는다: 거부하면 원본은 있는데 라이블리 사본만 빠지고, 형식에 맞게 고쳐 쓰면
+    //  사본이 원본과 달라진다. 그리고 그 좌표로 멱등 upsert 되므로(activity/store.ts conflictKey) 같은 코멘트를 다시 부르는
+    //  라운드트립이 매번 같은 판정에 걸린다. 좌표의 id 까지 요구하는 이유: system 이름 하나는 아무 기록이나 실을 수 있는 자기주장이라
+    //  그것만으로 판정을 건너뛰면 에이전트 기록이 reject 를 비껴간다(id 가 없으면 upsert 도 안 되는, 미러가 아닌 기록이다).
+    //  id 도 입력이라 흉내 낼 수 있지만, 형식 정책이라 미러 기록을 지키는 쪽을 택했다(isHumanWriter 의 화면 표식과 같은 저울질).
+    const { info: style, rejects, guide } = await checkWriting("activity", { title: input.title, body: input.body ?? null },
+      { human: isHumanWriter(user, ctx), observed: !!input.external_system && !!input.external_id });
+    if (rejects.length) throw await rejectWriting("activity", input.project_id != null ? String(input.project_id) : null, input.title, rejects, guide, ctx);
     const res = await logActivity({
       type: input.type, title: input.title, summary: input.summary ?? null, body: input.body ?? null,
       projectId: input.project_id ?? null, kuRefs: input.ku_refs, touches: input.touches,
@@ -153,7 +165,7 @@ const activityLog: Capability = {
       external_url: input.external_url ?? null, external_instance: input.external_instance,
       should_review: input.should_review, is_review: input.is_review,
     }, authorPerson);
-    return { ok: true, ...res, ...capped };
+    return { ok: true, ...res, ...capped, ...style };
   },
 };
 

@@ -9,7 +9,7 @@ import {
   postKnowledgeComment, getKnowledgeCommentFeed, toggleKnowledgeCommentReaction, knowledgeNameOfComment,
 } from "../../v6/knowledge-comment-store.js";
 import { setKnowledgePropsUi } from "../../v6/knowledge-store.js";
-import { assertKnowledgeVisible, assertKnowledgeWritable } from "./shared.js";
+import { assertKnowledgeAnnotatable, assertKnowledgeVisible, assertKnowledgeWritable } from "./shared.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertNoContentSecrets } from "../content-secrets.js";
 
@@ -141,7 +141,7 @@ export const knowledgePropsUi: Capability = {
       } }],
   },
   handler: async (input: KnowledgePropsUiInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { props_ui: await setKnowledgePropsUi(input.name, { show: input.show, hide: input.hide, full_width: input.full_width, icon: input.icon, cover: input.cover }, writeCtx) };
   },
@@ -194,7 +194,7 @@ export const knowledgeCommentPost: Capability = {
   },
   handler: async (input: KnowledgeCommentPostInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeAnnotatable(input.name, ctx?.viewer ?? null);   // 댓글은 문서를 바꾸지 않는다 — 주입 문구에도 구성원이 단다(#5801)
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { feed: await postKnowledgeComment(input.name, input.text, writeCtx, input.parent_id ?? null) };
   },

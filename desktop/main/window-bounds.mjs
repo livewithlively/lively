@@ -4,8 +4,8 @@
 //  보이지 않는 좌표(뺀 모니터 자리, 바뀐 해상도 바깥)에 있어서, 사용자는 트레이만 누르며 "앱이 고장났다"고
 //  본다. Electron 을 띄우는 검증은 CI 에서 못 하므로 판단은 여기 두고 표로 못박는다.
 
-export const DEFAULT_SIZE = { width: 720, height: 560 };
-export const MIN_SIZE = { width: 560, height: 420 };
+export const DEFAULT_SIZE = { width: 920, height: 620 };   // #5650 가로 두 칸(왼쪽 단계 · 오른쪽 내용)
+export const MIN_SIZE = { width: 860, height: 600 };   // 옛 720×560 으로 저장된 창도 이 크기로 커진다
 /** 이만큼은 어느 디스플레이 안에 들어와 있어야 '사람이 잡을 수 있다'고 본다(제목 표시줄을 끌 수 있는 최소). */
 export const MIN_VISIBLE = { width: 120, height: 40 };
 

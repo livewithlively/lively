@@ -577,7 +577,7 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     ok2(HARNESSES.every((h) => h.key === "shell" || !!h.bin), "E13f 셸 말고는 실행 파일이 반드시 있다");
     // 어느 하네스든 '하네스 기본'을 고를 수 있어야 낡은 모델 문자열에 사용자가 묶이지 않는다.
     const modelFlags = HARNESSES.flatMap((h) => h.flags.filter((f) => f.name === "--model"));
-    ok2(modelFlags.length > 0 && modelFlags.every((f) => (f.choices || [])[0] === ""),
+    ok2(modelFlags.length > 0 && modelFlags.filter((f) => f.type !== "text").every((f) => (f.choices || [])[0] === ""),
       "E13g 모델 목록의 첫 옵션은 언제나 '하네스 기본'(빈 값)");
   }
   ok2(harnessLoginArgv("antigravity") === null, "E13h agy 는 로그인 서브커맨드가 없어 로그인 전용 세션을 만들지 않는다");

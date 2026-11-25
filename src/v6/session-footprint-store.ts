@@ -273,8 +273,8 @@ export async function purgeFootprint(
   sel: PurgeSelection, tmuxSessionId: string | null, windowFrom: string | null, actor?: string,
 ): Promise<PurgeFootprintResult> {
   const ctx = { actor: actor ?? null, source: "web" };
-  const kNames = sel.knowledge ?? [];
-  const rNames = sel.revert ?? [];
+  let kNames = sel.knowledge ?? [];
+  let rNames = sel.revert ?? [];
   const pIds = sel.projects ?? [];
   const sIds = sel.sources ?? [];
   const tIds = sel.tasks ?? [];
@@ -285,6 +285,20 @@ export async function purgeFootprint(
       projects_deleted: 0, project_folders: [], sources_deleted: 0,
       tasks_deleted: 0, categories_deleted: 0, activities_deleted: 0,
     };
+
+    // #5801 — 세션 주입 문구(injection='always' 행)는 이 길로 되돌리지도 지우지도 않는다. 그 글은 모든 AI 세션에 주입되므로
+    //  관리자가 주입 문구 화면에서만 바꾼다. 세션 하나의 흔적을 지우는 일이 그 문을 돌아가면 안 된다. 되돌리기 대상이었으면
+    //  «못 되돌림» 으로 알린다(조용히 빼지 않는다).
+    const touched = [...new Set([...kNames, ...rNames])];
+    if (touched.length) {
+      const inj = await client.query(`SELECT name FROM knowledge WHERE name = ANY($1) AND injection='always'`, [touched]);
+      const injected = new Set(inj.rows.map((r) => String(r.name)));
+      if (injected.size) {
+        for (const name of rNames) if (injected.has(name)) out.knowledge_revert_failed.push(name);
+        kNames = kNames.filter((n) => !injected.has(n));
+        rNames = rNames.filter((n) => !injected.has(n));
+      }
+    }
 
     // ① 되돌리기 — 세션이 손대기 **직전**의 스냅샷을 감사에서 찾아 그 본문으로 되돌린다.
     //   기준 시각은 세션 활동 창의 시작(windowFrom). 그 이전 마지막 감사 행의 after 가 '그때의 그 지식'이다.

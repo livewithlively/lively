@@ -11,7 +11,7 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import * as store from "../org/store/apps.js";
 import { canSeeApp, isAdminViewer, isAppOwner, type Viewer } from "../apps/visibility.js";
-import { editDenial } from "../apps/member-app.js";
+import { serverDeployDenial } from "../apps/member-app.js";
 import { parseAppManifest } from "../apps/manifest.js";
 import { sessionOwnerOf } from "../apps/session-apps.js";
 import { blobTenant } from "../apps/app-blob-store.js";
@@ -96,7 +96,8 @@ const appServerDeploy: Capability = {
     const off = appServerUnavailable();
     if (off) throw new HttpError(503, off);
     const app = await requireVisibleApp(id, who);
-    const why = editDenial(app, who, safeManifest(app));
+    //  앱 v2 #121 — 관리자는 확장 기능(정기 작업 등)과 함께 설치된 앱의 서버도 올린다(판을 바꾸지 않고 설치된 판을 빌드할 뿐이다).
+    const why = serverDeployDenial(app, who, safeManifest(app));
     if (why) throw new HttpError(403, why);
     const t = await installedTarget(app);
     if (!t) throw new HttpError(400, `「${app.title || id}」 은(는) 서버를 선언하지 않았습니다 — 매니페스트에 "web": {"server": {}} 를 넣고(시작 명령은 package.json scripts.start) 저장하세요`);

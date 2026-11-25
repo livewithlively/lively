@@ -28,23 +28,48 @@
 //   · 한 번에 5,000행 · 5MB 까지 — 넘으면 오류(413)다(.limit()·.offset() 으로 나눠 읽는다). 문장 5초.
 //   · 오류: Drizzle 은 드라이버 오류를 DrizzleQueryError("Failed query: …") 로 감싼다. 게이트웨이가 준 안내(무엇 대신 무엇을 쓸지)는
 //     그 안의 cause 에 있다 — livelyErrorOf(err) 로 꺼낸다: `catch (e) { const le = livelyErrorOf(e); res.status(le?.status ?? 500).json({ error: le?.message ?? String(e) }) }`
+//   · 동의(#1644): 앱이 새 권한(scope · 도구 · AI 실행)을 얻은 뒤 그 사람의 예전 동의로 부르면 403 · code consent_required 다. 동의 주소를 박아 두지 말고
+//     livelyConsentOf(err) 로 동의할 곳(consentUrl)과 동의에 없는 것(missing)을 꺼내 사람에게 전한다(한 번 다시 동의하면 풀린다).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/pg-proxy";
 
-export const LIVELY_DB_SDK_VERSION = "5";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487) · 4 = generateDrizzleSchema 의 references.column · 5 = livelyMember(req).jobSource
+export const LIVELY_DB_SDK_VERSION = "6";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487) · 4 = generateDrizzleSchema 의 references.column · 5 = livelyMember(req).jobSource · 6 = LivelyDbError.code · livelyConsentOf(#1644)
 const IDENTITY_HEADER = "x-lively-identity";
+/** 이 사람의 앱 사용 동의가 없거나 예전 범위라 거절됐다는 표지(게이트웨이 body.code — src/apps/app-consent.ts CONSENT_REQUIRED 와 같은 글자). */
+const CONSENT_REQUIRED = "consent_required";
 
-/** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · index(묶음에서 몇 번째 문장인지, 0부터). */
+/** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · code(body.code — 예 consent_required) · index(묶음에서 몇 번째 문장인지, 0부터). */
 export class LivelyDbError extends Error {
   constructor(message, { status, body } = {}) {
     super(message);
     this.name = "LivelyDbError";
     this.status = status ?? 0;
     this.body = body ?? null;
+    this.code = typeof body?.code === "string" ? body.code : undefined;
     this.index = typeof body?.index === "number" ? body.index : undefined;
   }
+}
+
+/**
+ * #1644 «다시 동의» 거절이면 사람에게 전할 것을 꺼낸다 — {message, consentUrl, missing}. 아니면 null.
+ *  앱이 동의 뒤에 권한을 넓혔는데(새 scope · 도구 · AI 실행) 그 사람의 동의가 예전 범위면 게이트웨이가 403 + code consent_required 와 함께
+ *  consent_url(사람이 누를 라이블리 동의 자리 — 공개 주소를 모르면 없다) · missing(동의에 없는 것 {scopes, tools})을 준다. 앱은 동의 주소를 박아 두지 말고 이것을 전한다:
+ *    catch (e) { const c = livelyConsentOf(e); if (c) return res.status(403).json({ error: c.message, consent_url: c.consentUrl }); throw e; }
+ *  err — LivelyDbError(Drizzle 이 감싼 것 포함) 또는 직접 부른 게이트웨이 응답의 JSON 본문({error, code, consent_url}).
+ */
+export function livelyConsentOf(err) {
+  const le = livelyErrorOf(err);
+  const body = le ? le.body : (err && typeof err === "object" && !(err instanceof Error) ? err : null);
+  if (!body || typeof body !== "object" || body.code !== CONSENT_REQUIRED) return null;
+  const m = body.missing && typeof body.missing === "object" ? body.missing : null;
+  const strs = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  return {
+    message: String(le?.message ?? body.error ?? "앱 사용 동의가 필요합니다"),
+    consentUrl: typeof body.consent_url === "string" && /^https?:\/\//.test(body.consent_url) ? body.consent_url : null,
+    missing: m ? { scopes: strs(m.scopes), tools: strs(m.tools) } : null,
+  };
 }
 
 // ── 사람 신원 — 요청마다 ─────────────────────────────────────────────────────────────────

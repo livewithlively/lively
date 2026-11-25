@@ -50,7 +50,13 @@ function tokensPanel(detail, data) {
   const tokenRow = (t, isActive) => {
     // 권한이 7개까지 붙어 메타가 화면을 넘겼다 → 앞 3개만 보이고 나머지는 +N(전체는 마우스 올리면).
     const sc = t.scopes || [];
-    const scText = sc.length ? (sc.length > 3 ? sc.slice(0, 3).join('/') + ' +' + (sc.length - 3) : sc.join('/')) : '';
+    //  구성원 권한을 따르는 토큰(#2174 세션 · 박스 = 'all' · #5712 로그인 토큰 = 'safe')은 scopes 가 «발급 때 무엇이었나» 기록일 뿐이라
+    //   그대로 보여 주면 지금 권한과 다르게 읽힌다 — 따른다는 사실을 말한다. 로그인 토큰은 admin · runtime 을 발급 때 실은 것만 쓰므로 그것도 말한다.
+    const listed = (xs) => xs.length > 3 ? xs.slice(0, 3).join('/') + ' +' + (xs.length - 3) : xs.join('/');
+    const cp = sc.filter((x) => x === 'admin' || x === 'runtime');
+    const scText = t.follows_member === 'all' ? '구성원 권한을 따름'
+      : t.follows_member === 'safe' ? '구성원 권한을 따름(' + (cp.length ? cp.join('/') + ' 포함' : '관리 권한 제외') + ')'
+      : sc.length ? listed(sc) : '';
     const meta = (t.user_id || '') + (scText ? ' · ' + scText : '')
       + ' · 발급 ' + (t.created_at ? t.created_at.slice(0, 10) : '?')
       + (t.last_used_at ? ' · 마지막 ' + relTime(t.last_used_at) : ' · 미사용');
