@@ -21,8 +21,9 @@ const MEMBER_OPS = [
   "org_github_collect_set", "org_clickup_collect_set", "org_figma_collect_set", "org_linear_collect_set", "org_gitlab_collect_set",
   "org_mcp_upsert", "org_app_tools_set_write", "org_app_set_enabled",
   "cron_set", "feed_target_create", "org_alert_set", "org_ingest_policy_upsert",
-  "org_update_section", "org_update_profile", "org_embeddings_backfill",
-  // #4135(원준 2026-09-25) — AI 전달(세션 주입)도 구성원 몫. 보안 필드가 섞인 org_runtime_update 는 그대로 관리자(아래 INFRA_OPS).
+  "org_update_profile", "org_embeddings_backfill",
+  // #4135(원준 2026-09-25) — AI 전달(세션 주입)을 켜고 끄는 것은 구성원 몫. 보안 필드가 섞인 org_runtime_update 는 그대로 관리자(아래 INFRA_OPS).
+  //  주입되는 **글**은 아니다 — 아래 INJECTED_TEXT_OPS(#5801).
   "org_injection_update",
   // #4172 — 맥락 관리 ▸ 현황 「자동 실행」 기록.
   "org_auto_runs", "org_auto_runs_daily", "org_auto_run_detail",
@@ -32,6 +33,10 @@ const ADMIN_OPS = [
   "org_member_upsert", "org_member_remove", "org_member_reset_password",
   "org_tokens", "org_token_mint", "org_token_revoke", "org_session_mint",
 ];
+// AI 에 글로 주입되는 것 — 관리자만(#5801, 상민 2026-11-25. #3872 에서 열었던 것을 되돌렸다).
+//  이 글은 관리자 세션을 포함한 모든 구성원의 AI 세션에 지시문으로 들어간다. 구성원에게 열면 관리자 권한으로 도는 AI 에
+//  일을 시킬 수 있다. 같은 행을 지식 표면으로 고치는 길은 knowledge/injected-doc-admin-gate.pg-test.mjs 가 지킨다.
+const INJECTED_TEXT_OPS = ["org_update_section", "org_delete_section", "org_reorder_sections"];
 // 잘못 열면 보안·비용 사고가 나는 것 — 관리자만(이번 결정의 범위 밖).
 const INFRA_OPS = [
   "org_credentials", "org_credential_set", "org_db_source_upsert", "org_db_sources",
@@ -48,6 +53,10 @@ test("① 워크스페이스 관리 op 은 구성원 권한(memory)이다", () =
 
 test("② 인원 관리 op 은 관리자(admin)로 남는다", () => {
   for (const n of ADMIN_OPS) assert.equal(scopeOf(n), "admin", `${n} 이 구성원에게 열렸다 — 인원 관리는 제외다`);
+});
+
+test("②-2 세션 주입 문구를 저장·삭제·정렬하는 op 은 관리자(admin)다", () => {
+  for (const n of INJECTED_TEXT_OPS) assert.equal(scopeOf(n), "admin", `${n} 이 구성원에게 열렸다 — 모든 AI 세션에 주입되는 글은 관리자만 바꾼다`);
 });
 
 test("③ 인프라·위험 op 도 관리자로 남는다", () => {

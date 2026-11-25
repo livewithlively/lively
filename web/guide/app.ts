@@ -212,7 +212,7 @@ function homeArticle(): HTMLElement {
   return el('article', { class: 'gd-article gd-home' },
     el('h1', { class: 'gd-h1', text: GUIDE_TITLE }),
     el('p', { class: 'gd-lead', text: '라이블리를 처음 여는 분은 아래 세 문서를 순서대로 읽으시면 됩니다. 특정 화면의 사용법은 묶음에서 고르거나 위의 찾기 칸에 화면 이름을 적어 찾습니다.' }),
-    //  (#5550) 영상 — 처음 설정 첫 장면의 온보딩 영상(기초)과 사용 가이드(라이블리 동작원리). 여기서 다시 본다.
+    //  (#5550) 영상 — 라이블리 둘러보기 · 온보딩 영상(기초) · 사용 가이드(라이블리 동작원리). 여기서 다시 본다.
     el('div', { class: 'gd-films' }, ...FILMS.map((f) =>
       el('button', { class: 'gd-film', type: 'button', onclick: () => openWelcomeFilm(f) },
         el('span', { class: 'gd-film-th' }, el('img', { src: f.poster, alt: '', loading: 'lazy' }), el('i', { class: 'gd-film-play', 'aria-hidden': 'true' })),

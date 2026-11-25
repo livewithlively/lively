@@ -192,9 +192,10 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     }
     if (it.hlBusy) return;   // 승인 칸이 열려 있다 — 받은 주소·코드를 지우지 않는다
     const p = headlessParts(row, () => { void reload(); });
-    p.act.textContent = '승인하기';
-    p.act.className = 'ob-btn ob-btn-pri ob-btn-inline';
-    p.act.addEventListener('click', () => { it.hlBusy = true; });
+    const approve = p.act.querySelector('button') as HTMLButtonElement;
+    approve.textContent = '승인하기';
+    approve.className = 'ob-btn ob-btn-pri ob-btn-inline';
+    approve.addEventListener('click', () => { it.hlBusy = true; });
     const say = document.createElement('p');
     say.className = 'ob-q-help';
     say.textContent = `자리에 없을 때도 올린 파일을 지식으로 정리하려면 ${AI_BRAND[it.a.key] || row.label} 승인을 한 번 더 해 주세요 — 주소를 열어 승인하면 30초쯤이면 끝나요.`;

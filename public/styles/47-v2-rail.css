@@ -517,6 +517,14 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-list { padding: 0 20px; }
 .v2-sa-head, .v2-sa-gh, .v2-sa-row { display: grid; grid-template-columns: minmax(0, 1fr) 200px 112px 44px 92px 96px 32px; align-items: center; }
 .v2-sa-head.np, .v2-sa-gh.np, .v2-sa-row.np { grid-template-columns: minmax(0, 1fr) 112px 44px 92px 96px 32px; }
+/* #5630 사람 칸 격상(프로젝트 보드 리스트 뷰) — 열: 프로젝트 · 사람(리드 + 함께) · 세션 · 상태 · 생성 · 마지막 · ⋯ */
+.v2-sa-head.pp, .v2-sa-gh.pp, .v2-sa-row.pp { grid-template-columns: minmax(0, 1fr) 112px 168px 96px 88px 92px 32px; }
+.v2-sa-row .c-ppl { min-width: 0; padding-right: 12px; }
+.v2-sa-gh .hint { font-size: 12px; color: var(--muted-2); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: 4px; }
+.v2-sa-gh.rel-invited .pill { background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); }
+.v2-sa-gh.rel-mine .pill { background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.v2-sa-gh.rel-open .pill { background: transparent; border: 1px solid var(--line); color: var(--ink-sub); }
+.v2-sa-gmore { color: var(--blue); }
 /* 열 이름은 표 맨 위 한 줄뿐이고 스크롤해도 붙어 있다(클릭업 리스트 뷰와 같은 규칙, #4233).
    묶음마다 되풀이하면 리스트별 묶기에서 화면 절반이 열 제목이 된다. */
 .v2-sa-head { position: sticky; top: 0; z-index: 3; height: 34px; background: var(--bg); border-bottom: 1px solid var(--line); }
@@ -607,6 +615,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-sa-cmp .send:disabled { opacity: .4; cursor: default; }
 @media (max-width: 1280px) {
   .v2-sa-head, .v2-sa-gh, .v2-sa-row { grid-template-columns: minmax(0, 1fr) 150px 108px 40px 84px 88px 32px; }
+  .v2-sa-head.pp, .v2-sa-gh.pp, .v2-sa-row.pp { grid-template-columns: minmax(0, 1fr) 104px 140px 88px 80px 84px 32px; }
 }
 @media (max-width: 760px) {
   .v2-sa-top, .v2-sa-tools { padding: 0 12px; }
@@ -614,7 +623,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
   .v2-sa-q { width: 150px; }
   .v2-sa-now { padding: 12px 12px 2px; }
   .v2-sa-list { padding: 0 8px; }
-  .v2-sa-head, .v2-sa-gh, .v2-sa-row, .v2-sa-head.np, .v2-sa-gh.np, .v2-sa-row.np { grid-template-columns: minmax(0, 1fr) auto 64px 32px; column-gap: 8px; }
+  .v2-sa-head, .v2-sa-gh, .v2-sa-row, .v2-sa-head.np, .v2-sa-gh.np, .v2-sa-row.np, .v2-sa-head.pp, .v2-sa-gh.pp, .v2-sa-row.pp { grid-template-columns: minmax(0, 1fr) auto 64px 32px; column-gap: 8px; }
   .v2-sa-row .c-when { text-align: right; }
   .v2-sa-gh .hc, .v2-sa-head .hc:not(:first-child), .v2-sa-row .c-proj, .v2-sa-row .c-who, .v2-sa-row .c-made { display: none; }
   .v2-sa-peek { width: 100%; }

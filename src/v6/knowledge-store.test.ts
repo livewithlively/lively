@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import {
   resolveUpsertFacets, resolveWikiLinkTargets, appendBody, isDuplicateAppend, knowledgeListFilter,
   applyKnowledgeEdits,
-  listWikiPins, type KnowledgeFilter, type KnowledgeRow,
+  listWikiPins, pickKnowledgeName, slugify, type KnowledgeFilter, type KnowledgeRow,
 } from "./knowledge-store.js";
 
 let pass = 0;
@@ -127,6 +127,54 @@ t("#907: 이름이 '-' 로 끝나는 실재 지식 — exact 우선이라 해소
   const real = "배포-장애-수정-고객사 A-";
   assert.deepEqual(resolveWikiLinkTargets("from", [real], K(real)),
     { linked: [real], unmatched: [] });
+});
+// ⚠ 회귀 방지 — 저장 경로도 링크 해석과 같은 exact 우선이어야 한다. slugify 를 바로 태우던 때 64자 절단 이름
+//  4건이 꼬리 '-' 를 잃고 '신규'로 판정돼 수정 저장이 400(category 필수)으로 실패했다.
+const has = (...names: string[]) => (n: string) => names.includes(n);
+t("저장 이름: '-' 로 끝나는 실재 이름은 그대로 쓴다", () => {
+  const real = "제휴-지역-사전조회-오픈-요청-서울-경기-2026-";
+  assert.notEqual(slugify(real), real);
+  assert.equal(pickKnowledgeName(real, has(real)), real);
+});
+t("저장 이름: 긴 원문이 '-' 로 끝나는 실재 절단 이름으로 접히면 그 문서를 고친다", () => {
+  const raw = "a".repeat(63) + " b", cut = slugify(raw);
+  assert.ok(cut.endsWith("-"));
+  assert.equal(pickKnowledgeName(raw, has(cut)), cut);
+});
+t("저장 이름: 대소문자 쌍둥이의 대문자 쪽을 지목하면 그쪽을 덮는다", () => {
+  const upper = "2026-06-11-PM툴-설계결정", lower = "2026-06-11-pm툴-설계결정";
+  assert.equal(pickKnowledgeName(upper, has(upper, lower)), upper);
+});
+t("저장 이름: 실재하지 않으면 slugify 로 정규화·절단하고 꼬리 '-' 를 뗀다", () => {
+  assert.equal(pickKnowledgeName("Some Title", has()), "some-title");
+  assert.equal(pickKnowledgeName("가".repeat(70), has()), "가".repeat(64));
+  assert.equal(pickKnowledgeName("a".repeat(63) + " b", has()), "a".repeat(63));
+});
+t("링크 해석도 저장과 같은 이름에 닿는다(긴 제목으로 새로 만든 문서)", () => {
+  const raw = "a".repeat(63) + " b", saved = pickKnowledgeName(raw, has());
+  assert.deepEqual(resolveWikiLinkTargets("from", [raw], K(saved)), { linked: [saved], unmatched: [] });
+});
+// 해석한 이름을 다시 해석해도 같아야 한다 — knowledge_save 는 핸들러가 해석한 이름을 게이트·store 에 넘기지만(다시 안 한다),
+//  다른 저장 경로(리비전 승인·이관)는 이미 정해진 이름을 store 에 넣어 store 가 한 번 더 해석한다. 갈리면 엉뚱한 행을 고친다.
+t("저장 이름: 다시 해석해도 같다(존재 여부와 무관)", () => {
+  const raws = ["a".repeat(63) + " b", "Some Title", "가".repeat(70), "abc-", "2026-06-11-PM툴-설계결정"];
+  for (const raw of raws) {
+    for (const exists of [has(), has(raw), has(slugify(raw)), has("a".repeat(63))]) {
+      const once = pickKnowledgeName(raw, exists);
+      assert.equal(pickKnowledgeName(once, exists), once, `${raw} → ${once}`);
+    }
+  }
+});
+// resolveKnowledgeName 이 정규형 이름(slugify(x) === x)이면 조회하지 않고 그대로 돌려주는 근거 — 정규형이면 어느 DB 상태에서도
+//  해석 결과가 원문 그대로라 조회가 결과를 바꿀 수 없다(slugify 가 꼬리 '-' 를 떼므로 정규형은 '-' 로 끝나지 않는다).
+t("저장 이름: 정규형(slugify(x) === x)이면 존재 여부와 무관하게 그대로다", () => {
+  const raws = ["some-title", "가".repeat(64), "a".repeat(63), "2026-06-11-pm툴-설계결정", "untitled", "a-b-c"];
+  for (const raw of raws) {
+    assert.equal(slugify(raw), raw, raw);
+    for (const exists of [has(), has(raw), has(raw + "-"), has(raw.toUpperCase()), has("a".repeat(63))]) {
+      assert.equal(pickKnowledgeName(raw, exists), raw, raw);
+    }
+  }
 });
 // ⚠ 회귀 방지 — 대소문자만 다른 동명 지식이 실재한다(2026-06-11-PM툴… / …-pm툴…, 같은 제목·둘 다 active).
 //  정규화를 먼저 태우면 작성자가 지목한 문서가 아닌 쪽에 엣지가 붙는다.

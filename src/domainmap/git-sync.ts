@@ -12,9 +12,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { resolveGitSecret, hostOf, prepareGitAuth } from "../org/credentials/git-credential-store.js";
 import { stateDir } from "../ops/state-dir.js";
+import { workspaceDirSegments } from "../ops/workspace-dir-key.js";
 
 const execFileP = promisify(execFile);
 
@@ -37,10 +38,13 @@ export function sanitizeName(name: unknown): string {
 }
 
 // 클론 경로(캐시) — reposDir/sanitizeName 단일 조합. 부트스트랩(scheduler) 등 다른 곳도 같은 경로를 재사용(공식 1곳).
+//  워크스페이스 열쇠가 있으면 `reposDir/@ws/<워크스페이스 id>/<name>`(ops/workspace-dir-key.ts) — 이름만으로 자리를 잡으면 게이트웨이 하나가
+//  여러 워크스페이스를 서비스할 때 다른 워크스페이스가 같은 이름으로 등록한 레포가 먼저 받아 둔 클론을 fetch 해 그 코드를 제 것으로 읽는다
+//  (ensureClone 은 있는 클론이면 주소를 다시 보지 않는다). 열쇠가 없으면(단일 워크스페이스 · primary) 종전 자리 그대로다.
 export function repoClonePath(repoName: string): string {
   const safe = sanitizeName(repoName);
   if (!safe) throw new Error("invalid repo name for clone dir");
-  return join(reposDir(), safe);
+  return join(reposDir(), ...workspaceDirSegments(), safe);
 }
 
 // Run git with execFile (argv array — NEVER a shell string, no injection). SHAs
@@ -67,7 +71,7 @@ export interface EnsureCloneOpts extends GitOpts {
 //  ⚠ onGitError 는 clone/fetch try 안에서만 — prepareGitAuth 실패는 종전대로 raw 전파(번역 대상 아님).
 export async function ensureClone(repoName: string, gitUrl: string, opts: EnsureCloneOpts): Promise<string> {
   const cloneDir = repoClonePath(repoName);
-  const dir = reposDir();
+  const dir = dirname(cloneDir);
   const secret = await resolveGitSecret(null, hostOf(gitUrl) ?? "github.com").catch(() => null);
   const auth = await prepareGitAuth(secret);
   try {

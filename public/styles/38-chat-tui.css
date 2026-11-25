@@ -22,7 +22,8 @@
   --tui-fg: var(--ink);
   --tui-cursor: var(--blue);
   --tui-sel: var(--bg-sel);
-  --tui-link: var(--blue);   /* 터미널 테마의 ANSI 파랑 — JS 가 덮는다 */
+  --tui-link: #2563EB;       /* #5650 링크 = 파랑 + 밑줄(터미널과 같은 값) — JS 가 판에 맞춰 덮는다 */
+  --tui-code: #A04F12;       /* #5650 인라인 코드 — 파랑이 아닌 색(«파란데 안 눌림» 을 없앤다 · 터미널의 105·153 도 이 색) */
   /* ★ 색은 **터미널 화면에서 잰 값**이다(2026-10-14, Claude Code 2.1.299 · 라이블리 웹 터미널). 그 터미널의 Claude Code 는
      256색으로 그린다 — 테마의 RGB 를 xterm 256색 칸(#5f875f 같은 고정 색)으로 접어 찍는다. 그래서 여기도 그 접힌 색을 쓴다
      (테마 RGB 를 그대로 쓰면 «같은데 미묘하게 다른 색»이 된다). 라이트 테마 값 — 다크는 아래 [data-tui-scheme="dark"]
@@ -65,6 +66,8 @@
 }
 /* Claude Code 다크 테마 — 터미널 테마가 어두운 판이면(앱 테마와 무관하게) */
 .livc-tui[data-tui-scheme="dark"] {
+  --tui-link: #60A5FA;
+  --tui-code: #E7A36B;
   --tui-text: #ffffff;       /* (231) */
   --tui-dim: #949494;        /* (246) */
   --tui-subtle: #4e4e4e;     /* (239) */
@@ -138,8 +141,8 @@
 .livc-tui .tui-bq::before { content: '\258E '; }
 /* 코드 블록 — 언어가 없으면 권한색 글자, 있으면 문법 색(바탕·들여쓰기 없음 — Claude Code 2.1.299) */
 .livc-tui .tui-code { font: inherit; background: none; border: 0; border-radius: 0; padding: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--tui-fg); }
-.livc-tui .tui-code-plain { color: var(--tui-perm); }
-.livc-tui .livc-said .md pre.tui-code-plain code { color: var(--tui-perm); }
+.livc-tui .tui-code-plain { color: var(--tui-code); }
+.livc-tui .livc-said .md pre.tui-code-plain code { color: var(--tui-code); }
 /* 표 — 상자 글자(┌─┬─┐)로 그린 줄들. 칸 폭은 글자 수로 맞췄으므로 줄을 바꾸지 않는다. */
 .livc-tui .tui-tl { white-space: pre; }
 .livc-tui .livc-said .md p { margin: 0; line-height: inherit; }
@@ -148,8 +151,8 @@
 .livc-tui .livc-said .md h1 { font-style: italic; text-decoration: underline; }
 .livc-tui .livc-said .md strong { font-weight: 700; }
 .livc-tui .livc-said .md em { font-style: italic; }
-/* 인라인 코드 — Claude Code 는 바탕 없이 권한색(보라)으로 칠한다 */
-.livc-tui .livc-said .md code, .livc-tui .livc-said .md .md-code { font: inherit; background: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; color: var(--tui-perm);
+/* 인라인 코드 — Claude Code 는 바탕 없이 권한색(105)으로 칠한다. #5650 그 색은 파랑이라 링크로 읽혔다 → 코드 색(--tui-code) */
+.livc-tui .livc-said .md code, .livc-tui .livc-said .md .md-code { font: inherit; background: none; padding: 0; border: 0; border-radius: 0; box-shadow: none; color: var(--tui-code);
   word-break: inherit; }   /* .md-code 의 break-all 을 걷는다 — 터미널은 낱말(빈칸) 단위로 꺾는다(`s` / `ecret-scan` 으로 쪼개지던 것) */
 .livc-tui .livc-said .md pre { font: inherit; background: none; border: 0; border-radius: 0; padding: 0; margin: 0; overflow-x: auto; white-space: pre; }
 .livc-tui .livc-said .md pre code { color: var(--tui-fg); }
@@ -166,8 +169,9 @@
 .livc-tui .livc-said .md th, .livc-tui .livc-said .md td { border: 1px solid var(--tui-rule); padding: 0 var(--tui-cw); text-align: left; font: inherit; background: none; }
 .livc-tui .livc-said .md th { font-weight: 700; }
 .livc-tui .livc-said .md hr { border: 0; border-top: 1px solid var(--tui-rule); margin: calc(var(--tui-lh) / 2) 0; height: 0; }
-.livc-tui .livc-said .md a { color: var(--tui-link); text-decoration: none; }
-.livc-tui .livc-said .md a:hover { text-decoration: underline; }
+/* #5650 링크 = 파랑 + 늘 밑줄(터미널과 같다). 코드 속 링크(`경로`)도 링크 색 — 코드 색이 이기면 «눌리는데 안 파람» 이 된다. */
+.livc-tui .livc-said .md a, .livc-tui .livc-said .md a code { color: var(--tui-link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.livc-tui .livc-said .md a:hover { text-decoration-thickness: 2px; }
 .livc-tui .livc-said .md img { max-width: 100%; }
 .livc-tui .livc-said-live { white-space: pre-wrap; }
 /* 복사 단추 — 터미널엔 없다. 손을 얹을 때만 조용한 글자로. */

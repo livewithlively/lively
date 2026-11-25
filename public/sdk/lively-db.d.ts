@@ -4,12 +4,20 @@ import type { Logger } from "drizzle-orm";
 
 export declare const LIVELY_DB_SDK_VERSION: string;
 
-/** 게이트웨이가 거절한 호출 — status(HTTP) · body(게이트웨이 JSON) · index(묶음에서 몇 번째 쿼리인지, 0부터). */
+/** 게이트웨이가 거절한 호출 — status(HTTP) · body(게이트웨이 JSON) · code(body.code — 예 "consent_required") · index(묶음에서 몇 번째 쿼리인지, 0부터). */
 export declare class LivelyDbError extends Error {
   status: number;
   body: unknown;
+  code?: string;
   index?: number;
 }
+
+/**
+ * #1644 «다시 동의» 거절(게이트웨이 403 + code consent_required)이면 사람에게 전할 것 — 아니면 null.
+ *  consentUrl = 사람이 누를 라이블리 동의 자리(게이트웨이가 공개 주소를 모르면 null) · missing = 동의에 없는 것(scope · 도구 — 동의가 없는 거절이면 null).
+ *  err 는 LivelyDbError(Drizzle 이 감싼 것 포함) 또는 직접 부른 게이트웨이 응답의 JSON 본문.
+ */
+export declare function livelyConsentOf(err: unknown): { message: string; consentUrl: string | null; missing: { scopes: string[]; tools: string[] } | null } | null;
 
 export interface LivelyDbOptions<TSchema extends Record<string, unknown>> {
   /** 기본 = 환경변수 LIVELY_API_URL. */

@@ -9,6 +9,7 @@ import { bindCtx, bindCtxSurface, requestOpenRoute } from '../v2/ctx-registry.js
 import { EMBEDDED } from '../v2/embed.js';
 import { fetchTurns } from '../v2/sess-tail.js';
 import { SESS_STATES, rowDotCls, sessRank, sessStateKey } from '../session-status.js';
+import { mergeSessions } from '../v2/sess-merge.js';   // #5630 — 라이브 + 기록을 셸 · 리스트 뷰와 같은 규칙으로 접는다(사본을 두지 않는다)
 import type { HubTool, HubView } from './detail-hub-layout.js';
 
 export type HubSectionFactory = () => HTMLElement;
@@ -30,6 +31,7 @@ export interface HubOpts {
   reload: () => void;           // 상세 전체 재렌더(기존 섹션들이 쓰는 그 reload)
   base: string;                 // '/api/ui/v6/projects/'
   sections: Record<HubTool, HubSectionFactory>;   // «열기»(전폭)와 아직 위젯화 안 된 도구가 앉히는 기존 섹션 카드
+  nowHost?: HTMLElement;        // #5630 3판 — 제목 밑 «지금» 띠가 앉을 자리(허브가 채운다)
   inModal: boolean;             // .pjv-pm 안이면 열기는 제자리 전환
   focus: HubTool | null;        // 주소가 가리키는 «열기» 도구(페이지)
   actionsHost?: HTMLElement;    // [배치 편집] 단추를 앉힐 자리(뒤로 줄 오른쪽)
@@ -74,14 +76,18 @@ export const HUB_ICON: Record<string, string> = {
   sessions: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
   body: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
   folder: `<path d="${ICONS.folder}"/>`,
+  folderPlus: `<path d="${ICONS.folder}"/><path d="M12 10.5v5M9.5 13h5"/>`,   // #5630 머리의 «새 폴더»
   knowledge: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M8 7h7"/>',
   timeline: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
   right: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  expand: '<path d="M14 5h5v5"/><path d="M19 5l-6.5 6.5"/><path d="M10 19H5v-5"/><path d="M5 19l6.5-6.5"/>',   // #5630 «크게 열기» — 글자 «열기 →» 대신
+  replay: '<path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4.5v4h4"/>',   // 지난 세션 «다시 실행»
   left: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   chevr: '<path d="M9.5 6.5 15 12l-5.5 5.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   sessNew: `<path d="${ICONS.sessNew}"/>`,   // #4233 — 새 세션 = 말풍선과 더하기
   x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   grid: '<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>',
   monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
   comment: '<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/>',
@@ -145,6 +151,29 @@ export function sessView(s: any, nowMs = Date.now()): SessView {
 }
 export const sessDot = (v: SessView): HTMLElement =>
   v.dot === 'busy' ? el('span', { class: 'pjh-pulse', title: v.label }) : el('span', { class: 'pjh-dot ' + (v.dot === 'quiet' ? 'off' : v.dot), title: v.label });
+/**
+ * #5630 허브 «세션» 의 재료 — 이 프로젝트의 **도는 세션 + 지난 세션**(꺼진 박스 · 기록만 남은 것)을 한 목록으로.
+ *  live = terminal/sessions?includeProjects=1 중 이 프로젝트 것(꺼진 박스는 restorable 로 실려 온다),
+ *  logs = v6/projects/:id/session-logs(팀원 전원의 중앙 기록). 같은 대화는 mergeSessions 가 한 줄로 접는다.
+ *  기록만 남은 줄은 라이브 행과 같은 꼴로 맞춘다 — id = 대화 uuid(#/s/<uuid> 가 기록 화면을 연다), restorable 로 «꺼짐» 을 말한다.
+ *  휴지통에 든 것은 뺀다.
+ */
+export function hubSessionRows(live: any[], logs: any[], meId: string): any[] {
+  const out: any[] = [];
+  for (const s of mergeSessions(live || [], logs || [])) {
+    if (s.trashedAt) continue;
+    if (s.live) { out.push({ ...s.raw, _conv: s.logId || null, _logTitle: s.logTitle || '' }); continue; }
+    const r = s.raw || {};
+    out.push({
+      id: s.id, label: s.label, title: '', _logTitle: s.logTitle || '', owner: String(r.owner || ''), owned: !!meId && String(r.owner || '') === meId,
+      node: s.node ? { id: s.node, name: s.node } : null, harness: r.harness || '',
+      created: s.createdAt ? Math.floor(s.createdAt / 1000) : 0, lastActive: s.lastSeen ? Math.floor(s.lastSeen / 1000) : 0,
+      restorable: true, _logOnly: true,
+    });
+  }
+  return out;
+}
+
 /** 세션 «입장» — **셸 안의 세션 화면(#/s/<id>)** 으로 간다. 사이드바가 있는 그 창이다(원준 2026-10-04 «새 창에서 그거만 있는
  *  세션으로 열려서 너무 어색해 — 세션 입력하는 이 창 같은 곳으로»). 액자 안이면 부모 셸에 부탁한다(openSessionRoute).
  *  죽은 세션 복원은 도착지(세션 화면 autoResume)가 책임진다 — 터미널 창 쪽과 같은 규칙(#1820).

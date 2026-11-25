@@ -37,8 +37,10 @@ import { mountAiList } from './onboarding-ai.js';
 //  (#5060) 처음 설정에서 고른 파일 — 다른 화면으로 옮겨 가도 계속 올라간다.
 import { bgUploadAdd, bgUploadOnChange, bgUploadState, uploadVerdict } from './bg-upload.js';
 import { startSetupWatch } from './setup-watch.js';
-//  (#5550) 인사 장면의 소개 영상 — 못 읽으면 종전 그림(introArt)으로 되돌아간다.
-import { mountWelcomeFilm } from './welcome-film.js';
+//  (#5598, 상민 2026-11-24) 인사 장면의 안내 카드 5장 — 종전엔 이 자리에 소개 영상(#5550)이 있었다. 개념(AI 세션 · 프로젝트 · 자료 ·
+//   지식 · 누가 보나)은 화면을 보기 전인 여기서, 화면 둘러보기 영상은 셸에 돌아온 뒤 창으로 한 번(share-guide.ts maybeShowShareGuide).
+//   카드를 못 세우면 종전 그림(introArt)과 [계속하기]가 선다.
+import { markIntroGuideDone, mountShareGuide } from './share-guide.js';
 import { upDirSupported, upDropZone, upFromInput, type UpItem } from '../projects/files-upload.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
@@ -79,6 +81,8 @@ export const OB_COPY = {
   introTitle: '라이블리에 오신 것을 환영합니다',
   introBody: 'Lively는 사용자가 놓여있는 맥락을 저희가 직접 AI에게 풍부하게 주입해서 AI의 세팅 난이도를 줄이고, 양질의 결과물을 얻을 수 있도록 합니다.',
   introNext: '이를 위해서 이 뒤에서는, 라이블리 사용을 위한 기본 설정을 진행합니다.',
+  introGuide: '그 전에, 라이블리가 어떻게 돌아가는지 다섯 장으로 먼저 보여 드릴게요.',
+  introGuideGo: '확인 · 설정 시작하기',
   aiTitle: '라이블리에서 쓸 AI를 연결해 주세요',
   aiHelp: '외부 앱 연결과 자료 정리를 이 AI가 대신 합니다. 쓰시는 AI 하나면 돼요.',
   aiNext: '다음',
@@ -295,12 +299,13 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     /* 인사(#1631) — 무엇을 묻기 전에 **Lively 가 무엇을 하는지**와 이 뒤에서 무엇을 하는지를 먼저 말한다.
      *  ⚠ 아무것도 묻지 않는 장면이다 — BEFORE_ANSWER 에 들어 있어 여기 머문 것은 저장·이어 열기의 대상이 아니다. */
     intro: {
-      //  (#5550, 원준님 2026-11-16 «리니어는 온보딩하면 맨 처음에 온보딩 영상 띄워 주잖아») — 그림 자리에 소개 영상이 선다(welcome-film.ts).
-      //   끝까지 안 봐도 [계속하기]는 눌린다. 영상을 못 읽으면 그 자리에 종전 그림이 선다 — 영상 때문에 처음 설정이 막히지 않는다.
-      html: () => `<div class="ob-in-film" id="introFilm"></div>
-        <h1 class="ob-q-title ob-in-title">${esc(OB_COPY.introTitle)}</h1>
+      //  (#5598, 상민 2026-11-24) 문장 아래에 안내 카드 5장이 선다(mountIntroGuide). 카드의 마지막 단추가 [계속하기]를 대신 누른다 —
+      //   카드가 서 있는 동안 [계속하기]는 숨는다(단추가 둘이면 어느 쪽이 «다음» 인지 헷갈린다). 카드를 못 세우면 종전 그림과 [계속하기]가 선다.
+      html: () => `<h1 class="ob-q-title ob-in-title">${esc(OB_COPY.introTitle)}</h1>
         <p class="ob-in-p">${esc(OB_COPY.introBody)}</p>
         <p class="ob-in-p ob-in-next">${esc(OB_COPY.introNext)}</p>
+        <p class="ob-in-p ob-in-lead">${esc(OB_COPY.introGuide)}</p>
+        <div class="ob-in-guide" id="introGuide"></div>
         <button class="ob-btn ob-btn-pri ob-in-go" id="introGo">계속하기</button>`,
       bind: (el) => { $<HTMLButtonElement>('#introGo', el)!.onclick = () => goScene(nextScene('intro')!); },
     },
@@ -596,22 +601,31 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     col.style.animation = 'none';
     if (animate !== false) { void col.offsetWidth; col.style.animation = ''; }
     col.classList.toggle('ob-intro', key === 'intro');
-    col.classList.remove('ob-has-film');
+    col.classList.remove('ob-has-guide');
     //  앞 장면이 남긴 것(도는 영상 등)을 걷고 갈아 끼운다 — 떼어 낸 영상은 스스로 멈추지 않는다.
     if (sceneCleanup) { const c = sceneCleanup; sceneCleanup = null; try { c(); } catch (_) { /* 비치명 */ } }
     col.innerHTML = sc.html();
     syncBack();
     sc.bind && sc.bind(col);
-    if (key === 'intro') mountIntroFilm(col);
+    if (key === 'intro') mountIntroGuide(col);
   }
-  /** (#5550) 인사 장면의 영상을 세운다 — 못 읽으면 그 자리에 종전 그림(introArt)을 세우고 넓힌 칸도 되돌린다. 떠날 때는 sceneCleanup 이 걷는다. */
-  function mountIntroFilm(col: HTMLElement) {
-    const slot = $('#introFilm', col);
+  /** (#5598) 인사 장면의 안내 카드를 세운다. 마지막 장의 단추 → 확인 표식 + «영상 띄울 차례» 표식(한 요청 — markIntroGuideDone) → [계속하기]와 같은 길.
+   *  못 세우면 그 자리에 종전 그림(introArt)을 세우고 [계속하기]를 되살린다. 떠날 때는 sceneCleanup 이 걷는다. */
+  function mountIntroGuide(col: HTMLElement) {
+    const slot = $('#introGuide', col);
     if (!slot) return;
-    col.classList.add('ob-has-film');
-    const film = mountWelcomeFilm({ onError: () => { col.classList.remove('ob-has-film'); slot.outerHTML = introArt(); } });
-    slot.append(film.root);
-    sceneCleanup = () => film.destroy();
+    try {
+      const guide = mountShareGuide(slot, {
+        finishLabel: OB_COPY.introGuideGo,
+        onFinish: () => { markIntroGuideDone(); $<HTMLButtonElement>('#introGo', col)?.click(); },
+      });
+      col.classList.add('ob-has-guide');
+      sceneCleanup = () => guide.destroy();
+    } catch (e) {
+      console.warn('[onboarding] 안내 카드를 세우지 못했다 — 종전 그림으로 간다', e);
+      col.classList.remove('ob-has-guide');
+      slot.outerHTML = introArt();
+    }
   }
   /* 뒤로가기는 **지나온 자취**를 되짚는다. */
   function goBack() { const prev = S.trail.pop(); if (!prev) return; save(); goScene(prev, { back: true }); }

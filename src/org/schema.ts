@@ -31,6 +31,8 @@ import { initSessionConvLog } from "./schema/session-conv.js";
 import { initWorkspaceRegistry } from "./schema/workspace-registry.js";
 import { initAppRegistry } from "./schema/apps.js";
 import { initMemberAiConnector } from "./schema/member-ai-connector.js";
+import { initSlackBridge } from "./schema/slack-bridge.js";
+import { initSessionAsk } from "./schema/session-ask.js";
 
 export async function initOrgSchema(): Promise<void> {
   await initOrgCore(itemsPool);                    // org_profile·org_member·org_content_audit·mcp_call_log·auth_token
@@ -67,5 +69,7 @@ export async function initOrgSchema(): Promise<void> {
   await initSessionConvLog(itemsPool);             // #2233: org_session_conv(한 박스가 살면서 돌린 대화 전부 — 타임라인이 세션 전체를 본다) — 맨 끝(신규 조각 규약)
   await initTransfer(itemsPool);                   // #5458: org_transfer_identity·batch·origin(워크스페이스 간 옮기기 — 고유 id·가져오기 묶음·가져온 기록) — 맨 끝(신규 조각 규약)
   await initMemberAiConnector(itemsPool);          // #4213 T6: member_ai_connector(+scan) — 구성원 AI 계정(Claude)에 연결된 앱 기록 — 맨 끝(신규 조각 규약)
+  await initSlackBridge(itemsPool);                // #1782: org_slack_bridge(+event·call) — 슬랙 소켓 모드 → 앱 작업 다리 · 금고 봇 토큰 호출 기록 — 맨 끝(신규 조각 규약)
+  await initSessionAsk(itemsPool);                 // #5713: org_session_ask(세션의 AI 가 사람에게 건 요청 — 값 입력 · 고르기 · 파일 올리기) — 맨 끝(신규 조각 규약)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

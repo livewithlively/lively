@@ -13,7 +13,7 @@ import type { LivelyUser } from "../context.js";
 import { hiddenProjects } from "../v6/visibility.js";
 import { invitesWithout, leaveRefusal, newInvitees, notifySessionInvitees } from "./session-invite.js";   // #3870 — 초대 알림 · 초대받은 사람의 나가기   // #3870 — 초대받은 사람의 복제: 그 세션 프로젝트를 지금 볼 수 있나
 import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
-import { revokeSessionHookToken } from "./profiles.js";               // #4135 — 노드 세션을 죽일 때 그 토큰(훅·MCP 둘 다)을 거둔다
+import { retireSessionTokens } from "./profiles.js";                 // #4135 — 노드 세션을 죽일 때 그 토큰을 거둔다(#5611 — 훅 토큰은 유예 뒤)
 import { wrap, HttpError } from "../http/rest-util.js";
 import { aiLoginStep, isAiLoginHarness, parseAiLogin, type AiLoginHarness } from "./ai-login-flow.js";   // #2055 터미널 없는 AI 로그인
 import { cancelAiLogin, dropLoginSession, pasteAiLogin, readAiLogin, startAiLogin, touchHarnessSeat } from "./ai-login-run.js";
@@ -53,8 +53,14 @@ import { type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
+import { sessionVisible } from "./write-cap.js";   // #5598 — 끝난 세션 메타도 목록 · 입장과 같은 자
 // #2116 — 죽은 세션 메타의 '남에게도 보이나' 판정을 다른 게이트와 **같은 술어**로 맞춘다(cwd 축).
-const sharedByFolder = (dir: string): boolean => isProjectSessionDir(dir);
+// #5598 — 끝난 세션 메타를 소유자 · 관리자 밖의 사람에게 낼지: 목록 · 입장과 같은 자(sessionVisible).
+//  종전 sharedByFolder(«프로젝트 폴더에서 돌았나») 는 초대 없이도 누구에게나 냈다(#452 공동 세션 잔재).
+const viewerSeesFor = async (uid: string): Promise<(st: DeadSessionStateLike) => boolean> => {
+  const hidden = await hiddenProjects(uid).catch(() => undefined);
+  return (st) => sessionVisible({ owner: st.owner, invites: st.invites, dir: st.dir, projectId: st.project_id }, uid, hidden);
+};
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, nodeSessionGone, isSelfNode, isSessionHostNode, liveNodes, nodeOfSession, nodeSessionHarness, gatewayDefersHere, listCentralSessions, remoteNodeOfSession } from "../node/registry.js";
 import type { NodeSessionInfo } from "../node/registry.js";
@@ -73,6 +79,7 @@ import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 �
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
+import { sweepSessionOutputs } from "../ingest/session-outputs.js";
 import { launchReply, launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
@@ -86,7 +93,7 @@ import { cleanLastPrompt } from "./last-prompt.js";
 import { modeFromHeaders, captureMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토는 친 말을 저장하지 않는다
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
-import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
+import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta, type DeadSessionStateLike } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
 import { registerSessionTrashRoutes } from "../sessions/session-trash-routes.js";   // #1851 — 세션 휴지통
 import { trashMapFor } from "../sessions/session-trash.js";                        // #1851 — 목록 행에 휴지통 표식
 import { sessionHandoffInput } from "./session-handoff.js";
@@ -207,6 +214,18 @@ async function settleInterruptedRestore(oldId: string, st: SessionState, newId: 
   await carrySessionDismissals(oldId, newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 치움 승계 실패(비치명)"));
   await closeSessionAppInstances(oldId, "restore").catch((e) => logger.warn({ err: e, id: oldId }, "restore(이어 붙이기): 옛 앱 인스턴스 닫기 실패(비치명)"));
   await markSessionSuperseded(oldId, newId).catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore(이어 붙이기): 옛 행 이정표 기록 실패(비치명)"));
+  await carryAsksToRestored(oldId, newId);
+}
+
+/**
+ * #5713 — 새 id 로 복원이 확정됐다: 옛 세션에서 AI 가 걸어 둔 **열린 요청**(값 입력 · 고르기 …)을 새 id 로 넘긴다. 안 넘기면 되살린 세션의
+ *  사이드바 «요청» 탭에서 그 요청이 사라진다(요청은 세션 id 로 고른다 — 주소 #/ask/<id> 로는 여전히 열린다). 이정표(markSessionSuperseded)를
+ *  적는 세 자리에서 같이 부른다. 비치명.
+ *  ⚠ 세션 상태 모듈(sessions/session-state.ts)에서 부르지 않는다 — 그 모듈은 노드 에이전트 번들에 실리고, 노드엔 DB 가 없다(번들 경계 가드).
+ */
+async function carryAsksToRestored(oldId: string, newId: string): Promise<void> {
+  await import("../asks/store.js").then((m) => m.carrySessionAsks(oldId, newId))
+    .catch((e) => logger.warn({ err: e, id: oldId, newId }, "restore: 열린 요청 승계 실패(비치명 — 요청 탭에서만 빠진다)"));
 }
 
 // (#3626) themeOf · prepareRemoteAppSession · relayNodeOp 는 세션 생성 관문(session-launch.ts)으로 옮겼다 —
@@ -977,7 +996,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         return !!alive;
       });
       if (mode === "alive" && alive) { res.json({ id: alive.id, label: alive.label, projectId: alive.projectId || 0, node: nodeBadge, ...termFields(alive.harness) }); return; }
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, await viewerSeesFor(uid));
       // #2231 — 이미 이어진 id 다. 되살리라고 하지 말고 **이어진 세션을 알려 준다**(화면이 그리로 옮긴다).
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to, node: nodeBadge }); return; }
       if (dead.kind !== "ok") throw new HttpError(404, SESSION_NOT_FOUND);
@@ -1010,7 +1029,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //   (#3688 실측). 자동 경로의 접기는 그대로 두고, 이 자리에서만 «못 봤다» 를 사람에게 말한다.
     const goneVerdict = await sessionGoneVerdict(id);
     if (goneVerdict === null) {
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, await viewerSeesFor(uid));
       //  ⚠ restorable 을 내지 않는다 — 확답이 없으니 «되살릴 수 있어요» 를 약속하지 않는다(unknownStateMeta 머리말).
       //   화면은 stateUnknown 을 보고 «상태를 확인할 수 없어요» + [강제로 되살리기](force=1)를 그린다.
       if (dead.kind === "ok") { res.json(unknownStateMeta(dead.body)); return; }
@@ -1018,7 +1037,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (dead.kind === "forbidden") throw new HttpError(404, SESSION_NOT_FOUND);
       //  kind:"none" — desired-state 가 없어 되살릴 근거 자체가 없다. 종전 흐름(아래)으로 흘려보낸다.
     } else if (goneVerdict === true) {
-      const dead = deadSessionMeta(id, st, uid, isAdmin, sharedByFolder);
+      const dead = deadSessionMeta(id, st, uid, isAdmin, await viewerSeesFor(uid));
       if (dead.kind === "ok") { res.json(dead.body); return; }
       // #2231 — 이 id 는 이미 새 세션으로 이어졌다. '중단된 세션'이라고 말하면 화면이 복원을 약속했다가 404 를 받는다.
       if (dead.kind === "moved") { res.json({ id, movedTo: (await resolveSessionSuccessor(id).catch(() => null)) ?? dead.to }); return; }
@@ -1851,10 +1870,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           }
         }
       }
-      // #4135 — 게이트웨이가 relay 전에 구워 실어 준 이 세션의 훅·MCP 토큰(preissued)을 여기서 거둔다(revokeSessionHookToken 은
-      //  이름과 달리 훅·MCP 라벨 둘 다 본다) — 노드의 killSession 은 DB 가 없어 못 거둔다. 보관(reclaim)도 판은 내리므로 같이
+      // #4135 — 게이트웨이가 relay 전에 구워 실어 준 이 세션의 훅·MCP 토큰(preissued)을 여기서 거둔다(MCP 는 즉시,
+      //  훅은 유예 뒤) — 노드의 killSession 은 DB 가 없어 못 거둔다. 보관(reclaim)도 판은 내리므로 같이
       //  거둔다(복원은 새로 굽는다). 거둔 개수 0 은 오류가 아니다(이 변경 전에 뜬 세션 = 실어 준 적 없음).
-      await revokeSessionHookToken(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 훅·MCP 토큰 회수 실패(비치명)"));
+      //  #5611 — 훅 토큰은 즉시가 아니라 유예 뒤에 죽는다(retireSessionTokens): 내려가는 세션의 SessionEnd 훅이 그 토큰으로 마지막 답을 올린다.
+      await retireSessionTokens(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 훅·MCP 토큰 회수 실패(비치명)"));
       // 보관(reclaim=1)이면 **행을 남긴다** — tmux 만 내리고 좌표·대화 id 는 DB 에 그대로 두어 restorable 로 남는다.
       //  복원 경로(POST …/restore)가 st.node_id 를 보고 그 노드에 다시 create 를 릴레이하므로 노드 세션도 되살아난다.
       //  기본(완전 삭제)은 종전과 같다: 노드가 꺼져 있어 tmux 를 못 건드려도 사용자가 '복원 안 함'을 명시했으니 행은 지운다.
@@ -1988,7 +2008,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const stNodeId = relayNodeId(st.node_id, isSelfNode);
     if (stNodeId) {
       const nodeId = stNodeId;
-      if (nodeSessionsFor(me).some((x) => x.node?.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+      //  #5620 — 스냅샷에 있다는 것만으로 «이미 살아 있다» 고 답하지 않는다. 세션이 멈춘 뒤 그 컴퓨터의 다음 보고까지
+      //   (실측 약 15초) 스냅샷엔 죽은 세션이 남아 있고, 종전엔 그 틈의 복원이 전부 already:true 로 끝났다 — 화면은 같은 자리에
+      //   머물고 보낸 말은 없는 세션에 들어가다 실패했다(«두 번 쳐야 한다»). 그 컴퓨터가 연결돼 있으면 아래에서 직접 묻는다(gone op).
+      //   묻지 못하면(오프라인·무응답) 종전대로 스냅샷을 믿는다 — 모르면 같은 세션을 둘로 만들지 않는다(#835).
+      const listed = nodeSessionsFor(me).some((x) => x.node?.id === nodeId && x.id === id);
+      if (listed && !nodeOnline(nodeId)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       // #1849 — "연결돼 있지 않습니다"에서 끝내지 않는다: 게이트웨이는 그 노드의 연결 이력을 갖고 있으므로
       //  **왜 그런지(잠자기 추정)와 무엇을 하면 되는지**까지 말할 수 있다. 진단 조회가 실패해도 원래 문구는 나간다.
       if (!nodeOnline(nodeId)) {
@@ -1999,7 +2024,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       // 라이브 경합은 **노드에 묻는다**(gone op) — 스냅샷은 재시작 직후·생성 직후 비어 있고 뷰어별 필터라(admin) 살아 있는 세션을
       //  놓칠 수 있다. 확답을 못 받으면 복원하지 않는다(모르면 같은 세션을 둘로 만들지 않는다 — #835 '확답 only').
       const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
-      if (gone === false) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+      if (gone === false || (gone === null && listed)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
       if (gone === null) throw new HttpError(409, "그 컴퓨터(노드)가 응답하지 않아 세션 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하세요.");
       // #2022 — 게이트웨이가 **노드 스냅샷에서 발견한** 행은 workspace 좌표를 모른다(그 컴퓨터에서 직접 띄운 세션).
       //  아래 폴백(root_key || "shared")이 그걸 추측하면 그 세션이 **엉뚱한 폴더에서** 되살아난다 —
@@ -2069,6 +2094,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //   사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
       //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
       if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 이정표 기록 실패(비치명)"));
+      if (carried) await carryAsksToRestored(id, session.id);   // #5713 열린 요청도 새 id 로
       const ln = liveNodes().find((n) => n.id === nodeId);
       //  #3870 — «이어받았나» 를 사실대로 싣는다. 새 대화로 열었으면 화면이 «이어받았어요» 라고 말하면 안 된다.
       res.json({ ok: true, resumed: resumedKind(nodePlan),
@@ -2235,6 +2261,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   보이고 사용자가 지울 수 있다) 대화를 잃지는 않는다 — 다음 복원이 그 행에서 매핑을 다시 이관한다(자가치유).
     //  #2231 — 지우지 않고 **이어진 곳을 적는다**(옛 id 를 든 화면·링크가 새 세션으로 이어지도록). 목록에서 빠지는 건 같다.
     if (carried) await markSessionSuperseded(id, session.id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 이정표 기록 실패(비치명)"));
+    if (carried) await carryAsksToRestored(id, session.id);   // #5713 열린 요청도 새 id 로
     //  #3870 — 위 노드 갈래와 같은 축(그 머리말).
     res.json({ ok: true, resumed: resumedKind(boxPlan), session });
   })));
@@ -2298,6 +2325,9 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       //  "AI 를 여러 개 돌리다 끝나는 것마다 바로 받는다"가 여기서 성립한다. 구독자가 없으면 아무 일도 안 한다.
       //  이름은 desired 행의 라벨을 준다 — 종전엔 전이마다 tmux 로 @box_label 을 다시 읽었다(같은 계수 1.1/분).
       if (change) void notifyPhaseChange(id, me, change, st.label || undefined, { dir: st.dir });   // 응답을 막지 않는다 — 훅은 핫패스다
+      //  #5790 — 턴이 끝났다(idle) → 이 세션이 프로젝트 폴더에 만든 결과물을 자료로. 중앙 세션은 공유 저장소에 직접 써서
+      //   업로드(=자료 등록)가 없다(노드 세션은 project-push 훅이 올린다). 판정·상한·한 번에 하나는 그 모듈이 쥔다 — 응답을 막지 않는다.
+      if (phase === "idle") void sweepSessionOutputs(st);
       res.json({ ok: true });
       return;
     }

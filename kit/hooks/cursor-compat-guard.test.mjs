@@ -34,6 +34,11 @@ eq("B3 + CLAUDECODE=1(Claude 세션) → false", isForeignCursorInvocation([], {
 // [B4] (경계) Cursor 에이전트의 셸 툴이 띄운 claude — 그 env 엔 CURSOR_AGENT 만 있다(번들 실측).
 eq("B4 CURSOR_AGENT=1 만 → false", isForeignCursorInvocation([], { CURSOR_AGENT: "1", CURSOR_CONVERSATION_ID: "c" }), false);
 eq("B5 CURSOR_VERSION 만(PROJECT_DIR 없음) → false", isForeignCursorInvocation([], { CURSOR_VERSION: "x" }), false);
+// [B5b] (#5647) IDE 는 폴더 없이 연 창에서 CURSOR_PROJECT_DIR 를 **빈 값**으로 준다(2.6.13 번들 실측) — 그래도 Cursor 훅 프로세스다.
+//  종전엔 빈 값을 «없음» 으로 읽어 compat 사본이 통째로 돌았다(claude 형 기록 게이트 block → 자동 후속 메시지).
+eq("B5b PROJECT_DIR 빈 값 + 하네스 미지정 → true(compat 사본)", isForeignCursorInvocation([], { CURSOR_VERSION: "2.6.13", CURSOR_PROJECT_DIR: "" }), true);
+eq("B5c PROJECT_DIR 빈 값 + CLAUDECODE=1 → false", isForeignCursorInvocation([], { CURSOR_VERSION: "2.6.13", CURSOR_PROJECT_DIR: "", CLAUDECODE: "1" }), false);
+eq("B5d PROJECT_DIR 빈 값 + LIVELY_HARNESS=cursor → false(어댑터 경로)", isForeignCursorInvocation([], { CURSOR_VERSION: "2.6.13", CURSOR_PROJECT_DIR: "", LIVELY_HARNESS: "cursor" }), false);
 eq("B6 Cursor env 없음 → false", isForeignCursorInvocation([], {}), false);
 // [B1b] env 만의 하네스 표시는 «선언» 이 아니다 — 부모에게서 물려받은 LIVELY_HARNESS 로 사본이 통과하면 안 된다.
 eq("B1b + LIVELY_HARNESS=codex(env 만) → true", isForeignCursorInvocation([], { ...HOOK_ENV, LIVELY_HARNESS: "codex" }), true);

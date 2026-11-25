@@ -26,7 +26,15 @@ export async function runRefreshBases(): Promise<{ status: string; summary: unkn
   const { ensureProvisionBase } = await import("../../project/project-provision.js");
   const repos = await q(itemsPool,
     `SELECT name FROM repo WHERE COALESCE(state,'active')='active' AND git_url IS NOT NULL AND git_url <> ''`);
+  //  위키 수집기가 워크스페이스로 가르기 전의 공용 자리를 가리키면, 이 워크스페이스의 클론이 받아진 뒤 그리로 옮긴다(org/wiki-repo.ts
+  //   repointLegacyWikiCollector — 안 옮기면 더는 갱신되지 않는 옛 클론을 읽어 조용히 낡는다). 단일 워크스페이스 · primary 는 아무 일도 없다.
+  const { repointLegacyWikiCollector } = await import("../../org/wiki-repo.js");
   const results = [];
-  for (const r of repos) results.push(await ensureProvisionBase(r.name, null));
-  return { status: "ok", summary: { repos: results.length, results } };
+  const repointed: string[] = [];
+  for (const r of repos) {
+    const one = await ensureProvisionBase(r.name, null);
+    results.push(one);
+    if (one.status !== "error" && await repointLegacyWikiCollector(r.name)) repointed.push(r.name);
+  }
+  return { status: "ok", summary: { repos: results.length, results, ...(repointed.length ? { wiki_collectors_repointed: repointed } : {}) } };
 }

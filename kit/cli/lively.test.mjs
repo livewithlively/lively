@@ -690,6 +690,27 @@ try {
       `lively=${JSON.stringify(livelyAdd)} leaked=${JSON.stringify(leaked)}`);
   }
 
+  // ⑱-c **#5650 — `login --use-env-token --json-events`**: 데스크톱 앱이 방금 받은 토큰을 env 로 넘긴다.
+  //   이벤트 모드에선 interactive() 가 참이라, 파일 토큰이 있으면 종전 분기표는 env 를 버리고 브라우저 흐름을 **한 번 더** 열었다.
+  //   단언은 부작용으로 한다: 파일 토큰이 env 의 것으로 바뀌었나 · 장치 흐름 요청이 나갔나(=0 이어야) · 끝 이벤트.
+  {
+    const h = newHome("h-5650-envtok");
+    await lively(h, ["login", "--gateway", GW, "--token", TOKEN]);                               // 파일 = TOKEN
+    const r = await lively(h, ["login", "--gateway", GW, "--use-env-token", "--json-events"], { env: { LIVELY_TOKEN: OLD_TOKEN } });
+    const ev = r.out.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    const saved = readFileSync(join(h.home, ".lively", "token"), "utf8").trim();
+    check("⑱-c #5650 — --use-env-token 은 파일이 있어도 env 토큰으로 로그인한다(브라우저 흐름 없음)",
+      r.code === 0 && saved === OLD_TOKEN && ev.some((e) => e.t === "end" && e.ok) && !ev.some((e) => e.t === "prompt"),
+      `code=${r.code} saved=${saved} ev=${JSON.stringify(ev).slice(0, 300)} err=${r.err.slice(0, 200)}`);
+    const r2 = await lively(h, ["login", "--gateway", GW, "--use-env-token", "--json-events"], { env: { LIVELY_TOKEN: "" }, expectFail: true });
+    const saved2 = readFileSync(join(h.home, ".lively", "token"), "utf8").trim();
+    check("⑱-c #5650 — --use-env-token 인데 env 가 비면 실패하고 파일은 그대로",
+      r2.code !== 0 && saved2 === OLD_TOKEN && /LIVELY_TOKEN/.test(r2.err), `code=${r2.code} saved=${saved2} err=${r2.err.slice(0, 200)}`);
+    const r3 = await lively(h, ["login", "--gateway", GW, "--use-env-token", "--token", TOKEN], { env: { LIVELY_TOKEN: TOKEN }, expectFail: true });
+    check("⑱-c #5650 — --use-env-token 과 --token 을 같이 주면 거절(토큰은 argv 로 받지 않는다)",
+      r3.code !== 0 && readFileSync(join(h.home, ".lively", "token"), "utf8").trim() === OLD_TOKEN, `code=${r3.code}`);
+  }
+
   // ⑱-b **#2617 — 게이트웨이 주소도 파일이 SoT.** 바로 위 ⑱(#916)이 token() 에 적용한 판정의 **나머지 절반**이다.
   //   env 는 override 가 아니라 '파일의 캐시'다(셸 rc 가 로그인 시각의 값을 export 하고, 라이블리 세션은 tmux
   //   pane 이라 **서버가 처음 뜬 시점의 환경**을 물려받는다). 그래서 env-우선과 파일-우선이 갈리는 경우가
@@ -729,6 +750,9 @@ try {
       ["CI(비대화형) → env 탈출구 유지",      { envToken: T, fileToken: F, isInteractive: false },               T],
       ["프로비저닝(파일 없음) → env 탈출구",  { envToken: T, fileToken: "", isInteractive: true },               T],  // docker run -t 등 pty 붙은 컨테이너
       ["파일만 있고 env 없음 → 브라우저",     { envToken: "", fileToken: F, isInteractive: true },               ""],
+      // #5650 — 앱 전용 --use-env-token: 이벤트 모드는 interactive()=참이라, 파일이 있으면 env 를 버리고 브라우저를 또 열었다.
+      ["--use-env-token: 파일+대화형이어도 env", { envToken: T, fileToken: F, isInteractive: true, useEnvToken: true }, T],
+      ["--use-env-token: env 비면 \"\"(호출부가 죽는다)", { envToken: "", fileToken: F, isInteractive: true, useEnvToken: true }, ""],
     ];
     const bads = cases.filter(([, input, want]) => loginEscapeToken(input) !== want)
       .map(([why, input, want]) => `${why}: got=${JSON.stringify(loginEscapeToken(input))} want=${JSON.stringify(want)}`);

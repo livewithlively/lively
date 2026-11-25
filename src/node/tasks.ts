@@ -268,6 +268,13 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
     bypassFlag: "--always-approve",
     extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
   },
+  cursor: {
+    // Cursor 공식 print 모드는 stdin 프롬프트와 stream-json 결과를 지원한다.
+    // --force 는 배치에 사람 승인자가 없을 때만 호출자가 요청한 경우 붙인다.
+    run: (bin, f, p, bypass) => `[ -s "${p}" ] && ${bin} -p --output-format stream-json --trust${bypass} ${f} < "${p}"`,
+    bypassFlag: "--force",
+    extract: (j) => lastMatch(j, (ev) => (ev.type === "result" && typeof ev.result === "string" ? ev.result : null)),
+  },
 };
 // argv 로 프롬프트를 넘기는 하네스의 상한 — 실측 상한(131,072B)에서 인자·환경 몫을 빼고 여유를 둔다.
 export const ARGV_PROMPT_MAX = 100_000;

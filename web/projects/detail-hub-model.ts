@@ -150,6 +150,17 @@ export function nodeLabel(node: { id?: string | null; name?: string | null } | n
   return nm || '중앙';
 }
 
+/** #5630 허브 «세션» 줄 — 지난 세션(박스가 꺼졌거나 기록만 남은 것)인가. 꺼진 박스는 restorable, 기록만 남은 것은 _logOnly. */
+export function sessionIsPast(s: { restorable?: boolean; _logOnly?: boolean } | null | undefined): boolean {
+  return !!s && (!!s.restorable || !!s._logOnly);
+}
+/** #5630 허브 «세션» 순서 — 도는 것(순위 → 최근) 먼저, 그 뒤에 지난 세션(최근에 쓴 순). */
+export function orderHubSessions<T extends SessionLike & { restorable?: boolean; _logOnly?: boolean }>(sessions: T[], rank: (s: T) => number): { live: T[]; past: T[] } {
+  const live = sortSessions(sessions.filter((s) => !sessionIsPast(s)), rank);
+  const past = sessions.filter((s) => sessionIsPast(s)).sort((a, b) => sessionLastActivity(b) - sessionLastActivity(a));
+  return { live, past };
+}
+
 /** 세션이 맡은 태스크 — 프로젝트 상세의 tasks[].sessions 를 뒤집어 세션 id → 태스크. 한 세션은 태스크 하나(#4084). */
 export function sessionTaskIndex(tasks: Array<{ id: number | string; name?: string; sessions?: Array<{ id: string }> | null }>): Map<string, { id: number | string; name: string }> {
   const m = new Map<string, { id: number | string; name: string }>();
@@ -332,4 +343,17 @@ export function searchSnippet(raw: unknown, n: number): string {
     .replace(/^(?:…\s*)+|(?:\s*…)+$/g, '')
     .trim();
   return t.length > n ? t.slice(0, n).trimEnd() + '…' : t;
+}
+
+// ── «지금» 띠(#5630 3판 · detail-hub-now.ts) 의 셈 — 화면 없이 시험한다 ──
+/** 나를 기다리는 것 — 답할 세션(확인 필요 · 내 것)이 먼저, 그다음 내가 맡은 열린 태스크(진행 중 먼저). */
+export function myTurnItems(sessions: Array<{ s: any; key: string; mine: boolean }>, tasks: any[], meId: string): Array<{ kind: 'session' | 'task'; ref: any; label: string }> {
+  const out: Array<{ kind: 'session' | 'task'; ref: any; label: string }> = [];
+  for (const x of sessions) if (x.key === 'waiting' && x.mine) out.push({ kind: 'session', ref: x.s, label: String(x.s.label || x.s.id) });
+  if (meId) {
+    const mine = tasks.filter((t) => t && t.status !== 'done' && assigneesOf(t).includes(meId));
+    mine.sort((a, b) => Number(b.status === 'in_progress') - Number(a.status === 'in_progress'));
+    for (const t of mine) out.push({ kind: 'task', ref: t, label: String(t.name || ('#' + t.id)) });
+  }
+  return out;
 }

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// 리브 객관식 물음 카드(#5059, 런타임) — 실제 카드 코드(web/liv-cards.ts livAskCard)를 헤드리스 크롬에 띄워 누르고, 서버로 간 몸통을 잰다.
+// 리브 객관식 물음 카드(#5059, 런타임) — 실제 카드 코드(web/asks/* — askCard)를 헤드리스 크롬에 띄워 누르고, 서버로 간 몸통을 잰다.
 //
-//  계약(src/capabilities/delivery/liv.ts me_liv_answer): { choices: 저장된 선택지 id[], other?: 그 밖(≤200) }.
-//   단일 선택(multi:false)은 **답이 하나**여야 하는데 서버는 «choices 둘 이상» 만 막는다 — choices 하나 + other 는 받아 버린다.
-//   그래서 «하나만» 은 화면이 지켜야 한다(격리 리뷰 지적 2026-10-27: 알약을 켜 둔 채 선택지를 누르면 둘 다 갔다).
+//  계약(src/asks/kinds/choice.ts choiceAnswer — session_ask_submit): { choices: 저장된 선택지 id[], other?: 그 밖(≤200) }.
+//   단일 선택(multi:false)은 **답이 하나**여야 한다 — 서버도 «choices 하나 + other» 를 거절하지만(#5713), 거절은 사람에게 오류로 보인다.
+//   그래서 «하나만» 은 화면이 먼저 지킨다(격리 리뷰 지적 2026-10-27: 알약을 켜 둔 채 선택지를 누르면 둘 다 갔다).
 //
 //  엣지 표(행마다 장면 하나):
 //   C1  단일 · 알약(Zotero) 켬 → 선택지 누름          → choices [notion] · other 없음
@@ -29,7 +29,14 @@ if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BI
 
 const CSS = ["01-base.css", "03-components.css", "34-service-logins.css", "35-liv.css"].map((f) => path.join(ROOT, "public/styles", f)).filter(existsSync);
 const sc = buildSync({
-  stdin: { contents: "export { livAskCard } from './web/liv-cards.ts';", resolveDir: ROOT, loader: "ts" },
+  stdin: { contents: [
+    //  #5713 — 카드는 리브 전용(web/liv-cards.ts)에서 세션 요청(web/asks/*)으로 옮겼다. 시험은 종전처럼 «요청의 내용» 만 주고,
+    //   이 얇은 포장이 그것을 요청 한 건(payload)으로 싸서 실제 카드(askCard)에 넘긴다.
+    "import { askCard } from './web/asks/registry.ts';",
+    "import './web/asks/kinds.ts';",
+    "let n = 0;",
+    "export const livAskCard = (ask, hooks) => askCard({ id: 'ask_test_' + (++n), kind: ask.kind || 'secret', kind_label: '', title: '', session_id: null, status: 'open', created_at: '', resolved_at: null, payload: ask, result: null }, hooks);",
+  ].join('\n'), resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "LC", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 
@@ -49,10 +56,10 @@ async function PAGE_MAIN() {
   window.fetch = async (u, o) => {
     const url = String(u);
     if (url.includes("connect-status")) return new Response(JSON.stringify({ apps: APPS }), { headers: { "content-type": "application/json" } });
-    if (url.includes("liv-answer")) {
+    if (/\/api\/ui\/me\/asks\/item\/[^/]+\/submit$/.test(url.split("?")[0])) {   // #5713 — 답은 세션 요청의 submit 로 간다(옛 /liv-answer)
       const b = JSON.parse(o.body); posts.push(b);
       if (answerDelay) await sleep(answerDelay);
-      return new Response(JSON.stringify({ ok: true, labels: b.choices, other: b.other }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ ok: true, ask: {}, say: null }), { headers: { "content-type": "application/json" } });
     }
     return new Response("{}", { headers: { "content-type": "application/json" } });
   };

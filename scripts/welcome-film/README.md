@@ -1,6 +1,13 @@
 # 소개 영상 (welcome film)
 
-처음 설정 첫 장면(인사)에 재생되는 영상 `public/media/welcome-film.mp4` 의 **원본**이다.
+제품의 안내 영상 세 편의 **원본**이다.
+
+| 영상 | 어디서 뜨나 | 굽기 |
+|---|---|---|
+| `welcome-film.mp4` 온보딩 영상(기초) | 처음 설정을 지나 평소 화면에 온 사람에게 창으로 한 번 · [사용 가이드] | 아래 «굽기» |
+| `welcome-guide.mp4` 사용 가이드(라이블리 동작원리) | [사용 가이드] | 아래 «굽기» |
+| `welcome-intro.mp4` 라이블리 둘러보기 | CLI 설치 끝 상자의 «안내 영상 보기»(`#/film/intro`) · [사용 가이드] | `node render.mjs --page intro` (원본 `intro.*` · `share.css`) |
+
 화면 녹화가 아니라 HTML 로 그린 모션 그래픽이고, 프레임마다 찍어 ffmpeg 로 묶는다.
 
 | 파일 | 하는 일 |

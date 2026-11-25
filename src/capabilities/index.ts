@@ -4,7 +4,8 @@
 // - restMounts(): web.ts 가 순회 마운트하는 [capability, mount] 목록.
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveUser, requireScope } from "../context.js";
+import { resolveUser } from "../context.js";
+import { capMutates, capNeed, capAllowed } from "./cap-permission.js";
 import { viewerOf } from "./principal.js";
 import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
@@ -12,6 +13,8 @@ import { assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 �
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { requireSessionWriter } from "../sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
+import { repoReadCapabilities } from "./repo-read.js";
+import { setToolScopeResolver } from "../apps/grant.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
 import { domainmapCrudCapabilities } from "./domainmap-crud.js";
@@ -55,12 +58,14 @@ import { trashCapabilities } from "./trash.js";
 import { visAxesCapabilities } from "./vis-axes.js";
 import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
+import { appScheduleCapabilities } from "./app-schedule.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
 import { sessionProjectCapabilities } from "./session-project.js";
 import { sessionRenameCapabilities } from "./session-rename.js";
 import { sessionTaskCapabilities } from "./session-task.js";
+import { sessionAskCapabilities } from "./session-ask.js";
 import { collectRunCapabilities } from "./collect-run.js";
 import { collectUnitCapabilities } from "./collect-units.js";
 import { memberAiConnectorCapabilities } from "./member-ai-connectors.js";
@@ -75,6 +80,7 @@ import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { nasFileCapabilities } from "./nas-files.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
 import { slackConnectCapabilities } from "./slack-connect.js";
+import { slackBridgeCapabilities } from "./slack-bridge.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { googleConnectCapabilities } from "./google-connect.js";
@@ -139,16 +145,19 @@ const all: Capability[] = [
   ...undoCapabilities, // #702: 전역 실행취소(Cmd+Z) — org_content_audit before/after 역적용(content_undo, REST 전용 /api/ui/undo). 사람전용(에이전트 403), 대상=내 웹 채널 변경만.
   ...feedTargetCapabilities, // #976 위키 아웃바운드 — 피드 목적지(feed_target)+카테고리 N:M 매핑 CRUD+드레인. admin scope, MCP+REST(/api/ui/feed-targets*). 관리탭 '위키 아웃바운드' 패널.
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
+  ...appScheduleCapabilities, // 앱 v2 #121 org_app_job_set — 앱 server 정기 작업의 실행 신원(run_as) · 켜고 끔 · 지금 한 번(admin · POST /api/ui/apps/:app_id/jobs/:job).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
   ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
   ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
   ...sessionTaskCapabilities,    // #4084 세션 = 태스크 — 이 세션이 맡은 태스크 조회·완료 처리(id 없이).
+  ...sessionAskCapabilities,     // #5713 세션 요청 — 세션의 AI 가 사람에게 화면으로 받는 것(값 입력 · 고르기 · 파일 올리기). 종류는 등록부(asks/kinds).
   ...collectRunCapabilities,     // #4213 T11 수집 실행 — 내 Claude 커넥터를 읽는 `claude -p` 한 판(작은 세션 컨테이너) · 상태.
   ...collectUnitCapabilities,    // #4213 T10 수집 단위 표 — 단위·볼 수 있는 구성원(담당 후보)·지금 담당·읽은 위치 · 고치기·쪼개기·내 목록 반영 · 수집기 이관.
   ...memberAiConnectorCapabilities, // #4213 T6 구성원 Claude 커넥터 — 누가 무엇을 연결했나(보기) · 내 것 새로 확인 · 워크스페이스 정책(관리자).
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
+  ...repoReadCapabilities, // 앱 v2 #124 레포 판 읽기 — repo_refs/diff/file/grep(code scope · GET /api/ui/repos/:repo/{refs,diff,file,grep}). 앱 토큰은 context.repos 에 적은 레포만.
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
   ...delegateCapabilities, // P2(#869): 작업 위탁 — delegate_run/status/list/cancel(context scope, MCP+REST /api/ui/delegate*). 예상 소모량 신고→스케줄러가 노드 리소스 대조 배치, 결과는 .lively-task/<id>/.
   ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
@@ -161,6 +170,7 @@ const all: Capability[] = [
   ...nasFileCapabilities, // NAS(FTP) 파일 도구 — 구성원 본인 FTP 자격으로만 연다(net/nas/nas-access.ts).
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
   ...slackConnectCapabilities, // #1881: "팀 자료로 모으기" — org_slack_collect(상태)/org_slack_collect_set(admin 토글). [Slack 연결] 금고를 token_source 로 가리키는 수집기 인스턴스(lively-search·lively-bot)를 만든다. 토큰 복사 0.
+  ...slackBridgeCapabilities, // #1782: 슬랙 다리 — org_slack_bridges(상태)/set/remove(admin) + slack_bridge_call(앱 서버 전용 REST). 소켓 모드 이벤트 → 앱 백그라운드 작업 · 금고 봇 토큰으로 답하기.
   ...notionConnectCapabilities,
   ...githubConnectCapabilities, // #1881: 노션 "팀 자료로 모으기" — org_notion_collect(상태)/set(토글=동의 시작)/connect(페이지 더 고르기)/oauth_complete(CP 릴레이). 동의 화면의 페이지 선택이 곧 수집 범위, 수집기는 token_source=org 로 조직 슬롯을 가리킨다. 토큰 복사 0.
   orgAppTools, orgAppToolsSetWrite, // #2243 3차: 앱 상세가 «AI가 내 계정으로 하는 일»을 읽기/쓰기 동사로 보여 주는 창구(org_tool.level=L2 가 쓰기).
@@ -199,6 +209,9 @@ const all: Capability[] = [
 //  ku/knowledge 가 단일 캐노니컬 표면 — 지식 grep/단건 knowledge_grep·knowledge_get, 활동 activity_list·activity_log. REST 전용: GET /api/ui/learn(kind_registry+data_source ground-truth).
 
 export const registry: Map<string, Capability> = new Map(all.map((c) => [c.name, c]));
+//  앱 동의 빈칸 판정(apps/grant.ts grantGap)이 «그 사람이 쓸 수 없는 도구» 를 세지 않게 — 도구 이름 → 요구 scope 를 알려 준다(앱 v2 #124).
+//   등록부를 부를 때마다 읽으므로 나중에 합류하는 EE 표면도 따라간다.
+setToolScopeResolver((name) => registry.get(name)?.scope ?? null);
 
 // Enterprise(src/ee) 표면 합류 — 부팅 시 loadEnterprise() 가 EE 를 적재하면 ee/register.ts 가 이걸 호출한다.
 //  ⚠ 반드시 buildToolCandidates()/restMounts() 가 처음 불리기 **전에** 끝나야 한다(index.ts 최상단에서 await).
@@ -229,19 +242,9 @@ export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, b
 //   (delivery 포함 수백 op)를 로드하게 되고, capability 파일이면 index ↔ 자기 자신 순환이 된다(#1313 R25).
 export { viewerOf, isAdmin } from "./principal.js";
 
-// 읽기전용 모드(#1007) 판정의 단일 진실원천 — 이 capability 가 컨텍스트 스토어를 **변형(write)**하는가.
-//  · cap.mutates 명시가 있으면 그것(POST인데 읽기·MCP전용 읽기 등 예외 표기).
-//  · 없으면 REST 마운트 method 에서 파생: POST 마운트가 하나라도 있으면 쓰기, GET-only 면 읽기
-//    (이 코드베이스 관례 = 읽기 GET·쓰기 POST. 드리프트 0 — 새 co-exposed 툴은 자동 분류).
-//  · rest:false(MCP 전용) + 명시 없음 → 파생 신호 부재 → **fail-closed = 쓰기로 간주**.
-//    보안 게이트라 미지정의 안전한 기본은 '차단'이다 — 새 MCP전용 쓰기 툴이 읽기전용 세션에서 조용히 새지 않게.
-//    (그래서 순수 MCP전용 '읽기'는 반드시 mutates:false 를 달아야 읽기전용에서도 노출된다 — 실패해도 방향이 안전).
-export function capMutates(cap: Capability): boolean {
-  if (typeof cap.mutates === "boolean") return cap.mutates;
-  const rest = cap.expose.rest;
-  if (Array.isArray(rest) && rest.length) return rest.some((m) => m.method === "POST");
-  return true;
-}
+// capMutates(이 기능이 컨텍스트를 바꾸는가) · capNeed · capAllowed 의 본체는 ./cap-permission.ts(등록부를 import 하지 않는 잎) —
+//  여기는 기존 import 스펙 호환 재수출. 등록부가 import 하는 capability 파일(app-tool-call 등)은 잎을 **직결** import 한다(순환 방지 #1313 R25).
+export { capMutates, capNeed, capAllowed };
 
 // 읽기전용에서 차단 **예외**(#1007 사용자 스코프) — 컨텍스트 스토어 콘텐츠 쓰기가 아니라 '코드실행/오프로드'라 기밀 세션에서도 유지한다.
 //  broker_run(브로커 도구 실행)·delegate_run/cancel(무거운 작업 위탁)은 읽기전용이어도 '일'(빌드·테스트)을 계속하게 둔다는 사용자 결정.
@@ -293,7 +296,8 @@ export function registerMcpCapabilities(
       { title: cap.title, description: cap.description + restEquivHint(cap), inputSchema: cap.input, ...(meta ? { _meta: meta } : {}) },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
-        if (cap.scope) requireScope(u, cap.scope);
+        // 권한 판정(#5799 capAllowed — 새 권한이 실린 주체는 영역 × 수준, 옛 scope 만 가진 주체는 종전 그대로). 거절 문구는 종전 꼴.
+        if (!capAllowed(u, cap)) throw new Error(`Forbidden: user '${u.userId}' lacks scope '${cap.scope}'`);
         requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
         await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
         await assertAppContextSafeTool(u, cap.name, "mcp");   // #5100: 맥락 범위를 선언한 앱이면 범위를 못 지키는 도구는 403(기록은 instrument)

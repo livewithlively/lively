@@ -60,11 +60,11 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
       editor = EDITING.get(pid) || o.bodyEditor();   // 살아 있는 인스턴스를 옮겨 앉힌다 — 새로 만들지 않는다
       EDITING.set(pid, editor);
       contentHost.append(el('div', { class: 'pjh-edit-host' }, editor.el));
-      editBtn.replaceChildren(hubIcon('check', 12), '완료');
+      if (modal) editBtn.replaceChildren(hubIcon('check', 12), '완료'); else { editBtn.replaceChildren(hubIcon('check', 15)); editBtn.title = '편집 끝내기'; editBtn.classList.add('on'); }
     } else {
       editor = null;
       contentHost.append(readBox());
-      editBtn.replaceChildren(hubIcon('pen', 12), '편집');
+      if (modal) editBtn.replaceChildren(hubIcon('pen', 12), '편집'); else { editBtn.replaceChildren(hubIcon('pen', 15)); editBtn.title = '본문 편집'; editBtn.classList.remove('on'); }
     }
   };
   editBtn.onclick = async (e) => {
@@ -85,8 +85,9 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     f.modal ? { label: '닫기', icon: 'x', hint: 'Esc', run: () => ctx.openTool(null) } : { label: '크게 열기', icon: 'window', run: open },
   ], '본문');
   // «갱신 · 안내 칩 · 편집» 줄 — 1×1 은 바닥 단추가 그 역할(자리가 없다). 안내 칩은 1×1 이면 본문 위 한 줄.
-  const bh = (h >= 2 || w >= 2) ? el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, f.modal ? null : el('span', { text: P.updated_at ? '갱신 ' + relTime(P.updated_at) : '' }), notesRow()), editBtn) : null;   // 모달은 머리에 «갱신» 이 이미 있다
-  if (bh) textHost.append(bh); else { const nr = notesRow(); if (nr) textHost.append(nr); }
+  //  #5630 — 격자 위젯에는 이 줄이 없다: «갱신» 은 머리에 이미 있고(두 번 서던 것), [편집] 은 머리의 연필 아이콘, 안내 칩(«첫 지시로 자동 생성»)은 모달에서만 본다.
+  if (modal) textHost.append(el('div', { class: 'pjh-bh' }, el('span', { class: 'pjh-bh-l' }, notesRow()), editBtn));
+  else { editBtn.className = 'pjh-hbtn'; editBtn.setAttribute('aria-label', '본문 편집'); acts.prepend(editBtn); }
   textHost.append(contentHost);
   paintText();
 
@@ -116,7 +117,8 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     return el('div', { class: 'pjh-composer' }, ta, send);
   };
 
-  if (withCol) body.append(el('div', { class: 'pjh-two-b', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 340 : w >= 3 ? 250 : 220) + 'px' }, textHost, cmtHost));
+  const twoB = withCol ? el('div', { class: 'pjh-two-b', style: 'grid-template-columns:minmax(0,1fr) ' + (modal ? 340 : w >= 3 ? 250 : 220) + 'px' }, textHost, cmtHost) as HTMLElement : null;
+  if (twoB) body.append(twoB);
   else { body.append(textHost); if (withInline) body.append(cmtHost); }
 
   ctx.D.comments().then((cs: any[]) => {
@@ -124,6 +126,13 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
     cnt.append(' ' + cs.length);
     if (unread) cnt.append(el('span', { class: 'pjh-pill new', text: '새 ' + unread }));
     if (!withCol && !withInline) return;
+    //  #5630 — 코멘트가 아직 없으면 옆 칸(빈 상자 + «아직 코멘트가 없어요»)을 세우지 않는다. 본문이 폭을 다 쓰고, 맨 밑에 글쓰기 한 줄만 둔다.
+    if (!cs.length && !modal) {
+      if (twoB) { twoB.style.gridTemplateColumns = 'minmax(0,1fr)'; twoB.classList.add('nocmt'); }
+      cmtHost.classList.add('bare');
+      if (h >= 2) cmtHost.append(composer());
+      return;
+    }
     const newest = cs.slice().reverse();
     cmtHost.append(el('div', { class: 'pjh-cmt-h' }, hubIcon('comment', 13), el('b', { text: '코멘트 ' + cs.length }), unread ? el('span', { text: '· 새 ' + unread }) : null));
     const list = el('div', { class: 'pjh-cmt-list', 'data-mscroll': 'cmt' });
@@ -140,5 +149,4 @@ export const fillBody: Fill = (ctx, f, body, foot, sub, acts) => {
   else if (w <= 1 && h <= 1) foot.append(cnt, editBtn, btn('열기', 'btn-ghost', open));
   else if (withCol || withInline) foot.append(footText('본문 ' + bodyCharCount(md).toLocaleString() + '자'), btn('열기', 'btn-ghost', open));   // 같은 뜻은 같은 말 — 어느 크기든 «열기»
   else foot.append(cnt, btn('열기', 'btn-ghost', open));
-  void acts;
 };
