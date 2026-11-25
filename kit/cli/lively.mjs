@@ -3784,7 +3784,7 @@ export function shareGuideLines({ color = true, mode = "invite", link = "", narr
   ];
   const ways = [
     [C.dim("지식으로 남기기 싫으면"), C.cmd("lively run --readonly") + "  " + C.cmd("--incognito")],
-    [C.dim("쓰다가 끄거나 읽기만 하려면"), "AI에게 " + C.cmd("/lively-mode off") + " · " + C.cmd("/lively-mode readonly")],
+    [C.dim("쓰다가 라이블리를 끄려면"), "AI에게 " + C.cmd("/lively-disconnect")],
   ];
   if (narrow) {
     const out = ["", "  " + C.b("라이블리 / 접근 권한 안내"), ""];
