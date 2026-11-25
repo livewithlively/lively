@@ -897,6 +897,17 @@ function inChild(sb, code) {
   const once = (t) => t.split("$ARGUMENTS").length - 1 === 1;
   check("I2a 클로드 커맨드 — frontmatter·미리 허용·자리표시 한 번", c.startsWith("---\n") && c.includes("allowed-tools: Bash(lively on), ") && !c.includes("on:*") && once(c));
   const dc = r.claude.find((f) => f.id === "lively-disconnect").text;
+  {
+    //  스위치 하나(/lively-mode)의 미리 허용 — 닫는 쪽(off · readonly)과 상태 보기, 맨 `on` 까지. 꺼 둔 동안의 대화를 올리는 `--yes` 와
+    //   그 아래 전부·영속인 `--remember`, 세션을 지목해 켜는 `on --session` 은 권한 확인을 거친다(미리 허용하지 않는다).
+    const md = r.claude.find((f) => f.id === "lively-mode")?.text || "";
+    const line = (md.split("\n").find((l) => l.startsWith("allowed-tools:")) || "").slice("allowed-tools:".length);
+    const allowed = line.split(",").map((x) => x.trim()).filter(Boolean).sort();
+    const want = ["mode", "on", "off", "off --session:*", "readonly", "readonly --session:*"].flatMap((t) => [`Bash(lively ${t})`, `Bash(/h/.lively/bin/lively ${t})`]).sort();
+    check("I2m /lively-mode 의 미리 허용은 정확히 이 열두 꼴이다(--yes · --remember · on --session 없음)", JSON.stringify(allowed) === JSON.stringify(want) && !/--yes|--remember|on --session/.test(line), line);
+    check("I2m2 본문은 세 상태의 명령과 «기억» 을 말한다 · 윈도·다른 하네스 꼴엔 미리 허용이 없다", ["`lively on`", "`lively off`", "`lively readonly`", "`lively mode`", "--remember", "$ARGUMENTS"].every((x) => md.includes(x))
+      && ["codex", "cursor", "frontmatter"].every((f) => !(r[f].find((x) => x.id === "lively-mode")?.text || "x allowed-tools").includes("allowed-tools")), md.slice(0, 300));
+  }
   check("I2a2 끄기 커맨드의 미리 허용은 «이 세션만» 까지다(off · off --session — --remember 는 권한 확인을 거친다)", dc.includes("Bash(lively off), Bash(lively off --session:*)") && !dc.includes("Bash(lively off:*)"), dc.slice(0, 300));
   check("I2b 코덱스 프롬프트 — frontmatter 없음(프롬프트로 새지 않게)·자리표시 한 번", !x.startsWith("---") && once(x));
   check("I2c 커서 커맨드 — 첫 줄이 제목", u.split("\n")[0] === r.cursor[0].text.split("\n")[0] && !u.startsWith("---") && u.split("\n")[0].includes("라이블리를 켭니다"));
@@ -1110,6 +1121,8 @@ if (!WIN) {
   check("P3 읽기전용은 기억시킬 수 없다(종료 2 · 폴더 목록 그대로)", p3.code === 2 && p3.out.includes("기억시킬 수 없습니다") && run(S, "readonly", dir).code === 2 && !rs.readScopeFile(sb.lively)?.pending, p3.out);
   const st = run(S, "mode");
   check("P4 lively mode(인자 없음)는 이 세션의 지금 상태도 말한다", st.code === 0 && st.out.includes("이 세션") && st.out.includes("readonly") && st.out.includes("이 세션 안에서 바꿈") && run({}, "mode", "--session", "ro-2").out.includes("readonly"), st.out);
+  const dm = run(S, "mode", "readonly", "--session", "ro-1");
+  check("P4b lively mode <모드> --session 은 받지 않는다 — 기본 모드를 조용히 바꾸지 않는다(종료 2 · ~/.lively/mode 없음)", dm.code === 2 && dm.out.includes("lively on | off | readonly") && !existsSync(join(fd, "mode")), dm.out);
   const p5 = run(S, "on");
   check("P5 읽기전용 세션을 켜려 하면 먼저 멈춘다 — 읽기전용 동안의 대화도 올라간다(종료 3 · 표식 그대로)", p5.code === 3 && p5.out.includes("읽기전용 동안의 대화도") && rs.sessionReadonly("ro-1", fd), p5.out);
   const p6 = run(S, "on", "--yes");

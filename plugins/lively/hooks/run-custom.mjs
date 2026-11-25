@@ -767,15 +767,22 @@ const isLivelyTool = (name) => ["lively", "lively-local"].some((srv) => String(n
 //  그래서 같은 헤더로 tools/list 를 한 번 받아 «거기 있는 도구 = 써도 되는 도구» 로 판정한다 — 분류를 여기 한 벌 더 두지 않는다.
 //  받은 목록은 잠깐 사본으로 둔다(도구 호출마다 왕복하지 않게). 못 받았으면 묵은 사본으로, 그것도 없으면 "unknown"(부르는 쪽이 막는다).
 //  로컬 조작 도구(lively-local)는 보지 않는다 — env 로 연 읽기전용에서도 그 서버는 그대로 뜬다(같은 범위).
+//  ⚠ 이 판정은 «게이트웨이가 /mcp 의 tools/list 에서 x-lively-mode: readonly 를 지킨다» 는 서버 계약에 기댄다 — MCP 프록시(lively-mcp-gateway.mjs
+//   upstreamHeaders)가 env 로 연 읽기전용에서 쓰는 것과 같은 요청이다. 실측(2026-11-25, 매니지드): 일반 551개 → 읽기전용 247개(쓰는 도구 304개가 빠짐 ·
+//   읽기전용 ⊂ 일반 · nextCursor 없음 · 응답은 SSE). 그 헤더를 무시하는 게이트웨이면 전부 «써도 된다» 가 되므로, 헤더 처리를 바꿀 땐 이 자리를 함께 본다.
+//  플러그인만 깐 자리(도구 이름이 mcp__plugin_… 꼴)는 여기 안 걸린다 — 그 자리엔 표식을 세우는 CLI·커맨드가 없다(꺼짐 표식의 isLivelyTool 과 같은 범위).
 const GATEWAY_TOOL_PREFIX = () => harness(HARNESS).tools.mcp("lively", "");
 const isGatewayTool = (name) => String(name || "").startsWith(GATEWAY_TOOL_PREFIX());
 const bareToolName = (name) => String(name || "").slice(GATEWAY_TOOL_PREFIX().length);
 const RO_TOOLS_TTL_MS = 10 * 60 * 1000;
-const roToolsFile = () => join(LIST_CACHE_DIR, `readonly-tools-${crypto.createHash("sha256").update([GW, String(process.env.LVLY_TENANT_SLUG || "").trim(), TOKEN].join("\n")).digest("hex").slice(0, 24)}.json`);
-function readRoTools() {
+//  사본의 열쇠는 조직 훅 목록 사본(listCacheKey)과 같은 축이다 — 게이트웨이·워크스페이스·하네스·신원·세션. 세션에 붙인 앱의 도구처럼
+//   목록이 세션마다 다를 수 있어 세션도 넣는다(남의 세션 목록으로 판정하지 않는다).
+const roToolsFile = (input) => join(LIST_CACHE_DIR, `readonly-tools-${crypto.createHash("sha256").update([GW, String(process.env.LVLY_TENANT_SLUG || "").trim(), HARNESS, TOKEN, executionSessionId(input)].join("\n")).digest("hex").slice(0, 24)}.json`);
+function readRoTools(input) {
   try {
-    const j = JSON.parse(readFileSync(roToolsFile(), "utf8"));
-    return Array.isArray(j?.names) && Number.isFinite(j?.at) ? j : null;
+    const j = JSON.parse(readFileSync(roToolsFile(input), "utf8"));
+    //  시각이 앞날인 사본(시계가 뒤로 감 · 손댄 파일)은 영영 안 낡으므로 없는 것으로 본다.
+    return Array.isArray(j?.names) && Number.isFinite(j?.at) && j.at <= Date.now() ? j : null;
   } catch { return null; }
 }
 /** (순수) tools/list 응답 본문 → 도구 이름 배열. JSON 한 덩이 또는 SSE(data: 줄) 둘 다 받는다. 모양이 아니면 null. */
@@ -804,12 +811,12 @@ async function fetchRoTools(input) {
 }
 /** @returns {Promise<"allow"|"deny"|"unknown">} */
 async function readonlyVerdict(name, input) {
-  let c = readRoTools();
+  let c = readRoTools(input);
   if (!c || Date.now() - c.at > RO_TOOLS_TTL_MS) {
     const names = await fetchRoTools(input);
     if (names) {
       c = { at: Date.now(), names };
-      try { mkdirSync(LIST_CACHE_DIR, { recursive: true, mode: 0o700 }); writeFileSync(roToolsFile(), JSON.stringify(c), { mode: 0o600 }); } catch { /* 사본은 best-effort */ }
+      try { mkdirSync(LIST_CACHE_DIR, { recursive: true, mode: 0o700 }); writeFileSync(roToolsFile(input), JSON.stringify(c), { mode: 0o600 }); } catch { /* 사본은 best-effort */ }
     }
   }
   if (!c) return "unknown";

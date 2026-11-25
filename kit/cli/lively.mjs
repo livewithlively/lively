@@ -3069,6 +3069,8 @@ async function cmdMode(rest0) {
     return;
   }
   if (!MODES.includes(m)) die(`모드는 ${MODES.join("|")} 중 하나여야 합니다.`, 2);
+  //  `lively mode <모드> --session <id>` 는 «이 세션을 바꾼다» 로 읽히는데 실제로는 이 컴퓨터의 기본 모드를 바꾼다 — 조용히 받지 않는다.
+  if (si > -1) die("lively mode <모드> 는 lively run 으로 여는 세션의 기본 모드를 바꿉니다(--session 을 받지 않습니다).\n  이 세션을 바꾸려면: lively on | off | readonly --session <id>", 2);
   mkdirSync(LIVELY, { recursive: true });
   writeLively(MODE_FILE, m + "\n");
   // 로컬 선택이 웹의 옛 값에 되덮이지 않게 먼저 pending 을 남기고, 서버 반영 성공 뒤에만 지운다.
