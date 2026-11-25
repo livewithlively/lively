@@ -337,7 +337,7 @@ a.gd-crumb:hover { color: var(--ink); text-decoration: none; }
   .gd-pager { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* (#5550) 첫 화면의 영상 둘 — 온보딩 영상(기초) · 사용 가이드(라이블리 동작원리). 누르면 영상이 창으로 뜬다(web/v2/welcome-film.ts).
+/* (#5550) 첫 화면의 영상 셋 — 라이블리 둘러보기 · 온보딩 영상(기초) · 사용 가이드(라이블리 동작원리). 누르면 영상이 창으로 뜬다(web/v2/welcome-film.ts).
    카드는 포스터가 위, 제목 · 소개가 아래. 넓으면 둘이 나란히, 좁으면 위아래로 선다. */
 .gd-films{display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; margin:10px 0 24px}
 .gd-film{display:flex; flex-direction:column; gap:12px; width:100%; margin:0; padding:10px 10px 14px; border:1px solid var(--line); border-radius:14px; background:var(--surface); font:inherit; text-align:left; color:var(--ink); cursor:pointer}

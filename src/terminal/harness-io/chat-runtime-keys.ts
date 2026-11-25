@@ -9,7 +9,7 @@
 //  ⚠ 그래서 **사실(키)**과 **행동(함수)**을 가른다. 두 벌이 되지 않게 계약 테스트가
 //   `canOpenChatRuntime(k) === harnessOpensChatRuntime(k)` 를 전 키에서 강제한다 —
 //   표에 하네스를 더하고 여기를 안 고치면 그 자리에서 빨간불이 난다.
-export const CHAT_RUNTIME_KEYS = ["claude", "codex", "grok", "opencode", "antigravity"] as const;
+export const CHAT_RUNTIME_KEYS = ["claude", "codex", "grok", "opencode", "antigravity", "cursor"] as const;
 
 /** 이 하네스가 대화 런타임을 열 수 있나 — 모르는 키는 false(있는 척하지 않는다). */
 export function harnessOpensChatRuntime(key: string | null | undefined): boolean {

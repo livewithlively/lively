@@ -73,7 +73,7 @@ function pjvColOrderList(surface, fields) {
 // 키 → 그리드 트랙 문자열 — 고정 폭(안 찌그러짐, #607). 기본=CSS 폭 변수(숨김은 0), 커스텀=타입별 기본 폭.
 //  다 담을 폭이 모자라면 컬럼을 줄이는 대신 컨테이너(.pjv-board-scroll)가 가로 스크롤한다.
 function pjvColTrackFor(key, fields) {
-  const STD = { team: '--pjv-w-team, 96px', assignee: '--pjv-w-assignee, 120px', due: '--pjv-w-due, 92px', start: '--pjv-w-start, 0px', created: '--pjv-w-created, 0px', updated: '--pjv-w-updated, 0px', priority: '--pjv-w-priority, 112px', sess: '--pjv-w-sess, 80px' };
+  const STD = { team: '--pjv-w-team, 112px', assignee: '--pjv-w-assignee, 120px', due: '--pjv-w-due, 92px', start: '--pjv-w-start, 0px', created: '--pjv-w-created, 0px', updated: '--pjv-w-updated, 0px', priority: '--pjv-w-priority, 112px', sess: '--pjv-w-sess, 80px' };
   if (STD[key]) return 'var(' + STD[key] + ')';
   const f = (fields || []).find((x) => 'f:' + x.id === key);
   const w = (f && PJV_FIELD_BY_KEY[f.field_type] && PJV_FIELD_BY_KEY[f.field_type].w) || 130;
@@ -255,7 +255,7 @@ function pjvColResizeHandle(colKey) {
 //  surface: 'proj'(팀원·마감·우선·세션) | 'task'(담당자·마감·우선). 값은 localStorage 에 저장돼 유지, Fields 패널에서 되살린다.
 const PJV_STD_COLS = {
   proj: [
-    { key: 'team', label: '팀원' }, { key: 'due', label: '마감일' },
+    { key: 'team', label: '사람' }, { key: 'due', label: '마감일' },
     // #541 빌트인 컬럼(ClickUp 뷰 패리티) — 기본 숨김(defaultHidden): 켠 사람/뷰에만 보임.
     { key: 'start', label: '시작일', defaultHidden: true }, { key: 'created', label: '생성일', defaultHidden: true }, { key: 'updated', label: '갱신일', defaultHidden: true },
     { key: 'priority', label: '우선순위' }, { key: 'sess', label: '내 세션' }],

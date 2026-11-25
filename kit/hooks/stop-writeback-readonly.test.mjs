@@ -25,8 +25,10 @@ const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
 let sid = 0;
 // 넛지 조건을 갖춘 세션(isLivelyWork=.lively + .worked, writeback/blocked 없음)을 만들고 게이트를 실제 프로세스로 실행,
 //  게이트가 stdout 에 낸 것을 돌려준다. LIVELY_MODE 값(#1007+)은 인자로 주입.
-function runGate(modeEnv) {
+function runGate(modeEnv, { marked = false } = {}) {
   const id = `s${++sid}`;
+  //  세션 안에서 읽기전용으로 바꾼 세션(record-scope.mjs «세션 모드») — 표식 ~/.lively/session-mode/<세션 id>.
+  if (marked) { mkdirSync(join(HOME, ".lively", "session-mode"), { recursive: true }); writeFileSync(join(HOME, ".lively", "session-mode", id), "readonly\n"); }
   writeFileSync(join(FLAG_DIR, `${id}.lively`), "");  // 자가게이팅 신호(이 세션은 lively work)
   writeFileSync(join(FLAG_DIR, `${id}.worked`), "");  // 의미있는 작업함 → 넛지 후보
   const out = execFileSync(process.execPath, [HOOK], {
@@ -55,6 +57,13 @@ try {
       assert.equal(nagged(runGate(v)), true, `'${v}' 은 readonly 아님 → 넛지 유지`);
     });
   }
+  // 세션 안에서 읽기전용으로 바꾼 세션(/lively-mode readonly) — env 는 그대로(normal)여도 그 세션만 억제된다.
+  t("세션 안에서 읽기전용으로 바꾼 세션(표식) — 넛지 억제", () => {
+    assert.equal(nagged(runGate("", { marked: true })), false, "표식이 있는 세션은 넛지 없어야");
+  });
+  t("표식은 그 세션에만 걸린다 — 같은 홈의 다른 세션은 넛지 유지(대조군)", () => {
+    assert.equal(nagged(runGate("")), true, "표식 없는 세션은 넛지가 나와야");
+  });
   console.log(`\nstop-writeback readonly tests: ${pass} passed`);
 } finally {
   rmSync(SANDBOX, { recursive: true, force: true });

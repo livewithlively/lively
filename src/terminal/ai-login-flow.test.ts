@@ -93,4 +93,14 @@ t("★ grok 은 이 통로의 대상이다 — 표에서 빠지면 화면이 종
   assert.deepEqual(aiLoginArgv("grok"), ["grok", "login", "--device-auth"]);
 });
 
+t("★ Cursor 는 브라우저 없는 로그인 URL을 이 화면에서 받는다", () => {
+  assert.ok(isAiLoginHarness("cursor"));
+  assert.deepEqual(aiLoginArgv("cursor"), ["agent", "login"]);
+  const st = parseAiLogin("cursor", "Starting login process...\nWaiting for browser authentication...\nOpen a browser and navigate to this link: https://cursor.com/login/cli?challenge=redacted\n");
+  assert.match(String(st.url), /^https:\/\/cursor\.com\/login\/cli/);
+  assert.equal(st.code, undefined);
+  assert.equal(st.needsPaste, undefined);
+  assert.equal(aiLoginStep(st, false), "open-url");
+});
+
 console.log(`\n${pass} passed`);

@@ -17,12 +17,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PROJECT_SHARED_BASE } from "../project/project-fs.js";
-import { REPOS_SUBDIR } from "../project/project-provision.js";
+import { sharedRepoPath } from "../project/project-provision.js";
 import { getRepo } from "../domainmap/core/repos.js";
 import { listMarkdown, selectMarkdown } from "../connectors/domain-wiki.js";
 import { parseGlobList } from "../connectors/path-glob.js";
 import { upsertCollector, listCollectors } from "./store/collectors.js";
 import { HttpError } from "../http-error.js";
+import { logger } from "../log.js";
 
 /** 이 레포의 위키 수집기 key(=사람이 보는 식별자·URL 컴포넌트). */
 export function wikiCollectorKey(repo: string): string {
@@ -38,9 +39,13 @@ export function wikiInstance(repo: string): string {
   return wikiCollectorKey(repo);
 }
 
-/** 게이트웨이가 이 레포를 클론해 두는 자리 — provision·repo-refresh 와 같은 경로여야 한다. */
+/** 게이트웨이가 이 레포를 클론해 두는 자리 — provision·repo-refresh 와 같은 경로여야 한다(이 워크스페이스의 공유 클론 · sharedRepoPath). */
 export function repoClonePath(repo: string): string {
-  return path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, String(repo).trim());
+  return sharedRepoPath(String(repo).trim());
+}
+/** 워크스페이스로 가르기 전의 공용 자리(`workspace/repos/<name>`) — 옛 수집기 설정이 가리키는 값을 알아보는 데만 쓴다. */
+export function legacyRepoClonePath(repo: string): string {
+  return path.join(PROJECT_SHARED_BASE, "repos", String(repo).trim());
 }
 
 /**
@@ -161,8 +166,10 @@ export async function ensureWikiRepoCollector(opts: {
   //  ⚠ 슬러그는 대소문자를 접는다 — 레포 'Lively' 와 'lively' 는 같은 key 로 떨어진다. 그대로 두면 뒤에 온
   //   레포가 앞 레포의 수집기를 **말없이 빼앗고**, 두 레포가 같은 instance 를 쓰게 되어 서로의 지식을 아카이브한다
   //   (스윕을 instance 로 좁힌 의미가 사라진다). 남의 자리면 만들지 않고 막는다.
+  //  옛 공용 자리(`workspace/repos/<이 레포>`)는 «다른 레포» 가 아니다 — 공유 클론을 워크스페이스마다 가르기 전에 만든 이 레포의 수집기다.
+  //   그대로 통과시켜 아래 저장이 경로를 이 워크스페이스의 자리로 옮긴다.
   const takenBy = existing?.config?.repo_path;
-  if (takenBy && takenBy !== clonePath) {
+  if (takenBy && takenBy !== clonePath && takenBy !== legacyRepoClonePath(repo)) {
     throw new HttpError(409,
       `수집기 이름 '${key}' 를 이미 다른 레포가 쓰고 있습니다(${takenBy}). 레포 이름이 대소문자만 다르면 같은 자리로 접힙니다 — 한쪽 이름을 바꾸거나 그 수집기를 먼저 정리하세요.`);
   }
@@ -202,4 +209,36 @@ export async function ensureWikiRepoCollector(opts: {
     base_url: base.url,
     base_url_guessed: base.guessed,
   };
+}
+
+/**
+ * 이 레포의 위키 수집기가 옛 공용 자리(`workspace/repos/<name>`)를 가리키면 이 워크스페이스의 공유 클론으로 옮긴다. 옮겼으면 true.
+ *  왜: 공유 클론을 워크스페이스마다 가른 뒤로 주기 갱신(refresh_bases)은 새 자리만 최신화한다. 수집기 설정에 적힌 옛 경로를 그대로 두면
+ *   위키 수집이 더는 갱신되지 않는 옛 클론을 계속 읽어 **조용히 낡는다**. 새 자리에 클론이 받아진 뒤에만 옮긴다(없는 경로로 옮기면
+ *   수집기가 «content 경로 없음» 만 남긴다). 옛 자리와 새 자리가 같은 워크스페이스(단일 · primary)에서는 아무것도 하지 않는다.
+ *  주기 갱신(scheduler/actions/repo-refresh.ts runRefreshBases)이 레포마다 부른다 — 실패는 던지지 않는다(갱신을 막지 않는다).
+ */
+export async function repointLegacyWikiCollector(repo: string, actor = "cron:refresh-provision-bases"): Promise<boolean> {
+  try {
+    const name = String(repo ?? "").trim();
+    if (!name) return false;
+    const next = repoClonePath(name);
+    const legacy = legacyRepoClonePath(name);
+    if (next === legacy) return false;   // 단일 워크스페이스 · primary — 수집기 목록도 읽지 않는다
+    const key = wikiCollectorKey(name);
+    const existing = (await listCollectors()).find((c) => c.key === key);
+    if (!existing?.id) return false;
+    if (!wikiRepointNeeded({ current: existing.config?.repo_path, legacy, next, nextCloned: fs.existsSync(path.join(next, ".git")) })) return false;
+    await upsertCollector({ id: existing.id, config: { repo_path: next } }, actor, "system");   // 준 칸만 바뀐다(나머지 설정 · 켜짐은 그대로)
+    return true;
+  } catch (e) {
+    //  삼키되 남긴다 — 못 옮기면 그 수집기는 더는 갱신되지 않는 옛 클론을 계속 읽는다(다음 주기 갱신이 다시 해 본다).
+    logger.warn({ repo, err: (e as Error)?.message ?? String(e) }, "[wiki-repo] 위키 수집기 경로를 이 워크스페이스의 공유 클론으로 옮기지 못했다 — 다음 주기 갱신에 다시 한다");
+    return false;
+  }
+}
+
+/** (순수) 수집기 경로를 옮겨야 하나 — 지금 값이 옛 공용 자리이고 · 새 자리가 그와 다르고 · 새 자리에 클론이 받아져 있을 때만. */
+export function wikiRepointNeeded(o: { current: string | null | undefined; legacy: string; next: string; nextCloned: boolean }): boolean {
+  return o.next !== o.legacy && o.current === o.legacy && o.nextCloned;
 }

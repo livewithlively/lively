@@ -237,6 +237,48 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .install-minter select, .install-minter input { flex: 1; min-width: 0; }
 .install-minter .btn { flex: none; white-space: nowrap; }
 
+/* 기기 연결 승인(#/activate) — «이 컴퓨터를 연결할까요?» 한 장 카드(설치 흐름 시안 3 · 3b). 토큰만 쓴다(다크 자동). */
+.dauth-card { max-width: 680px; margin: 24px auto; padding: 28px 28px 22px; word-break: keep-all; }
+.dauth-head { display: flex; align-items: center; gap: 14px; }
+.dauth-head-text { min-width: 0; }
+.dauth-card h2.dauth-title { margin: 0; font-size: 22px; font-weight: 800; color: var(--ink); line-height: 1.35; }
+.dauth-sub { margin: 6px 0 0; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.dauth-done-ic { flex: none; width: 44px; height: 44px; border-radius: 50%; background: var(--mint-fill); color: var(--on-fill);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800; }
+.dauth-note { margin: 16px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.dauth-note p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.dauth-note p + p { margin-top: 4px; }
+.dauth-entry { display: flex; gap: 8px; align-items: center; margin: 16px 0 0; }
+.dauth-entry input { flex: 1; min-width: 0; }
+.dauth-entry .btn { flex: none; }
+/* 고정폭 · 대문자는 코드를 친 뒤에만 — 자리표시자 문장은 본문 글꼴 그대로 둔다. */
+.dauth-code-input:not(:placeholder-shown) { font-family: ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 1px; text-transform: uppercase; }
+.dauth-msg { margin: 14px 0 0; font-size: 13px; color: var(--muted); }
+.dauth-kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 18px 0 0; }
+.dauth-kv { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.dauth-k { font-size: 12px; color: var(--muted); }
+.dauth-v { margin-top: 2px; font-size: 15px; font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.dauth-v-code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 20px; letter-spacing: .1em; }
+.dauth-h { margin-top: 2px; font-size: 12px; color: var(--muted-3); }
+.dauth-adm { position: relative; margin: 10px 0 0; border: 1px solid var(--line); border-radius: 10px; }
+.dauth-adm.on { border-color: var(--line-note); background: var(--bg-sel); }
+.dauth-adm-row { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; cursor: pointer; }
+.dauth-adm-row input { flex: none; margin: 3px 0 0; }
+.dauth-adm-t { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.dauth-opt { display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 999px; background: var(--gray-bg); border: 1px solid var(--line);
+  font-size: 11px; font-weight: 500; line-height: 18px; color: var(--ink-sub); vertical-align: 1px; }
+.dauth-d { margin: 2px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+.dauth-pw { padding: 0 14px 14px 37px; }
+.dauth-pw label { display: block; margin-bottom: 6px; font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.dauth-pw input { width: 100%; box-sizing: border-box; }
+.dauth-pw .dauth-d { margin-top: 6px; }
+.dauth-foot { display: flex; justify-content: flex-end; gap: 8px; margin: 18px 0 0; padding-top: 16px; border-top: 1px solid var(--line-row); }
+@media (max-width: 560px) {
+  .dauth-card { margin: 12px auto; padding: 20px 16px 16px; }
+  .dauth-card h2.dauth-title { font-size: 19px; }
+  .dauth-foot .btn { flex: 1; }
+}
+
 /* 커스텀 훅 · AI 도구(런타임 권한) */
 .admin-subhead { font-size: 15px; font-weight: 800; color: var(--ink); margin: 18px 0 6px; }
 /* 카드 첫 요소면 상단 여백은 카드 패딩이 맡는다 — 헤더(h2) 카드와 서브카드(h3) 상단 여백을 통일(#762). */

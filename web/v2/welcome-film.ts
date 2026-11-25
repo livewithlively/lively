@@ -1,12 +1,15 @@
 // v2/welcome-film.ts — 영상 재생기(#5550, 원준 2026-11-16 «리니어는 온보딩하면 맨 처음에 온보딩 영상 띄워 주잖아, 그거 비슷한 거»).
 //
-//  영상은 둘이다(원준 2026-11-19 «앞으로 사용 가이드 같은 거 영상으로 하는 거 좋은 것 같아»).
-//   · 온보딩 영상(기초) WELCOME_FILM — 처음 설정의 첫 장면(인사)이 이 영상으로 열린다. 맞이 인사 → 사이드바(워크스페이스 · 고정 앱 둘 ·
-//     최근 연 앱 · 앱 · 내 프로필) → 홈(프로젝트 · 선행 · 시키기) → 세션 → 곁칸(프로젝트 태스크 · 자료 · 웹) → 앱 찾기. 1분 50초 남짓.
+//  영상은 셋이다(원준 2026-11-19 «앞으로 사용 가이드 같은 거 영상으로 하는 거 좋은 것 같아» · 상민 2026-11-24 둘러보기 영상 추가).
+//   · 라이블리 둘러보기 INTRO_FILM — 개념(AI 세션 · 프로젝트 · 자료 · 지식)과 누구에게 보이는지. CLI 설치 끝 상자의 링크가 연다. 2분 30초 남짓.
+//   · 온보딩 영상(기초) WELCOME_FILM — 처음 설정을 지나 평소 화면(셸)에 온 사람에게 창으로 한 번 뜬다(#5598, 상민 2026-11-24 —
+//     종전엔 처음 설정의 인사 장면에 있었다. 화면 둘러보기는 그 화면이 뒤에 보일 때 봐야 «저게 저기구나» 가 된다. 인사 장면에는
+//     안내 카드 5장이 선다 — share-guide.ts). 맞이 인사 → 사이드바(워크스페이스 · 고정 앱 둘 ·
+//     최근 연 앱 · 앱 · 내 프로필) → 홈(프로젝트 · 선행 · 시키기) → 세션 → 곁칸(프로젝트 태스크 · 자료 · 웹) → 앱 찾기. 1분 40초 남짓(1.15배로 굽는다).
 //   · 사용 가이드(라이블리 동작원리) GUIDE_FILM — 모으기 · 정리하기 · 건네기 · 다시 쌓기를 원리 그림과 실제 화면(수집기 · 증류기 ·
 //     실시간 현황 · WIKI · AI 주입기 · 세션 터미널)으로 보여 준다. 3분 40초 남짓.
-//  ★ 홍보 장면 없이 **제품 화면 그대로**, 밝은 바탕(원준 2026-11-17). 끝까지 봐야 넘어가는 것이 아니다 — 인사 장면의 [계속하기]는
-//  처음부터 눌린다. 둘 다 [사용 가이드] 첫 화면에서 다시 본다(openWelcomeFilm(film)).
+//  ★ 홍보 장면 없이 **제품 화면 그대로**, 밝은 바탕(원준 2026-11-17). 끝까지 봐야 하는 것이 아니다 — 창은 언제든 닫힌다.
+//  둘 다 [사용 가이드] 첫 화면에서 다시 본다(openWelcomeFilm(film)).
 //
 //  · 영상 파일은 정적 자산이다(public/media/welcome-film.mp4 · welcome-guide.mp4 와 각 포스터 *-poster.jpg).
 //  · 소리: 영상마다 sound 로 정한다. 내레이션이 있는 영상은 **음소거로 시작한다** — 브라우저의 자동 재생 정책(소리 없는 영상만
@@ -17,7 +20,7 @@
 //    제품의 스타일시트 · 아이콘 표 · 서비스 로고 표를 그대로 읽어 그리므로, 화면이 바뀌면 원본의 장면을 고쳐 다시 굽는다.
 //  · 조작은 우리가 그린다(브라우저 기본 조작줄은 테마 · 글꼴이 달라 화면에서 뜬다): 누르면 멈춤/재생 · 진행 줄 · 다시 보기 · 전체 화면.
 //    «움직임 줄이기» 를 켠 사람에게는 스스로 틀지 않는다(포스터와 재생 단추만 선다).
-//  · 못 읽으면(옛 서버 · 끊긴 망) onError 로 알린다 — 인사 장면은 종전의 그림으로 되돌아간다. 영상 때문에 처음 설정이 막히면 안 된다.
+//  · 못 읽으면(옛 서버 · 끊긴 망) onError 로 알린다 — 창은 «불러오지 못했어요» 한 줄을 세운다.
 //  ⚠ 셸(apps · rail · shell-prefs)을 물지 않는다 — 사용 가이드(클래식 번들)도 이 모듈을 부른다. 무는 것은 잎 모듈(lib/dom)뿐이다.
 import { el, reducedMotion, sv } from '../lib/dom.js';
 
@@ -36,7 +39,7 @@ export const WELCOME_FILM: FilmSpec = {
   src: 'media/welcome-film.mp4',
   poster: 'media/welcome-film-poster.jpg',
   label: '온보딩 영상(기초)',
-  blurb: '사이드바와 홈, 세션, 우측 사이드바를 2분 남짓 영상으로 둘러봅니다. 소리는 없습니다.',
+  blurb: '사이드바와 홈, 세션, 우측 사이드바를 1분 40초 남짓 영상으로 둘러봅니다. 소리는 없습니다.',
   sound: false,
 };
 export const GUIDE_FILM: FilmSpec = {
@@ -46,8 +49,25 @@ export const GUIDE_FILM: FilmSpec = {
   blurb: '자료를 모아 지식으로 정리하고 AI에게 건네는 원리를, 실제 화면에서 어디서 보이는지와 함께 4분 남짓 영상으로 설명합니다. 소리는 없습니다.',
   sound: false,
 };
-/** 사용 가이드 첫 화면에 늘어놓는 순서. */
-export const FILMS: readonly FilmSpec[] = [WELCOME_FILM, GUIDE_FILM];
+/** 라이블리 둘러보기(#5598) — AI 세션 · 프로젝트 · 자료 · 지식이 무엇이고 어떻게 이어지며 누구에게 보이는지. 안내 카드 5장과 같은 이야기의 영상판.
+ *  CLI 설치 끝 상자의 «안내 영상 보기» 링크(#/film/intro)가 이 영상을 연다. 원본은 scripts/welcome-film/intro.* (`render.mjs --page intro`). */
+export const INTRO_FILM: FilmSpec = {
+  src: 'media/welcome-intro.mp4',
+  poster: 'media/welcome-intro-poster.jpg',
+  label: '라이블리 둘러보기',
+  blurb: 'AI 세션 · 프로젝트 · 자료 · 지식이 어떻게 이어지고 누구에게 보이는지를 2분 30초 남짓 영상으로 설명합니다. 소리는 없습니다.',
+  sound: false,
+};
+/** 사용 가이드 첫 화면에 늘어놓는 순서 — 개념 → 화면 → 원리. */
+export const FILMS: readonly FilmSpec[] = [INTRO_FILM, WELCOME_FILM, GUIDE_FILM];
+
+/** 영상 창을 여는 주소 — `#/film/intro` · `#/film/tour` · `#/film/guide`. 화면(탭)이 아니라 창이다(셸이 창을 열고 주소를 되돌린다). */
+const FILM_KEYS: Record<string, FilmSpec> = { intro: INTRO_FILM, tour: WELCOME_FILM, guide: GUIDE_FILM };
+/** (순수) 주소가 가리키는 영상. 영상 주소가 아니거나 모르는 이름이면 null. */
+export function filmOfRoute(hash: string): FilmSpec | null {
+  const m = /^#\/film\/([a-z]+)(?:[/?]|$)/.exec(hash || '');
+  return (m && Object.prototype.hasOwnProperty.call(FILM_KEYS, m[1]!) && FILM_KEYS[m[1]!]) || null;
+}
 
 const ICON = {
   play: 'M8 5.5v13l11-6.5z',
@@ -202,16 +222,19 @@ export function mountWelcomeFilm(opts: WelcomeFilmOpts = {}): WelcomeFilm {
   };
 }
 
-/** 영상을 창으로 띄워 다시 본다([사용 가이드] 첫 화면). Esc · 바깥 누르기 · [닫기]로 닫는다. 창은 한 번에 하나다. */
-export function openWelcomeFilm(film: FilmSpec = WELCOME_FILM): void {
+/** 영상을 창으로 띄운다 — [사용 가이드] 첫 화면의 다시 보기, 그리고 처음 설정을 지나 셸에 온 사람에게 한 번(share-guide.ts).
+ *  Esc · 바깥 누르기 · [닫기]로 닫는다. 창은 한 번에 하나다. head 를 주면 영상 위에 머리말(제목 · 한 줄)이 서고,
+ *  뒤의 화면이 비쳐 보이게 바탕을 옅게 깐다(처음 뜨는 창 — 워크스페이스 위에 떴다는 것이 보여야 한다). */
+export function openWelcomeFilm(film: FilmSpec = WELCOME_FILM, head?: { title: string; note?: string }): void {
   if (document.querySelector('.wf-modal')) return;
   const back = document.activeElement as HTMLElement | null;
   const close = el('button', { class: 'wf-close', type: 'button', 'aria-label': '닫기' },
     sv('svg', { class: 'wf-ic', viewBox: '0 0 24 24', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12 M18 6 6 18' }))) as HTMLButtonElement;
   const note = el('p', { class: 'wf-note', hidden: true, text: '영상을 불러오지 못했어요. 잠시 뒤에 다시 열어 주세요.' }) as HTMLElement;
   const player = mountWelcomeFilm({ film, autoplay: true, onError: () => { player.root.hidden = true; note.hidden = false; } });
-  const box = el('div', { class: 'wf-modal-box' }, player.root, note, close) as HTMLElement;
-  const modal = el('div', { class: 'wf-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': film.label }, box) as HTMLElement;
+  const headEl = head ? el('div', { class: 'wf-head' }, el('b', { text: head.title }), ...(head.note ? [el('span', { text: head.note })] : [])) as HTMLElement : null;
+  const box = el('div', { class: 'wf-modal-box' }, ...(headEl ? [headEl] : []), player.root, note, close) as HTMLElement;
+  const modal = el('div', { class: 'wf-modal' + (head ? ' wf-first' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': head ? head.title : film.label }, box) as HTMLElement;
   const shut = (): void => {
     player.destroy();
     modal.remove();

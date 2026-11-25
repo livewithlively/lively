@@ -47,13 +47,14 @@ t("[3] ★ 번역기 없는 하네스는 chat 모드가 **안 열린다** — �
   }
 });
 
-//  #4927 — 여섯 번째(cursor)는 대화 기록만 읽고(harness-io/cursor.ts) 런타임은 열지 않는다. 표엔 있되 모든 축이 null 이어야
-//   «말은 거는데 아무도 안 받는» 세션이 안 생긴다.
-t("[3b] cursor — 표에 있지만 런타임은 안 열린다(전송·argv·번역 null, 이유를 note 에)", () => {
+// Cursor ACP 는 전용 핸드셰이크 뒤에만 말할 수 있다.
+t("[3b] cursor — ACP 전송과 전용 기동 경로가 함께 있어야 열린다", () => {
   const c = chatAdapter("cursor")!;
-  assert.deepEqual([c.transport, c.argv, c.translate, c.encode], [null, null, null, null]);
-  assert.equal(canOpenChatRuntime("cursor"), false);
-  assert.equal(harnessSupportsChat("cursor"), false);
+  assert.equal(c.transport, "jsonrpc-stdio");
+  assert.equal(c.runsVia, "cursor-acp");
+  assert.ok(c.translate && c.respond && c.interrupt);
+  assert.equal(canOpenChatRuntime("cursor"), true);
+  assert.equal(harnessSupportsChat("cursor"), true);
 });
 
 t("[4] ★ 모드 판정이 이 표에서 **파생**된다 — 두 곳에 적으면 반드시 갈린다", () => {
@@ -63,9 +64,9 @@ t("[4] ★ 모드 판정이 이 표에서 **파생**된다 — 두 곳에 적으
   assert.equal(harnessSupportsChat("모르는하네스"), false, "모르는 key 는 claude 로 추측하지 않는다");
 });
 
-t("[5] ★ 5하네스 **전부** 열린다 — 각자 기동 경로가 다르다(표가 그 차이를 흡수한다)", () => {
+t("[5] ★ 6하네스 **전부** 열린다 — 각자 기동 경로가 다르다(표가 그 차이를 흡수한다)", () => {
   const open = CHAT_ADAPTERS.filter((a) => canOpenChatRuntime(a.key)).map((a) => a.key);
-  assert.deepEqual(open, ["claude", "codex", "grok", "antigravity", "opencode"], "★ 5하네스 전부 열렸다");
+  assert.deepEqual(open, ["claude", "codex", "grok", "antigravity", "opencode", "cursor"], "★ 6하네스 전부 열렸다");
   //  ⚠ 이 단언은 **진도를 재는 자리**다. codex·grok·opencode 가 열리면 여기서 빨간불이 나고,
   //   그때 이 목록을 늘리면서 «무엇이 실측됐나» 를 함께 갱신하게 된다.
   assert.equal(chatAdapter("codex")!.runsVia, "codex-chat-runtime", "codex 기동은 전용 런타임이 쥔다");

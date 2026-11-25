@@ -102,7 +102,7 @@ export function runConfig(cur: Partial<RunConfigValue> | null, style: string): R
       const cfg = await api('/api/ui/terminal/config');
       //  shell(=AI 없음)은 무인 배치를 돌릴 수 없으니 뺀다. 위탁 규약을 아는 하네스만 남긴다
       //  (서버 HEADLESS 표와 같은 넷 — 여기 목록이 더 넓으면 고른 즉시 접수가 거부된다).
-      const HEADLESS_OK = ['claude', 'codex', 'antigravity', 'grok'];
+      const HEADLESS_OK = ['claude', 'codex', 'antigravity', 'grok', 'cursor'];
       cat = ((cfg && cfg.harnesses) || []).filter((h: any) => h && HEADLESS_OK.includes(h.key));
       if (cat.length) fillHarness();
     } catch { /* graceful — 제공자 «자동» 만으로도 폼은 성립한다 */ }

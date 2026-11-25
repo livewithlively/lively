@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>라이블리 둘러보기 영상 — 원본</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="share.css">
+<link rel="stylesheet" href="intro.css">
+</head>
+<body>
+<!-- 아이콘은 제품과 같은 한 벌(lively web/lib/icon-paths.ts): 세션=말풍선 chat · 프로젝트=과녁 proj · 자료=폴더 src · 지식=책 wiki -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="chat" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/></symbol>
+  <symbol id="proj" viewBox="0 0 24 24"><path d="M11 4.5a8.5 8.5 0 1 0 8.5 8.5 M11 9.3a3.7 3.7 0 1 0 3.7 3.7 M11 12.3a.7.7 0 1 0 0 1.4a.7.7 0 1 0 0-1.4z M12.3 11.7 21 3 M16.5 5v2.5H19 M19 2.5V5h2.5"/></symbol>
+  <symbol id="src" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="wiki" viewBox="0 0 24 24"><path d="M12 7 4 5v13l8 2 8-2V5z M12 7v13"/></symbol>
+  <symbol id="upload" viewBox="0 0 24 24"><path d="M12 15V3 M7 8l5-5 5 5 M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+  <symbol id="spark" viewBox="0 0 24 24"><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z M18.5 16v4 M16.5 18h4"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6z M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11"/></symbol>
+  <symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.4 3.6 5.2 3.6 8.5s-1.2 6.1-3.6 8.5c-2.4-2.4-3.6-5.2-3.6-8.5S9.6 5.9 12 3.5z"/></symbol>
+  <symbol id="task" viewBox="0 0 24 24"><path d="M3.5 7 5 8.5 8 5.5 M11 7h9 M3.5 16 5 17.5 8 14.5 M11 16h9"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <!-- 파일 그림 — 접힌 귀 · 색 띠 · 확장자 -->
+  <symbol id="f-pdf" viewBox="0 0 48 58"><path d="M7.5 1.5h23.5l13 13V54a2.5 2.5 0 0 1-2.5 2.5h-34A2.5 2.5 0 0 1 5 54V4A2.5 2.5 0 0 1 7.5 1.5z" fill="#fff" stroke="#D3DAE6" stroke-width="2"/><path d="M31 1.5V12a2.5 2.5 0 0 0 2.5 2.5H44" fill="#EEF1F6" stroke="#D3DAE6" stroke-width="2"/><rect x="0" y="28" width="34" height="16" rx="3.5" fill="#E5484D"/><text x="17" y="40" text-anchor="middle" font-family="Pretendard, sans-serif" font-size="10.5" font-weight="800" fill="#fff">PDF</text><path d="M12 50.5h22" stroke="#E3E8F0" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="f-xls" viewBox="0 0 48 58"><path d="M7.5 1.5h23.5l13 13V54a2.5 2.5 0 0 1-2.5 2.5h-34A2.5 2.5 0 0 1 5 54V4A2.5 2.5 0 0 1 7.5 1.5z" fill="#fff" stroke="#D3DAE6" stroke-width="2"/><path d="M31 1.5V12a2.5 2.5 0 0 0 2.5 2.5H44" fill="#EEF1F6" stroke="#D3DAE6" stroke-width="2"/><rect x="0" y="28" width="38" height="16" rx="3.5" fill="#1D9F5B"/><text x="19" y="40" text-anchor="middle" font-family="Pretendard, sans-serif" font-size="10.5" font-weight="800" fill="#fff">XLSX</text><path d="M12 50.5h22" stroke="#E3E8F0" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="f-md" viewBox="0 0 48 58"><path d="M7.5 1.5h23.5l13 13V54a2.5 2.5 0 0 1-2.5 2.5h-34A2.5 2.5 0 0 1 5 54V4A2.5 2.5 0 0 1 7.5 1.5z" fill="#fff" stroke="#D3DAE6" stroke-width="2"/><path d="M31 1.5V12a2.5 2.5 0 0 0 2.5 2.5H44" fill="#EEF1F6" stroke="#D3DAE6" stroke-width="2"/><rect x="0" y="28" width="30" height="16" rx="3.5" fill="#4558FF"/><text x="15" y="40" text-anchor="middle" font-family="Pretendard, sans-serif" font-size="10.5" font-weight="800" fill="#fff">MD</text><path d="M12 50.5h22" stroke="#E3E8F0" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="lg-slack" viewBox="0 0 256 256"><path d="M53.841 161.32c0 14.832-11.987 26.82-26.819 26.82S.203 176.152.203 161.32c0-14.831 11.987-26.818 26.82-26.818H53.84zm13.41 0c0-14.831 11.987-26.818 26.819-26.818s26.819 11.987 26.819 26.819v67.047c0 14.832-11.987 26.82-26.82 26.82c-14.83 0-26.818-11.988-26.818-26.82z" fill="#e01e5a"/><path d="M94.07 53.638c-14.832 0-26.82-11.987-26.82-26.819S79.239 0 94.07 0s26.819 11.987 26.819 26.819v26.82zm0 13.613c14.832 0 26.819 11.987 26.819 26.819s-11.987 26.819-26.82 26.819H26.82C11.987 120.889 0 108.902 0 94.069c0-14.83 11.987-26.818 26.819-26.818z" fill="#36c5f0"/><path d="M201.55 94.07c0-14.832 11.987-26.82 26.818-26.82s26.82 11.988 26.82 26.82s-11.988 26.819-26.82 26.819H201.55zm-13.41 0c0 14.832-11.988 26.819-26.82 26.819c-14.831 0-26.818-11.987-26.818-26.82V26.82C134.502 11.987 146.489 0 161.32 0s26.819 11.987 26.819 26.819z" fill="#2eb67d"/><path d="M161.32 201.55c14.832 0 26.82 11.987 26.82 26.818s-11.988 26.82-26.82 26.82c-14.831 0-26.818-11.988-26.818-26.82V201.55zm0-13.41c-14.831 0-26.818-11.988-26.818-26.82c0-14.831 11.987-26.818 26.819-26.818h67.25c14.832 0 26.82 11.987 26.82 26.819s-11.988 26.819-26.82 26.819z" fill="#ecb22e"/></symbol>
+  <symbol id="lg-notion" viewBox="0 0 256 268"><path d="M16.092 11.538L164.09.608c18.179-1.56 22.85-.508 34.28 7.801l47.243 33.282C253.406 47.414 256 48.975 256 55.207v182.527c0 11.439-4.155 18.205-18.696 19.24L65.44 267.378c-10.913.517-16.11-1.043-21.825-8.327L8.826 213.814C2.586 205.487 0 199.254 0 191.97V29.726c0-9.352 4.155-17.153 16.092-18.188" fill="#fff"/><path d="M164.09.608L16.092 11.538C4.155 12.573 0 20.374 0 29.726v162.245c0 7.284 2.585 13.516 8.826 21.843l34.789 45.237c5.715 7.284 10.912 8.844 21.825 8.327l171.864-10.404c14.532-1.035 18.696-7.801 18.696-19.24V55.207c0-5.911-2.336-7.614-9.21-12.66l-1.185-.856L198.37 8.409C186.94.1 182.27-.952 164.09.608M69.327 52.22c-14.033.945-17.216 1.159-25.186-5.323L23.876 30.778c-2.06-2.086-1.026-4.69 4.163-5.207l142.274-10.395c11.947-1.043 18.17 3.12 22.842 6.758l24.401 17.68c1.043.525 3.638 3.637.517 3.637L71.146 52.095zm-16.36 183.954V81.222c0-6.767 2.077-9.887 8.3-10.413L230.02 60.93c5.724-.517 8.31 3.12 8.31 9.879v153.917c0 6.767-1.044 12.49-10.387 13.008l-161.487 9.361c-9.343.517-13.489-2.594-13.489-10.921M212.377 89.53c1.034 4.681 0 9.362-4.681 9.897l-7.783 1.542v114.404c-6.758 3.637-12.981 5.715-18.18 5.715c-8.308 0-10.386-2.604-16.609-10.396l-50.898-80.079v77.476l16.1 3.646s0 9.362-12.989 9.362l-35.814 2.077c-1.043-2.086 0-7.284 3.63-8.318l9.351-2.595V109.823l-12.98-1.052c-1.044-4.68 1.55-11.439 8.826-11.965l38.426-2.585l52.958 81.113v-71.76l-13.498-1.552c-1.043-5.733 3.111-9.896 8.3-10.404z" fill="#000"/></symbol>
+  <symbol id="lg-google-drive" viewBox="0 0 256 229"><path d="m19.354 196.034l11.29 19.5c2.346 4.106 5.718 7.332 9.677 9.678q17.009-21.591 23.68-33.137q6.77-11.717 16.641-36.655q-26.604-3.502-40.32-3.502q-13.165 0-40.322 3.502c0 4.545 1.173 9.09 3.519 13.196z" fill="#0066da"/><path d="M215.681 225.212c3.96-2.346 7.332-5.572 9.677-9.677l4.692-8.064l22.434-38.855a26.57 26.57 0 0 0 3.518-13.196q-27.315-3.502-40.247-3.502q-13.899 0-40.248 3.502q9.754 25.075 16.422 36.655q6.724 11.683 23.752 33.137" fill="#ea4335"/><path d="M128.001 73.311q19.68-23.768 27.125-36.655q5.996-10.377 13.196-33.137C164.363 1.173 159.818 0 155.126 0h-54.25C96.184 0 91.64 1.32 87.68 3.519q9.16 26.103 15.544 37.154q7.056 12.213 24.777 32.638" fill="#00832d"/><path d="M175.36 155.42H80.642l-40.32 69.792c3.958 2.346 8.503 3.519 13.195 3.519h148.968c4.692 0 9.238-1.32 13.196-3.52z" fill="#2684fc"/><path d="M128.001 73.311L87.681 3.52c-3.96 2.346-7.332 5.571-9.678 9.677L3.519 142.224A26.57 26.57 0 0 0 0 155.42h80.642z" fill="#00ac47"/><path d="m215.242 77.71l-37.243-64.514c-2.345-4.106-5.718-7.331-9.677-9.677l-40.32 69.792l47.358 82.109h80.496c0-4.546-1.173-9.09-3.519-13.196z" fill="#ffba00"/></symbol>
+</svg>
+<div id="fit">
+<div id="stage">
+  <div id="bg"></div>
+
+  <!-- 0. 여는 장 -->
+  <section class="sc" id="sc0"><div class="center">
+    <span class="dot" id="o-dot"></span>
+    <h1 class="h-open" id="o-t">라이블리 둘러보기</h1>
+    <p class="s-open" id="o-s">라이블리는 우리 회사 자료를 아는 AI와 함께 일하는 곳이에요.</p>
+    <p class="s-open2" id="o-s2">어떻게 돌아가는지, 그리고 누구에게 보이는지 짧게 보여 드릴게요.</p>
+  </div></section>
+
+  <!-- F. 이렇게 돌아가요 — 큰 카드 넷이 하나씩 켜진다(같은 예시로 이어진다) -->
+  <section class="sc" id="scF">
+    <h2 class="h-flow" id="f-h">라이블리는 이렇게 돌아가요</h2>
+    <div class="mid" style="top:250px"><div class="flow2">
+      <div class="gcard st2 s" id="f-1"><span class="bic"><svg class="i"><use href="#chat"/></svg></span><b>AI 세션</b><span class="d">AI에게 일을 시켜요</span>
+        <div class="ex"><span class="bub">법인카드 한도 정리해 줘</span></div></div>
+      <svg class="arr2" id="f-a1" viewBox="0 0 40 24"><path d="M2 12h34M28 4l8 8-8 8"/></svg>
+      <div class="gcard st2 p" id="f-2"><span class="bic"><svg class="i"><use href="#proj"/></svg></span><b>프로젝트</b><span class="d">알아서 생기고 모여요</span>
+        <div class="ex"><span class="xchip"><svg class="i tp"><use href="#proj"/></svg>법인카드 한도 정리<span class="ab" id="f-ab"><svg class="i"><use href="#spark"/></svg>자동</span></span></div></div>
+      <svg class="arr2" id="f-a2" viewBox="0 0 40 24"><path d="M2 12h34M28 4l8 8-8 8"/></svg>
+      <div class="gcard st2 r" id="f-3"><span class="bic"><svg class="i"><use href="#src"/></svg></span><b>자료</b><span class="d">회사 자료를 찾아 읽어요</span>
+        <div class="ex lgs"><svg class="lg sm"><use href="#lg-slack"/></svg><svg class="lg sm"><use href="#lg-notion"/></svg><svg class="lg sm"><use href="#lg-google-drive"/></svg><svg class="fg"><use href="#f-pdf"/></svg><svg class="fg"><use href="#f-xls"/></svg></div></div>
+      <svg class="arr2" id="f-a3" viewBox="0 0 40 24"><path d="M2 12h34M28 4l8 8-8 8"/></svg>
+      <div class="gcard st2 k" id="f-4"><span class="bic"><svg class="i"><use href="#wiki"/></svg></span><b>지식</b><span class="d">알게 된 걸 정리해 둬요</span>
+        <div class="ex"><span class="xchip"><svg class="i tk"><use href="#wiki"/></svg>법인카드 월 한도</span></div></div>
+    </div></div>
+    <svg class="lines fl" viewBox="0 0 1920 1080" aria-hidden="true">
+      <path class="loop" id="f-loop" pathLength="1" d="M1653 676 C1653 880 267 880 267 676"/>
+      <path class="loophd" id="f-head" d="M247 700 L267 676 L287 700"/>
+    </svg>
+    <div class="mid" style="top:800px"><span class="loopnote" id="f-ln">다음 일에 다시 써요</span></div>
+  </section>
+
+  <!-- 차례 띠 — ①~④ 동안 -->
+  <div id="toc">
+    <span class="tc" id="toc1"><svg class="i"><use href="#chat"/></svg>AI 세션<span class="on s"><svg class="i"><use href="#chat"/></svg>AI 세션</span></span>
+    <span class="tc" id="toc2"><svg class="i"><use href="#proj"/></svg>프로젝트<span class="on p"><svg class="i"><use href="#proj"/></svg>프로젝트</span></span>
+    <span class="tc" id="toc3"><svg class="i"><use href="#src"/></svg>자료<span class="on r"><svg class="i"><use href="#src"/></svg>자료</span></span>
+    <span class="tc" id="toc4"><svg class="i"><use href="#wiki"/></svg>지식<span class="on k"><svg class="i"><use href="#wiki"/></svg>지식</span></span>
+  </div>
+
+  <!-- 1. AI 세션 = 대화창 하나 -->
+  <section class="sc" id="sc1">
+    <div class="mid" style="top:200px"><div class="app gcard" id="s1-app">
+      <div class="side">
+        <div class="side-h">AI 세션</div>
+        <div class="si on" id="s1-si1"><svg class="i"><use href="#chat"/></svg>법인카드 한도 정리</div>
+        <div class="si" id="s1-si2"><svg class="i"><use href="#chat"/></svg>채용 공고 초안</div>
+        <div class="si" id="s1-si3"><svg class="i"><use href="#chat"/></svg>주간 보고 정리</div>
+      </div>
+      <div class="chat">
+        <div class="chat-h"><svg class="i"><use href="#chat"/></svg>법인카드 한도 정리</div>
+        <div class="chat-b">
+          <div class="msg me" id="s1-m1">법인카드 한도 정리해 줘</div>
+          <div class="msg ai" id="s1-m2">직급별로 3단계예요. 넘으면 팀장 승인이 필요해요.</div>
+          <div class="msg me" id="s1-m3">표로 만들어 줘</div>
+          <div class="msg ai" id="s1-m4">한도표.xlsx 로 만들었어요.</div>
+        </div>
+        <div class="frame" id="s1-frame"><span class="fnote">이 대화창 하나 = AI 세션 하나</span></div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- 2. 프로젝트 — 일마다 따로 · 한 프로젝트 화면 안 -->
+  <section class="sc" id="sc2">
+    <!-- 알아서 생긴다 — 일을 시키면 세션 둘레에 프로젝트가 저절로 생기고, 그 일의 세션 · 파일이 들어온다 -->
+    <div id="s2-bn">
+      <div class="box bx-p" id="bn-box" style="left:400px;top:276px;width:1120px;height:372px"></div>
+      <div class="bhd" id="bn-h" style="left:440px;top:306px"><span class="ico p"><svg class="i"><use href="#proj"/></svg></span><div><small class="tp">프로젝트</small><b>법인카드 한도 정리</b></div></div>
+      <span class="auto" id="bn-auto" style="left:1192px;top:322px"><svg class="i"><use href="#spark"/></svg>알아서 생겼어요</span>
+      <div class="gcard scard" id="bn-s" style="left:440px;top:436px;width:580px">
+        <div class="sc-h"><svg class="i ts"><use href="#chat"/></svg>AI 세션</div>
+        <div class="sc-b"><div class="msg me">법인카드 한도 정리해 줘</div></div>
+      </div>
+      <div class="row" id="bn-r1" style="left:1060px;top:444px;width:420px"><svg class="i ts"><use href="#chat"/></svg>예외 승인 절차</div>
+      <div class="row f" id="bn-r2" style="left:1060px;top:530px;width:420px"><svg class="fg sm"><use href="#f-xls"/></svg>한도표.xlsx</div>
+    </div>
+
+    <div class="mid" style="top:300px"><div class="pcards">
+      <div class="gcard pcard" id="s2-c1"><div class="pc-h"><span class="ico p sm"><svg class="i"><use href="#proj"/></svg></span><b>법인카드 한도 정리</b></div>
+        <div class="pc-b"><span><svg class="i ts"><use href="#chat"/></svg>AI 세션 2</span><span><svg class="i tr"><use href="#src"/></svg>파일 2</span><span><svg class="i tm"><use href="#task"/></svg>할 일 3</span></div></div>
+      <div class="gcard pcard" id="s2-c2"><div class="pc-h"><span class="ico p sm"><svg class="i"><use href="#proj"/></svg></span><b>채용 공고 쓰기</b></div>
+        <div class="pc-b"><span><svg class="i ts"><use href="#chat"/></svg>AI 세션 1</span><span><svg class="i tr"><use href="#src"/></svg>파일 3</span><span><svg class="i tm"><use href="#task"/></svg>할 일 2</span></div></div>
+      <div class="gcard pcard" id="s2-c3"><div class="pc-h"><span class="ico p sm"><svg class="i"><use href="#proj"/></svg></span><b>주간 보고 정리</b></div>
+        <div class="pc-b"><span><svg class="i ts"><use href="#chat"/></svg>AI 세션 4</span><span><svg class="i tr"><use href="#src"/></svg>파일 1</span><span><svg class="i tm"><use href="#task"/></svg>할 일 5</span></div></div>
+    </div></div>
+
+    <div class="mid" style="top:196px"><div class="gcard ppage" id="s2-page">
+      <div class="pp-h"><span class="ico p"><svg class="i"><use href="#proj"/></svg></span><div><small class="tp">프로젝트</small><b>법인카드 한도 정리</b></div></div>
+      <div class="pp-b">
+        <div class="pp-c"><h4><svg class="i tm"><use href="#task"/></svg>할 일</h4>
+          <div class="row2 done"><span class="cb"><svg class="i"><use href="#check"/></svg></span>규정 문서 찾기</div>
+          <div class="row2 done"><span class="cb"><svg class="i"><use href="#check"/></svg></span>한도표 만들기</div>
+          <div class="row2"><span class="cb"></span>팀에 공지하기</div></div>
+        <div class="pp-c"><h4><svg class="i ts"><use href="#chat"/></svg>AI 세션</h4>
+          <div class="row2"><svg class="i ts"><use href="#chat"/></svg>한도 정리</div>
+          <div class="row2"><svg class="i ts"><use href="#chat"/></svg>예외 승인 절차</div></div>
+        <div class="pp-c"><h4><svg class="i tr"><use href="#src"/></svg>파일</h4>
+          <div class="row2"><svg class="fg"><use href="#f-pdf"/></svg>경비 규정.pdf</div>
+          <div class="row2"><svg class="fg"><use href="#f-xls"/></svg>한도표.xlsx</div></div>
+      </div>
+    </div></div>
+
+    <!-- 함께 일하기 — 프로젝트에 초대 → 각자 연 세션이 프로젝트를 거쳐 서로 한 일을 이어받는다 · 대화 안은 따로 -->
+    <div id="s2-co">
+      <div class="box bx-p" id="co-pbg" style="left:500px;top:180px;width:920px;height:310px"></div>
+      <div class="bhd" id="co-ph" style="left:532px;top:204px"><span class="ico p"><svg class="i"><use href="#proj"/></svg></span><div><small class="tp">프로젝트</small><b>법인카드 한도 정리</b></div></div>
+      <div class="ppl" id="co-mem" style="left:1260px;top:208px"><span class="av a1">나</span><span class="av a2" id="co-min">민</span></div>
+      <span class="inv" id="co-inv" style="left:1086px;top:214px">+ 민지 초대</span>
+      <div class="row" id="co-t1" style="left:532px;top:318px;width:856px"><span class="cb on"><svg class="i"><use href="#check"/></svg></span>한도표 만들기<span class="by s">나의 AI가 끝냄</span></div>
+      <div class="row" id="co-t2" style="left:532px;top:400px;width:856px"><span class="cb" id="co-cb2"></span>팀에 공지하기<span class="by m">민지의 AI가 하는 중</span></div>
+
+      <svg class="lines co" viewBox="0 0 1920 1080" aria-hidden="true">
+        <path id="co-l1" d="M450 632 C450 560 700 560 720 494"/>
+        <path id="co-l2" d="M1200 494 C1220 560 1470 560 1470 632"/>
+        <circle id="co-d1" r="11" cx="450" cy="632"/>
+        <circle id="co-d2" r="11" cx="1200" cy="494"/>
+      </svg>
+
+      <div class="gcard scard" id="co-a" style="left:150px;top:636px;width:600px">
+        <div class="sc-h"><svg class="i ts"><use href="#chat"/></svg>나의 AI 세션<span class="avs"><span class="av a1 sm">나</span><span class="av a2 sm" id="co-ainv">민</span></span></div>
+        <div class="sc-b"><div class="msg ai">한도표.xlsx 만들었어요.</div></div>
+      </div>
+      <span class="inv s" id="co-sinv" style="left:500px;top:588px">+ 이 세션에 초대</span>
+      <div class="gcard scard" id="co-b" style="left:1170px;top:636px;width:600px">
+        <div class="sc-h"><svg class="i ts"><use href="#chat"/></svg>민지의 AI 세션<span class="avs"><span class="av a2 sm">민</span></span></div>
+        <div class="sc-b"><div class="msg ai" id="co-bm">한도표 보고 공지 초안 쓸게요.</div></div>
+      </div>
+      <div class="wall" id="co-wall" style="left:958px;top:636px;height:220px"></div>
+      <span class="bd priv" id="co-lock" style="position:absolute;left:812px;top:722px"><svg class="i"><use href="#lock"/></svg>대화 안은 서로 못 봐요</span>
+    </div>
+  </section>
+
+  <!-- 3. 자료 — 외부 앱 + 프로젝트의 파일이 한곳으로 -->
+  <section class="sc" id="sc3">
+    <span class="glbl big" id="s3-gl1" style="left:200px;top:178px">연결한 외부 앱</span>
+    <div class="gcard tile" id="s3-t1" style="left:200px;top:228px"><svg class="lg"><use href="#lg-slack"/></svg>슬랙</div>
+    <div class="gcard tile" id="s3-t2" style="left:420px;top:228px"><svg class="lg"><use href="#lg-notion"/></svg>노션</div>
+    <div class="gcard tile" id="s3-t3" style="left:640px;top:228px"><svg class="lg"><use href="#lg-google-drive"/></svg>드라이브</div>
+
+    <span class="glbl big" id="s3-gl2" style="left:1060px;top:178px">프로젝트에서</span>
+    <div class="gcard mproj" id="s3-p" style="left:1060px;top:228px;width:660px">
+      <div class="mp-h"><span class="ico p sm"><svg class="i"><use href="#proj"/></svg></span><b>법인카드 한도 정리</b></div>
+      <div class="mp-r"><svg class="fg"><use href="#f-pdf"/></svg>경비 규정.pdf<span class="who up"><svg class="i"><use href="#upload"/></svg>내가 올린 파일</span></div>
+      <div class="mp-r"><svg class="fg"><use href="#f-xls"/></svg>한도표.xlsx<span class="who ai"><svg class="i"><use href="#spark"/></svg>AI가 만든 파일</span></div>
+    </div>
+
+    <div class="box bx-r big" id="s3-box" style="left:200px;top:590px;width:1520px;height:280px"></div>
+    <div class="bhd" id="s3-bh" style="left:236px;top:616px"><span class="ico r"><svg class="i"><use href="#src"/></svg></span><div><small class="tr">자료</small><b>AI가 일할 때 여기서 찾아 읽어요</b></div></div>
+    <div class="chip" id="s3-c1" style="left:236px;top:752px"><svg class="lg xs"><use href="#lg-slack"/></svg>#재무팀 대화</div>
+    <div class="chip" id="s3-c2" style="left:528px;top:752px"><svg class="lg xs"><use href="#lg-notion"/></svg>경비 규정 v4</div>
+    <div class="chip" id="s3-c3" style="left:820px;top:752px"><svg class="lg xs"><use href="#lg-google-drive"/></svg>법인카드 신청서</div>
+    <div class="chip" id="s3-c4" style="left:1112px;top:752px"><svg class="fg sm"><use href="#f-pdf"/></svg>경비 규정.pdf</div>
+    <div class="chip" id="s3-c5" style="left:1404px;top:752px"><svg class="fg sm"><use href="#f-xls"/></svg>한도표.xlsx</div>
+  </section>
+
+  <!-- 4. 지식 — 자료 → AI가 정리 → 지식 문서 -->
+  <section class="sc" id="sc4">
+    <div class="mid" style="top:196px"><div class="row4">
+      <div class="col4"><span class="lbl tr" id="s4-l1"><svg class="i"><use href="#src"/></svg>자료</span>
+        <div class="gcard rawi" id="s4-r1"><svg class="lg sm"><use href="#lg-slack"/></svg><span>한도 넘으면 팀장님 승인 받아야 해요~</span></div>
+        <div class="gcard rawi" id="s4-r2"><svg class="lg sm"><use href="#lg-notion"/></svg><span>경비 규정 v4 · 3.2 법인카드 사용 한도</span></div>
+        <div class="gcard rawi" id="s4-r3"><svg class="fg sm"><use href="#f-xls"/></svg><span>한도표.xlsx</span></div></div>
+      <div class="col4" id="s4-arrow"><span class="lbl">AI가 정리</span><svg class="arrow" viewBox="0 0 40 24"><path d="M2 12h34M28 4l8 8-8 8"/></svg></div>
+      <div class="col4"><span class="lbl tk" id="s4-l2"><svg class="i"><use href="#wiki"/></svg>지식</span>
+        <div class="gcard kdoc" id="s4-k">
+          <div class="kd-h"><span class="kd-ic"><svg class="i"><use href="#wiki"/></svg></span><div><b>법인카드 월 한도</b><small>AI가 정리 · 11월 20일</small></div></div>
+          <div class="kd-b">
+            <p class="kd-sum">직급별로 3단계예요. 한도를 넘으면 <strong>팀장 승인</strong>을 받아요.</p>
+            <div class="kd-tbl"><span><i>사원</i><em>월 50만 원</em></span><span><i>팀장</i><em>월 100만 원</em></span><span><i>임원</i><em>월 300만 원</em></span></div>
+            <div class="kd-src" id="s4-src"><span class="kd-sl">출처</span><span class="tag"><svg class="lg xs"><use href="#lg-notion"/></svg>경비 규정 v4</span><span class="tag"><svg class="lg xs"><use href="#lg-slack"/></svg>#재무팀</span><span class="tag"><svg class="fg xs"><use href="#f-xls"/></svg>한도표.xlsx</span></div>
+          </div>
+        </div></div>
+    </div></div>
+  </section>
+
+  <!-- 마지막 — 누구에게 보일까요(번호 없음) -->
+  <section class="sc" id="sc5">
+    <h2 class="h-recap" id="s5-h">누구에게 보일까요?</h2>
+
+    <div id="s5-dia">
+      <div class="box bx-p" id="v-pbg" style="left:150px;top:250px;width:780px;height:480px"></div>
+      <div class="bhd" id="v-ph" style="left:180px;top:274px"><span class="ico p"><svg class="i"><use href="#proj"/></svg></span><div><small class="tp">프로젝트</small><b>법인카드 한도 정리</b></div></div>
+      <span class="bd priv" id="v-lock" style="position:absolute;left:740px;top:288px"><svg class="i"><use href="#lock"/></svg>비공개</span>
+      <div class="row" id="v-s1" style="left:180px;top:384px;width:720px"><svg class="i ts"><use href="#chat"/></svg>AI 세션 · 한도 정리</div>
+      <div class="row" id="v-s2" style="left:180px;top:460px;width:720px"><svg class="i ts"><use href="#chat"/></svg>AI 세션 · 예외 승인 절차</div>
+      <div class="row f" id="v-f1" style="left:180px;top:548px;width:720px"><svg class="fg"><use href="#f-pdf"/></svg>경비 규정.pdf<span class="who up"><svg class="i"><use href="#upload"/></svg>내가 올린 파일</span></div>
+      <div class="row f" id="v-f2" style="left:180px;top:636px;width:720px"><svg class="fg"><use href="#f-xls"/></svg>한도표.xlsx<span class="who ai"><svg class="i"><use href="#spark"/></svg>AI가 만든 파일</span></div>
+      <div class="ppl" id="v-in" style="left:150px;top:760px"><span class="av a1">나</span><span class="av a2">민</span><b>나와 내가 초대한 사람</b></div>
+      <div class="ppl no" id="v-out" style="left:600px;top:760px"><span class="av a3">준</span><span class="nolock"><svg class="i"><use href="#lock"/></svg></span><b>초대 안 한 팀원</b></div>
+
+      <div class="box bx-r" id="v-rbg" style="left:1060px;top:250px;width:700px;height:260px"></div>
+      <div class="bhd" id="v-rh" style="left:1090px;top:274px"><span class="ico r"><svg class="i"><use href="#src"/></svg></span><div><small class="tr">자료</small><b>모두의 자료</b></div></div>
+      <span class="bd pub" id="v-rg" style="position:absolute;left:1530px;top:288px"><svg class="i"><use href="#globe"/></svg>전체 공개</span>
+      <div class="chip" id="v-d1" style="left:1090px;top:400px"><svg class="fg sm"><use href="#f-pdf"/></svg>경비 규정.pdf</div>
+      <div class="chip" id="v-d2" style="left:1390px;top:400px"><svg class="fg sm"><use href="#f-xls"/></svg>한도표.xlsx</div>
+      <div class="box bx-k" id="v-kbg" style="left:1060px;top:536px;width:700px;height:194px"></div>
+      <div class="bhd" id="v-kh" style="left:1090px;top:560px"><span class="ico k"><svg class="i"><use href="#wiki"/></svg></span><div><small class="tk">지식</small><b>모두의 지식</b></div></div>
+      <span class="bd pub" id="v-kg" style="position:absolute;left:1530px;top:574px"><svg class="i"><use href="#globe"/></svg>전체 공개</span>
+      <div class="chip" id="v-k1" style="left:1090px;top:652px"><svg class="i tk"><use href="#wiki"/></svg>법인카드 월 한도</div>
+      <div class="ppl" id="v-all" style="left:1060px;top:760px"><span class="av a1">나</span><span class="av a2">민</span><span class="av a3">준</span><span class="av a4">하</span><b>팀 전원</b></div>
+    </div>
+
+    <div class="mid" style="top:300px"><div class="rcap" id="s5-rc">
+      <div class="rrow" id="s5-r1"><span class="bd what"><svg class="i ts"><use href="#chat"/></svg>AI 세션</span><span class="bd priv"><svg class="i"><use href="#lock"/></svg>비공개</span><p>나와 내가 초대한 사람만 볼 수 있어요</p></div>
+      <div class="rrow" id="s5-r2"><span class="bd what"><svg class="i tp"><use href="#proj"/></svg>프로젝트</span><span class="bd priv"><svg class="i"><use href="#lock"/></svg>비공개</span><p>나와 내가 초대한 사람만 볼 수 있어요</p></div>
+      <div class="rrow" id="s5-r3"><span class="bd what"><svg class="i tr"><use href="#src"/></svg>자료</span><span class="bd pub"><svg class="i"><use href="#globe"/></svg>전체 공개</span><p>팀 전원이 볼 수 있어요</p></div>
+      <div class="rrow" id="s5-r4"><span class="bd what"><svg class="i tk"><use href="#wiki"/></svg>지식</span><span class="bd pub"><svg class="i"><use href="#globe"/></svg>전체 공개</span><p>팀 전원이 볼 수 있어요</p></div>
+    </div></div>
+  </section>
+
+  <!-- 맺음 -->
+  <section class="sc" id="sc9"><div class="center">
+    <div class="logo" id="e-logo"><span class="dot"></span><span class="wm">Lively</span></div>
+    <p class="endline" id="e-line">이제 AI에게 일을 시켜 보세요.</p>
+  </div></section>
+
+  <!-- 자막 -->
+  <p class="cap" id="cf1">AI와 대화하며 일을 시켜요. 이 대화창 하나가 <b class="ts">AI 세션</b>이에요.</p>
+  <p class="cap" id="cf2"><b class="tp">프로젝트</b>는 직접 만들 필요 없어요. 일을 시키면 알아서 생기고, 거기에 모여요.</p>
+  <p class="cap" id="cf3">AI는 슬랙 · 노션 · 올린 파일 같은 회사 <b class="tr">자료</b>를 찾아 읽으며 일해요.</p>
+  <p class="cap" id="cf4">그러면서 알게 된 건 <b class="tk">지식</b>으로 정리해 둬요.</p>
+  <p class="cap" id="cf5">다음 일은 이 지식을 보고 시작하니까, 쓸수록 더 잘해요.</p>
+  <p class="cap" id="cf6">하나씩 자세히 볼게요.</p>
+
+  <p class="cap" id="c1a">AI에게 일을 시키는 대화창 하나가 <b class="ts">AI 세션</b> 하나예요.</p>
+  <p class="cap" id="c1b">연 대화창은 왼쪽 목록에 쌓여서, 언제든 다시 열어 이어서 시킬 수 있어요.</p>
+  <p class="cap" id="c2n1"><b class="tp">프로젝트</b>는 직접 만들지 않아도 돼요. AI에게 일을 시키면 알아서 생겨요.</p>
+  <p class="cap" id="c2n2">그 일에서 나온 세션과 파일도 여기에 저절로 모여요. 신경 쓸 것 없어요.</p>
+  <p class="cap" id="c2a">그래서 프로젝트는 일마다 하나씩, 따로따로 생겨요.</p>
+  <p class="cap" id="c2b">프로젝트 화면을 열면 그 일의 할 일 · AI 세션 · 파일을 한눈에 볼 수 있어요.</p>
+  <p class="cap" id="c2d">여럿이 한 가지 일을 함께 하려면, 프로젝트에 팀원을 초대하세요.</p>
+  <p class="cap" id="c2e">초대받은 사람이 이 프로젝트에서 AI 세션을 열면, 서로의 AI가 한 일을 바로 이어받아요.</p>
+  <p class="cap" id="c2f">그래도 서로의 AI 세션 안, 대화 내용은 볼 수 없어요.</p>
+  <p class="cap" id="c2g">대화까지 함께 보려면, 그 세션에 따로 초대하면 돼요.</p>
+  <p class="cap" id="c3a">슬랙 · 노션 · 드라이브처럼 연결한 외부 앱의 글과 파일이 <b class="tr">자료</b>로 모여요.</p>
+  <p class="cap" id="c3b">프로젝트에 내가 올린 파일과 AI가 만든 파일도 자료로 들어가요.</p>
+  <p class="cap" id="c3c">AI는 일할 때 여기서 필요한 것을 찾아 읽어요.</p>
+  <p class="cap" id="c4a">AI가 자료를 읽고 알게 된 것을 한 장으로 정리한 글이 <b class="tk">지식</b>이에요.</p>
+  <p class="cap" id="c4b">어디서 나온 이야기인지 출처도 함께 남아요.</p>
+  <p class="cap" id="c4c">다음에 비슷한 일을 시키면, AI가 이 지식부터 꺼내 봐요.</p>
+  <p class="cap" id="c5a">프로젝트와 그 안의 AI 세션은 나와 내가 초대한 사람만 볼 수 있어요.</p>
+  <p class="cap" id="c5b">초대하지 않은 팀원에게는 프로젝트가 목록에도 보이지 않아요.</p>
+  <p class="cap" id="c5c">다만 프로젝트의 파일은 자료로 들어가서, 팀 전원이 볼 수 있어요.</p>
+  <p class="cap" id="c5d">자료와 지식은 팀 전원이 볼 수 있어요.</p>
+  <p class="cap" id="c5e">쓰다가 이 대화창에서만 라이블리를 끄려면 AI에게 <code>/lively-disconnect</code> 를 입력하세요.</p>
+</div>
+</div>
+
+<div id="hud"><button id="hudPlay">⏯</button><input id="hudBar" type="range" min="0" max="1000" value="0"><span id="hudT">0.00</span></div>
+<script type="module" src="intro.js"></script>
+</body>
+</html>

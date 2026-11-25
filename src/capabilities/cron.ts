@@ -93,6 +93,11 @@ const cronSet: Capability = {
     if (input.action && !CRON_ACTION_KEYS.includes(input.action)) {
       throw new HttpError(400, "action 이 allowlist 밖입니다 — 등록된 액션: " + CRON_ACTION_KEYS.join(", "));
     }
+    //  앱 v2 #121 — app_server_job 은 앱 설치만 만든다(앱 매니페스트 jobs[].run.kind server). 이 도구는 일반 구성원도 부르므로(scope memory) 여기서 받으면
+    //   남의 이름(run_as · 앱 책임자)으로 앱 서버 라우트를 부르는 잡을 만들 수 있다(격리 리뷰 2026-11-22). 실행 쪽도 설치가 깐 잡만 돌린다(actions/app-server-job.ts).
+    if (input.action === "app_server_job") {
+      throw new HttpError(400, "app_server_job 은 앱 설치가 만드는 잡입니다 — 앱 매니페스트의 jobs[].run.kind server 로 깔고, 실행 신원은 org_app_job_set 으로 정합니다");
+    }
     // cron_expr: ""=명시적 비움(interval 모드 복귀), 미제공=유지(수정 시), 값=검증 후 설정.
     if (input.cron_expr != null && input.cron_expr !== "" && !isValidCron(input.cron_expr)) {
       throw new HttpError(400, "cron_expr 가 올바르지 않습니다(5필드: 분 시 일 월 요일, 예: '0 9 * * 1-5' / '*/10 * * * *')");

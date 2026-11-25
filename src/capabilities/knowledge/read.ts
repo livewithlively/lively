@@ -19,9 +19,15 @@ import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   /
 import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
 import { contradictsWarning } from "../../v6/knowledge-links.js";
 import { openReviewHints } from "../../org/store/managers.js";
-import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
+import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC, knowledgeWritable } from "./shared.js";
 import { isAdmin } from "../principal.js";
 import { logger } from "../../log.js";
+import { readStyleHint, type ReadStyleEditBlock } from "../writing-style.js";
+import type { KnowledgeRow } from "../../v6/knowledge-store.js";
+import type { WritingFormat } from "../../org/policies/writing-format.js";
+import { getWritingFormat } from "../../org/store/runtime-config.js";
+import { isRecentlyEdited } from "../../v6/writing-rewrite-gate.js";
+import { appToolAllowed } from "../../apps/principal.js";
 
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
@@ -397,11 +403,35 @@ const knowledgeGetInput = {
   limit: z.number().int().min(1).max(2000).optional().describe("부분읽기 줄 수(기본 200)"),
 };
 type KnowledgeGetInput = z.infer<z.ZodObject<typeof knowledgeGetInput>>;
+
+// 상세 조회가 바깥에 묻는 조회 — **테스트 seam** 이다(운영 경로는 이 기본값을 그대로 쓴다).
+//  형식 신호의 배선(검토 대기 제안이면 신호를 빼는 것 · 쓰기 게이트 · 최근 편집 판정)은 DB 없이는 핸들러째 돌려 볼 수 없어
+//  갈아 끼울 자리를 둔다(read-get-handler.test.ts).
+const getDeps = {
+  assertInAppContext: assertKnowledgeInAppContext,
+  canSee: canSeeKnowledge,
+  get: getKnowledge,
+  pendingRevision: pendingRevisionFor,
+  writable: knowledgeWritable,
+  loadFormat: getWritingFormat,
+  now: (): number => Date.now(),
+  //  모순 경고 · 검토 힌트 조회(knowledgeGetFlags) — 핸들러 시험이 DB 없이 돌게 같은 자리에서 갈아 끼운다.
+  contradicts: contradictsWarning,
+  reviewHints: openReviewHints,
+};
+
+/** 시험 전용 — 조회를 갈아 끼우고, 되돌리는 함수를 돌려준다. */
+export function _setKnowledgeGetDepsForTest(over: Partial<typeof getDeps>): () => void {
+  const prev = { ...getDeps };
+  Object.assign(getDeps, over);
+  return () => { Object.assign(getDeps, prev); };
+}
+
 export const knowledgeGet: Capability = {
   name: "knowledge_get",
   title: "지식 상세",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(grep→get 루프 왕복 0)
-  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악. " +
+  description: "지식 1건 + 매핑된 카테고리. **부분읽기**: offset(시작 줄,1-based)·limit(줄 수)로 본문을 줄 범위만 받는다(로컬 Read 패리티 — grep 스니펫의 L<n>: 를 그대로 조회). 둘 다 생략 시 전문. 응답 body_range 로 총줄수·다음 범위 파악. 조직 서술 형식에 어긋난 지식이면 style(count·findings·note — 지금 고치면 안 되는 글이면 edit_blocked 도)이 함께 오고, 다음 행동은 note 를 따른다. " +
     "links.superseded 는 대체된 이웃(후속 superseded_by 포함)이다. 응답에 contradicts_warning(이 지식과 모순으로 이어진 지식)이나 review_hint(근거·코드가 바뀌어 다시 읽어 볼 발견)가 있으면 근거로 쓰기 전에 확인하라.",
   scope: "memory",
   input: knowledgeGetInput,
@@ -416,15 +446,15 @@ export const knowledgeGet: Capability = {
   },
   handler: async (input: KnowledgeGetInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     //  #5100 앱 맥락 범위 — 공개범위로는 보이는데 이 앱이 선언한 범위 밖이면 거절하고 기록한다(«없음» 과 다른 문구 — 범위를 잘못 적었는지 알게).
-    await assertKnowledgeInAppContext(String(input.name), ctx?.viewer ?? null, user, ctx, "knowledge_get");
+    await getDeps.assertInAppContext(String(input.name), ctx?.viewer ?? null, user, ctx, "knowledge_get");
     // 공개범위(#1291) — 전문을 돌려주는 자리라 **본문을 읽기 전에** 막는다(없는 문서와 같은 문구 = 존재 은닉).
-    if (!(await canSeeKnowledge(String(input.name), ctx?.viewer ?? null))) throw new Error(`지식 '${input.name}' 없음`);
-    const knowledge = await getKnowledge(input.name, ctx?.viewer ?? null);
+    if (!(await getDeps.canSee(String(input.name), ctx?.viewer ?? null))) throw new Error(`지식 '${input.name}' 없음`);
+    const knowledge = await getDeps.get(input.name, ctx?.viewer ?? null);
     if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
     if (isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "get", member: user.userId, session: ctx?.session, names: [input.name] });
     // #783 이 지식에 검토 대기 중인 수정이 있으면 함께 알린다 — staged 면 "지금 보는 본문은 옛 승인본"이라는 뜻이라
     //  사람·에이전트가 그 사실을 모르고 덧쓰면 안 된다(웹 문서화면은 이 값으로 배너를 띄운다).
-    const pendingRev = await pendingRevisionFor(input.name);
+    const pendingRev = await getDeps.pendingRevision(input.name);
     const revInfo = pendingRev
       ? {
         pending_revision: {
@@ -437,20 +467,13 @@ export const knowledgeGet: Capability = {
         },
       }
       : {};
+    //  모순 경고 · 검토 힌트는 조립(knowledgeGetResult — DB 를 다시 읽지 않는다)과 따로 조회해 응답 끝에 붙인다.
     const flags = await knowledgeGetFlags(input.name, ctx?.viewer ?? null);
-    if (input.offset == null && input.limit == null) return { knowledge, ...revInfo, ...flags };
-    // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
-    const lines = (knowledge.body_md ?? "").split("\n");
-    const from = Math.max(1, input.offset ?? 1);
-    const count = Math.min(input.limit ?? 200, 2000);
-    const slice = lines.slice(from - 1, from - 1 + count);
-    const to = from - 1 + slice.length;
-    return {
-      knowledge: { ...knowledge, body_md: slice.join("\n") },
-      body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
-      ...revInfo,
-      ...flags,
-    };
+    const result = await knowledgeGetResult(knowledge, input, revInfo, {
+      staged: pendingRev?.mode === "staged",
+      editBlock: () => readEditBlock(knowledge, user, ctx),
+    }, getDeps.loadFormat);
+    return { ...result, ...flags };
   },
 };
 
@@ -463,16 +486,74 @@ export const knowledgeGet: Capability = {
 //  조회 실패는 표시를 빼고 넘어간다 — 부가 표시 때문에 지식 본문을 못 읽게 되면 안 된다.
 async function knowledgeGetFlags(name: string, viewer: Viewer | null): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
-  const contra = await contradictsWarning(name, viewer).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "contradicts 경고 조회 실패 — 표시 없이 진행"); return []; });
+  const contra = await getDeps.contradicts(name, viewer).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "contradicts 경고 조회 실패 — 표시 없이 진행"); return []; });
   if (contra.length) {
     out.contradicts_warning = {
       note: "이 지식과 모순으로 이어진 지식이 있다 — 근거로 쓰기 전에 양쪽을 대조하라. 모순이 아니면 links 의 각 링크를 그 from·to 그대로 knowledge_link(unlink, relation=contradicts) 로 해제하거나, 관리기 발견이면 반려한다. recheck=true 는 연결 뒤 두 문서가 모두 고쳐져 이미 풀렸을 수 있다는 뜻이다.",
       with: contra,
     };
   }
-  const hints = await openReviewHints(name).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "review_hint 조회 실패 — 표시 없이 진행"); return []; });
+  const hints = await getDeps.reviewHints(name).catch((e) => { logger.warn({ err: (e as Error)?.message, name }, "review_hint 조회 실패 — 표시 없이 진행"); return []; });
   if (hints.length) out.review_hint = hints;
   return out;
+}
+
+/**
+ * 다른 편집자가 보호 창(24시간) 안에 고친 글인가. 마지막 저장이 같은 계정의 에이전트(MCP) 저장이면 아니다 — 자기가 방금 저장한
+ *  글의 형식 안내를 받고 바로 고치는 게 기본 흐름이다. «내 마지막 저장» 은 updated_by 가 같고 confidence='ai'(upsertKnowledge 가
+ *  저장 출처로 매번 덮는 값 — MCP 면 'ai')일 때다. 계정만 보면 그 사람이 웹에서 고치던 글을 자기 에이전트가 덮는다.
+ *  형식 정리 저장(#1740 knowledge_save style_fix)의 보호 창과 같은 판정이다. 시각을 못 읽으면 최근으로 본다(isRecentlyEdited).
+ */
+export function editedByOtherRecently(
+  k: { updated_at?: unknown; updated_by?: unknown; confidence?: unknown },
+  actor: string | null | undefined,
+  now: number | Date,
+): boolean {
+  const ownLast = !!actor && k.updated_by === actor && k.confidence === "ai";
+  return !ownLast && isRecentlyEdited(k.updated_at as string | Date | null | undefined, now);
+}
+
+/**
+ * 읽은 사람이 지금 이 지식의 형식을 고치면 안 되는 까닭(없으면 null) — 형식 신호의 note 가 «지금 고쳐라» 를 실을지 가른다.
+ *  위반이 있을 때만 불린다(readStyleHint). 주입 문구(injection='always')는 readStyleHint 가 행으로 가른다.
+ *  ① no_write — 안내를 따라도 막히는 사람: 읽기전용 세션(쓰기 도구가 등록조차 안 된다) · knowledge_save 가 도구 범위 밖인 앱·작업
+ *     토큰 · 쓰기 게이트(assertKnowledgeWritable 과 같은 판정 — 공개범위, 주입 문구는 관리자만)를 못 넘는 사람.
+ *  ② recently_edited — 다른 사람이 보호 창 안에 고친 글(editedByOtherRecently). 권한이 없으면 «나중에» 도 없으니 ①을 먼저 본다.
+ */
+async function readEditBlock(k: KnowledgeRow, user: LivelyUser, ctx: CapabilityCtx | undefined): Promise<ReadStyleEditBlock | null> {
+  if (ctx?.readOnly) return "no_write";
+  if (!(await appToolAllowed(user, "knowledge_save"))) return "no_write";
+  if (!(await getDeps.writable(k.name, ctx?.viewer ?? null, user))) return "no_write";
+  if (editedByOtherRecently(k, ctx?.actor ?? user?.userId ?? null, getDeps.now())) return "recently_edited";
+  return null;
+}
+
+/** 조회한 지식으로 상세 응답을 조립한다(부분읽기·형식 신호). DB 를 다시 읽지 않는다. */
+export async function knowledgeGetResult(
+  knowledge: KnowledgeRow,
+  input: { offset?: number; limit?: number },
+  revInfo: Record<string, unknown>,
+  opts: { staged: boolean; editBlock?: () => Promise<ReadStyleEditBlock | null> },
+  loadFormat?: () => Promise<WritingFormat>,
+): Promise<Record<string, unknown>> {
+  // 형식 신호는 부분읽기로 자르기 전 전문으로 판정한다 — 잘린 범위만 보면 뒤쪽 위반을 놓친다. 그래서 부분읽기면 note 가
+  //  «고치기 전에 전문을 읽어라» 를 더한다(위반 위치는 받은 줄 범위 밖일 수 있고, edit 의 앵커는 전문에서 찾는다).
+  //  검토 대기 중인 수정 제안(staged)이 있으면 싣지 않는다. 그동안 edit·제목 변경이 409 로 막혀 안내를 따를 수 없다.
+  const partial = input.offset != null || input.limit != null;
+  const styleInfo = opts.staged ? {} : await readStyleHint(knowledge, loadFormat, { editBlock: opts.editBlock, partial });
+  if (!partial) return { knowledge, ...revInfo, ...styleInfo };
+  // 부분읽기 — 본문을 줄 범위로 잘라 반환(전문 대신). body_range 로 위치·총량 표기.
+  const lines = (knowledge.body_md ?? "").split("\n");
+  const from = Math.max(1, input.offset ?? 1);
+  const count = Math.min(input.limit ?? 200, 2000);
+  const slice = lines.slice(from - 1, from - 1 + count);
+  const to = from - 1 + slice.length;
+  return {
+    knowledge: { ...knowledge, body_md: slice.join("\n") },
+    body_range: { from, to, returned: slice.length, total_lines: lines.length, has_more: to < lines.length },
+    ...revInfo,
+    ...styleInfo,
+  };
 }
 
 // 정적 REST 경로(/knowledge/search·/knowledge/semantic·/knowledge/similar·/knowledge-graph·/knowledge-tree)

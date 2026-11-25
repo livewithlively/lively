@@ -10,6 +10,8 @@
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { reviewResumeTarget } from './review-resume.js';   // #4632 ③ 앱 화면 새로고침 복귀
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
+import { SHARE_GUIDE_ROUTE, maybeShowShareGuide, openShareGuide } from './share-guide.js'; // #5598 «누가 무엇을 보나요»
+import { filmOfRoute, openWelcomeFilm } from './welcome-film.js';   // #5598 영상 창 주소(#/film/intro — CLI 설치 끝 상자의 «안내 영상 보기»)
 import { resumeSetupWatch } from './setup-watch.js'; // #5167 처음 설정 뒤 정리 진행 띠
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
@@ -19,6 +21,9 @@ import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shell
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
 import { renderLiv } from '../liv.js';   // #4970 — 리브 화면(단독). 리브 세션이 있으면 그 세션 화면으로 간다(lib/liv-desk livRoute)
+import { askHash, renderAskPage } from './ask-page.js';   // #5713 — 요청 주소(#/ask/<id>): 로컬 터미널의 AI 가 주는 링크가 오는 자리
+import { focusAsk, mountFloatingAsks } from './session-ask-pane.js';
+import { getAsk } from '../asks/api.js';
 import { isLivBoard, isLivRoute, isLivSessionId, livRoute } from '../lib/liv-desk.js';
 import { knownLivSessionId, livSessionId, livSessionIdWithin } from './liv-open.js';
 import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledAppOpened, openAppById, setLaunchpadContext } from './apps.js';
@@ -400,11 +405,10 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     //  그릇은 셸(panes.ts)이 세션마다 쥐고 여기로 건네준다.
     mountSession: (host, sid, o) => {
       const h = renderSession(host, data, sid, {
-        //  #4970 — 리브 세션: 리브 물음은 입력칸 바로 위(터미널을 볼 땐 머리줄 아래 — session-chat.ts placeLivAsk).
-        //   ★ 보기는 일반 세션과 같다(#4940 상민님 2026-10-23 «그냥 터미널로 열면 되잖아… 하네스 뜨기 전까진 터미널 모사한
+        //  ★ 리브 세션도 보기는 일반 세션과 같다(#4940 상민님 2026-10-23 «그냥 터미널로 열면 되잖아… 하네스 뜨기 전까진 터미널 모사한
         //    대화화면 보여주다가 하네스 뜨면 넘어가면 된다») — 종전 «대화 보기가 본자리»(chatHome, 원준 2026-09-14)를 걷었다.
         //    대화가 본자리면 하네스가 첫 실행 화면에서 기다릴 때 사람은 그 화면을 못 보고 «전달하는 중…» 에 갇힌다(셀프호스트 실측).
-        ...(isLiv(sid) ? { livAsks: true } : {}),
+        //   #5713 — AI 가 건 요청(옛 리브 물음 카드)은 대화창이 아니라 곁칸 «요청» 칸에 뜬다(어느 세션이든 — session-ask-pane.ts).
         trail: (o && o.trail) || null,
         //  머리줄 [자료](#4088 후속) — 곁칸의 자료 칸을 켠다(폰: 서랍). 셸(panes.ts)이 준 배선을 그대로 넘긴다.
         onOpenFiles: o && o.openFiles ? o.openFiles : undefined,
@@ -788,6 +792,12 @@ export async function bootV2(): Promise<void> {
   // #4051 — «내 AI 계정» 창 주소로 켰으면 탭은 평소대로 되살리고 창만 연다(ME_AI_ROUTE 머리말).
   const openAiAcct = !!boot && ME_AI_ROUTE.test(boot);
   if (openAiAcct) boot = null;
+  // #5598 — «누가 무엇을 보나요» 다시 보기 주소(CLI 설치 끝 상자의 링크)로 켰으면 탭은 평소대로 되살리고 창만 연다.
+  const openShare = !!boot && SHARE_GUIDE_ROUTE.test(boot);
+  if (openShare) boot = null;
+  // #5598 — 영상 창 주소(#/film/intro …)로 켰으면 마찬가지로 탭은 평소대로 되살리고 영상 창만 연다.
+  const openFilm = boot ? filmOfRoute(boot) : null;
+  if (openFilm) boot = null;
   // 처음 설정을 아직 안 끝낸 **처음 오는 사람**만 홈 대신 #/welcome 으로(#1813). 딥링크가 있으면 그쪽이 우선.
   //  ⚠ 판정은 **서버**(me.first_run — src/org/delivery/first-run.ts)다. 종전엔 localStorage 하나로 정해서
   //   몇 달째 쓰던 사람도 새 브라우저·다른 기기·시크릿창이면 홈 대신 처음 설정이 떴다(원준님 신고 2026-08-26,
@@ -859,6 +869,18 @@ export async function bootV2(): Promise<void> {
     const back = tabsApi.active().route || '#/';
     history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
     openMeModal({ tab: 'aiacct' });
+  }
+  if (openShare) {
+    const back = tabsApi.active().route || '#/';
+    history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    openShareGuide({ again: true });
+  } else if (openFilm) {
+    const back = tabsApi.active().route || '#/';
+    history.replaceState(null, '', location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    openWelcomeFilm(openFilm);
+  } else {
+    // #5598 — 아직 확인하지 않은 사람에게 한 번. 처음 설정 · 앱 전체 화면 같은 지나가는 자리에선 셸로 돌아올 때까지 미룬다(share-guide.ts).
+    void maybeShowShareGuide();
   }
 
   window.addEventListener('hashchange', () => { histStamp(); void onHash(); });
@@ -1427,6 +1449,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   if (p === 'open') return { title: '앱 여는 중', noAside: true };   // #4769 설치한 앱의 문(#/open/<앱 id>) — 인스턴스를 확보해 #/i/ 로 넘긴다
   if (p === 'app-grant') return { title: '앱 사용 동의', noAside: true };   // #4482 앱 주소(새 탭 · 폰)에서 동의를 받으러 왔다 돌아가는 자리
   if (p === 'liv') return { title: '리브', noAside: true };
+  if (p === 'ask') return { title: '요청', noAside: true };   // #5713 AI 가 나에게 건 요청(값 입력 · 고르기 · 파일 올리기)
   if (p === 'welcome') return { title: '처음 설정', noAside: true };   // 온보딩(#1813) — 우패널 없이, 리브와 둘이서
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
   //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
@@ -1530,6 +1553,23 @@ async function onHash(): Promise<void> {
   if (!tabsApi) return;
   if (suppressHash > 0) { suppressHash--; return; }
   let hash = location.hash || '#/';
+  // #5598 — «누가 무엇을 보나요» 다시 보기 주소(CLI 설치 끝 상자의 링크). 화면이 아니라 창이라 탭을 만들지 않는다(아래 #4051 과 같은 방식).
+  if (SHARE_GUIDE_ROUTE.test(hash)) {
+    openShareGuide({ again: true });
+    const back = tabsApi.active().route || '#/';
+    suppressHash++;
+    location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    return;
+  }
+  // #5598 — 영상 창 주소(#/film/intro · tour · guide). 창이라 탭을 만들지 않는다.
+  const film = filmOfRoute(hash);
+  if (film) {
+    openWelcomeFilm(film);
+    const back = tabsApi.active().route || '#/';
+    suppressHash++;
+    location.replace(location.pathname + location.search + (back.startsWith('#') ? back : '#' + back));
+    return;
+  }
   // #4051 — «내 AI 계정» 창으로 가는 주소(알림 «사람 없이 도는 작업이 멈췄어요» 가 가리킨다). 화면(탭)이 아니라 **창**이라
   //  탭을 만들지 않는다 — 창을 열고 주소만 지금 탭의 자리로 되돌린다(안 되돌리면 창을 닫은 뒤 새로고침에서 다시 열린다).
   if (ME_AI_ROUTE.test(hash)) {
@@ -1662,7 +1702,10 @@ function homeDests(): HomeDest[] {
 async function renderRoute(tab: ShellTab): Promise<void> {
   const seq = ++tab.seq;
   frameTabs.delete(tab);   // 클래식 앱 액자를 그리는 갈래가 다시 적는다(고정 문서가 물러나는 화면)
-  if ((tab as any).ob) { (tab as any).ob.destroy(); (tab as any).ob = null; }   // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
+  if ((tab as any).ob) { (tab as any).ob.destroy(); (tab as any).ob = null; }
+   // 처음 설정 화면을 떠나면 읽기 타이머·사이드바 숨김을 푼다
+  if ((tab as any).askPage) { (tab as any).askPage.destroy(); (tab as any).askPage = null; }   // #5713 요청 화면의 목록 구독
+  if ((tab as any).soloAsks) { (tab as any).soloAsks.destroy(); (tab as any).soloAsks = null; }   // #5713 팝아웃 창의 요청 카드
   const { segs, raw, params } = parseRoute(tab.route);
   const page = segs[0] || '';
   //  #4480 — 크게 보기 덮개(openAppUi)는 셸 위의 따로 붙은 층이라 화면을 옮겨도 남는다. 다른 화면으로 가면 걷는다(닫기 뒷일 없이) —
@@ -1811,6 +1854,13 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       tab.center.replaceChildren();
       tab.aside.replaceChildren();
       const board = params.get('board') === '1';
+      //  #5713 — `?board=1` 은 로컬 AI 가 «이 링크에서 넣어 주세요» 로 주던 옛 주소다. 물음 카드는 요청 화면(#/ask)으로 옮겼다 — 옛 링크를 그리로 넘긴다.
+      if (board) {
+        const to = askHash();
+        tab.route = to;
+        if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+        tabsApi?.routed(tab); void renderRoute(tab); return;
+      }
       const livId = await livSessionId({ fresh: true });
       if (seq !== tab.seq) return;
       if (livRoute({ board, sessionId: livId }) === 'session' && livId) {
@@ -1829,6 +1879,41 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       const host = el('div', { class: 'v2-livpage' });
       tab.center.append(host);
       await renderLiv(host, { embedded: true, sessionId: livId });
+    } else if (page === 'ask') {
+      //  #5713 요청 주소 — `#/ask/<id>`(로컬 터미널의 AI 가 사람에게 준 링크) · `#/ask`(내 열린 요청 전부).
+      //   그 요청을 건 세션이 이 화면의 세션 목록에 있으면 **그 세션 화면**으로 넘긴다 — 곁칸 «요청» 칸이 그 카드를 짚는다(focusAsk).
+      //   못 찾으면(세션 없이 건 요청 · 목록에 없는 세션 · 이미 끝난 요청) 요청 화면이 카드를 직접 보인다.
+      if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+      tab.center.replaceChildren();
+      tab.aside.replaceChildren();
+      //  사람이 붙여 넣은 링크다 — 깨진 % 가 섞여도 던지지 않는다(그때는 요청 화면이 «찾을 수 없어요» 를 보인다).
+      let askId = '';
+      try { askId = segs[1] ? decodeURIComponent(segs[1]) : ''; } catch (_) { askId = segs[1] || ''; }
+      if (askId) {
+        const ask = await getAsk(askId);
+        if (seq !== tab.seq) return;
+        if (ask && ask.status === 'open' && ask.session_id) {
+          let s = findSess(ask.session_id);
+          if (!s) { await loadData(); if (seq !== tab.seq) return; drawSide(); s = findSess(ask.session_id); }
+          if (s) {
+            focusAsk(ask.id);
+            //  지나가는 주소다 — 그 세션 주소로 갈아 끼운다(replace — 뒤로 가기에 이 자리를 남기지 않는다. #/liv 와 같은 길).
+            const to = '#/s/' + encodeURIComponent(s.id);
+            const other = tabsApi?.find(to);
+            if (other && other !== tab) { tabsApi?.activate(other); tabsApi?.close(tab); return; }
+            tab.route = to;
+            if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+            tabsApi?.routed(tab);
+            void renderRoute(tab);
+            return;
+          }
+        }
+      }
+      const host = el('div', { class: 'v2-askpage' });
+      tab.center.append(host);
+      (tab as any).askPage = renderAskPage(host, askId || null, {
+        sessionHref: (sid) => { const s = findSess(sid); return s ? '#/s/' + encodeURIComponent(s.id) : null; },
+      });
     } else if (page === 'welcome') {
       // 처음 설정(#1813) — 리브가 이름·무대·자료·AI 를 묻고 채팅으로 이어진다. 막1(이름)에서는 사이드바·탭 줄을 숨긴다(노션 p1).
       tab.center.replaceChildren();
@@ -1897,13 +1982,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
       if (SOLO) {
         const trail = drawAsideSession(tab, s || null);
-        //  #4970 — 팝아웃 창에서 연 리브 세션도 리브 물음 자리(종전엔 세션 이름으로 알아봤다 — 이제 리브 좌표로).
-        //   보기는 본 창과 같이 일반 세션이다(#4940 — 위 mountSession 주석).
-        const soloLivId = await livSessionIdWithin(1500);
-        if (seq !== tab.seq) return;
-        const soloLiv = isLivSessionId([id, s?.id, s?.logId, s?.raw?.claudeSessionId], soloLivId);
         tab.chat = renderSession(tab.center, data, id, {
-          ...(soloLiv ? { livAsks: true } : {}),
           trail,
           onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
           onRename: (label) => renameSession(s ? s.id : id, label, tab),
@@ -1914,6 +1993,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
           //   이 갈래는 다시 그리기 전에 옛 대화창을 안 부수므로(아래 mountProjectShell 과 다르다) 여기서 부순다.
           onResumed: (nid) => { tab.chat?.destroy(); tab.chat = null; resumedInTab(tab, nid); },
         });
+        //  #5713 — 팝아웃 창엔 곁칸(«요청» 탭)이 없다. 이 세션의 AI 가 건 요청은 창 위에 뜬 카드 묶음으로 보인다(없으면 아무것도 안 뜬다).
+        (tab as any).soloAsks = mountFloatingAsks(s ? s.id : id);
         return;
       }
       //  #2022 — 목록에 아직·영영 없는 세션이어도 서버가 아는 소속으로 셸을 두른다(종전엔 무조건 0 = 프로젝트 없음).

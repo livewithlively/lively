@@ -72,7 +72,8 @@ import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
-import { DRAFT_HINT, DRAFT_LABEL, DRAFTS_SHOWN_KEY, draftsShown, isDraftProj } from '../lib/proj-draft.js';   // #5522 초안 — 「초안」 줄 · 「초안 보기」 토글이 보드와 같은 잣대로 센다
+import { DRAFT_HINT, DRAFT_LABEL, DRAFTS_SHOWN_KEY, draftsShown, isDraftProj } from '../lib/proj-draft.js';
+import { projRelation } from '../lib/proj-relation.js';   // #5630 「초대받은」 · 「내가 만든」 줄 — 보드 스코프와 같은 잣대   // #5522 초안 — 「초안」 줄 · 「초안 보기」 토글이 보드와 같은 잣대로 센다
 import { screenLangOn, setScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — «EN» 알약은 #5319 에서 걷었다(켜 둔 채 남은 것만 끈다)
 import { LIV_BUCKET_NAME, isLooseLivWork, isMachineOpened, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
@@ -2236,6 +2237,8 @@ function projScopeKey(): string {
   if (m) return (m[1] === 'l' ? 'L' : 'F') + m[2];
   if (/^#\/projects2\/none/.test(location.hash)) return 'none';
   if (/^#\/projects2\/drafts(?:[/?]|$)/.test(location.hash)) return 'drafts';
+  if (/^#\/projects2\/invited(?:[/?]|$)/.test(location.hash)) return 'invited';   // #5630
+  if (/^#\/projects2\/mine(?:[/?]|$)/.test(location.hash)) return 'mine';         // #5630
   return /^#\/projects2\/all(?:[/?]|$)/.test(location.hash) ? 'all' : '';
 }
 
@@ -2305,11 +2308,17 @@ function renderProjects(): void {
   const openByList = new Map<number, number>();
   let noneN = 0;
   let draftN = 0;
+  //  #5630 나와의 관계 — 초대받은(팀원이지만 만든 사람은 아님) · 내가 만든. 「전체」 와 같은 자(열린 것 · 초안 토글)로 센다.
+  const me = meId();
+  let invitedN = 0;
+  let mineN = 0;
   //  #5522 — 「전체」 · 「기타」 · 리스트 수는 보드의 「초안 보기」 토글을 따른다(켜짐 = 초안도 센다, 기본). 「초안」 줄은 늘 초안 전부를 센다.
   const showDrafts = draftsShown();
   for (const p of data.projects) {
     if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;
     if (isDraftProj(p)) { draftN++; if (!showDrafts) continue; }
+    const rel = projRelation({ created_by: p.created_by, members: p.member_ids }, me);
+    if (rel === 'invited') invitedN++; else if (rel === 'mine') mineN++;
     if (p.list_id) openByList.set(p.list_id, (openByList.get(p.list_id) || 0) + 1); else noneN++;
   }
   //  아카이브 폴더(#1067 settings.kind='archive')와 그 아래는 이 사이드바에 없다 — 「지난 세션」 앱(#/archive)의 «보관한 프로젝트» 칩이 그 문이다(proj-cards 가 뺀다).
@@ -2354,8 +2363,21 @@ function renderProjects(): void {
       title: tip(l) + ' — 즐겨찾기', ...(on ? { 'aria-current': 'true' } : {}) },
       icon('star', 'v2-ptl-ic'), el('span', { class: 'n', text: l.name }), l.visibility === 'members' ? lockIc() : null, cnt(openByList.get(l.id) || 0), favBtn(l, 'fav'));
   };
+  //  #5630(원준 2026-11-22) — 프로젝트가 기본 초대제(#5598)라 «나와의 관계» 가 첫 갈래다. 「전체」 바로 밑 두 줄:
+  //   「초대받은」 = 남이 나를 함께하는 사람으로 넣은 것 · 「내가 만든」 = 내가 리드인 것. 누르면 보드의 모든 뷰가 그 범위로 좁혀진다.
+  //   초대받은 것이 0 이어도 선다 — «초대받으면 여기 온다» 를 알려 주는 자리다(받기 전엔 안 세운다).
+  const relRow = (key: 'invited' | 'mine', label: string, ic: string, n: number, tip: string): HTMLElement => {
+    const on = projScopeKey() === key;
+    return el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--rel v2-ptl--' + key + (on ? ' on' : '') + (n ? '' : ' zero'), href: '#/projects2/' + key,
+      title: tip, ...(on ? { 'aria-current': 'true' } : {}) },
+      icon(ic, 'v2-ptl-ic'), el('span', { class: 'n', text: label }), cnt(n));
+  };
+  const relRows = ready && me ? [
+    relRow('invited', '초대받은', 'people', invitedN, '초대받은 프로젝트 — 다른 사람이 나를 함께하는 사람으로 넣은 것'),
+    relRow('mine', '내가 만든', 'person', mineN, '내가 만든 프로젝트 — 내가 리드인 것'),
+  ] : [];
   //  #3870 — 즐겨찾기 · 기타 줄도 받은 뒤에만. 프로젝트만 오고 리스트가 아직이면 전부 «기타 (미분류) 311» 로 세어진다.
-  const fixed: HTMLElement[] = [allRow, ...(ready ? plan.favs.map(favRow) : [])];
+  const fixed: HTMLElement[] = [allRow, ...relRows, ...(ready ? plan.favs.map(favRow) : [])];
   if (ready && plan.noneN) {
     const on = plan.onKey === 'none';
     fixed.push(el('a', { class: 'v2-wcat v2-ptl v2-kview v2-ptl--none' + (on ? ' on' : ''), href: '#/projects2/none',

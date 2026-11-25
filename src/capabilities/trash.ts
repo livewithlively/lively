@@ -13,6 +13,8 @@ import { restoreProject } from "../v6/project-store.js";
 import { restoreCategory } from "../v6/category-store.js";
 import { canSeeProjectRowVis, projectVisFor, type ProjectVis, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
+import { permits } from "../auth/permissions.js";
+import { INJECTED_DOC_ADMIN_ONLY } from "./knowledge/shared.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
 
 const ENTITIES = TRASH_ENTITIES;   // knowledge · project · category · source(#3778) — 목록·복원·미리보기·파기가 같은 집합을 본다
@@ -184,7 +186,8 @@ const contentRestore: Capability = {
       throw new HttpError(403, "복원은 사람(웹)만 가능합니다 — 에이전트는 거부됩니다(큐레이션)");
     }
     // 카테고리는 context scope 자원 — memory 만으론 복원 불가(엔티티별 권한 정합).
-    if (input.entity === "category" && !((user?.scopes ?? []) as string[]).includes("context")) {
+    //  #5799 — 새 권한이 실린 주체에게는 분류체계도 «맥락» 이라 이 기능의 관문(맥락 고치기)과 같은 판정이 된다.
+    if (input.entity === "category" && !permits(user, "context", { perm: "content", level: "write" })) {
       throw new HttpError(403, "카테고리 복원은 context 권한이 필요합니다");
     }
     const before = await getDeleteSnapshot(input.entity, input.key);
@@ -194,6 +197,10 @@ const contentRestore: Capability = {
     //  복원된 행은 DDL 기본값(open)으로 되살아난다. 목록에서 안 보이는 것을 복원할 수는 없어야 한다.
     if (!(await canRestore(before, input.entity, ctx?.viewer ?? null))) {
       throw new HttpError(404, `복원할 삭제 스냅샷이 없습니다(entity=${input.entity}, key=${input.key})`);
+    }
+    // #5801 — 지운 세션 주입 문구를 되살리면 다시 모든 AI 세션에 주입된다. 저장 · 삭제와 같은 문(관리자)을 지난다.
+    if (input.entity === "knowledge" && (before as Record<string, unknown>).injection === "always" && !isAdmin(user)) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     let item: unknown;
@@ -264,6 +271,10 @@ const contentPurge: Capability = {
       throw new HttpError(404, `휴지통에 없는 항목입니다(entity=${input.entity}, key=${input.key})`);
     }
     if (!(await isDeletedNow(input.entity, input.key))) throw new HttpError(409, "지금 삭제 상태가 아닙니다 — 살아 있는 항목은 먼저 지워야 완전히 지울 수 있어요");
+    // #5801 — 지운 세션 주입 문구의 스냅샷을 비우면 관리자가 되살릴 길과 이력이 사라진다. 복원과 같은 문(관리자).
+    if (input.entity === "knowledge" && (before as Record<string, unknown>).injection === "always" && !isAdmin(user)) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
+    }
     const scrubbed = await purgeDeleted(input.entity, input.key);
     await auditOrgContent(input.entity, input.key, "purge", null, { scrubbed_rows: scrubbed },
       { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" });

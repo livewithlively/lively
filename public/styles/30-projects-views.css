@@ -308,3 +308,8 @@
 .pjv-sl-count { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 /* 4판 — 줄 = 프로젝트. 「세션」 칸: 가장 급한 상태 알약 + «외 N» */
 .pjv-sl .c-sess .n { flex: none; font-size: 12px; color: var(--muted); }
+
+/* #5630 타임라인의 사람 한 벌 — 시트 이름 옆 얼굴(글자 없이) · 바 옆 얼굴 + 이름 */
+.pjv-gt-sheet .pj-ppl { flex: none; margin-left: 4px; }
+.pjv-gt-faces.pjv-gt-ppl { top: 7px; }
+.pjv-gt-ppl .pj-ppl-t { font-weight: 500; color: var(--ink-sub); }

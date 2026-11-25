@@ -22,6 +22,7 @@ import { SINGLE_TENANT_ID } from "./tenant-column.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { installTenantSlugResolver } from "../terminal/catalog.js";
 import { registryModeActive } from "../org/tenancy/state.js";   // #2599 T3 — 테넌시 축 술어의 정본(인라인 재구현 금지)
+import { installWorkspaceDirKeyResolver } from "../ops/workspace-dir-key.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -67,12 +68,25 @@ export function installTenantBinding(env: NodeJS.ProcessEnv = process.env): stri
     installTenantResolver(() => id);
     return `테넌트 바인딩: 고정(${id.slice(0, 8)}…) — 공용 DB, 이 프로세스는 테넌트 하나를 서비스한다`;
   }
+  // ★ 게이트웨이가 디스크에 받아 두는 레포 클론도 워크스페이스를 따른다(ops/workspace-dir-key.ts) — DB 는 갈리는데 클론 자리가 레포 이름만으로
+  //  정해지면, 다른 워크스페이스가 같은 이름으로 등록한 레포가 먼저 받아 둔 쪽의 클론을 그대로 쓴다. 이 프로세스가 워크스페이스 여럿을
+  //  서비스하는 두 모드(registry · request)에만 꽂는다. fixed 는 프로세스 = 워크스페이스 하나라 종전 자리 그대로다.
   if (r.mode === "registry") {
+    //  primary(SINGLE_TENANT_ID — 기존 박스 워크스페이스)는 열쇠 없음 = 종전 자리: 요청은 컨텍스트 없이, 정비는 primary 컨텍스트로 오는데
+    //   둘이 같은 자리를 봐야 하고, 이미 받아 둔 클론 · 워크트리가 그대로 쓰여야 한다. DB 폴백(아래)과 같은 뜻이다.
+    installWorkspaceDirKeyResolver(() => {
+      const id = currentTenant()?.id;
+      return !id || id === SINGLE_TENANT_ID ? null : id;
+    });
     installTenantResolver(() => currentTenant()?.id ?? SINGLE_TENANT_ID);
     return "테넌트 바인딩: 등록부(셀프호스트 다중 워크스페이스) — 컨텍스트 없으면 primary";
   }
   // request 모드 — 요청 스코프 컨텍스트를 읽는다. 컨텍스트가 없으면 null 을 주고(던지지 않는다),
   //  막는 주체는 DB 정책이다(`''::uuid` 오류). 자세한 이유는 client.ts 의 tenantBindingSql 주석 참조.
   installTenantResolver(() => currentTenant()?.id ?? null);
+  //  디스크 자리는 **언제나 열쇠가 있다** — 이 모드에는 «종전 자리의 주인» 인 워크스페이스가 없다(모든 요청이 테넌트를 달고 온다). 컨텍스트 밖
+  //   호출은 던지지 않고(부팅 · 타이머가 죽지 않게) 아무 워크스페이스의 것도 아닌 자리(0 UUID)를 본다 — 가르기 전에 공용 자리에 받아 둔
+  //   클론(누구 것인지 모른다)을 컨텍스트를 잃은 호출이 읽지 못하게.
+  installWorkspaceDirKeyResolver(() => currentTenant()?.id ?? SINGLE_TENANT_ID);
   return "테넌트 바인딩: 요청별 — 공유 게이트웨이";
 }
