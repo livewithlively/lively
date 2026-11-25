@@ -33,6 +33,7 @@ import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTM
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, macUpdateHandoffAction, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
+import { hideWindow } from "./window-hide.mjs";   // #5791 — 전체화면이면 풀고 숨긴다(안 풀고 숨기면 까만 Space 가 남는다)
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
@@ -148,7 +149,7 @@ async function refreshState({ deep = false } = {}) {
 function syncWindows(wasReady) {
   const ready = appReady(state);
   if (wasReady && !ready) {
-    if (appWin && !appWin.isDestroyed() && appWin.isVisible()) { appWin.hide(); showWindow(); }
+    if (appWin && !appWin.isDestroyed() && appWin.isVisible()) { hideWindow(appWin); showWindow(); }
     return;
   }
   if (!wasReady && ready && win && !win.isDestroyed() && win.isVisible()) {
@@ -568,7 +569,7 @@ function showWindow() {
   win.once("ready-to-show", () => win.show());
   // 창을 닫아도 앱은 트레이에 남는다 — 노드 리모컨이 사라지면 안 된다.
   //  ⚠ 자리는 **숨기기 직전에** 저장한다. 'closed' 는 트레이 상주라 앱 종료 때까지 안 올 수도 있다.
-  win.on("close", (e) => { saveBounds(); if (!quitting) { e.preventDefault(); win.hide(); } });
+  win.on("close", (e) => { saveBounds(); if (!quitting) { e.preventDefault(); hideWindow(win); } });
   // 업데이트 자동 적용은 '사람이 안 보고 있을 때'만 — 창을 숨기면 예약하고, 다시 보이면 취소한다.
   win.on("hide", () => scheduleAutoApply());
   win.on("show", () => { if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; } });
@@ -992,7 +993,8 @@ function showApp() {
     const fallback = setTimeout(() => { if (appWin && !appWin.isDestroyed() && !appWin.isVisible()) appWin.show(); }, 1500);
     appWin.once("ready-to-show", () => { clearTimeout(fallback); if (appWin && !appWin.isDestroyed()) appWin.show(); });
     // 마법사 창과 같은 수명 규약 — 닫아도 앱은 트레이에 남는다(노드 리모컨이 사라지면 안 된다).
-    appWin.on("close", (e) => { saveAppBounds(); if (!quitting) { e.preventDefault(); appWin.hide(); } });
+    //  ⌘W(기본 메뉴 Window ▸ Close)도 여기로 온다. 전체화면이면 풀고 숨긴다(#5791 — 안 풀면 까만 화면만 남았다).
+    appWin.on("close", (e) => { saveAppBounds(); if (!quitting) { e.preventDefault(); hideWindow(appWin); } });
     appWin.on("hide", () => scheduleAutoApply());
     appWin.on("show", () => {
       if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
@@ -1009,7 +1011,7 @@ function showApp() {
       webError = `라이블리 화면을 열지 못했습니다 — ${desc || code} (${failedUrl || url})`;
       appLoaded = { url: null, token: null };
       send(IPC.LOG, { stream: "raw", line: webError });
-      if (appWin && !appWin.isDestroyed()) appWin.hide();
+      if (appWin && !appWin.isDestroyed()) hideWindow(appWin);
       showWindow(); void refreshState();
     });
     appWin.webContents.on("did-finish-load", () => {
@@ -1830,7 +1832,7 @@ function skipSetup() {
   setView({ screen: null });
   return refreshState().then(() => {
     const r = showApp();
-    if (r.ok && win && !win.isDestroyed()) win.hide();
+    if (r.ok && win && !win.isDestroyed()) hideWindow(win);
     return r;
   });
 }
