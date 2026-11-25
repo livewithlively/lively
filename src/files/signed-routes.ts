@@ -18,6 +18,7 @@
 //    이 출처의 문서로 열리지 않게 한다. 그림 · 소리 · 영상 · PDF · 글만 제 종류로, 나머지는 octet-stream.
 //  · Referrer-Policy: no-referrer · no-store — 주소(=자격)가 다른 곳으로 새거나 캐시에 남지 않게.
 import express from "express";
+import { grantsField } from "../auth/permissions.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { LivelyUser } from "../context.js";
@@ -39,7 +40,8 @@ export interface SignedRouteDeps {
   /** 이 요청의 워크스페이스 id — 토큰의 워크스페이스와 대조한다 */
   tenantId(): string;
   /** 토큰을 받은 구성원이 **지금도** 활성이고 이 워크스페이스에 들어올 수 있으면 그 사람, 아니면 null */
-  activeMember(id: string): Promise<{ id: string; email: string; scopes: string[] } | null>;
+  //  role · grants(#5799) — 역할을 받은 구성원이면 싣는다(주체가 새 권한으로 판정받게). 없으면 옛 구성원.
+  activeMember(id: string): Promise<{ id: string; email: string; scopes: string[]; role?: unknown; grants?: unknown } | null>;
   access: FileAccessDeps;
   /** 공유 자리 올리기의 마무리(자료 등록 · 그룹 rw · 도장 — ingest/upload-finish). 앱 폴더엔 부르지 않는다 */
   finishShared(o: { user: LivelyUser; base: string; abs: string; osUser: string | null; entry: UploadEntry }): Promise<{ size?: number; mtime?: number; ref?: string; source_id?: number; skipped?: string }>;
@@ -92,7 +94,7 @@ function claimsOf(token: string, want: "GET" | "PUT", d: SignedRouteDeps): { cla
 async function principalUser(claims: FileUrlClaims, d: SignedRouteDeps): Promise<LivelyUser> {
   const m = await d.activeMember(claims.s);
   if (!m) throw new HttpError(403, "이 주소를 받은 구성원이 지금 이 워크스페이스에서 활성 상태가 아닙니다");
-  return { userId: m.id, email: m.email, scopes: m.scopes, projects: [] } as LivelyUser;
+  return { userId: m.id, email: m.email, scopes: m.scopes, ...grantsField(m), projects: [] } as LivelyUser;
 }
 
 
