@@ -1,9 +1,9 @@
 // 새 권한 체계 (#5799) — 기능 영역 10개 × 수준(보기 · 고치기) + 역할 4개.
 //  방향 합의: 윤상민 2026-11-25 (지식 permission-model-redesign-direction-5799).
 //
-//  ⚠ **아직 강제에 쓰이지 않는다.** 지금 요청을 막고 여는 것은 종전 scope(./scopes.ts) 그대로다. 이 파일은 1단계 —
-//   새 이름 · 옛 이름 번역 · 역할 묶음을 **순수 값**으로 먼저 고정하고, 옛 판정과 새 판정이 어디서 갈리는지를
-//   시험(capabilities/permission-map.test.ts)이 전 기능 × 옛 scope 조합으로 잰다. 강제 전환은 다음 단계다.
+//  강제 지점은 아래 permits 로 잰다(2단계). **새 권한(grants)이 실린 주체만** 새 규칙을 받고, 옛 scope 만 가진 주체는 종전 그대로
+//   «그 scope 를 갖고 있는가» 로 판정받는다 — 구성원을 역할로 옮기기 전에는 누구에게도 아무것도 바뀌지 않는다.
+//   ⚠ 지금은 어느 인증 경로도 grants 를 싣지 않는다(역할을 저장하는 단계에서 싣는다). 그래서 실행 중 판정은 아직 종전과 같다.
 //
 //  종전 체계에서 섞여 있던 세 가지를 뗀다:
 //   · 무슨 기능인가  = 권한(Permission) 10개 — 아래 PERMISSIONS
@@ -73,10 +73,67 @@ export function mergeGrants(...parts: readonly Grants[]): Grants {
   return out;
 }
 
+/**
+ * 교집합 — 권한마다 **낮은** 수준이 남고, 한쪽에 없으면 없다.
+ *  토큰 · 앱 동의는 «발급된 상한» 이고 구성원은 «지금의 상한» 이다 — 둘 다 허락한 만큼만 통한다
+ *  (종전 «토큰 scope ∩ 구성원 scope» 의 새 꼴. 구성원을 내리면 그 사람의 토큰 · 앱이 즉시 따라 내려간다).
+ */
+export function intersectGrants(a: Grants, b: Grants): Grants {
+  const out: Partial<Record<Permission, Level>> = {};
+  for (const p of PERMISSIONS) {
+    const x = a[p], y = b[p];
+    if (x !== undefined && y !== undefined) out[p] = RANK[x] <= RANK[y] ? x : y;
+  }
+  return out;
+}
+
+/**
+ * 위험 권한 — 사람과 조직 정책 · 로그인 정보 · 구성원 컴퓨터에 깔리는 것. 종전 DANGEROUS_SCOPES(admin · runtime)가 가리키던 것이다.
+ *  회수할 수 없는 정적 토큰(AUTH_TOKENS_JSON)으로는 이 권한의 기능을 쓰지 못한다(보기 포함 — 종전과 같다).
+ */
+export const DANGEROUS_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["admin", "secrets", "harness"]);
+
+/** 권한을 가진 주체의 최소 꼴 — LivelyUser 가 이 꼴이다(이 파일은 context.ts 를 import 하지 않는 잎으로 둔다). */
+export interface GrantHolder { scopes?: readonly string[] | null; grants?: Grants | null }
+
+/**
+ * 이 주체가 가진 권한. 새 값(grants)이 실려 있으면 그것, 없으면 옛 scope 를 번역한다.
+ *  ⚠ 둘을 **합치지 않는다** — grants 가 실린 주체의 scopes 는 옛 코드 · 되돌리기용 사본일 뿐이다. 합치면 보기만 받은 사람이
+ *   사본에 남은 옛 이름으로 고치기를 얻는다.
+ */
+export function grantsOf(u: GrantHolder | null | undefined): Grants {
+  if (!u) return {};
+  return u.grants ?? legacyScopesToGrants(u.scopes);
+}
+
+/**
+ * **옛 scope 검사 한 번의 새 꼴** — 강제 지점이 쓰는 판정.
+ *  · 새 권한(grants)이 실린 주체 → need 를 덮는가(영역 × 보기 · 고치기).
+ *  · 그렇지 않은 주체(옛 scope 만) → **종전 그대로** 그 scope 를 갖고 있는가.
+ *  옛 주체를 번역해서 재지 않는 까닭: 영역이 합쳐진 자리(context 와 memory 가 둘 다 «맥락»)에서 번역은 옛 주체의 권한을 넓힌다.
+ *   앱 동의는 «이 앱에 memory 만 허락했다» 를 scope 이름으로 약속한 것이라, 배포만으로 그 앱이 분류체계 · NAS 파일까지 읽게 되면
+ *   그 약속이 거짓이 된다. 그래서 **구성원을 역할로 옮기기 전에는 누구에게도 아무것도 바뀌지 않는다** — 달라지는 것은 옮기는 순간에,
+ *   옮기는 사람이 보는 앞에서 달라진다.
+ *  need 가 null(로그인만)이면 누구든 통과한다.
+ */
+export function permits(u: GrantHolder | null | undefined, legacyScope: string | null, need: Need | null): boolean {
+  if (!need || legacyScope === null) return true;
+  if (!u) return false;
+  if (u.grants) return allows(u.grants, need);
+  return Array.isArray(u.scopes) && u.scopes.includes(legacyScope);
+}
+
+/** 이 주체가 그 권한을 그 수준으로 갖고 있나. 수준을 안 주면 고치기를 묻는다(모르면 닫는 쪽). */
+export function can(u: GrantHolder | null | undefined, perm: Permission, level: Level = "write"): boolean {
+  return allows(grantsOf(u), { perm, level });
+}
+
 // ── 옛 이름 → 새 권한 (번역층) ─────────────────────────────────────────────────────────────
-//  저장된 옛 값은 건드리지 않고 **읽을 때** 번역한다. 지금 코드는 모르는 이름을 조용히 버리므로
-//   (org/store/tokens.ts computeEffectiveScopes 의 isScope 필터) 옛 칸에 새 이름을 써 넣었다가 되돌리면 그 사람의
-//   권한이 전부 사라진다. 새 값은 새 칸에 둔다(다음 단계).
+//  쓰이는 자리는 둘이다 — ① 구성원을 역할로 옮길 때 «지금 scope 로 되던 일» 을 새 권한으로 옮겨 적는다 ② 역할로 옮긴 구성원의
+//   토큰 · 앱 동의는 여전히 옛 이름으로 적혀 있다(발급된 상한) — 그것을 번역해 구성원의 새 권한과 교집합한다.
+//   ⚠ **옛 scope 만 가진 주체의 판정에는 쓰지 않는다**(permits 머리말 — 번역은 영역이 합쳐진 자리에서 넓힌다).
+//  저장된 옛 값은 건드리지 않는다. 지금 코드는 모르는 이름을 조용히 버리므로(org/store/tokens.ts computeEffectiveScopes 의
+//   isScope 필터) 옛 칸에 새 이름을 써 넣었다가 되돌리면 그 사람의 권한이 전부 사라진다. 새 값은 새 칸에 둔다.
 //
 //  기준: **옛 scope 하나가 열던 기능은 번역 뒤에도 전부 열린다.** 예외는 일부러 좁히는 것뿐이고 그 목록은
 //   capabilities/permission-map.ts 의 NARROWED 가 이유와 함께 적는다(시험이 «그 목록이 전부» 임을 잰다).

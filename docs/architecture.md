@@ -117,7 +117,7 @@ Single source of truth for allowed scopes: **`src/auth/scopes.ts`** (the types u
 
 ### New permission model (in transition, #5799)
 
-The seven scopes above are being replaced by **10 feature areas × a level (read · write) + 4 roles**. At this stage only the values and the assignment table exist; they are **not used for enforcement yet** — requests are still allowed or denied by the scopes above.
+The seven scopes above are being replaced by **10 feature areas × a level (read · write) + 4 roles**. The enforcement points (MCP and REST adapters · the app screen bridge · external-app tools) share one decision, `permits`: **only a principal that carries the new `grants`** is judged by the new rule, while a principal with old scopes only is judged exactly as before. No auth path attaches `grants` yet (that comes with role storage), so runtime decisions are still unchanged.
 
 | Permission | UI name | Covers |
 |---|---|---|
@@ -136,6 +136,7 @@ The seven scopes above are being replaced by **10 feature areas × a level (read
 - The level is derived from whether the capability mutates the context store (`capMutates`). Targets (DB sources · repos · external apps) are not encoded in the permission name; people and teams are granted on the target.
 - **When you add a capability that has a scope, add one line to the table** — otherwise `permission-map.test` fails and names it.
 - That test checks every capability against every combination of old scopes: what an old scope allowed is still allowed after translation, and nothing widens toward the dangerous permissions. Capabilities that are narrowed on purpose are listed in `NARROWED` with the reason.
+- `cap-permission.test` checks that a principal with old scopes only gets **exactly the same** decision as before for every capability × all 128 scope subsets. When you add an enforcement point, do not call `scopes.includes(...)` directly; use `permits(user, oldScope, need)` (or `capAllowed` · `isAdmin` · `canManageWorkspace`).
 
 ## Running
 

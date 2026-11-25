@@ -16,6 +16,7 @@ import type { LivelyUser } from "../context.js";
 import { listContentAudit, type ContentAuditRow } from "../org/store.js";
 import { anyInjectedDoc } from "../org/store/sections.js";
 import { isAdmin } from "./principal.js";
+import { permits } from "../auth/permissions.js";
 import { INJECTED_DOC_ADMIN_ONLY } from "./knowledge/shared.js";
 import {
   updateProject, updateProjectStatus, setProjectFolder, restoreProject, deleteProject, deleteTaskNode,
@@ -274,7 +275,8 @@ function applier(r: Row): Apply | undefined {
 // 카테고리 되돌리기는 context 권한(content_restore 와 동일 정합) — 없으면 그 행은 건너뛴다.
 function scopeOk(r: Row, user: LivelyUser): boolean {
   if (r.entity !== "category") return true;
-  return ((user?.scopes ?? []) as string[]).includes("context");
+  //  #5799 — 새 권한이 실린 주체에게는 분류체계도 «맥락» 이다(trash.ts 의 카테고리 복원과 같은 판정).
+  return permits(user, "context", { perm: "content", level: "write" });
 }
 
 // #5801 — 세션 주입 문구(injection='always' 행)에 닿는 되돌리기 · 다시 실행은 관리자만. 이 op 은 감사 스냅샷을 스토어에 바로

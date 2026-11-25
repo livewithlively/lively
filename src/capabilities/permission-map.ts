@@ -1,8 +1,9 @@
 // 기능 → 새 권한 배정표 (#5799) — 등록부(capabilities/index.ts registry)의 기능마다 새 권한 10개 중 어디에 드는가.
 //  방향 합의: 윤상민 2026-11-25 (지식 permission-model-redesign-direction-5799). 권한 정의는 auth/permissions.ts.
 //
-//  ⚠ **아직 강제에 쓰이지 않는다.** 요청을 막고 여는 것은 여전히 각 기능의 scope 다. 이 표는 전환할 때 쓸 **목표 배정**이고,
-//   옛 판정과 어디서 갈리는지는 permission-map.test.ts 가 전 기능 × 옛 scope 로 잰다.
+//  이 표는 **새 권한이 실린 주체**(역할로 옮긴 구성원)의 판정에 쓰인다(cap-permission.ts capAllowed). 옛 scope 만 가진 주체는
+//   종전 그대로 각 기능의 scope 로 판정받는다. 옛 scope 를 번역했을 때 어디서 갈리는지는 permission-map.test.ts 가
+//   전 기능 × 옛 scope 로 잰다 — 구성원을 역할로 옮길 때 달라지는 것이 그것이다.
 //
 //  읽는 법
 //   · scope 가 null 인 기능(로그인만)은 여기 적지 않는다 — 새 체계에서도 로그인만이다.
@@ -26,7 +27,7 @@
 //     맥락 저장소 설정은 아니지만 같은 사람들이 하는 워크스페이스 운영이다.
 //   · 개인 설정(notify_prefs_set · dash_watch_set · knowledge_view_set)이 content 고치기다 — 게스트는 못 바꾼다.
 import type { Scope } from "../auth/scopes.js";
-import type { Permission, Need } from "../auth/permissions.js";
+import { LEGACY_SCOPE_GRANTS, type Permission, type Need } from "../auth/permissions.js";
 
 export const CAPABILITY_PERMISSIONS: Readonly<Record<Permission, readonly string[]>> = {
   // 지식 · 자료 · 프로젝트 · 태스크 · 분류체계 · 도메인맵 · 공유폴더 파일 · 워크스페이스 자가 관리
@@ -167,6 +168,20 @@ export function permissionOf(name: string, legacyScope: Scope | null): Permissio
 export function needFor(name: string, legacyScope: Scope | null, mutates: boolean): Need | null {
   const perm = permissionOf(name, legacyScope);
   return perm ? { perm, level: mutates ? "write" : "read" } : null;
+}
+
+/**
+ * 외부 앱 도구(http_proxy · MCP 프록시) 한 번 부르기가 요구하는 것 — 등록부 밖이라 이름이 아니라 **그 도구에 설정된 호출 scope 와 등급**으로 정한다.
+ *  · 호출 scope 가 items(기본값)면 «외부 앱» — 조회 등급(L0)은 보기, 그 밖(L1 · L2 · 모름)은 고치기.
+ *  · 관리자가 다른 scope(context · memory · db · code)로 조여 둔 도구는 그 조임을 그대로 잇는다: 그 scope 의 본줄기 권한을,
+ *    그 scope 가 번역으로 받는 수준만큼 요구한다(옛 scope 를 가진 사람은 정확히 그대로 통과한다).
+ *  ⚠ MCP 프록시의 등급은 도구 이름으로 짐작한 값이다(mcp-proxy.ts classifyToolLevel). «외부 앱 보기» 만 따로 주기 시작하기 전에
+ *   그 짐작이 쓰기 도구를 L0 으로 두지 않는지 다시 재야 한다 — 지금은 외부 앱 권한이 전부 고치기라 차이가 없다.
+ */
+export function needForExternalTool(callScope: Scope, level: string | null | undefined): Need {
+  if (callScope === "items") return { perm: "external", level: level === "L0" ? "read" : "write" };
+  const perm = LEGACY_DEFAULT[callScope];
+  return { perm, level: LEGACY_SCOPE_GRANTS[callScope][perm] ?? "write" };
 }
 
 /** 표가 이름으로 적은 기능인가(기본값으로 떨어진 것이 아니라). */

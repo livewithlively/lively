@@ -4,7 +4,8 @@
 // - restMounts(): web.ts 가 순회 마운트하는 [capability, mount] 목록.
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveUser, requireScope } from "../context.js";
+import { resolveUser } from "../context.js";
+import { capMutates, capNeed, capAllowed } from "./cap-permission.js";
 import { viewerOf } from "./principal.js";
 import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
@@ -241,19 +242,9 @@ export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, b
 //   (delivery 포함 수백 op)를 로드하게 되고, capability 파일이면 index ↔ 자기 자신 순환이 된다(#1313 R25).
 export { viewerOf, isAdmin } from "./principal.js";
 
-// 읽기전용 모드(#1007) 판정의 단일 진실원천 — 이 capability 가 컨텍스트 스토어를 **변형(write)**하는가.
-//  · cap.mutates 명시가 있으면 그것(POST인데 읽기·MCP전용 읽기 등 예외 표기).
-//  · 없으면 REST 마운트 method 에서 파생: POST 마운트가 하나라도 있으면 쓰기, GET-only 면 읽기
-//    (이 코드베이스 관례 = 읽기 GET·쓰기 POST. 드리프트 0 — 새 co-exposed 툴은 자동 분류).
-//  · rest:false(MCP 전용) + 명시 없음 → 파생 신호 부재 → **fail-closed = 쓰기로 간주**.
-//    보안 게이트라 미지정의 안전한 기본은 '차단'이다 — 새 MCP전용 쓰기 툴이 읽기전용 세션에서 조용히 새지 않게.
-//    (그래서 순수 MCP전용 '읽기'는 반드시 mutates:false 를 달아야 읽기전용에서도 노출된다 — 실패해도 방향이 안전).
-export function capMutates(cap: Capability): boolean {
-  if (typeof cap.mutates === "boolean") return cap.mutates;
-  const rest = cap.expose.rest;
-  if (Array.isArray(rest) && rest.length) return rest.some((m) => m.method === "POST");
-  return true;
-}
+// capMutates(이 기능이 컨텍스트를 바꾸는가) · capNeed · capAllowed 의 본체는 ./cap-permission.ts(등록부를 import 하지 않는 잎) —
+//  여기는 기존 import 스펙 호환 재수출. 등록부가 import 하는 capability 파일(app-tool-call 등)은 잎을 **직결** import 한다(순환 방지 #1313 R25).
+export { capMutates, capNeed, capAllowed };
 
 // 읽기전용에서 차단 **예외**(#1007 사용자 스코프) — 컨텍스트 스토어 콘텐츠 쓰기가 아니라 '코드실행/오프로드'라 기밀 세션에서도 유지한다.
 //  broker_run(브로커 도구 실행)·delegate_run/cancel(무거운 작업 위탁)은 읽기전용이어도 '일'(빌드·테스트)을 계속하게 둔다는 사용자 결정.
@@ -305,7 +296,8 @@ export function registerMcpCapabilities(
       { title: cap.title, description: cap.description + restEquivHint(cap), inputSchema: cap.input, ...(meta ? { _meta: meta } : {}) },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
-        if (cap.scope) requireScope(u, cap.scope);
+        // 권한 판정(#5799 capAllowed — 새 권한이 실린 주체는 영역 × 수준, 옛 scope 만 가진 주체는 종전 그대로). 거절 문구는 종전 꼴.
+        if (!capAllowed(u, cap)) throw new Error(`Forbidden: user '${u.userId}' lacks scope '${cap.scope}'`);
         requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
         await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
         await assertAppContextSafeTool(u, cap.name, "mcp");   // #5100: 맥락 범위를 선언한 앱이면 범위를 못 지키는 도구는 403(기록은 instrument)

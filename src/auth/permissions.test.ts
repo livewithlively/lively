@@ -9,12 +9,17 @@
 //   P5 옛 위험 scope(admin · runtime)만 관리 · 자격 · 하네스 설정을 준다
 //   P6 역할은 게스트 ⊆ 구성원 ⊆ 관리자 ⊆ 소유자 로 넓어진다
 //   P7 합의한 역할 표 그대로다(게스트 = 맥락 보기만 · 관리자는 자격 · 하네스 설정이 보기 · DB 는 누구도 고치기가 없다)
+//   P8 교집합: 권한마다 낮은 수준 · 한쪽에 없으면 없다 · 순서와 무관 · 빈 쪽과는 빈 것
+//   P9 주체의 권한: 새 값이 실려 있으면 그것만 본다(옛 scope 사본과 합치지 않는다) · 없으면 옛 scope 번역 · 주체가 없으면 빈 것
+//   P10 can: 수준을 안 주면 고치기를 묻는다 · 보기만 가진 사람에게 보기는 통하고 고치기는 안 통한다
+//   P11 위험 권한은 관리 · 자격 · 하네스 설정이고, 옛 위험 scope 가 주는 것과 정확히 같다
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SCOPES, DANGEROUS_SCOPES, SAFE_SCOPES } from "./scopes.js";
 import {
   PERMISSIONS, PERMISSION_INFO, isPermission, allows, mergeGrants, legacyScopesToGrants, LEGACY_SCOPE_GRANTS,
-  ROLES, ROLE_INFO, ROLE_GRANTS, isRole, type Grants, type Level, type Permission,
+  ROLES, ROLE_INFO, ROLE_GRANTS, isRole, intersectGrants, grantsOf, can, DANGEROUS_PERMISSIONS,
+  type Grants, type Level, type Permission,
 } from "./permissions.js";
 
 const RANK: Record<Level, number> = { read: 1, write: 2 };
@@ -107,4 +112,56 @@ test("P7 합의한 역할 표 그대로다", () => {
   for (const r of ROLES) assert.notEqual(ROLE_GRANTS[r].db, "write", `${r} — DB 는 조회 전용이다`);
   assert.equal(ROLE_GRANTS.owner.secrets, "write");
   assert.equal(ROLE_GRANTS.owner.harness, "write");
+});
+
+test("P8 교집합은 권한마다 낮은 수준이고, 한쪽에 없으면 없다", () => {
+  assert.deepEqual(intersectGrants({ content: "write", code: "read", db: "read" }, { content: "read", code: "write", admin: "write" }),
+    { content: "read", code: "read" });
+  assert.deepEqual(intersectGrants({ content: "write" }, { content: "write" }), { content: "write" });
+  assert.deepEqual(intersectGrants({ content: "write" }, {}), {});
+  assert.deepEqual(intersectGrants({}, { content: "write" }), {});
+  const a: Grants = { content: "read", pipeline: "write", session: "write" }, b: Grants = { content: "write", pipeline: "read", harness: "read" };
+  assert.deepEqual(intersectGrants(a, b), intersectGrants(b, a), "순서와 무관");
+  // 구성원이 상한이다 — 토큰이 더 많이 들고 있어도 구성원이 가진 만큼만 남는다
+  assert.deepEqual(intersectGrants(legacyScopesToGrants(["admin", "memory"]), ROLE_GRANTS.guest), { content: "read" });
+  // 교집합은 어느 쪽보다도 넓지 않다
+  for (const p of PERMISSIONS) {
+    const x = intersectGrants(ROLE_GRANTS.admin, ROLE_GRANTS.member)[p];
+    assert.ok(rank({ [p]: x } as Grants, p) <= rank(ROLE_GRANTS.admin, p) && rank({ [p]: x } as Grants, p) <= rank(ROLE_GRANTS.member, p), p);
+  }
+});
+
+test("P9 주체의 권한 — 새 값이 실려 있으면 그것만 본다", () => {
+  assert.deepEqual(grantsOf(null), {});
+  assert.deepEqual(grantsOf(undefined), {});
+  assert.deepEqual(grantsOf({}), {});
+  assert.deepEqual(grantsOf({ scopes: ["memory"] }), { content: "write", pipeline: "write", session: "write" }, "옛 scope 번역");
+  assert.deepEqual(grantsOf({ scopes: ["memory"], grants: null }), { content: "write", pipeline: "write", session: "write" }, "grants 가 null 이면 없는 것과 같다");
+  // 보기만 받은 사람의 옛 scope 사본에 memory · admin 이 남아 있어도 고치기 · 관리를 얻지 않는다
+  assert.deepEqual(grantsOf({ scopes: ["memory", "admin"], grants: { content: "read" } }), { content: "read" });
+  // 새 값이 «아무것도 없음» 이면 그대로 아무것도 없다(빈 객체는 «없음» 이 아니라 «권한 0개» 다)
+  assert.deepEqual(grantsOf({ scopes: ["memory", "admin"], grants: {} }), {});
+});
+
+test("P10 can — 수준을 안 주면 고치기를 묻는다", () => {
+  const viewer = { grants: { content: "read" } as Grants };
+  assert.equal(can(viewer, "content", "read"), true);
+  assert.equal(can(viewer, "content", "write"), false);
+  assert.equal(can(viewer, "content"), false, "기본은 고치기");
+  assert.equal(can({ scopes: ["admin"] }, "admin"), true);
+  assert.equal(can({ scopes: ["admin"] }, "harness", "read"), false, "admin 은 하네스 설정을 주지 않는다");
+  assert.equal(can({ scopes: ["runtime"] }, "harness"), true);
+  assert.equal(can({ scopes: ["memory"] }, "pipeline"), true);
+  assert.equal(can({ scopes: ["context"] }, "pipeline", "read"), false);
+  assert.equal(can(null, "content", "read"), false);
+  assert.equal(can({ scopes: [] }, "session", "read"), false);
+});
+
+test("P11 위험 권한은 관리 · 자격 · 하네스 설정이다", () => {
+  assert.deepEqual([...DANGEROUS_PERMISSIONS].sort(), ["admin", "harness", "secrets"]);
+  const fromDangerousScopes = new Set<string>([...DANGEROUS_SCOPES].flatMap((s) => Object.keys(LEGACY_SCOPE_GRANTS[s])));
+  assert.deepEqual([...fromDangerousScopes].sort(), [...DANGEROUS_PERMISSIONS].sort(), "옛 위험 scope 가 주는 권한과 같은 집합");
+  for (const s of SAFE_SCOPES) {
+    for (const p of Object.keys(LEGACY_SCOPE_GRANTS[s])) assert.ok(!DANGEROUS_PERMISSIONS.has(p as Permission), `${s} → ${p}`);
+  }
 });
