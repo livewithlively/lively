@@ -425,8 +425,10 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
  *  · expectedVersion: 판 대조(CAS) — 지금 행의 version 이 이 값일 때만 고친다. 행이 없거나 판이 다르면 아무것도 쓰지 않고
  *    KnowledgeVersionConflictError. 읽기(before)·대조·쓰기를 행을 잡은 한 트랜잭션에서 한다 — db 를 안 주면 여기서 트랜잭션을 열고,
  *    주면 그 트랜잭션 안에서 잡는다(트랜잭션이 아닌 연결을 주지 마라 — 그땐 쓰기 문장의 조건만 남는다).
+ *  · nameResolved: input.name 이 이미 resolveKnowledgeName 을 거친 이름이다 — 다시 해석하지 않고 그 이름의 행을 쓴다.
+ *    knowledge_save 가 핸들러에서 해석한 이름을 넘긴다(공개범위 검사 · 게이트 · 쓰기가 한 이름을 보고, 저장마다 조회 하나가 준다).
  */
-export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean; expectedVersion?: number }
+export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean; expectedVersion?: number; nameResolved?: boolean }
 export class KnowledgeExistsError extends Error {
   constructor(public readonly knowledgeName: string) { super(`지식 '${knowledgeName}' 이(가) 이미 있습니다`); }
 }
@@ -458,7 +460,7 @@ export async function upsertKnowledge(
   const db: Db = opts.db ?? itemsPool;
   let name: string;
   if (input.name) {
-    name = await resolveKnowledgeName(input.name);
+    name = opts.nameResolved ? input.name : await resolveKnowledgeName(input.name);
   } else {
     const base = slugify(input.title || input.body_md.slice(0, 40));
     name = base;

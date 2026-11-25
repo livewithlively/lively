@@ -2,6 +2,8 @@
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
 import { checkWriting, isHumanWriter, rejectWriting } from "./writing-style.js";
+import { getWritingFormat } from "../org/store/runtime-config.js";   // 서술 형식(워크스페이스별 짧은 캐시) — checkProjectText
+import type { WritingFormat } from "../org/policies/writing-format.js";
 import { z } from "zod";
 import { canSeeProjectRow, canSeeProjectRowVis, projectVisFor, visibleListIds, listVisible, hiddenProjects, PUBLIC_VIEWER } from "../v6/visibility.js";
 import { releaseProjectDraft } from "../v6/project-draft.js";
@@ -36,7 +38,7 @@ const regenAgentsForList = async (listId: number | null) => {
 };
 // #2031 — 세션이 자기 프로젝트의 이름을 짓는다: 걸쇠(claimProjectName)와 이름 규칙(project-name)은 아래 capability 가 쓴다.
 import { projectNameFromAgent } from "../v6/project-name.js";
-import { AUTO_CREATED_MARK, FIRST_PROMPT_HEADING } from "../project/first-prompt-project.js";
+import { AUTO_CREATED_MARK, withoutFirstPromptQuote } from "../project/first-prompt-project.js";
 import { executionSessionProject } from "../v6/execution-session-store.js";
 import { sessionsOfTasks } from "../v6/session-task.js";
 import { purgeDeleted } from "../v6/trash-store.js";   // #3778 — 프로젝트 완전 삭제 = 감사 스냅샷 본문까지
@@ -62,24 +64,48 @@ import { PROJECT_ACCESS_MODES, projectAccessInfo } from "../v6/project-access.js
 import { isPrivateProject, memberEditRefusal, newProjectInvitees, notifyProjectInvitees } from "../v6/project-invite.js";
 import { redactTokenShapes } from "../org/ingest/redact.js";
 
-async function checkProjectText(
+/** checkProjectText 가 읽는 것 — 시험이 갈아 끼운다. */
+export interface ProjectTextDeps {
+  loadFormat: () => Promise<WritingFormat>;
+  loadRow: (id: number) => Promise<{ description?: string | null } | null | undefined>;
+}
+const projectTextDeps: ProjectTextDeps = { loadFormat: getWritingFormat, loadRow: getNodeRow };
+
+/**
+ * 프로젝트·태스크 본문 수정의 서술 형식 판정. reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 rejects 로 돌려준다.
+ *  · 형식이 꺼진 조직(기본값)이나 project 표면을 뺀 조직은 여기서 끝난다 — 이전 본문을 읽지 않는다(형식을 안 쓰는 조직의 저장에
+ *    조회를 늘리지 않는다 · 2026-10-14 리뷰 H).
+ *  · 사람의 첫 지시 인용(`## 첫 지시(원문)` 절)과 껍데기 안내 문구는 보지 않는다(withoutFirstPromptQuote) — 프로젝트 이관이 옮겨 붙이는
+ *    사람의 지시문은 에이전트가 고칠 글이 아니다. 그 밖은 본다: 종전엔 조각에 헤딩이나 표식이 있기만 하면 판정을 통째로 건너뛰어
+ *    헤딩 한 줄로 형식 검사를 비껴갈 수 있었다(리뷰 D). 전체 교체도 같은 규칙으로 앞뒤를 비교한다 — 사람 지시 속 위반이
+ *    «원래 있던 위반» 으로 잡혀 에이전트가 새로 만든 같은 규칙의 위반을 덮지 않게.
+ */
+export async function checkProjectText(
   patch: { description?: string | null; append_description?: string },
   id: number,
   user: LivelyUser,
+  deps: ProjectTextDeps = projectTextDeps,
+  ctx?: { source?: string; client?: string } | null,   // 사람 판정에 쓴다 — 웹 화면의 토큰 편집(데스크톱 앱 등)은 사람이다(isHumanWriter)
 ): Promise<Awaited<ReturnType<typeof checkWriting>>> {
-  const human = isHumanWriter(user);
-  if (patch.append_description !== undefined) {
-    const frag = String(patch.append_description);
-    if (frag.includes(AUTO_CREATED_MARK) || frag.includes(FIRST_PROMPT_HEADING)) return { info: {}, rejects: [], guide: "" };
-    return checkWriting("project", { title: null, body: frag }, { human });
+  const none = { info: {}, rejects: [], guide: "" };
+  const appending = patch.append_description !== undefined;
+  if (!appending && (patch.description === undefined || patch.description === null)) return none;
+  // 형식을 못 읽으면 판정하지 않는다(checkWriting 과 같은 fail-open — 설정 조회 장애로 본문 저장이 멈추지 않게).
+  const fmt = await deps.loadFormat().catch(() => null);
+  if (!fmt || !fmt.enabled || !fmt.apply_to.includes("project")) return none;
+  const loadFormat = async (): Promise<WritingFormat> => fmt;   // 위에서 읽은 그 형식으로 판정한다(두 번 읽지 않는다)
+  const human = isHumanWriter(user, ctx);
+  if (appending) {
+    const rest = withoutFirstPromptQuote(String(patch.append_description));
+    if (!rest.trim()) return none;
+    return checkWriting("project", { title: null, body: rest }, { human }, loadFormat);
   }
-  if (patch.description === undefined || patch.description === null) return { info: {}, rejects: [], guide: "" };
   // 기존 본문을 못 읽으면 판정을 건너뛴다 — before 없이 판정하면 원래 있던 위반까지 거부해 형식 검사가 엄격한 쪽으로 기운다
   //  (형식 조회 실패 때의 fail-open 과 방향을 맞춘다). 행이 정말 없으면 뒤의 updateProject 가 어차피 404 를 낸다.
-  const cur = await getNodeRow(id).catch(() => null);
-  if (cur === null) return { info: {}, rejects: [], guide: "" };
-  return checkWriting("project", { title: null, body: patch.description },
-    { human, before: cur ? { title: null, body: cur.description ?? "" } : null });
+  const cur = await deps.loadRow(id).catch(() => null);
+  if (!cur) return none;
+  return checkWriting("project", { title: null, body: withoutFirstPromptQuote(String(patch.description)) },
+    { human, before: { title: null, body: withoutFirstPromptQuote(cur.description ?? "") } }, loadFormat);
 }
 
 const STATUSES = ["active", "done"] as const;
@@ -517,7 +543,7 @@ const projectCreateV6: Capability = {
     // 서술 형식 — 세션 첫 지시로 만든 껍데기(name_source=rule)는 사람의 지시문 원문을 그대로 담으므로 보지 않는다.
     const { info: style, rejects, guide } = name_source === "rule"
       ? { info: {}, rejects: [], guide: "" }
-      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user) });
+      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user, ctx) });
     if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
     //  초대제(#5598) — access 를 안 주면 createProject 가 워크스페이스의 새 프로젝트 공개 방식을 따른다(첫 지시 자동 생성 경로와 한 규칙).
@@ -862,8 +888,8 @@ const projectUpdateV6: Capability = {
     let project;
     // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
     //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
-    //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
-    const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
+    //  다른 수정까지 막히지 않게. 옮겨 붙인 첫 지시 인용(프로젝트 이관)은 사람의 지시문이라 그 절만 빼고 본다.
+    const { info: style, rejects, guide } = await checkProjectText(patch, id, user, undefined, ctx);
     if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     try { project = await updateProject(id, patch, writeCtx); }
     catch (e) {
@@ -1357,7 +1383,7 @@ const taskCreateV6: Capability = {
     await assertProjectVisible(input.parentTaskId ?? input.projectId, ctx);
     // 서술 형식 — reject 규칙에 걸린 에이전트 본문은 받지 않는다(사람의 웹 입력은 안내만). 이어쓰기는 덧붙이는 조각만 본다.
     const { info: style, rejects, guide } = await checkWriting("project", { title: null, body: input.description ?? null },
-      { human: isHumanWriter(user) });
+      { human: isHumanWriter(user, ctx) });
     if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     const task = await createTask(input, writeCtx);
     // #5522 — 일부러 만든 태스크다(세션이 저절로 갖는 태스크는 session-task.ts 가 만들고 이 길을 안 지난다) → 초안이면 푼다.
@@ -1463,8 +1489,8 @@ const taskUpdateV6: Capability = {
     const before = reschedule_dependents ? await getNodeRow(id) : null;
     // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
     //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
-    //  다른 수정까지 막히지 않게. 첫 지시 원문을 옮겨 붙이는 이어쓰기(프로젝트 이관)는 사람의 지시문이라 보지 않는다.
-    const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
+    //  다른 수정까지 막히지 않게. 옮겨 붙인 첫 지시 인용(프로젝트 이관)은 사람의 지시문이라 그 절만 빼고 본다.
+    const { info: style, rejects, guide } = await checkProjectText(patch, id, user, undefined, ctx);
     if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     const task = await updateTask(id, patch, writeCtx);
     const rescheduled = before ? await propagateReschedule(id, before, task, writeCtx) : [];

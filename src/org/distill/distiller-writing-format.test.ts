@@ -61,6 +61,18 @@ t("레인이 format 조각을 비워도(빈 문자열) 조직 블록은 남는�
   assert.ok(buildDistillerPrompt({ distiller: d, ...base, writingFormat: ON }).includes(HEADER));
   assert.ok(!buildDistillerPrompt({ distiller: d, ...base }).includes(HEADER));
 });
+// 회귀 대상 ④(리뷰 G): 지식을 형식 적용 표면에서 뺀 조직(apply_to 에 knowledge 없음 · 빈 표면)에도 «저장 거부» 블록이 붙는 것.
+//  그 조직의 증류 산출(지식 저장)은 판정하지 않으므로, 블록은 걸리지도 않는 규칙을 예고하는 거짓 안내다.
+t("지식을 적용 표면에서 뺀 조직의 증류 프롬프트는 꺼진 조직과 바이트 동일", () => {
+  const d = mk({ format_md: "## 배경\n## 결론" });
+  const plain = buildDistillerPrompt({ distiller: d, ...base });
+  for (const apply_to of [[], ["activity", "project"]]) {
+    const fmt = resolveWritingFormat({ enabled: true, apply_to, rules: { local_path: "reject" }, forbid_terms: ["review-gate"] });
+    assert.equal(buildDistillerPrompt({ distiller: d, ...base, writingFormat: fmt }), plain, `apply_to=${JSON.stringify(apply_to)}`);
+  }
+  const withKnowledge = resolveWritingFormat({ enabled: true, apply_to: ["knowledge"], rules: { local_path: "reject" } });
+  assert.ok(buildDistillerPrompt({ distiller: d, ...base, writingFormat: withKnowledge }).includes(HEADER), "지식을 켠 조직엔 붙는다");
+});
 t("첫 줄 결론 규칙을 끈 조직엔 결론 순서 지시를 붙이지 않는다", () => {
   const off = resolveWritingFormat({ enabled: true, rules: { lead_missing: "off" } });
   const out = buildDistillerPrompt({ distiller: mk(), ...base, writingFormat: off });

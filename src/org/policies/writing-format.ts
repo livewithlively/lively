@@ -159,7 +159,8 @@ export function resolveWritingFormat(raw: unknown): WritingFormat {
       bold_max: cleanLimit("bold_max", lim.bold_max, d.limits.bold_max),
       symbol_max: cleanLimit("symbol_max", lim.symbol_max, d.limits.symbol_max),
     },
-    forbid_terms: cleanTerms(r.forbid_terms) ?? d.forbid_terms,
+    // 기본값 배열을 그대로 내주지 않는다 — 받은 쪽이 고치면 제품 기본값(과 그 위에서 읽는 모든 조직)이 함께 바뀐다.
+    forbid_terms: cleanTerms(r.forbid_terms) ?? [...d.forbid_terms],
     rules: cleanRules(r.rules),
     default_level: (WRITING_RULE_LEVELS as readonly string[]).includes(r.default_level as string)
       ? (r.default_level as WritingRuleLevel) : d.default_level,
@@ -215,9 +216,15 @@ const LEVEL_WORD: Record<WritingRuleLevel, string> = { off: "끔", warn: "안내
 /**
  * 세션 주입·증류 프롬프트에 싣는 형식 블록. 꺼져 있으면 빈 글 — 켜지 않은 조직의 주입은 바이트 단위로 그대로다.
  *  거부 규칙을 함께 적는 이유: 에이전트가 저장한 뒤 422 를 받고서야 규칙을 알면 한 번의 저장이 버려진다.
+ *
+ *  적용 표면(apply_to)도 본다 — 형식을 적용하지 않는 저장은 판정조차 하지 않으므로, 그 자리에 «저장 거부» 를 예고하면 거짓 안내가 된다
+ *   (에이전트는 걸리지도 않는 규칙에 맞추느라 글을 고친다).
+ *   · surface 를 주면(증류기 = knowledge) 그 표면에 형식을 적용하는 조직에만 싣는다.
+ *   · 안 주면(세션 주입 — 한 세션이 지식·작업기록·프로젝트를 다 쓴다) 적용 표면이 하나라도 있을 때만 싣는다.
  */
-export function buildWritingGuideBlock(fmt: WritingFormat): string {
-  if (!fmt.enabled) return "";
+export function buildWritingGuideBlock(fmt: WritingFormat, surface?: WritingSurface): string {
+  if (!fmt.enabled || !fmt.apply_to.length) return "";
+  if (surface && !fmt.apply_to.includes(surface)) return "";
   const rejects = WRITING_RULE_IDS.filter((id) => ruleLevel(fmt, id) === "reject");
   const lines = [fmt.guide_md.trim()];
   if (rejects.length) {

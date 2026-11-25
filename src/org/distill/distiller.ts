@@ -1352,8 +1352,9 @@ export function distillerSectionViews(d: DistillerRow, o: SectionOpts): PromptSe
   }));
 }
 
+// 증류 산출은 지식 저장이다 — 지식을 형식 적용 표면에서 뺀 조직엔 블록을 붙이지 않는다(그 저장은 판정하지 않는다).
 function orgWritingBlock(fmt: WritingFormat): string {
-  const w = buildWritingGuideBlock(fmt);
+  const w = buildWritingGuideBlock(fmt, "knowledge");
   if (!w) return "";
   const head = ["[조직 서술 형식 — 레인 형식보다 우선]"];
   if (ruleLevel(fmt, "lead_missing") !== "off") head.push("레인 형식의 섹션은 결론 문장 뒤에 둔다: 본문 첫 줄은 헤딩 없이 결론 1~3문장이다.");
