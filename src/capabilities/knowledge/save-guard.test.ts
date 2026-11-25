@@ -121,6 +121,10 @@ t("MCP 입력 스키마에 style_fix·expected_version 이 있고 설명이 붙�
   assert.match(knowledgeSave.description, /style_fix:true 와 읽을 때의 expected_version/);
   assert.match(knowledgeSave.description, /knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version/);
 });
+t("expected_version 설명은 없는 지식(신규 저장)에 보내도 409 라고 알린다", () => {
+  const input = knowledgeSave.input as Record<string, { description?: string }>;
+  assert.match(String(input.expected_version?.description), /없는 지식[^.]*409/);
+});
 const parse = (body: Record<string, unknown>) => {
   const mount = (knowledgeSave.expose as { rest: Array<{ parse: (req: unknown) => Record<string, unknown> }> }).rest[0];
   return mount.parse({ body: { name: "k", body_md: "본문이다.", ...body }, params: {}, query: {}, headers: {} });
@@ -133,6 +137,13 @@ t("REST 도 style_fix·expected_version 을 핸들러로 넘기고, 정수가 �
   assert.equal(none.style_fix, undefined);
   assert.equal(none.expected_version, undefined);
   for (const bad of ["abc", 1.5, 0]) assert.equal(thrown(() => { parse({ expected_version: bad }); })?.status, 400, String(bad));
+});
+t("REST 의 expected_version 은 정수나 숫자 문자열만 받는다 — Number() 가 다른 판으로 바꾸는 값은 400", () => {
+  // true→1 · "0x10"→16 · [5]→5 · "1e1"→10 — 그대로 받으면 호출자가 뜻하지 않은 판과 대조한다(knowledge_set_fields 와 같은 규칙).
+  for (const bad of [true, "0x10", [5], "1e1", " 3", -1]) {
+    assert.equal(thrown(() => { parse({ expected_version: bad }); })?.status, 400, JSON.stringify(bad));
+  }
+  assert.equal(parse({ expected_version: 4 }).expected_version, 4);
 });
 t("REST 의 style_fix 는 boolean 만 받는다", () => {
   assert.equal(parse({ style_fix: false }).style_fix, false);
