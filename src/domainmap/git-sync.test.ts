@@ -19,11 +19,18 @@
 // 13  | '' / '\n\n' (빈 입력·빈 줄)       | []                                (빈 경우 행)
 // 14  | 다중 라인 혼합 + 후행 개행         | 순서 보존한 전 행 파싱
 // 15  | 경로에 공백/한글                   | 탭 분리라 원형 보존
+//
+// ── 판정용 git 질의 3상(isAncestorStrict·commitExists) — 쓰기를 가르는 판정이라 오류를 「아니다」 로 읽지 않는다 ──
+// 16 | 커밋 있음 / 조상임                         | true
+// 17 | 커밋 없음·커밋 아닌 객체·sha 아닌 값 / 조상 아님 | false (git 의 「아니다」 = exit 1)
+// 18 | 없는 sha 로 조상 판정(exit 128)            | throw
+// 19 | 클론 디렉터리 없음 · git 실행 파일 없음(ENOENT) · 타임아웃 | throw
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseDiff, sanitizeName, repoClonePath, reposDir, withCloneLock, CloneBusyError, CLONE_LOCK_STALE_MS } from "./git-sync.js";
+import { parseDiff, sanitizeName, repoClonePath, reposDir, withCloneLock, CloneBusyError, CLONE_LOCK_STALE_MS, isAncestorStrict, commitExists } from "./git-sync.js";
 import { installWorkspaceDirKeyResolver } from "../ops/workspace-dir-key.js";
 
 let pass = 0;
@@ -134,6 +141,57 @@ t("repoClonePath 은 reposDir 하위 단일 세그먼트(경로탈출 불가)", 
     if (prevDir === undefined) delete process.env.DOMAINMAP_REPOS_DIR; else process.env.DOMAINMAP_REPOS_DIR = prevDir;
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+{
+  const dir = mkdtempSync(join(tmpdir(), "git-sync-answer-"));
+  const g = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], {
+    encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" },
+  }).trim();
+  const O = { timeoutMs: 30_000 };
+  try {
+    g("init", "-q");
+    writeFileSync(join(dir, "a"), "1"); g("add", "a"); g("commit", "-qm", "1");
+    const c1 = g("rev-parse", "HEAD");
+    writeFileSync(join(dir, "a"), "2"); g("commit", "-qam", "2");
+    const c2 = g("rev-parse", "HEAD");
+    const tree = g("rev-parse", "HEAD^{tree}");
+    const missing = "d".repeat(40);
+    const rejects = async (p: Promise<unknown>) => { let threw = false; try { await p; } catch { threw = true; } return threw; };
+
+    assert.equal(await commitExists(dir, c1, O), true);
+    assert.equal(await commitExists(dir, c1.slice(0, 7), O), true);
+    assert.equal(await isAncestorStrict(dir, c1, c2, O), true);
+    assert.equal(await isAncestorStrict(dir, c2, c2, O), true);
+    pass++; console.log("ok  #16 있음·조상 → true");
+
+    for (const v of [missing, missing.slice(0, 7), tree, "not-a-sha", "--help"]) assert.equal(await commitExists(dir, v, O), false, v);
+    assert.equal(await isAncestorStrict(dir, c2, c1, O), false);
+    pass++; console.log("ok  #17 없음·커밋 아님·sha 아님 / 조상 아님 → false");
+
+    assert.equal(await rejects(isAncestorStrict(dir, missing, c2, O)), true);
+    pass++; console.log("ok  #18 없는 sha 로 조상 판정(128) → throw");
+
+    const gone = join(dir, "no-such-dir");
+    assert.equal(await rejects(commitExists(gone, c1, O)), true);
+    assert.equal(await rejects(isAncestorStrict(gone, c1, c2, O)), true);
+    const path0 = process.env.PATH;
+    process.env.PATH = join(dir, "empty-path");
+    try {
+      assert.equal(await rejects(commitExists(dir, c1, O)), true);
+      assert.equal(await rejects(isAncestorStrict(dir, c1, c2, O)), true);
+    } finally { process.env.PATH = path0; }
+    // 타임아웃: 응답하지 않는 가짜 git 을 PATH 앞에 둔다.
+    const slowBin = join(dir, "slow-bin");
+    mkdirSync(slowBin);
+    writeFileSync(join(slowBin, "git"), "#!/bin/sh\nsleep 5\n", { mode: 0o755 });
+    process.env.PATH = `${slowBin}:${path0}`;
+    try {
+      assert.equal(await rejects(commitExists(dir, c1, { timeoutMs: 200 })), true);
+      assert.equal(await rejects(isAncestorStrict(dir, c1, c2, { timeoutMs: 200 })), true);
+    } finally { process.env.PATH = path0; }
+    pass++; console.log("ok  #19 클론 없음·git 없음(ENOENT)·타임아웃 → throw");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 // ── 스캐너 클론 자리도 워크스페이스마다 따로 ──────────────────────────────────

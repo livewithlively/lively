@@ -8,7 +8,7 @@ import { getRepo } from "./core/repos.js";
 import { refresh } from "./core/refresh.js";
 import type { Actor } from "./core/types.js";
 import { hostOf, isAuthError, describeGitError } from "../org/credentials/git-credential-store.js";
-import { git as gitExec, ensureClone as ensureCloneRaw, repoClonePath, parseDiff, CloneBusyError } from "./git-sync.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, repoClonePath, parseDiff, CloneBusyError, commitTime, commitExists } from "./git-sync.js";
 
 // repoClonePath 는 구 git-pull.ts 표면(scheduler/actions/map-bootstrap.ts 가 동적 import).
 //  구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
@@ -64,10 +64,13 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
     ? repo.last_refreshed_sha : null;
   // base 가 클론에서 실제 reachable 한 커밋인지 검증 — phantom/history-rewrite/local-only 체크포인트(diff 영원히 실패)는
   //  null 취급해 head 로 자가 재베이스라인한다(is 는 이미 부트스트랩으로 현 HEAD 기준 → 적용할 diff 없음, 체크포인트만 정렬).
+  //  조회 자체가 실패하면(타임아웃·깨진 클론) 「없다」 로 읽지 않는다 — 그러면 조건 없는 재기준(쓰기)으로 간다. 이번 틱은 건너뛴다.
   let base = baseRaw;
   if (base) {
-    try { await git(["-C", cloneDir, "cat-file", "-e", `${base}^{commit}`]); }
-    catch { base = null; }
+    let present: boolean;
+    try { present = await commitExists(cloneDir, base, { timeoutMs: GIT_TIMEOUT_MS }); }
+    catch { return { repo: repoName, status: "skipped", detail: "git check failed (rev-parse), will retry next tick", base, head }; }
+    if (!present) base = null;
   }
   if (base && base === head) return { repo: repoName, status: "skipped", detail: "up-to-date", head };
 
@@ -83,6 +86,9 @@ export async function refreshRepoFromGit(repoName: string, actor: Actor): Promis
   catch { return { repo: repoName, status: "skipped", detail: "sha not in clone yet, will retry next tick", base, head }; }
 
   const changes = parseDiff(diffOut);
-  const r = await refresh(repoName, { base, head, changes, granularity: "file" }, actor);
-  return { repo: repoName, status: "ok", base, head, changes: changes.length, tally: (r as { tally?: unknown }).tally };
+  const head_committed_at = await commitTime(cloneDir, head, { timeoutMs: GIT_TIMEOUT_MS });
+  const r = await refresh(repoName, { base, head, head_committed_at, changes, granularity: "file" }, actor);
+  // A webhook refresh moved the checkpoint after we read it; the next tick diffs from there.
+  if (r.skipped) return { repo: repoName, status: "skipped", detail: "checkpoint moved concurrently, will retry next tick", base, head };
+  return { repo: repoName, status: "ok", base, head, changes: changes.length, tally: r.tally };
 }

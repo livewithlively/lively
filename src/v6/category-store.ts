@@ -293,9 +293,10 @@ export async function createCategory(
  *   세워 둔 규칙 — "카테고리를 지우기 전에 그 아래 지식을 먼저 옮긴다"). 비활성도 같은 자리다.
  *   이 검사가 있어야 «비활성 축은 비어 있다» 가 보장되고, 그 덕분에 비활성 축을 분류 후보에서 빼도
  *   소환에서 잃는 것이 없다(안 그러면 지식이 조용히 사라진다).
+ *  검사와 상태 전환은 한 트랜잭션에서 분류 행을 잠근 채로 한다(updateCategory) — 이유는 deleteCategory 와 같다.
  */
-async function assertDeprecatable(id: number, key: string): Promise<void> {
-  const row: { n: number } | undefined = await one(itemsPool,
+async function assertDeprecatable(db: Db, id: number, key: string): Promise<void> {
+  const row: { n: number } | undefined = await one(db,
     `SELECT count(*)::int AS n FROM knowledge_category kc JOIN knowledge k ON k.name=kc.name
       WHERE kc.category_id=$1 AND kc.state<>'rejected' AND k.lifecycle='active'`, [id]);
   const n = row?.n ?? 0;
@@ -320,19 +321,26 @@ export async function updateCategory(
   if (nextState !== null && nextState !== "active" && nextState !== "deprecated") {
     throw new HttpError(400, "state 는 active|deprecated 만 가능합니다(merged 는 병합 경로가 정합니다)");
   }
-  if (nextState === "deprecated" && before.state !== "deprecated") await assertDeprecatable(id, before.key);
   //  묶음(#1631) — 3상이다: 키 부재=미변경 / 빈 문자열·null=해제 / 값=그 묶음(없는 key 면 400).
   //   COALESCE 로는 «해제» 를 표현할 수 없어(null 이 곧 «안 건드림» 이다) 조건부 SET 으로 가른다.
   const group = await resolveGroupKey(patch.group);
-  // COALESCE($n, col): undefined→null→기존값 보존(부분 수정).
-  const row: CategoryRow = await one(itemsPool,
-    `UPDATE category SET
-       name=COALESCE($2,name), description=COALESCE($3,description),
-       should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting),
-       state=COALESCE($6,state), group_key=CASE WHEN $7::boolean THEN $8::text ELSE group_key END, updated_at=now()
-     WHERE id=$1 RETURNING ${CATEGORY_COLS}`,
-    [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null, nextState,
-     group.change, group.groupKey]);
+  //  비활성 검사와 UPDATE 를 한 트랜잭션에서 분류 행을 잠근 채로 한다(FOR UPDATE). 매핑을 이 분류에 붙이는 쓰기는 FK 검사로
+  //   같은 행에 FOR KEY SHARE 를 잡는데, UPDATE 자체의 잠금(FOR NO KEY UPDATE)은 그것과 부딪치지 않는다. 그래서 잠그지 않으면
+  //   커밋 전 매핑을 못 본 검사가 통과하고 UPDATE 도 기다리지 않아, 활성 지식이 든 분류가 비활성이 된다(category-classification-tx.pg-test D1).
+  const row: CategoryRow = await withTx(async (db) => {
+    const locked: { state: string } | undefined = await one(db, `SELECT state FROM category WHERE id=$1 FOR UPDATE`, [id]);
+    if (!locked) throw new HttpError(404, `카테고리 #${id} 없음`);
+    if (nextState === "deprecated" && locked.state !== "deprecated") await assertDeprecatable(db, id, before.key);
+    // COALESCE($n, col): undefined→null→기존값 보존(부분 수정).
+    return one(db,
+      `UPDATE category SET
+         name=COALESCE($2,name), description=COALESCE($3,description),
+         should=COALESCE($4,should), cross_cutting=COALESCE($5,cross_cutting),
+         state=COALESCE($6,state), group_key=CASE WHEN $7::boolean THEN $8::text ELSE group_key END, updated_at=now()
+       WHERE id=$1 RETURNING ${CATEGORY_COLS}`,
+      [id, patch.name ?? null, patch.description ?? null, patch.should ?? null, patch.cross_cutting ?? null, nextState,
+       group.change, group.groupKey]);
+  });
   await auditCategory(before.key, "update", before, row, ctx);
   // #1153 — 정의 벡터 재계산. 임베딩 입력(이름+설명+should)이 **실제로 바뀐** 경우에만 pending 으로 되돌린다
   //  (무변경 저장에 헛임베딩을 태우지 않는다 — knowledge 쓰기 경로와 동일 idiom). 백그라운드 스윕이 채운다.

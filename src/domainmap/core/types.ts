@@ -76,7 +76,13 @@ export interface RestoreResult { restored: number; change_id: number; action: "d
 
 export interface IngestResult { repo: string; run_id: number; tally: Record<string, number> }
 // refresh — tally 는 카운터 + (file granularity 시) aggregation 객체가 섞인다.
-export interface RefreshResult { repo: string; run_id: number; base: unknown; head: unknown; tally: Record<string, unknown> }
+// skipped: the payload's base was not the repo checkpoint when the refresh took the repo lock, so
+//  nothing was applied and the checkpoint did not move. `checkpoint` is the value it found — the
+//  webhook re-diffs from it once, refresh_all and the CLI report the skip.
+export interface RefreshResult {
+  repo: string; run_id: number; base: unknown; head: unknown; tally: Record<string, unknown>;
+  skipped?: { reason: "checkpoint_moved"; checkpoint: string };
+}
 
 // 읽기 리스트 아이템(queries.ts 가 구성하는 리터럴).
 export interface DomainListItem {

@@ -4,11 +4,12 @@
 // Update the store from a git diff (name-status) WITHOUT ever silently corrupting
 // confirmed mappings. The LLM judgment pass handles the flagged residue separately.
 //
-// payload = { base?, head?, changes: [ {status, from?, to?, path?, score?} ] }
+// payload = { base?, head?, head_committed_at?, granularity?, changes: [ {status, from?, to?, path?, score?} ] }
 //   status 'R' rename from->to (score = git similarity 0-100)
 //   status 'A' add   path
 //   status 'D' delete path
-//   status 'M' modify path  (structural no-op; content re-eval is the LLM pass)
+//   status 'M' modify path  (structural no-op; content re-eval is the LLM pass — only
+//              code_unit.content_changed_at/_sha move, never updated_at)
 //
 // HARD INVARIANT (enforced in code below; do not weaken):
 //   refresh() NEVER changes any mapping.category_id (구 domain_id) and NEVER re-derives
@@ -22,6 +23,19 @@
 //
 // All writes run inside ONE transaction on a single client and are audited via
 // changelog.logChange. A mid-payload failure rolls the whole refresh back.
+//
+// CHECKPOINT INVARIANT: repo.last_refreshed_sha names the commit the stored code_units reflect.
+// A refresh carrying a `base` applies base..head and advances the checkpoint ONLY when base is
+// the checkpoint at the moment the repo row is locked; otherwise it applies nothing (a scan_run
+// row records the skip) and returns the checkpoint it found. The webhook re-diffs from it once;
+// refresh_all leaves it to its next tick. Without this, a refresh whose range starts after a
+// skipped one (webhook acked 200 while the clone was busy / its sha was not fetched yet) moved
+// the checkpoint past the skipped range and that range was never applied. The row lock makes
+// concurrent refreshes of one repo (webhook vs scheduled refresh_all) apply one after the other,
+// so the second sees the first's checkpoint. A payload without `base` is an explicit re-baseline
+// (git-pull baseline, refresh-scan, webhook over an unusable checkpoint) and keeps setting the
+// checkpoint unconditionally. A `base` without `head` is rejected: it would apply a range without
+// moving the checkpoint, so the same range would be applied again by the next refresh.
 import { one, q, withTx } from "../db.js";
 import { httpErr, type Actor, type RefreshResult } from "./types.js";
 import { logChange } from "./changelog.js";
@@ -52,11 +66,23 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
   const p: any = typeof payload === "string" ? JSON.parse(payload) : payload;
   const rawChanges: any[] = Array.isArray(p.changes) ? p.changes : [];
   const act: Actor = actor ?? { type: "agent", id: "agent" };
-  const result = await withTx(async (client) => {
-    // Resolve repo inside the txn so a bad name rolls back cleanly with a 404.
-    const repo = await one(client, "SELECT * FROM repo WHERE name=$1", [repoName]);
+  if (p.head != null && String(p.head) === "") throw httpErr(400, "refresh payload head must not be empty");
+  if (p.base != null && p.head == null) throw httpErr(400, "refresh payload with base requires head");
+  const result = await withTx<RefreshResult>(async (client) => {
+    // Resolve repo inside the txn so a bad name rolls back cleanly with a 404. FOR UPDATE: see
+    // CHECKPOINT INVARIANT — the checkpoint read below must stay true until this txn commits.
+    const repo = await one(client, "SELECT * FROM repo WHERE name=$1 FOR UPDATE", [repoName]);
     if (!repo) throw httpErr(404, "no such repo: " + repoName);
     const repo_id = repo.id;
+    const checkpoint: string | null = repo.last_refreshed_sha ?? null;
+    // A NULL checkpoint tracks no range yet, so the first based refresh may set it (pre-guard behavior).
+    if (p.base != null && checkpoint != null && String(p.base) !== checkpoint) {
+      const skipped = { reason: "checkpoint_moved" as const, checkpoint };
+      const sr0 = await one(client,
+        "INSERT INTO scan_run(repo_id,runbook,harness,actor_type,actor_id,started_at,finished_at,summary) VALUES($1,$2,$3,$4,$5,$6,$6,$7) RETURNING id",
+        [repo_id, "refresh-structure", p.harness ?? null, act.type, act.id, now(), JSON.stringify({ skipped: skipped.reason, base: String(p.base), checkpoint })]);
+      return { repo: repoName, run_id: sr0.id, base: p.base, head: p.head ?? null, tally: {}, skipped };
+    }
     // Record this refresh as a scan_run for provenance (mirrors ingest()).
     const sr = await one(client, "INSERT INTO scan_run(repo_id,runbook,harness,actor_type,actor_id,started_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
       [repo_id, "refresh-structure", p.harness ?? null, act.type, act.id, now()]);
@@ -68,17 +94,19 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
     // module-level, so first NORMALIZE the file changes onto the existing code_unit
     // granularity (longest-prefix ownership; dir-move = file-rename cluster → one
     // module rename; new dir = candidate unit; file add/modify/delete inside an
-    // existing module = no-op). The RESULTING unit-level changes then go through the
+    // existing module = no-op apart from content_changed_at). The RESULTING unit-level changes then go through the
     // EXISTING apply loop below — engine/invariant untouched.
     const granularity = (p.granularity ?? "unit") === "file" ? "file" : "unit";
     let changes = rawChanges;
     let aggregation = null;
+    let contentChanged: string[] = [];
     if (granularity === "file") {
       const unitRows = await q(client,
         `SELECT path FROM code_unit WHERE repo_id=$1 AND COALESCE(state,'active')='active'`, [repo_id]);
       const agg = aggregateFileChanges(rawChanges, unitRows.map((r) => r.path));
       changes = agg.unitChanges;
       aggregation = agg.summary;
+      contentChanged = agg.contentChanged;
     }
 
     const tally: any = { renamed: 0, renamed_lowconf: 0, added: 0, revived: 0, deleted: 0, orphaned: 0, modified: 0, skipped: 0 };
@@ -204,11 +232,31 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
 
       if (status === "M") {
         // Structural no-op: content re-evaluation is the LLM pass, not this one.
+        const path = c.path ?? c.to;
+        if (path) contentChanged.push(path);
         tally.modified++;
         continue;
       }
 
       tally.skipped++; // unknown status
+    }
+
+    // Without a head there is no commit to attribute the change to, so the content stamp is skipped.
+    if (contentChanged.length && p.head != null) {
+      // The head commit's time, not now(): a later refresh carrying an older commit (a re-baseline,
+      // a CLI replay) must not move a module's content time forward, so only rows whose stamp is
+      // not newer advance (and only those are counted). The time is capped at now(): committer
+      // dates are client-set, and one commit dated in the future would otherwise pin the stamp so
+      // no later commit could move it. now() is also the fallback when the caller has no git clone.
+      const at = typeof p.head_committed_at === "string" && !Number.isNaN(Date.parse(p.head_committed_at))
+        ? new Date(p.head_committed_at).toISOString() : now();
+      const r = await client.query(
+        `UPDATE code_unit
+            SET content_changed_at = LEAST($3::timestamptz, now()), content_changed_sha = $4
+          WHERE repo_id=$1 AND path = ANY($2::text[]) AND COALESCE(state,'active')='active'
+            AND (content_changed_at IS NULL OR content_changed_at <= LEAST($3::timestamptz, now()))`,
+        [repo_id, [...new Set(contentChanged)], at, String(p.head)]);
+      tally.content_changed = r.rowCount ?? 0;
     }
 
     if (p.head != null) {
@@ -219,8 +267,9 @@ export async function refresh(repoName: string, payload: unknown, actor: Actor |
     // and visible to the caller. Unit-granularity callers see no extra field.
     if (aggregation) tally.aggregation = aggregation;
     await client.query("UPDATE scan_run SET finished_at=$1, summary=$2 WHERE id=$3", [now(), JSON.stringify(tally), run_id]);
-    return { repo: repoName, run_id, base: p.base ?? repo.last_refreshed_sha ?? null, head: p.head ?? null, tally };
+    return { repo: repoName, run_id, base: p.base ?? checkpoint, head: p.head ?? null, tally };
   });
+  if (result.skipped) return result;
   // P4 옵션ii — is-reconcile 백스톱: 하네스 밖 변경이 refresh 로 들어온 뒤 should↔is debt 를 재평가한다
   //  (stop훅이 1차 경로, 이건 온디맨드 보정 — 깃헙액션 트리거 아님). best-effort(읽기 + debt upsert 만,
   //  refresh 의 '매핑 무변경' 불변식과 무관). domain-debt 가 should_no_is/active_commits(통합 DB join)까지 본다.
