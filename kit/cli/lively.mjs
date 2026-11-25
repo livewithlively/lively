@@ -954,7 +954,7 @@ export function workRootAddCommand({ win, nodeExe, cliPath, dir = "" }) {
 /** (순수) 사람에게 보이는 «작업 폴더 등록» 안내. node 직결형이면 긴 셸 명령보다 AI 세션 안의 /lively-connect 를 먼저 말한다. */
 export function workRootAddHint(opts) {
   const cmd = workRootAddCommand(opts);
-  return cmd.startsWith("& ") ? `/lively-connect(AI 세션 안, 코덱스는 $lively-connect) 또는 PowerShell 의 ${cmd}` : cmd;
+  return cmd.startsWith("& ") ? `/lively-mode on(AI 세션 안, 코덱스는 $lively-mode on) 또는 PowerShell 의 ${cmd}` : cmd;
 }
 const addHint = () => workRootAddHint({ win: WIN, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs") });
 
@@ -3043,15 +3043,34 @@ async function cmdRun(rest0) {
 }
 
 // `lively mode [normal|readonly|incognito]` — 디폴트 실행 모드 조회/설정(~/.lively/mode). lively run 이 --mode 없을 때 이걸 읽는다.
-async function cmdMode(rest) {
+async function cmdMode(rest0) {
+  //  `--session <id>` — 이 세션의 상태를 볼 때만 쓴다(코덱스의 셸에는 세션 id 가 없다). 기본 모드를 바꾸는 인자가 아니다.
+  const si = rest0.indexOf("--session");
+  const sessArg = si > -1 ? String(rest0[si + 1] || "") : "";
+  const rest = si > -1 ? rest0.filter((_, i) => i !== si && i !== si + 1) : rest0;
   const m = rest[0];
   if (!m) {
     const cur = defaultMode();
+    //  AI 세션 안에서 부르면(/lively-mode 가 인자 없이 부른다) 이 세션의 지금 상태를 먼저 말한다 — on · readonly · off.
+    const sidNow = sessArg || String(process.env.CLAUDE_CODE_SESSION_ID || "").trim();
+    if (sidNow) {
+      try {
+        const rs = await loadRecordScope();
+        if (rs.isSessionId(sidNow) && typeof rs.sessionModeNow === "function") {
+          const st = rs.sessionModeNow({ env: process.env, sid: sidNow, lively: LIVELY });
+          const label = st.mode === "incognito" ? "off(꺼짐)" : st.mode === "readonly" ? "readonly(읽기전용)" : "on(켜짐)";
+          say(`이 세션: ${bold(label)}${st.from === "env" ? dim(" — 열 때 정한 모드") : st.from === "mark" ? dim(" — 이 세션 안에서 바꿈") : ""}`);
+          say(dim("  바꾸기: lively on | off | readonly  (AI 세션 안에서는 /lively-mode on | off | readonly)"));
+        }
+      } catch { /* 세션 상태는 덤이다 — 못 읽어도 기본 모드는 보인다 */ }
+    }
     say(`디폴트 실행 모드: ${bold(cur)}`);
     say(dim(`  변경: lively mode <${MODES.join("|")}>   ·   일회성: lively run --readonly  /  --incognito  /  --normal`));
     return;
   }
   if (!MODES.includes(m)) die(`모드는 ${MODES.join("|")} 중 하나여야 합니다.`, 2);
+  //  `lively mode <모드> --session <id>` 는 «이 세션을 바꾼다» 로 읽히는데 실제로는 이 컴퓨터의 기본 모드를 바꾼다 — 조용히 받지 않는다.
+  if (si > -1) die("lively mode <모드> 는 lively run 으로 여는 세션의 기본 모드를 바꿉니다(--session 을 받지 않습니다).\n  이 세션을 바꾸려면: lively on | off | readonly --session <id>", 2);
   mkdirSync(LIVELY, { recursive: true });
   writeLively(MODE_FILE, m + "\n");
   // 로컬 선택이 웹의 옛 값에 되덮이지 않게 먼저 pending 을 남기고, 서버 반영 성공 뒤에만 지운다.
@@ -3114,7 +3133,7 @@ async function cmdScope(rest) {
   const arg = String(rest[0] || "").trim();
   if (arg) {
     die(`기록 방식(작업 폴더에서만 | 어디서나)은 조직 관리자가 정합니다 — ${SCOPE_ADMIN_PLACE}.\n`
-      + "  이 컴퓨터에서는 목록만 바꿀 수 있습니다: lively work-root add|remove [경로] (/lively-connect · /lively-disconnect)", 2);
+      + "  이 컴퓨터에서는 목록만 바꿀 수 있습니다: lively work-root add|remove [경로] (/lively-mode on 기억 · /lively-mode off 기억)", 2);
   }
   return listScope(rs);
 }
@@ -3277,7 +3296,7 @@ async function workRootAnywhere({ rs, s, sub, target, key, whole, change, orgLin
 }
 
 // ── 스위치 — `lively off` · `lively on` (상민님 2026-11-18) ───────────────────────
-//  /lively-disconnect·/lively-connect(코덱스 $lively-disconnect·$lively-connect)가 부르는 것. 기본은 **이 세션만**이다 — 스위치를 누른
+//  /lively-mode on|off(코덱스 $lively-mode · 별칭 /lively-connect·/lively-disconnect)가 부르는 것. 기본은 **이 세션만**이다 — 스위치를 누른
 //  그 대화만 끄고 켠다. 이후 세션까지 기억시키려면 `--remember`(= work-root remove|add — 그 폴더와 그 아래 전부, 이 컴퓨터에 남는다).
 //  세션은 `--session <id>`(시작 알림이 AI 에게 준 명령에 실려 온다) 또는 클로드가 셸에 싣는 CLAUDE_CODE_SESSION_ID 로 안다.
 //  표식·판정은 hooks/record-scope.mjs «이 세션만 끄기» — 훅은 그 세션에서 멈추고, 라이블리 도구 호출은 러너가 막는다.
@@ -3290,7 +3309,7 @@ function switchArgs(rest) {
     else if (a === "--session") o.session = String(rest[++i] || "");
     else if (a.startsWith("--session=")) o.session = a.slice(10);
     else if (!a.startsWith("-") && !o.path) o.path = a;
-    else die(`모르는 인자: ${a}\n사용법: lively off|on [--remember [경로]] [--session <id>]`, 2);
+    else die(`모르는 인자: ${a}\n사용법: lively on|off [--remember [경로]] [--session <id>] · lively readonly [--session <id>]`, 2);
   }
   return o;
 }
@@ -3306,21 +3325,22 @@ async function cmdOff(rest) {
   const sid = switchSession(rs, o);
   const here = sessionFolderOf(rs);
   if (!sid) {
-    die("어느 세션인지 알 수 없습니다 — AI 세션 안에서 /lively-disconnect(코덱스 $lively-disconnect)를 쓰거나 --session <id> 를 주세요.\n"
+    die("어느 세션인지 알 수 없습니다 — AI 세션 안에서 /lively-mode off(코덱스 $lively-mode off)를 쓰거나 --session <id> 를 주세요.\n"
       + `  이 폴더(${here})와 그 아래를 앞으로 여는 세션까지 끄려면: lively off --remember`, 2);
   }
   if (rs.sessionOff(sid, LIVELY)) { say(green("이미 이 세션은 꺼 두었습니다.") + dim(`\n  다시 켜기: lively on --session ${sid}`)); return; }
   const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: here, lively: LIVELY });
   if (!d.inScope) { say(`이 폴더는 이미 라이블리가 꺼져 있습니다(${d.reason === "excluded" ? "제외 폴더" : "작업 폴더 밖"}) — 끌 것이 없습니다.`); return; }
   if (!rs.markSessionOff(sid, LIVELY)) die("이 세션을 끄지 못했습니다(표식 파일을 쓸 수 없습니다).", 1);
+  rs.clearSessionReadonly?.(sid, LIVELY);   // 상태는 하나다 — 읽기전용으로 바꿔 둔 세션을 끄면 off 만 남는다
   say(green("✓ 이 세션에서 라이블리를 껐습니다.") + dim(` (세션 ${sid})`)
     + dim("\n  지금부터 기록·대화 업로드가 멈추고 라이블리 도구 호출이 막힙니다. 이미 올라간 앞부분 대화는 그대로 남습니다."
       + "\n  이 세션에만 적용됩니다 — 새 세션은 다시 켜진 채로 시작합니다."));
-  say(`  다시 켜기: /lively-connect ${dim(`(lively on --session ${sid})`)}`);
+  say(`  다시 켜기: /lively-mode on ${dim(`(lively on --session ${sid})`)} · 읽기만: /lively-mode readonly`);
   //  기억시키는 법 — 원하는 사람만. 폴더로는 못 끄는 자리(프로젝트 폴더)는 그렇다고 말한다.
   if (d.reason === "project") say(dim(`  (이 폴더는 라이블리 프로젝트 폴더(${d.root})라 폴더 단위로는 끌 수 없습니다 — 세션마다 끄거나 lively run --incognito 로 엽니다.)`));
   else if (d.reason === "work_root" && key2(rs, d.root) !== key2(rs, here)) say(`  이후 세션에서도 끄려면: 작업 폴더 ${bold(d.root)} 를 목록에서 뺍니다 — lively off --remember "${d.root}" ${dim("(그 폴더와 그 아래 모든 폴더에 적용됩니다)")}`);
-  else say(`  이후 세션에서도 이 폴더를 끄려면: /lively-disconnect 기억 ${dim("(lively off --remember)")} — ${bold(here)} 와 그 아래 모든 폴더에 적용됩니다.`);
+  else say(`  이후 세션에서도 이 폴더를 끄려면: /lively-mode off 기억 ${dim("(lively off --remember)")} — ${bold(here)} 와 그 아래 모든 폴더에 적용됩니다.`);
 }
 const key2 = (rs, p) => rs.rootKey(p, HOME);
 
@@ -3330,19 +3350,56 @@ async function cmdOn(rest) {
   if (o.session && (o.remember || o.path)) die("--session 과 --remember·경로는 함께 쓸 수 없습니다 — 꺼 둔 세션 켜기: lively on --session <id> · 이 폴더를 앞으로도: lively on --remember [경로]", 2);
   if (o.remember || o.path) return cmdWorkRoot(["add", ...(o.path ? [o.path] : [])]);
   const sid = switchSession(rs, o);
-  if (sid && rs.sessionOff(sid, LIVELY)) {
-    //  다시 켜면 대화 업로드 훅이 이 대화 파일을 다시 올린다 — 꺼 둔 동안의 대화가 함께 간다. 사람이 알고 고르게 한 번 멈춘다.
+  const wasOff = !!sid && rs.sessionOff(sid, LIVELY);
+  const wasRo = !!sid && !wasOff && !!rs.sessionReadonly?.(sid, LIVELY);
+  if (wasOff || wasRo) {
+    //  다시 켜면 대화 업로드 훅이 이 대화 파일을 다시 올린다 — 꺼 둔(읽기전용이던) 동안의 대화가 함께 간다. 사람이 알고 고르게 한 번 멈춘다.
+    const during = wasOff ? "꺼 둔 동안" : "읽기전용 동안";
     if (!o.yes) {
-      say(yellow("이 세션은 꺼 둔 상태입니다. 다시 켜면 꺼 둔 동안의 대화도 대화 기록에 올라갑니다."));
+      say(yellow(`이 세션은 ${wasOff ? "꺼 둔" : "읽기전용으로 바꿔 둔"} 상태입니다. 다시 켜면 ${during}의 대화도 대화 기록에 올라갑니다.`));
       say(`  그래도 켜려면: lively on --session ${sid} --yes`);
       process.exit(3);
     }
     rs.clearSessionOff(sid, LIVELY);
+    rs.clearSessionReadonly?.(sid, LIVELY);
     say(green("✓ 이 세션에서 라이블리를 다시 켰습니다.") + dim("\n  다음 메시지부터 기록·대화 업로드·라이블리 도구가 돌아옵니다."));
     return;
   }
+  //  읽기전용으로 **연** 세션(env) — 세션 안에서는 못 푼다(hooks/record-scope.mjs «세션 모드» 머리말). 폴더 등록으로 새지 않게 여기서 멈춘다.
+  if (sid && rs.envMode?.(process.env) === "readonly") {
+    die("이 세션은 읽기전용으로 열었습니다 — 세션 안에서는 일반(on)으로 바꿀 수 없습니다. 새 세션을 일반 모드로 여세요(lively run --normal · 웹 새 세션의 «일반»).", 2);
+  }
   //  꺼 둔 세션이 아니다 — 폴더가 꺼져 있는 것이다. 폴더는 세션 하나만 켤 수 없어(도구를 주는 MCP 프록시가 세션을 모른다) 이 컴퓨터에 남긴다.
   return cmdWorkRoot(["add"]);
+}
+
+// `lively readonly [--session <id>]` — 이 세션을 읽기전용으로(상민님 2026-11-25). on · off 와 같은 레일의 셋째 상태다:
+//  회사 맥락과 읽는 도구는 그대로, 기록·대화 업로드·쓰는 라이블리 도구만 멈춘다. 세션 단위뿐이다 — 폴더에 기억시키는 길은 없다
+//  (`lively run` 으로 여는 세션의 기본 모드는 `lively mode readonly`). 표식·판정은 hooks/record-scope.mjs «세션 모드».
+async function cmdReadonly(rest) {
+  const rs = await loadRecordScope();
+  const o = switchArgs(rest);
+  if (o.remember || o.path) die("읽기전용은 이 세션에만 적용됩니다 — 폴더에 기억시킬 수 없습니다.\n  lively run 으로 여는 세션의 기본 모드를 바꾸려면: lively mode readonly", 2);
+  if (typeof rs.markSessionReadonly !== "function") die("이 컴퓨터의 라이블리 훅이 옛 판이라 읽기전용 전환을 모릅니다 — lively update 뒤에 다시 시도하세요.", 1);
+  const sid = switchSession(rs, o);
+  if (!sid) die("어느 세션인지 알 수 없습니다 — AI 세션 안에서 /lively-mode readonly(코덱스 $lively-mode readonly)를 쓰거나 --session <id> 를 주세요.", 2);
+  const opened = rs.envMode(process.env);
+  if (opened === "readonly") { say(green("이 세션은 읽기전용으로 열었습니다 — 이미 읽기전용입니다.")); return; }
+  if (opened === "incognito") die("이 세션은 인코그니토로 열었습니다(라이블리 꺼짐) — 세션 안에서는 바꿀 수 없습니다.", 2);
+  if (rs.sessionReadonly(sid, LIVELY)) { say(green("이미 이 세션은 읽기전용입니다.") + dim(`\n  다시 켜기: lively on --session ${sid} · 끄기: lively off --session ${sid}`)); return; }
+  const wasOff = rs.sessionOff(sid, LIVELY);
+  if (!wasOff) {
+    const here = sessionFolderOf(rs);
+    const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "", LIVELY_RUN: "" }, dir: here, lively: LIVELY });
+    const spawned = !!String(process.env.LIVELY_SESSION_ID || "").trim() || String(process.env.LIVELY_RUN || "").trim() === "1";
+    if (!d.inScope && !spawned) { say(`이 폴더는 라이블리가 꺼져 있습니다(${d.reason === "excluded" ? "제외 폴더" : "작업 폴더 밖"}) — 읽기전용으로 쓰려면 먼저 폴더를 켜야 합니다: lively on`); process.exit(2); }
+  }
+  if (!rs.markSessionReadonly(sid, LIVELY)) die("이 세션을 읽기전용으로 바꾸지 못했습니다(표식 파일을 쓸 수 없습니다).", 1);
+  if (wasOff) rs.clearSessionOff(sid, LIVELY);   // 상태는 하나다 — 꺼 둔 세션을 읽기전용으로 올린다(대화 업로드는 여전히 없다)
+  say(green("✓ 이 세션을 읽기전용으로 바꿨습니다.") + dim(` (세션 ${sid})`)
+    + dim("\n  지금부터 기록·대화 업로드가 멈추고, 라이블리에 쓰는 도구 호출이 막힙니다. 회사 맥락과 읽는 도구는 그대로입니다."
+      + "\n  이미 올라간 앞부분 대화는 그대로 남습니다. 이 세션에만 적용됩니다 — 새 세션은 다시 켜진 채로 시작합니다."));
+  say(`  다시 켜기: /lively-mode on ${dim(`(lively on --session ${sid})`)} · 끄기: /lively-mode off`);
 }
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
@@ -3845,8 +3902,9 @@ ${bold("작업")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
   scope                               이 컴퓨터의 기록 범위 조회 ${dim("(방식 — 작업 폴더에서만 | 어디서나 — 은 조직 관리자가 정함)")}
   work-root [list|add|remove] [경로]  이 폴더에서 라이블리 켜기(add)·끄기(remove) — 방식에 맞춰 작업 폴더·제외 폴더 목록을 바꿈 ${dim("(경로 생략 = 지금 폴더 · /lively-connect·/lively-disconnect 가 부르는 것)")}
-  off [--remember [경로]]           이 세션에서 라이블리 끄기 ${dim("(기본은 이 세션만 · --remember = 이 폴더와 그 아래를 앞으로 여는 세션까지 · /lively-disconnect 가 부르는 것)")}
-  on [--remember [경로]]            꺼 둔 세션 다시 켜기, 꺼진 폴더면 이 폴더 켜기 ${dim("(/lively-connect 가 부르는 것)")}
+  off [--remember [경로]]           이 세션에서 라이블리 끄기 ${dim("(기본은 이 세션만 · --remember = 이 폴더와 그 아래를 앞으로 여는 세션까지 · /lively-mode off 가 부르는 것)")}
+  on [--remember [경로]]            꺼 둔·읽기전용 세션 다시 켜기, 꺼진 폴더면 이 폴더 켜기 ${dim("(/lively-mode on 이 부르는 것)")}
+  readonly                          이 세션을 읽기전용으로 ${dim("(읽기만 — 기록·대화 업로드·쓰는 도구가 멈춤 · 이 세션만 · /lively-mode readonly 가 부르는 것)")}
   workspace              지금 매여 있는 워크스페이스 + 이 PC 노드가 같은 곳을 보고 있는지
       switch             다른 워크스페이스로 옮기기 ${dim("(다시 로그인 — 노드·MCP 도 함께 따라갑니다)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
@@ -4149,6 +4207,7 @@ async function dispatch(cmd, o, argv) {
     case "work-root": return cmdWorkRoot(argv.slice(argv.indexOf("work-root") + 1));
     case "off": return cmdOff(argv.slice(argv.indexOf("off") + 1));
     case "on": return cmdOn(argv.slice(argv.indexOf("on") + 1));
+    case "readonly": return cmdReadonly(argv.slice(argv.indexOf("readonly") + 1));
     // workspace — 지금 어느 워크스페이스에 매여 있나 + 전환(#2215). 계정 하나가 여러 워크스페이스에 속한다.
     case "workspace": return cmdWorkspace(argv.slice(argv.indexOf("workspace") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
