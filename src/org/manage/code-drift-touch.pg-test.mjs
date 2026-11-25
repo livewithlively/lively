@@ -28,6 +28,8 @@
 //       실패를 partial_error 로 싣는다
 //   T15 제외 순번 표(excl_rank)는 그 지식이 낸 모듈 쌍만 담는다 — 지식을 낸 커밋이 다른 지식의 원천 모듈에 붙어 있어도 그 쌍으로
 //       번지지 않는다(결과는 같고 중간 표만 준다 — 실행 계획의 실제 행 수로 본다)
+//   T16 이 원천 조회에는 문장 시간 상한이 있다 — 넘으면(잠금에 막히는 등) 57014 로 던진다. 던진 오류는 E1 처럼 관리기 실행이
+//       그 원천만 빼고 partial_error 로 싣는다
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -271,6 +273,17 @@ try {
   };
   const excl = sql15 ? cteRows(await planOf(), "excl_rank") : undefined;
   chk("T15 excl_rank 는 그 지식이 낸 모듈 쌍만(두 행) — 다른 지식의 모듈로 번지지 않는다", excl === 2, show({ excl, captured: !!sql15 }));
+
+  // ── T16 문장 시간 상한 ──  다른 연결이 activity_touch 를 배타 잠금으로 쥔 동안 부른다 — 상한이 없으면 놓을 때까지 붙잡힌다.
+  const locker = new pg.Client({ connectionString: dsnFor(DB) }); await locker.connect();
+  await locker.query("BEGIN");
+  await locker.query("LOCK TABLE activity_touch IN ACCESS EXCLUSIVE MODE");
+  const released = new Promise((r) => setTimeout(() => { locker.query("ROLLBACK").then(() => locker.end()).then(r, r); }, 3000));
+  const t16 = Date.now();
+  const r16 = await det.findCodeDriftTouchCandidates(scope, 50, { timeoutMs: 300 }).then(() => "ok", (e) => e?.code ?? String(e));
+  const took16 = Date.now() - t16;
+  await released;
+  chk("T16 상한 시간을 넘으면 57014 로 던진다(잠금이 풀리기를 기다리지 않는다)", r16 === "57014" && took16 < 2500, show({ r16, took16 }));
 
   // ── E1 SQL 오류 ──  (DB 는 끝에 통째로 지우므로 열 이름을 되돌리지 않는다)
   await Q(`ALTER TABLE activity_knowledge RENAME COLUMN relation TO relation_cdt`);

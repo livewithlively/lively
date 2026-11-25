@@ -7,7 +7,7 @@
 //
 //  ⚠ 판정기는 **발견만 만든다.** 고치는 것은 조치(apply-action.ts)가 하고, 그것도 action_level 이 허락할 때만.
 //   관리기는 '이미 사람이 정리해 둔 것'을 건드리므로 오탐 한 번의 반경이 크다 — 기본은 report(쌓기만)다.
-import { itemsPool, q } from "../../db/client.js";
+import { itemsPool, q, withTx } from "../../db/client.js";
 import type { ManagerRow } from "../store/managers.js";
 
 /** 판정 결과 1건 — 저장(upsertFinding)이 이 모양을 받는다. */
@@ -397,10 +397,16 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
  *   제외 순번 표(excl_rank)는 그 지식이 낸 모듈 쌍(origin)으로만 만든다 — 지식을 낸 커밋이 다른 지식의 원천 모듈에도 붙어 있으면
  *   그 쌍은 결과에 쓰이지 않는데(changed 가 origin 으로 거른다) 중간 표만 (그 커밋이 붙은 모듈 수)배로 불어난다.
  *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
+ *  ⚠ 문장 시간 상한(SET LOCAL statement_timeout)을 둔다 — 플랜이 틀어지거나 잠금에 막혀 오래 걸리면 57014 로 던지고, 관리기 실행은
+ *   이 원천만 빼고 partial_error 로 싣는다(runManager 의 touchError). 상한 없이 붙잡혀 있으면 관리기 실행 전체가 그만큼 멈춘다.
  */
 export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
+/** 작업 기록 원천 조회의 문장 시간 상한(ms) — 큰 배포의 합성 측정(작업 기록 20만 · touch 59만)에서 3초 안쪽이었다. */
+export const CODE_DRIFT_TOUCH_TIMEOUT_MS = 60_000;
 
-export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
+export async function findCodeDriftTouchCandidates(
+  m: ManagerRow, limit: number, opts: { timeoutMs?: number } = {},
+): Promise<CodeDriftKnowledgeCandidate[]> {
   const params: unknown[] = [];
   const conds = scopeConds({ ...m, lookback_days: null }, params, "k");
   params.push(CODE_DRIFT_TOUCH_GRACE_DAYS);
@@ -408,7 +414,10 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
   params.push(limit);
   const limP = `$${params.length}`;
   try {
-    const rows = await q(itemsPool, `
+    //  읽기뿐이라 트랜잭션은 SET LOCAL 을 담는 그릇이다.
+    const rows = await withTx(async (c) => {
+      await c.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(opts.timeoutMs ?? CODE_DRIFT_TOUCH_TIMEOUT_MS))}`);
+      return q(c, `
       WITH kk AS (
         SELECT k.name, COALESCE(k.body_updated_at, k.updated_at) AS body_at
           FROM knowledge k
@@ -478,6 +487,7 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
         FROM pick JOIN knowledge k ON k.name = pick.name
        ORDER BY pick.changed_at DESC, k.name
        LIMIT ${limP}`, params);
+    });
     return rows.map((r) => ({
       name: String(r.name), title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
       repos: [String(r.repo)], category_keys: (r.category_keys as string[]) ?? [],
