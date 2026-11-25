@@ -282,9 +282,11 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
   ok(c.n === 1 && r.ms >= 95 && r.ms < 190, `C3 다시 기다리지 않는다 — 한도 한 번(100ms) 남짓에 끝(${r.ms}ms · 찍기 ${c.n}번)`);
 }
 {
+  //  본 찍기 한도를 첫 장보다 훨씬 길게 둔다 — «곧바로 실패»(첫 장 한도) 와 «본 찍기까지 기다림»(첫 장 + 본 찍기)의 간격이
+  //   좁으면 바쁜 러너의 타이머 지연(수십 ms)만으로 갈린다. 찍기 횟수(c.n)가 본 판정이고 시간은 큰 간격으로만 본다.
   const c = mkCap(["hang"]);
-  const r = await settle(captureFrame(c.fn, c.opts(true)));
-  ok(/화면을 찍지 못했습니다/.test(String(r.e?.message)) && c.n === 1 && r.ms < 95, `C4 숨은 창에서 첫 장부터 안 끝나면 본 찍기 없이 곧바로 실패(${r.ms}ms)`);
+  const r = await settle(captureFrame(c.fn, { ...c.opts(true), mainMs: 2000 }));
+  ok(/화면을 찍지 못했습니다/.test(String(r.e?.message)) && c.n === 1 && r.ms < 1000, `C4 숨은 창에서 첫 장부터 안 끝나면 본 찍기 없이 곧바로 실패(${r.ms}ms)`);
 }
 {
   const c = mkCap(["err", "img2"]);
