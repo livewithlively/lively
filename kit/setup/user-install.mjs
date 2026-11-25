@@ -515,7 +515,9 @@ export const CONNECT_MARK = "lively-managed: record-scope(#5016)";
 //  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
 //   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
 const directCli = ({ win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) } = {}) => (win && nodeBin !== "node" ? `& "${nodeBin}" "${cliPath}"` : "");
-const CONNECT_IDS = ["lively-connect", "lively-disconnect"];
+//  손잡이는 **/lively-mode 하나**다(상민님 2026-11-25): on · off · readonly, «기억» 은 인자. 알림은 이 이름만 가리킨다.
+//   lively-connect · lively-disconnect 는 같은 일을 하는 별칭으로 계속 깐다 — 이미 나간 안내(공유 안내 · 안내 영상)가 그 이름을 가리킨다.
+const CONNECT_IDS = ["lively-connect", "lively-disconnect", "lively-mode"];
 export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) }) {
   const direct = directCli({ win, nodeBin, cliPath });
   const cli = direct ? `(PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고) ${direct} 를 lively 대신 쓰는` : `lively(PATH 에 없으면 ${shim})`;
@@ -544,6 +546,19 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
         `2. 사람이 «기억»·«앞으로도»·«계속»·remember 같은 말이나 경로를 적었으면, 먼저 «그 폴더와 그 아래 모든 폴더에서, 앞으로 여는 세션까지 꺼진다» 는 것을 말하고 확인받은 뒤 \`${lv} off --remember "<폴더>"\` 를 실행하라. <폴더> 는 사람이 적은 경로, 없으면 이 세션을 연 폴더의 절대경로다.`,
         "3. 실행 결과를 사람에게 그대로 전하라 — 껐다는 것, 이 세션에만 적용된다는 것, 다시 켜는 법, 이후 세션에도 적용하려면 어떻게 하는지(결과에 적혀 있다). 조직 설정을 바꿔 주겠다고 먼저 나서지 마라.",
       ].join("\n") },
+    { id: "lively-mode", description: "이 세션의 라이블리를 켜고(on) · 끄고(off) · 읽기전용(readonly)으로 바꿉니다 — «기억» 을 붙이면 이 폴더와 그 아래를 앞으로도 켜거나 끕니다",
+      body: [
+        "라이블리 스위치다 — 이 세션의 라이블리를 on · off · readonly 로 바꾼다. 사람이 이 커맨드 뒤에 적은 말: «$ARGUMENTS»" + (win || format !== "claude" && format !== "codex" ? " (비었거나 달러 기호로 시작하는 글자 그대로면 적은 말이 없는 것이다)" : ""),
+        "",
+        "상태는 셋이다. on(켜짐 — 회사 맥락 · 기록 · 대화 업로드 · 라이블리 도구 전부) · readonly(읽기전용 — 회사 맥락과 읽는 도구만. 기록 · 대화 업로드 · 쓰는 도구는 멈춘다) · off(꺼짐 — 라이블리가 이 세션에서 멈춘다. 인코그니토와 같은 상태다).",
+        "세션 시작 때 라이블리 안내가 `on --session …` · `off --session …` · `readonly --session …` 꼴의 명령을 적어 줬으면 아래 명령 대신 그 꼴을 그대로 쓴다.",
+        "",
+        `1. 적은 말이 없으면 셸에서 ${cli} 명령으로 지금 상태만 확인하라: \`${lv} mode\` — 결과를 한 줄로 전하고 on · off · readonly 중 무엇으로 바꿀지 물어라(묻기 전에 바꾸지 마라).`,
+        `2. off(끄기 · 꺼 줘 · 인코그니토)면 \`${lv} off\` 를, readonly(읽기전용 · 읽기만)면 \`${lv} readonly\` 를, on(켜기 · 다시 켜 · 일반)이면 \`${lv} on\` 을 실행하라.`,
+        "3. 결과가 «… 동안의 대화도 대화 기록에 올라간다» 며 확인을 요구하면 그 내용을 사람에게 그대로 전하고, 사람이 그래도 켜겠다고 하면 결과에 적힌 `--yes` 명령을 실행하라.",
+        `4. «기억»·«앞으로도»·«계속»·remember 같은 말이나 경로가 함께 적혔으면(on · off 만 된다) 먼저 «그 폴더와 그 아래 모든 폴더에서, 앞으로 여는 세션까지 적용된다» 는 것을 말하고 확인받은 뒤 \`${lv} off --remember "<폴더>"\` 또는 \`${lv} on --remember "<폴더>"\` 를 실행하라. <폴더> 는 사람이 적은 경로, 없으면 이 세션을 연 폴더의 절대경로다. readonly 는 기억시킬 수 없다(이 세션만) — 그렇게 전하라.`,
+        "5. 실행 결과를 사람에게 한두 줄로 그대로 전하라 — 무엇으로 바뀌었는지, 이 세션에만 적용된다는 것, 되돌리는 법(결과에 적혀 있다). off · readonly 로 바꾼 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라. 실패했으면 결과에 나온 이유를 그대로 전하라. 조직 설정을 바꿔 주겠다고 먼저 나서지 마라.",
+      ].join("\n") },
   ];
   const note = `<!-- ${CONNECT_MARK} — 라이블리 설치기가 쓰는 파일입니다. 고쳐도 다음 업데이트에 덮입니다. -->`;
   return cmds.map((c) => {
@@ -560,6 +575,8 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
       //   대화가 올라간다)와 기억시키기(`--remember` — 그 아래 전부·영속)는 하네스의 권한 확인을 거친다.
       const allowed = format !== "claude" || win ? ""
         : c.id === "lively-connect" ? `allowed-tools: Bash(lively on), Bash(${shim} on)\n`
+        //  스위치 하나(/lively-mode)도 같은 선이다 — 닫는 쪽(off · readonly — 이 세션만)과 상태 보기, 그리고 `on` 한 꼴까지. `--yes` · `--remember` 는 권한 확인을 거친다.
+        : c.id === "lively-mode" ? `allowed-tools: ${["mode", "on", "off", "off --session:*", "readonly", "readonly --session:*"].flatMap((t) => [`Bash(lively ${t})`, `Bash(${shim} ${t})`]).join(", ")}\n`
         : `allowed-tools: Bash(lively off), Bash(lively off --session:*), Bash(${shim} off), Bash(${shim} off --session:*)\n`;
       text = `---\ndescription: ${JSON.stringify(c.description)}\n${allowed}---\n\n${note}\n\n${c.body}\n`;
     }
@@ -1802,12 +1819,12 @@ async function main() {
       // 기본 훅 3종 + 커스텀 훅 런너(이벤트별 고정 엔트리)를 비파괴 머지(절대경로).
       safeMergeUserSettings(mergeBlocks(userLevelHooksBlock(), runnerHooksBlock()));
       mergeAutoApprove(); // auto-approve(permissions.allow) reconcile
-      writeConnectCommands(join(CLAUDE_DIR, "commands"), "claude", "Claude");   // /lively-connect · /lively-disconnect(#5016)
+      writeConnectCommands(join(CLAUDE_DIR, "commands"), "claude", "Claude");   // /lively-mode(스위치) · 별칭 /lively-connect · /lively-disconnect(#5016)
     },
     codex: () => {
       console.log("  ── Codex ──");
       installCodex(ctx, gatewayMcpUrl());
-      writeConnectCommands(join(CODEX, "skills"), "skill", "Codex");            // $lively-connect · $lively-disconnect(스킬 — 0.170 의 정본)
+      writeConnectCommands(join(CODEX, "skills"), "skill", "Codex");            // $lively-mode · 별칭 $lively-connect · $lively-disconnect(스킬 — 0.170 의 정본)
       writeConnectCommands(join(CODEX, "prompts"), "codex", "Codex(옛 프롬프트)");  // /prompts:lively-connect(#5016 — 커스텀 프롬프트가 남은 옛 코덱스)
     },
     opencode: () => {

@@ -36,7 +36,7 @@ import crypto from "node:crypto";
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { inScopeNow, startedOutside, clearStartedOutside, sessionOffToolText } from "./record-scope.mjs";
+import { inScopeNow, startedOutside, clearStartedOutside, sessionOffToolText, sessionModeNow, readonlyToolText, readonlyUnknownToolText } from "./record-scope.mjs";
 import { isInjectedPrompt } from "./prompt-origin.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
@@ -762,6 +762,60 @@ async function lateOrgContext(input) {
 // 라이블리 MCP 도구인가(게이트웨이 프록시 lively · 로컬 조작 lively-local) — 이름 꼴은 하네스 표가 정한다.
 const isLivelyTool = (name) => ["lively", "lively-local"].some((srv) => String(name || "").startsWith(harness(HARNESS).tools.mcp(srv, "")));
 
+// ── 읽기전용에서 쓸 수 있는 도구(세션 안에서 읽기전용으로 바꾼 세션용) ─────────────────────────────
+//  무엇이 «쓰는 도구» 인지는 게이트웨이만 안다(src/capabilities/index.ts isReadOnlyBlocked — 읽기전용 헤더로 온 tools/list 에서 뺀다).
+//  그래서 같은 헤더로 tools/list 를 한 번 받아 «거기 있는 도구 = 써도 되는 도구» 로 판정한다 — 분류를 여기 한 벌 더 두지 않는다.
+//  받은 목록은 잠깐 사본으로 둔다(도구 호출마다 왕복하지 않게). 못 받았으면 묵은 사본으로, 그것도 없으면 "unknown"(부르는 쪽이 막는다).
+//  로컬 조작 도구(lively-local)는 보지 않는다 — env 로 연 읽기전용에서도 그 서버는 그대로 뜬다(같은 범위).
+const GATEWAY_TOOL_PREFIX = () => harness(HARNESS).tools.mcp("lively", "");
+const isGatewayTool = (name) => String(name || "").startsWith(GATEWAY_TOOL_PREFIX());
+const bareToolName = (name) => String(name || "").slice(GATEWAY_TOOL_PREFIX().length);
+const RO_TOOLS_TTL_MS = 10 * 60 * 1000;
+const roToolsFile = () => join(LIST_CACHE_DIR, `readonly-tools-${crypto.createHash("sha256").update([GW, String(process.env.LVLY_TENANT_SLUG || "").trim(), TOKEN].join("\n")).digest("hex").slice(0, 24)}.json`);
+function readRoTools() {
+  try {
+    const j = JSON.parse(readFileSync(roToolsFile(), "utf8"));
+    return Array.isArray(j?.names) && Number.isFinite(j?.at) ? j : null;
+  } catch { return null; }
+}
+/** (순수) tools/list 응답 본문 → 도구 이름 배열. JSON 한 덩이 또는 SSE(data: 줄) 둘 다 받는다. 모양이 아니면 null. */
+function toolNamesFromMcpBody(text, contentType = "") {
+  const pick = (m) => (Array.isArray(m?.result?.tools) ? m.result.tools.map((t) => String(t?.name || "")).filter(Boolean) : null);
+  if (!String(contentType).includes("text/event-stream")) { try { return pick(JSON.parse(text)); } catch { return null; } }
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    try { const names = pick(JSON.parse(line.slice(5).trim())); if (names) return names; } catch { /* 부분 프레임 */ }
+  }
+  return null;
+}
+async function fetchRoTools(input) {
+  if (!TOKEN) return null;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), FETCH_MS);
+  try {
+    const res = await fetch(`${GW}/mcp`, { method: "POST", signal: ctl.signal,
+      headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input), "content-type": "application/json", accept: "application/json, text/event-stream",
+        "x-lively-mode": "readonly", "x-lively-harness": HARNESS || "claude-code" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "ro-tools", method: "tools/list" }) });
+    if (!res.ok) return null;
+    return toolNamesFromMcpBody(await res.text(), String(res.headers.get("content-type") || ""));
+  } catch { return null; }
+  finally { clearTimeout(t); }
+}
+/** @returns {Promise<"allow"|"deny"|"unknown">} */
+async function readonlyVerdict(name, input) {
+  let c = readRoTools();
+  if (!c || Date.now() - c.at > RO_TOOLS_TTL_MS) {
+    const names = await fetchRoTools(input);
+    if (names) {
+      c = { at: Date.now(), names };
+      try { mkdirSync(LIST_CACHE_DIR, { recursive: true, mode: 0o700 }); writeFileSync(roToolsFile(), JSON.stringify(c), { mode: 0o600 }); } catch { /* 사본은 best-effort */ }
+    }
+  }
+  if (!c) return "unknown";
+  return c.names.includes(name) ? "allow" : "deny";
+}
+
 async function main() {
   if (!EVENT) return;
   const stdin = await readStdin(SESSIONEND ? STDIN_MS_SESSIONEND : undefined);
@@ -778,6 +832,23 @@ async function main() {
         permissionDecisionReason: sessionOffToolText(harness(HARNESS).id) } }) + "\n");
     }
     return;
+  }
+  //  세션 안에서 읽기전용으로 바꾼 세션(record-scope.mjs «세션 모드») — env 로 연 읽기전용과 똑같이 굴게 한다:
+  //   ① 조직 훅(자식 프로세스)이 보는 env 에 모드를 싣는다 — 대화 업로드·첫 지시 프로젝트 같은 훅이 종전 판정(LIVELY_MODE) 그대로 비켜선다.
+  //   ② 쓰는 라이블리 도구는 여기서 막는다 — MCP 프록시는 이 세션의 모드가 바뀐 줄 모른다(env 는 뜰 때 값이다).
+  //  env 로 연 읽기전용은 건드리지 않는다(프록시가 헤더로 싣고 게이트웨이가 막는다 — 종전 경로).
+  if (sessionModeNow({ env: process.env, input, lively: LIVELY }).from === "mark") {
+    process.env.LIVELY_MODE = "readonly";
+    process.env.LIVELY_READONLY = "1";
+    if (EVENT === "PreToolUse" && isGatewayTool(toolName)) {
+      const verdict = await readonlyVerdict(bareToolName(toolName), input);
+      if (verdict !== "allow") {
+        const h = harness(HARNESS).id;
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+          permissionDecisionReason: verdict === "deny" ? readonlyToolText(bareToolName(toolName), h) : readonlyUnknownToolText(h) } }) + "\n");
+        return;
+      }
+    }
   }
   const late = EVENT === "UserPromptSubmit" && !HOOK_ONLY.size ? await lateOrgContext(input) : "";
 

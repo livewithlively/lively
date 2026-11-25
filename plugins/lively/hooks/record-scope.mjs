@@ -421,8 +421,7 @@ export function workRootAddVia(opts = {}) {
 export function connectHint(harness = "claude", { plugin = false, addCmd = workRootAddCommand() } = {}) {
   const h = String(harness || "claude").toLowerCase();
   if (plugin) return "웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 등록";
-  if (h === "claude") return "/lively-connect";
-  if (h === "codex") return "$lively-connect";
+  if (h === "claude" || h === "codex") return `${modeHint(h)} on`;
   return `\`${addCmd}\``;
 }
 
@@ -491,14 +490,20 @@ export function outsideNotice({ dir = "", reason = "outside", root = "", harness
 export function disconnectHint(harness = "claude", { plugin = false, removeCmd = workRootRemoveCommand() } = {}) {
   const h = String(harness || "claude").toLowerCase();
   if (plugin) return "웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 빼거나 제외";
-  if (h === "claude") return "/lively-disconnect";
-  if (h === "codex") return "$lively-disconnect";
+  if (h === "claude" || h === "codex") return `${modeHint(h)} off`;
   return `\`${removeCmd}\``;
+}
+
+/** 이 하네스의 스위치 이름 — 켜기·끄기·읽기전용을 한 손잡이로 다룬다(상민님 2026-11-25): `/lively-mode on | off | readonly [기억]`.
+ *  클로드는 슬래시 커맨드, 코덱스는 스킬(`$lively-mode`)이다. 종전 /lively-connect · /lively-disconnect 는 같은 일을 하는 별칭으로 남는다
+ *  (이미 나간 안내가 가리킨다) — 알림은 이 손잡이 하나만 가리킨다. */
+export function modeHint(harness = "claude") {
+  return String(harness || "claude").toLowerCase() === "codex" ? "$lively-mode" : "/lively-mode";
 }
 
 /** 범위 안 세션 시작 알림 — 사람에게 한 줄(user) + AI 에게 짧은 안내(ai). 알릴 것이 없으면 null.
  *  ai 는 회사 맥락 **앞**에 붙는다 — 하네스가 긴 훅 출력을 앞 2,000자 미리보기로 자르므로(#4503) 짧게 쓴다. */
-export function insideNotice({ dir = "", reason = "", root = "", sid = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
+export function insideNotice({ dir = "", reason = "", root = "", sid = "", mode = "normal", modeFixed = false, harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
   if (!["anywhere", "work_root", "project", "unsynced"].includes(reason)) return null;
   const cli = { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") };
   const remove = (d = "") => workRootRemoveCommand({ ...cli, dir: d });
@@ -518,9 +523,23 @@ export function insideNotice({ dir = "", reason = "", root = "", sid = "", harne
       : reason === "unsynced" ? "이 컴퓨터는 기록 범위 설정을 아직 받지 못해(종전 동작)"
       : reason === "anywhere" ? "이 컴퓨터는 «어디서나» 방식(조직 설정)이라"
       : safeDir(root) ? `이 세션을 연 폴더가 이 컴퓨터의 라이블리 작업 폴더(\`${root}\`) 안이라` : "이 세션을 연 폴더가 이 컴퓨터의 라이블리 작업 폴더 안이라";
-    return done(`[라이블리] 켜져 있습니다 · 이 세션에서 끄려면 ${hint}`, [head, `${where} 라이블리가 켜져 있다 — ${on}`,
-      `사람이 연결 상태를 묻거나 끄고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 \`${off}\` 를 실행하라${isDirect(off) ? `(${PS_NOTE})` : ""} — 이 세션만 꺼진다(지금부터 기록·업로드가 멈추고 라이블리 도구가 막힌다). 끈 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라. 이후 세션에도 적용하는 법은 그 명령의 결과가 알려 준다.`,
-      ask]);
+    //  지금 모드와 바꾸는 손잡이를 한 줄에 싣는다(상민님 2026-11-25 — 아래 «세션 모드» 절). 손잡이는 /lively-mode 하나다: on · off · readonly.
+    //   읽기전용으로 **연** 세션(modeFixed — 띄울 때 env 로 정함)은 여기서 on 으로 못 바꾼다 — 안 듣는 손잡이를 가리키지 않는다.
+    const mh = modeHint(h);
+    const sw = (verb) => cliLine(`${verb} --session ${sid}`, cli);
+    const ps = isDirect(off) ? `(${PS_NOTE})` : "";
+    const ask2 = "사람이 요청하지 않았는데 바꾸지 마라.";
+    if (mode === "readonly") {
+      const roHead = "## 라이블리 읽기전용 — 이 세션은 읽기만 한다";
+      const roState = "회사 맥락 주입·읽는 도구는 동작하고, 기록·대화 업로드·쓰는 라이블리 도구는 멈춰 있다. 라이블리 규칙(기록하라 등)을 적용하지 마라.";
+      if (modeFixed) return done(`[라이블리] 읽기전용으로 연 세션입니다(기록 안 함) · 끄려면 ${mh} off`, [roHead, `읽기전용으로 연 세션이다 — ${roState}`,
+        `여기서 on(일반)으로는 못 바꾼다(새 세션에서 연다). 사람이 끄고 싶다고 하면 ${mh} off 를 안내하거나, 사람의 요청에 따라 셸에서 \`${off}\` 를 실행하라${ps}.`, ask2]);
+      return done(`[라이블리] 읽기전용입니다(readonly · 기록 안 함) · 바꾸려면 ${mh} on | off`, [roHead, `사람이 이 세션을 읽기전용으로 바꿔 두었다 — ${roState}`,
+        `사람이 바꾸고 싶다고 하면 ${mh} 를 안내하거나, 사람의 요청에 따라 셸에서 실행하라${ps} — 다시 켜기 \`${sw("on")}\`(읽기전용 동안의 대화도 대화 기록에 올라간다는 것을 먼저 말하라) · 끄기 \`${off}\`.`, ask2]);
+    }
+    return done(`[라이블리] 켜져 있습니다(on) · 바꾸려면 ${mh} off | readonly`, [head, `${where} 라이블리가 켜져 있다 — ${on}`,
+      `사람이 연결 상태를 묻거나 바꾸고 싶다고 하면 ${mh} 를 안내하거나, 사람의 요청에 따라 셸에서 실행하라${ps} — 끄기 \`${off}\`(이 세션만: 기록·업로드가 멈추고 라이블리 도구가 막힌다) · 읽기전용 \`${sw("readonly")}\`(읽기만: 기록·업로드가 멈추고 쓰는 도구가 막힌다). 바꾼 뒤로는 라이블리 규칙(기록하라 등)을 적용하지 마라. 이후 세션에도 적용하는 법은 그 명령의 결과가 알려 준다.`,
+      ask2]);
   }
   if (reason === "project" || reason === "unsynced") {
     const why = reason === "project"
@@ -600,17 +619,93 @@ export function sessionOffNotice({ sid = "", harness = "claude", win = WIN, node
   const h = String(harness || "claude").toLowerCase();
   const hint = connectHint(h, { addCmd: cliLine("on", { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") }) });
   const onCmd = cliLine(`on --session ${isSessionId(sid) ? sid : "<세션 id>"}`, { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") });
-  return { user: `[라이블리] 이 세션은 꺼 두었습니다 · 다시 켜려면 ${hint}`, ai: [
+  const mh = modeHint(h);
+  const roCmd = cliLine(`readonly --session ${isSessionId(sid) ? sid : "<세션 id>"}`, { win, nodeExe, cliPath: join(lively, "lib", "lively.mjs") });
+  const user = h === "claude" || h === "codex" ? `[라이블리] 이 세션은 꺼 두었습니다(off) · 바꾸려면 ${mh} on | readonly` : `[라이블리] 이 세션은 꺼 두었습니다 · 다시 켜려면 ${hint}`;
+  return { user, ai: [
     "## 라이블리 꺼짐 — 이 세션만",
     "사람이 이 세션에서 라이블리를 꺼 두었다 — 회사 맥락 주입·기록·대화 업로드가 없고 라이블리 도구 호출은 막힌다.",
     "다른 곳(예: ~/.codex/AGENTS.md)에 라이블리 블록이 남아 있어도 그 규칙(기록하라 등)은 이 세션에 적용하지 마라.",
-    `사람이 다시 켜고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 \`${onCmd}\` 를 실행하라 — 다시 켜면 꺼 둔 동안의 대화도 대화 기록에 올라간다는 것을 먼저 말하라.`,
+    `사람이 다시 켜고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 \`${onCmd}\` 를 실행하라 — 다시 켜면 꺼 둔 동안의 대화도 대화 기록에 올라간다는 것을 먼저 말하라. 읽기만 하게 하려면 \`${roCmd}\`(기록·업로드 없이 회사 맥락과 읽는 도구만 돌아온다).`,
     "사람이 요청하지 않았는데 켜지 마라.",
   ].join("\n") };
 }
 /** 꺼 둔 세션에서 라이블리 도구를 부르면 러너가 돌려주는 말. */
 export function sessionOffToolText(harness = "claude") {
   return `이 세션은 라이블리를 꺼 두었습니다 — 라이블리 도구를 쓰지 않습니다. 사람이 다시 켜 달라고 하면 ${connectHint(String(harness || "claude").toLowerCase())} 를 안내하세요.`;
+}
+
+// ── 세션 모드(세션 안에서 바꾸기) ─────────────────────────────────────────────
+//  모드(일반 · 읽기전용 · 인코그니토)는 종전엔 세션을 **띄울 때만** 정했다(`lively run --readonly` · 웹 새 세션 폼 → env LIVELY_MODE →
+//  MCP 프록시가 x-lively-mode 로 실어 게이트웨이가 강제). 세션 안에서 바꾸는 길은 «이 세션만 끄기» 와 같은 레일이다(상민님 2026-11-25):
+//  셸의 CLI(`lively on | off | readonly --session <id>`)가 표식을 쓰고, 세션 id 를 받는 훅이 읽는다.
+//   · 인코그니토 = «이 세션만 끄기» 그 자체다(표식 session-off/<id> — 훅이 멈추고 라이블리 도구가 막힌다). 표식도 손잡이도 따로 두지 않는다
+//     (상민님 2026-11-25 «disconnect 상태랑 동일한가»): 세션 안의 손잡이는 /lively-mode 하나이고 상태는 셋이다 — on(일반) · readonly · off(= 종전 끄기).
+//     **열 때** 인코그니토(`lively run --incognito`)는 남는다 — 처음부터 아무것도 안 올라가고 게이트웨이가 도구를 0개로 내린다(세션 중 끄기는 끄기 전 대화가 이미 올라가 있다).
+//   · 읽기전용 = 표식 session-mode/<id>(내용 `readonly`). 훅은 env 로 연 읽기전용과 똑같이 군다(대화 업로드·친 말 보고·기록 넛지 없음 —
+//     러너가 조직 훅에 LIVELY_MODE=readonly 를 실어 준다). 쓰는 라이블리 도구는 러너(run-custom PreToolUse)가 막는다 — 무엇이 «쓰는 도구» 인지는
+//     게이트웨이가 정한다(읽기전용 헤더로 받은 tools/list 에 없는 도구 = 막을 도구. 서버의 isReadOnlyBlocked 와 같은 집합).
+//  ⚠ 세션 안에서는 **더 닫는 쪽과 되돌리기만** 된다. 읽기전용·인코그니토로 **연** 세션을 일반으로 푸는 것은 안 한다 —
+//   env 로 연 모드는 MCP 프록시가 헤더로 싣고(프록시는 하네스가 뜰 때의 세션 id 만 안다 — «이 세션만 끄기» 머리말), 웹·노드가 연 세션은
+//   서버가 세션 상태(org_session_state.read_only)로도 닫아 둔다. 그 둘을 표식 하나로 열면 /clear 뒤에 «훅은 읽기전용인데 도구는 쓰는» 반쪽이 난다.
+//  /clear 로 새 대화를 열면 세션 id 가 바뀌어 연 때의 모드로 돌아간다(시작 알림이 지금 모드를 다시 말한다). 이어 열기(resume)는 같은 id 라 그대로다.
+const MODE_DIR = "session-mode";
+const modeMarker = (sid, lively) => join(lively, MODE_DIR, String(sid));
+/** 세션을 띄울 때 정한 모드(env) — 인코그니토는 훅을 통째로 끄는 LIVELY_OFF 로도 온다. */
+export function envMode(env = process.env) {
+  const m = String(env.LIVELY_MODE || "").trim().toLowerCase();
+  if (m === "incognito" || env.LIVELY_INCOGNITO === "1" || env.LIVELY_OFF === "1" || env.LIVELY_HOOKS_OFF === "1") return "incognito";
+  if (m === "readonly" || env.LIVELY_READONLY === "1") return "readonly";
+  return "normal";
+}
+export function markSessionReadonly(sid, lively = livelyDirOf()) {
+  if (!isSessionId(sid)) return false;
+  try {
+    const dir = join(lively, MODE_DIR);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of readdirSync(dir)) { try { if (Date.now() - statSync(join(dir, f)).mtimeMs > OFF_KEEP_MS) unlinkSync(join(dir, f)); } catch { /* 경합 */ } }
+    writeFileSync(modeMarker(sid, lively), "readonly\n");
+    return true;
+  } catch { return false; }
+}
+/** 세션 안에서 읽기전용으로 바꿔 둔 세션인가. 표식 정리 기준은 «이 세션만 끄기» 와 같다(마지막으로 읽힌 때 · 석 달). */
+export function sessionReadonly(sid, lively = livelyDirOf()) {
+  if (!isSessionId(sid)) return false;
+  const f = modeMarker(sid, lively);
+  try {
+    const st = statSync(f);
+    //  내용이 모르는 값이어도 닫는 쪽으로 읽는다 — 표식이 있다는 것은 사람이 이 세션을 닫아 두었다는 뜻이다.
+    if (Date.now() - st.mtimeMs > OFF_TOUCH_MS) { try { const now = new Date(); utimesSync(f, now, now); } catch { /* 읽기 전용 홈 — 판정은 그대로 */ } }
+    return true;
+  } catch { return false; }
+}
+export function clearSessionReadonly(sid, lively = livelyDirOf()) {
+  if (!isSessionId(sid)) return false;
+  try { unlinkSync(modeMarker(sid, lively)); return true; } catch { return false; }
+}
+/** 세션 안에서 바꿔 둔 모드(표식) — "incognito"(= 이 세션만 끄기) | "readonly" | ""(바꾼 적 없음). */
+export function sessionModeMark(sid, lively = livelyDirOf()) {
+  return sessionOff(sid, lively) ? "incognito" : sessionReadonly(sid, lively) ? "readonly" : "";
+}
+/** 지금 이 세션의 모드 — 띄울 때 정한 것(env)과 세션 안에서 바꾼 것(표식) 중 더 닫힌 쪽. sid 를 안 주면 훅 입력에서 읽는다.
+ *  @returns {{ mode: "normal"|"readonly"|"incognito", from: "env"|"mark"|"" }} from — 그 모드를 정한 자리(일반이면 ""). */
+export function sessionModeNow({ env = process.env, input = null, sid = "", lively = livelyDirOf(env) } = {}) {
+  try {
+    const e = envMode(env);
+    if (e === "incognito") return { mode: e, from: "env" };
+    const m = sessionModeMark(sid || hookSessionId(input), lively);
+    if (m === "incognito") return { mode: m, from: "mark" };
+    if (e === "readonly") return { mode: e, from: "env" };
+    return m ? { mode: m, from: "mark" } : { mode: "normal", from: "" };
+  } catch { return { mode: envMode(env), from: "env" }; }
+}
+/** 세션 안에서 읽기전용으로 바꾼 세션이 쓰는 라이블리 도구를 부르면 러너가 돌려주는 말. */
+export function readonlyToolText(tool = "", harness = "claude") {
+  return `이 세션은 읽기전용 모드입니다 — 라이블리에 쓰는 도구${tool ? `(${tool})` : ""}는 막혀 있습니다. 읽는 도구는 그대로 쓸 수 있습니다. 사람이 다시 켜 달라고 하면 ${modeHint(harness)} on 을 안내하세요.`;
+}
+/** 읽기전용에서 쓸 수 있는 도구 목록을 못 받았을 때(게이트웨이 미도달 · 사본 없음) — 닫는 쪽으로 막고 이유를 말한다. */
+export function readonlyUnknownToolText(harness = "claude") {
+  return `이 세션은 읽기전용 모드인데, 어느 라이블리 도구가 읽기 전용인지 게이트웨이에서 확인하지 못해 이 호출을 막았습니다. 잠시 뒤 다시 시도하거나, 사람이 원하면 ${modeHint(harness)} on 으로 바꾸세요.`;
 }
 
 // ── 세션 중간 연결(늦은 맥락 주입) ───────────────────────────────────────────

@@ -91,7 +91,7 @@ try {
     check(`W1 /lively-connect 본문도 같은 명령 — ${o.nodeExe}`, body.includes(want), `want=${want}\n${body}`);
   }
   const winHint = workRootAddHint({ win: true, nodeExe: NODE, cliPath: CLI_JS });
-  check("W2 ★ 윈도 node 직결 — /lively-connect 를 먼저, 셸 명령은 node 직접 호출", winHint.startsWith("/lively-connect") && winHint.endsWith(direct) && !winHint.includes("lively work-root"), winHint);
+  check("W2 ★ 윈도 node 직결 — 스위치(/lively-mode on)를 먼저, 셸 명령은 node 직접 호출", winHint.startsWith("/lively-mode on") && winHint.endsWith(direct) && !winHint.includes("lively work-root"), winHint);
   check("W2 그 밖엔 종전 명령 그대로", workRootAddHint({ win: false, nodeExe: "/usr/bin/node", cliPath: "/x" }) === "lively work-root add");
 
   // 일관성 — 안내가 «등록 필요» 라고 하는 곳은 실제 판정도 꺼져 있고, 아니라고 하는 곳은 켜져 있다.
