@@ -40,6 +40,11 @@ export async function init(): Promise<string> {
   ALTER TABLE code_unit ADD COLUMN IF NOT EXISTS state TEXT DEFAULT 'active';
   ALTER TABLE code_unit ADD COLUMN IF NOT EXISTS prev_path TEXT;
   ALTER TABLE code_unit ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+  -- updated_at moves on structural changes only (add/rename/remove). These two record the
+  -- last commit that changed files INSIDE the unit (refresh, granularity 'file'); NULL = none
+  -- seen since the column existed. No backfill: there is no history to derive it from.
+  ALTER TABLE code_unit ADD COLUMN IF NOT EXISTS content_changed_at TIMESTAMPTZ;
+  ALTER TABLE code_unit ADD COLUMN IF NOT EXISTS content_changed_sha TEXT;
   ALTER TABLE repo ADD COLUMN IF NOT EXISTS last_refreshed_sha TEXT;
   -- Webhook-driven refresh: the box clones/fetches each repo from git_url and runs
   -- the deterministic refresh on push. git_url MAY embed a credential token for

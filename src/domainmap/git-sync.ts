@@ -122,3 +122,35 @@ export function parseDiff(out: string): any[] {
   }
   return changes;
 }
+
+// Committer time of `sha` in the clone as ISO-8601, or null if git cannot resolve it. refresh() stamps
+// code_unit.content_changed_at with it so the value is the commit's time, not the delivery time.
+export async function commitTime(cloneDir: string, sha: string, opts: GitOpts): Promise<string | null> {
+  try {
+    const out = (await git(["-C", cloneDir, "show", "-s", "--format=%cI", sha], undefined, undefined, opts)).stdout.trim();
+    return out && !Number.isNaN(Date.parse(out)) ? out : null;
+  } catch { return null; }
+}
+
+// Yes/no git questions whose answer gates a write. git answers "no" with exit 1; anything else (exit 128
+// for an unknown ref or a broken clone, a timeout signal, ENOENT for a missing binary or cwd) is an error
+// and throws — reading it as "no" is how a failed lookup used to fall through to the wrong write.
+async function gitAnswer(args: string[], opts: GitOpts): Promise<boolean> {
+  try { await git(args, undefined, undefined, opts); return true; }
+  catch (e) {
+    if ((e as { code?: unknown })?.code === 1) return false;
+    throw e;
+  }
+}
+
+// `ancestor` is reachable from `descendant` (equal counts). Both must resolve — an unknown sha throws.
+export function isAncestorStrict(cloneDir: string, ancestor: string, descendant: string, opts: GitOpts): Promise<boolean> {
+  return gitAnswer(["-C", cloneDir, "merge-base", "--is-ancestor", ancestor, descendant], opts);
+}
+
+// `sha` names a commit in the clone. Absent, ambiguous or not a commit (exit 1 under --quiet) → false;
+// `cat-file -e <sha>^{commit}` is not used because it exits 128 for an absent object, the same code as
+// a real error.
+export function commitExists(cloneDir: string, sha: string, opts: GitOpts): Promise<boolean> {
+  return gitAnswer(["-C", cloneDir, "rev-parse", "--verify", "--quiet", "--end-of-options", `${sha}^{commit}`], opts);
+}

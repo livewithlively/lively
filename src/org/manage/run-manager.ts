@@ -232,7 +232,9 @@ async function applyActionIn(client: PoolClient, action: unknown, actor: string)
   const cur = (await client.query(
     `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1 FOR UPDATE`,
     [name])).rows[0] as { category_id: number; state: string; mapped_by: string } | undefined;
-  const target = (await client.query(`SELECT state FROM category WHERE id=$1 FOR SHARE`, [to])).rows[0] as { state: string } | undefined;
+  //  비활성 분류로는 옮기지 않는다(#1760) — FOR KEY SHARE 는 비활성 전환의 FOR UPDATE 와 부딪쳐, 전환이 진행 중이면 기다렸다가
+  //   바뀐 state 를 본다. 분류 저장의 다른 경로(linkKnowledgeCategory · 제안 · 수집기)와 같은 잠금이다.
+  const target = (await client.query(`SELECT state FROM category WHERE id=$1 FOR KEY SHARE`, [to])).rows[0] as { state: string } | undefined;
   if ((from && Number(cur?.category_id) !== from) || cur?.state === "rejected" || target?.state !== "active") {
     logger.info({ name, from, to, current: cur?.category_id ?? null, target: target?.state ?? null }, "관리기 분류 보정 건너뜀 — 발견 이후 분류가 바뀌었다");
     return "stale";
