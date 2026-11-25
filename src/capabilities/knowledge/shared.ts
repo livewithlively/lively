@@ -13,14 +13,32 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_KNOWLEDGE } from "../../org/delivery/default-content.js";
 import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
-import { anyRestrictedKnowledge, existingKnowledgeNames } from "../../v6/knowledge-store.js";
+import { anyRestrictedKnowledge, existingKnowledgeNames, maskHiddenPointers } from "../../v6/knowledge-store.js";
 import { slugify } from "../../v6/knowledge-common.js";
 import { readScopeFor, outsideReadScope } from "../../v6/read-scope.js";   // #5100 앱 맥락 범위
 import { appContextDeniedError } from "../../apps/app-context.js";
 import type { LivelyUser } from "../../context.js";
-import type { CapabilityCtx } from "../types.js";
+import type { Capability, CapabilityCtx } from "../types.js";
 import { isAdmin } from "../principal.js";
 import { anyInjectedDoc } from "../../org/store/sections.js";
+
+/**
+ * 지식 행을 돌려주는 도구의 응답에서 보는 사람에게 안 보이는 지식을 가리키는 포인터(supersedes·superseded_by)를 비운다.
+ *  쓰기 스토어 함수는 `RETURNING ${K_COLS}` 를 그대로 돌려주고 그 행이 감사 스냅샷이기도 해서 스토어에서는 가리지 않는다 — 대신
+ *  도구 묶음을 내보내는 자리에서 한 번 감싼다(저작 도구 · 트리 이동 · 휴지통 복원). 지식 행이 들어 있는 응답 칸(key)만 본다.
+ */
+export function withPointerMask(caps: Capability[], key = "knowledge"): Capability[] {
+  return caps.map((cap) => ({
+    ...cap,
+    handler: async (input: any, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const out = await cap.handler(input, user, ctx);
+      const row = out && typeof out === "object" ? (out as Record<string, unknown>)[key] : undefined;
+      if (!row || typeof row !== "object" || !("supersedes" in row || "superseded_by" in row)) return out;
+      const [masked] = await maskHiddenPointers([row as Record<string, unknown>], ctx?.viewer ?? null);
+      return { ...(out as Record<string, unknown>), [key]: masked };
+    },
+  }));
+}
 
 // 공개범위(#1291) — name 을 가진 행 배열에서 안 보이는 것을 걸러낸다. 목록 표면 공용.
 //  대부분의 조직에서 members 지식은 0건이라 첫 조회에서 바로 통과한다(문서마다 판정하지만 값싼 경로).

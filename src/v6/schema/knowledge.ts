@@ -56,6 +56,13 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     --  같은 사실이 검색용 문서에 이미 있는 것이 대상이다. lifecycle(살아 있나)·injection(항상 주입)과 직교.
     --  기본 true 라 기존 행은 그대로다(값 없는 ADD — 재작성 없음).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS searchable BOOLEAN NOT NULL DEFAULT true;
+    -- superseded_by: 대체된(superseded) 옛 지식이 가리키는 후속 지식의 name. 후속 쪽 supersedes 는 한 칸이라 후속 하나가
+    --  옛 지식 여럿을 대체하는 경우를 못 담는다 — 옛 지식 쪽에 두면 N→1 이 그대로 된다. lifecycle='superseded' 일 때만 뜻이 있다.
+    --  «superseded 면 후속이 있다» 는 CHECK 가 아니라 앱 검증(setKnowledgeLifecycle)이다 — 무중단 배포 중 아직 도는 옛 버전은
+    --  후속 없이 superseded 로 바꾸는데, CHECK 면 그 UPDATE 가 23514 로 죽는다. FK 도 두지 않는다(supersedes 와 같은 소프트 참조) —
+    --  후속을 지우는 길은 deleteKnowledge 가 막는다. 값 없는 ADD 라 재작성 없음.
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS superseded_by TEXT;
+    CREATE INDEX IF NOT EXISTS knowledge_superseded_by_idx ON knowledge(superseded_by) WHERE superseded_by IS NOT NULL;
     -- type(2026-06-30 #290): page-type facet — 엔터프라이즈 표준 합성(DITA Concept/Reference + Diátaxis How-to/Explanation + ADR Decision + LLM위키 Entity).
     --  6종: decision|concept|how-to|reference|research|entity. NULL 허용(미분류). 옛 kind(R/K/H/W)는 폐기 — 무관. 비파괴 ADD COLUMN.
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS type TEXT;

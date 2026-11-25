@@ -2634,7 +2634,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "d1b334836edc5c63"
+  "input_hash": "a951a00ca9f8071a"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -2644,7 +2644,7 @@
   "rest": [
    "POST /api/ui/knowledge/:name/lifecycle"
   ],
-  "input_hash": "df042d210dae62bf"
+  "input_hash": "7958f2959c1294ae"
  },
  {
   "name": "knowledge_set_wiki",

@@ -226,6 +226,7 @@ const KN_PROP_CATALOG = [
   { key: 'lifecycle', label: '상태' },
   { key: 'author', label: '작성자' },
   { key: 'injection', label: '주입' },
+  { key: 'superseded_by', label: '후속' },
   { key: 'supersedes', label: '대체함' },
   { key: 'external', label: '외부 링크' },
   { key: 'occurred_at', label: '발생 시각' },
@@ -281,6 +282,10 @@ function knPropValue(k, key) {
     case 'lifecycle': return k.lifecycle ? { node: LIFECYCLE_LABEL[k.lifecycle] || k.lifecycle } : null;
     case 'author': return k.author ? { node: k.author } : null;
     case 'injection': return k.injection ? { node: KN_INJECTION_LABEL[k.injection] || k.injection, hint: KN_INJECTION_HINT[k.injection] || '' } : null;
+    case 'superseded_by':
+      // 포인터는 대체됨일 때만 뜻이 있다 — 다른 상태에 남은 값은 그리지 않는다.
+      return k.lifecycle === 'superseded' && k.superseded_by
+        ? { node: el('a', { class: 'md-link mono', href: '#/k/' + encodeURIComponent(k.superseded_by), text: k.superseded_by }) } : null;
     case 'supersedes': return k.supersedes ? { node: el('span', { class: 'mono', text: k.supersedes }) } : null;
     case 'external': {
       // 합성 속성(§1) — external_system/instance/url 을 한 행으로.
