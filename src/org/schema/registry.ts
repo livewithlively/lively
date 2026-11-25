@@ -11,7 +11,7 @@ export async function initGroundTruthRegistries(pool: Pool): Promise<void> {
   // v6 컷오버(2026-06-24): 지식 본체는 v6 knowledge 테이블(src/v6/schema.ts)이 캐노니컬 — 구 knowledge_unit 통합스토어는 드랍됨.
   //  이 섹션은 #/learn ground-truth 용 별도 메타 테이블 2종(kind_registry=지식종류 정의, data_source=소스별 수집방식)만 시드한다.
 
-  // ── kind_registry — 지식 종류 분류 + 주입 정책 메타. 12 kind 시드(아래). ──
+  // ── kind_registry — 맥락이 저장되는 자리(kind) + 주입 정책 메타. 시드는 아래 INSERT. ──
   // injection_mode = 멤버 컨텍스트에 어떻게 노출되는가(enforced/always/recalled/manual/query/digest).
   //  domain_scoped = domainmap 도메인 귀속을 갖는 종류인지. cardinality = 한 종류당 한 단위(one)인지 다수(many)인지.
   // P-V3-2(D-GT): description 외에 **분류기준(criteria)·저장방식(storage)·전달방식(delivery)** 을 ground-truth 로
@@ -89,27 +89,30 @@ export async function initGroundTruthRegistries(pool: Pool): Promise<void> {
   //     (A/D/F/M/L/Z→K, S/G=domainmap federate 0행)는 scripts/v4-absorb-kinds.mjs 가 1회 수행. 이 시드+DELETE 가
   //     소스 캐노니컬이라 부팅마다 4kind 로 정렬·정리(스크립트 미실행 DB 도 시드는 4행, 데이터 흡수만 스크립트 의존).
   //   - injection_mode: R=enforced / K·H=recalled / W=query. materialize FALLBACK·web #/learn 은 라이브 registry 읽음.
+  //  ⚠ 지식 자체의 분류는 kind 가 아니라 knowledge.type 6종(src/v6/schema/knowledge.ts 의 knowledge_type_chk)이다.
+  //   kind 코드는 /api/ui/learn 응답과 data_source.into_kinds 가 쓰는 값이라 행은 그대로 두고, 문구만 «kind 는 저장 자리,
+  //   지식 분류는 type» 으로 맞춘다 — 문구가 R·K·H·W 를 분류로 안내하면 type 과 다른 두 번째 분류 안내가 된다(런북이 이 문구를 렌더한다).
   await pool.query(`
     INSERT INTO kind_registry(kind, label, injection_mode, domain_scoped, audience, cardinality, sort, description, criteria, storage, delivery) VALUES
       ('R','Rule/Policy/Persona','enforced',false,'context','many',10,
-        '조직이 모든 AI 세션에 강제하는 규칙·정책·페르소나. "반드시/금지" 같은 행동 규범과 AI 의 말투·역할. 4 본질 종류 중 하나(R·K·H·W).',
-        '"항상/반드시/절대" 지켜야 하는 강제 규범이면 R. 한 번 일어난 사실·방법 절차(H)·배경 지식(K)과 구분: R 은 위반하면 안 되는 명령형이다. 페르소나(AI 역할·말투)도 R.',
-        '항상-주입 섹션 문서(injection=always)로 저장. 본문 전체가 보존된다.',
+        '조직이 모든 AI 세션에 강제하는 규칙·정책·페르소나. "반드시/금지" 같은 행동 규범과 AI 의 말투·역할. 지식이 아니라 세션 주입 섹션 문서라 지식 분류(type)를 달지 않는다.',
+        '"항상/반드시/절대" 지켜야 하는 강제 규범이면 R. 페르소나(AI 역할·말투)도 R. R 은 위반하면 안 되는 명령형이다 — 한 번 정한 결정·배경·절차는 R 이 아니라 지식이고 type 으로 분류한다.',
+        '항상-주입 섹션 문서(injection=always)로 저장. 관리 ▸ 세션 주입(org_update_section)으로 쓰며, 지식 저장(knowledge_save)으로는 만들 수 없다(지식은 항상 recalled). 본문 전체가 보존된다.',
         '강제 주입(enforced): 맥락과 무관하게 모든 세션 컨텍스트 최상단에 전문이 그대로 들어간다(R 만 항상 주입).'),
       ('K','Knowledge note','recalled',false,'memory','many',20,
-        '지식 노트 — 결정의 배경, 알게 된 것, 정리한 생각, 사실, 도메인 지식, 메모·링크까지 아우르는 일반 지식. 4 본질 종류 중 가장 큰 기본값(R·K·H·W). (구 A/D/F/M/L/Z 흡수.)',
-        '강제 규범(R)·절차(H)·과업(W)이 아닌 거의 모든 저작 지식은 K. 배경·맥락·사실·도메인 지식·메모·외부 링크·산출물이 다 K 로 모인다(주제는 종류가 아니라 area=domain 으로 구분, 출처는 provenance 로 구분). 애매하면 K.',
-        '지식 단위로 저장(제목+본문). 본문은 전문 보존, 검색 대상. 주제 귀속은 area(domain_key, product/business)로 단다.',
-        '검색 회상(recalled): 인덱스(제목·요약)에 노출, 전문은 일에 맞춰 area+검색으로 그때 소환(on-demand).'),
+        '지식 — 결정·개념·사양·조사·개체처럼 지속되는 기록. 지식의 분류는 kind 가 아니라 type 6종(decision·concept·how-to·reference·research·entity)이고, K 는 그중 how-to 를 뺀 다섯이 저장되는 자리를 부르는 이름이다.',
+        '세션 주입 규범(R)·과업(W)이 아닌 기록이면 지식이다. 지식으로 저장할 땐 kind 를 고르지 않고 type 을 고른다 — 절차면 how-to(H), 그 밖에는 decision·concept·reference·research·entity 중 하나(K). 주제는 kind 가 아니라 카테고리로, 출처는 provenance 로 구분한다.',
+        '지식 단위로 저장(제목+본문, type 1개, 카테고리 1개). 본문은 전문 보존, 검색 대상.',
+        '검색 회상(recalled): 인덱스(제목·요약)에 노출, 전문은 일에 맞춰 카테고리+검색으로 그때 소환(on-demand).'),
       ('H','How-to/Runbook','recalled',true,'memory','many',50,
-        '하우투·런북 — 무엇을 어떤 순서로 하는지의 재현 가능한 절차(예: 배포 방법, 동기화 실행법). AI 워크플로 표준화의 핵심 산물. 4 본질 종류 중 하나(R·K·H·W).',
-        '"이렇게 한다"는 단계별 절차면 H. 배경 지식(K)과 구분: H 는 따라 하면 결과가 재현된다. 도메인 절차여도 H(area=domain 부여 가능).',
-        '지식 단위로 저장(단계 목록 본문). 주제 귀속은 area(domain_key) 부여 가능.',
-        '검색 회상(recalled): 인덱스에 노출, 필요할 때 area+검색으로 전문 소환(on-demand).'),
+        '하우투·런북 — 무엇을 어떤 순서로 하는지의 재현 가능한 절차(예: 배포 방법, 동기화 실행법). 지식의 type=how-to 와 같은 것이다. AI 워크플로 표준화의 핵심 산물.',
+        '"이렇게 한다"는 단계별 절차면 H 이고, 지식으로 저장할 땐 type=how-to 를 단다. 결정·배경(decision·concept 등)과 구분: H 는 따라 하면 결과가 재현된다.',
+        '지식 단위로 저장(type=how-to, 단계 목록 본문). 주제는 카테고리 1개.',
+        '검색 회상(recalled): 인덱스에 노출, 필요할 때 카테고리+검색으로 전문 소환(on-demand).'),
       ('W','과업(Task)','query',false,'memory','many',90,
-        '과업·태스크 — PM 도구(ClickUp 등)의 태스크/이슈. 진행 상태·담당을 가진 일. 4 본질 종류 중 하나(R·K·H·W). (과업을 향한 개별 행위·진척은 별 엔티티 작업=activity.)',
-        '진행 상태(미정/진행/완료)·담당을 가진 **과업/태스크**면 W. 절차 설명은 H, 정리된 지식은 K. 수집된 외부 활동/문서는 출처(provenance=observed)로 들어온 W/K 미러다.',
-        '커넥터/pm_* 가 적재(external_id·상태). 과업 단위. 과업을 향한 개별 작업(activity)은 activity_* 가 별도 기록.',
+        '과업·태스크 — 진행 상태·담당을 가진 일. 지식이 아니라 프로젝트·태스크(project ▸ task ▸ subtask)로 저장해 지식 분류(type)를 달지 않는다. PM 도구(ClickUp 등)의 태스크도 여기로 들어온다. (과업을 향한 개별 행위·진척은 별 엔티티 작업=activity.)',
+        '진행 상태(미정/진행/완료)·담당을 가진 **과업/태스크**면 W. 절차 설명은 지식(type=how-to), 정리된 기록은 지식(그 밖의 type)이다. 수집된 외부 과업·문서는 출처(provenance=observed)로 들어온 W·지식 미러다.',
+        '프로젝트·태스크로 저장(project_*_v6·task_*_v6, 커넥터는 external_id·상태와 함께 적재). 과업을 향한 개별 작업(activity)은 activity_* 가 별도 기록.',
         '질의 시(query): 필요할 때 조회(과업 현황 검색).')
     -- ⚠ 중재자를 **제약 이름**으로 적는다. 컬럼으로 적으면 배포 모드마다 달라진다:
     --  신규 설치에서는 이 문장이 tenant_id 컬럼이 생기기 **전에** 돌고(42703), 이미 테넌트화된

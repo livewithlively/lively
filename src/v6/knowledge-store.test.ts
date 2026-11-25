@@ -500,3 +500,15 @@ t("excludeSeed — 손 안 댄 시드(updated_by='system')를 WHERE 에서 뺀�
   assert.match(knowledgeListFilter({ excludeSeed: true }).where, /COALESCE\(k\.updated_by,''\) <> 'system'/);
   assert.doesNotMatch(knowledgeListFilter({}).where, /updated_by/);
 });
+
+// edit 의 new 는 글자 그대로 들어가야 한다. String.prototype.replace 에 문자열을 넘기면 $&·$'·$`·$$ 를
+//  치환 패턴으로 해석해, 셸 예시·정규식·가격 표기($$)가 든 문단을 고치면 본문이 조용히 바뀐다.
+t("applyKnowledgeEdits: new 안의 $ 치환 패턴을 글자 그대로 넣는다", () => {
+  const base = "앞 문장. 바꿀 자리. 뒤 문장.";
+  for (const lit of ["$&", "$'", "$`", "$$", "echo $1 $$ cost"]) {
+    for (const replace_all of [false, true]) {
+      const out = applyKnowledgeEdits(base, [{ old: "바꿀 자리", new: `값 ${lit} 끝`, replace_all }]);
+      assert.equal(out, `앞 문장. 값 ${lit} 끝. 뒤 문장.`, `${lit} replace_all=${replace_all}`);
+    }
+  }
+});

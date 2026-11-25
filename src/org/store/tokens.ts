@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
 import { isScope, DANGEROUS_SCOPES, SAFE_SCOPES } from "../../auth/scopes.js";
+import { memberGrants, principalGrants, type Grants } from "../../auth/permissions.js";
 import { audit, sha256 } from "./audit.js";
 
 // ── auth_token (DB 기반 bearer) ──
@@ -287,6 +288,8 @@ export interface DbTokenIdentity {
   userId: string;
   email: string;
   scopes: string[];
+  /** 새 권한(#5799) — 역할을 받은 구성원의 토큰만 싣는다. LivelyUser.grants 로 그대로 간다(bearer.ts). */
+  grants?: Grants;
   projects: string[];
   clientId: string | null;   // 발급 OAuth 클라이언트(oauth_client.client_id). 감사·읽기전용 프로필(T3)의 축.
   resource: string | null;   // RFC 8707 대상(audience) — 자원서버가 '내 앞으로 발급된 토큰인가'를 이걸로 판정.
@@ -327,6 +330,8 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
               to_jsonb(t) -> 'tool_ceiling' AS tool_ceiling,
               -- 비위험 권한 추종(#5712)도 같은 까닭으로 행에서 꺼낸다(칸이 없으면 NULL = 따르지 않음 — 종전 판정 그대로).
               to_jsonb(t) -> 'follow_safe_scopes' AS follow_safe_scopes,
+              -- 구성원의 역할 · 개별 권한(#5799)도 같은 까닭으로 행에서 꺼낸다(칸이 없거나 구성원이 없으면 NULL = 옛 구성원).
+              to_jsonb(m) -> 'role' AS member_role, to_jsonb(m) -> 'grants' AS member_grants,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
         WHERE t.token_hash=$1 AND t.revoked_at IS NULL
@@ -336,7 +341,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const row = r.rows[0] as {
       user_id: string; member_id: string | null; email: string | null;
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
-      follow_member_scopes: boolean | null; follow_safe_scopes: unknown;
+      follow_member_scopes: boolean | null; follow_safe_scopes: unknown; member_role: unknown; member_grants: unknown;
       client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
       app_live: boolean | null; app_server_principal: boolean | null; tool_ceiling: unknown;
     } | undefined;
@@ -361,6 +366,11 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       followSafeScopes,
     });
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
+    //  역할을 받은 구성원의 토큰이면 새 권한을 싣는다(#5799) = 구성원의 지금 권한 ∩ 이 토큰에 발급된 상한(같은 추종 규칙 — principalGrants).
+    //   옛 구성원 · 구성원 없는 토큰은 싣지 않는다 — 위 scopes 가 종전 그대로 판정한다.
+    const mg = row.member_id ? memberGrants({ role: row.member_role, grants: row.member_grants }) : undefined;
+    const grants = mg === undefined ? undefined : principalGrants(mg,
+      row.follow_member_scopes === true ? { follow: "all" } : { follow: followSafeScopes ? "safe" : "none", scopes: tokenScopes });
     //  #4891 — 앱 서버 급 표시는 앱 토큰에만 뜻이 있다. 앱 없이 켜져 있으면(있어선 안 되는 행) 받지 않는다 — 앱 도구 게이트가 안 걸린다.
     const appServer = row.app_server_principal === true;
     if (appServer && !row.app_id) return null;
@@ -378,6 +388,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
     return {
       userId: row.user_id, email: row.email ?? "", scopes, projects: strArr(row.projects, ["*"]),
+      ...(grants ? { grants } : {}),
       clientId: row.client_id ?? null,
       resource: row.resource ?? null,
       appId: row.app_id ?? null,

@@ -403,7 +403,7 @@
   "rest": [
    "POST /api/ui/org/member"
   ],
-  "input_hash": "4ea9f07e509c403d"
+  "input_hash": "ac132f1c560e2f79"
  },
  {
   "name": "org_member_reset_password",

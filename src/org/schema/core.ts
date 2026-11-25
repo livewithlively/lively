@@ -108,10 +108,20 @@ export async function initOrgCore(pool: Pool): Promise<void> {
     --  잔소리꾼이 된다(#850 이 멤버 온보딩을 세션 주입에서 뺀 이유와 같은 함정, 상시 에이전트라 더 크다).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS liv_profile JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+  // ── 역할 저장(#5799 새 권한 체계) — role = 역할 하나(guest · member · admin · owner) · grants = 역할 위에 개별로 얹은 권한({권한: read|write}).
+  //  role 이 NULL 이면 **옛 구성원**이다 — 그 사람과 그 사람의 토큰 · 앱은 종전 그대로 scopes 로 판정받는다(auth/permissions.ts permits).
+  //  역할을 줄 때 scopes 칸에는 새 권한을 옛 이름으로 비춘 사본을 함께 적는다(grantsToLegacyScopes — 아직 scopes 를 읽는 자리 · 되돌리기용).
+  //  ⚠ 이 두 칸을 읽는 쿼리는 칸 이름으로 고르지 말고 to_jsonb(행) -> 'role' 로 꺼낸다 — 롤 창(새 게이트웨이가 먼저 뜨고 마이그레이션이 끝에
+  //   도는 동안)에 칸이 아직 없어도 인증 쿼리가 깨지지 않게(auth_token.tool_ceiling 과 같은 규율).
+  await pool.query(`
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS role TEXT;
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS grants JSONB;
+  `);
   await pool.query(`
     ${ensureCheck("org_member", {
       org_member_kind_chk: "kind IN ('human','agent','system')",
       org_member_state_chk: "state IN ('active','inactive')",
+      org_member_role_chk: "role IS NULL OR role IN ('guest','member','admin','owner')",
     })}
   `);
 

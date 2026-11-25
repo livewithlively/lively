@@ -100,7 +100,7 @@ export const liveSignedRouteDeps: SignedRouteDeps = {
   activeMember: async (id) => {
     const m = await getMember(id);
     if (!m || m.state !== "active" || !(await workspaceAccessAllowed(m.id))) return null;
-    return { id: m.id, email: m.email ?? "", scopes: m.scopes };
+    return { id: m.id, email: m.email ?? "", scopes: m.scopes, role: m.role, grants: m.grants };
   },
   access: liveFileAccessDeps,
   //  공유 · 프로젝트 파일 — 다른 업로드 입구와 같은 마무리(ingest/upload-finish). 공유 루트 아래 project/<id>/… 는 프로젝트 좌표로 접힌다.
