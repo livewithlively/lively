@@ -6,7 +6,7 @@ import { HttpError } from "../rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, DEFAULT_MEMBER_SCOPES, type Scope } from "../scopes.js";
 import type { LivelyUser } from "../../context.js";
 import { getMember, mintToken, listTokens, revokeToken, mintSessionCode } from "../../org/store.js";
-import { resolveTokenHandle, MIN_HANDLE_LEN, TOKEN_HASH_LEN } from "../../org/store/tokens.js";
+import { resolveTokenHandle, MIN_HANDLE_LEN, TOKEN_HASH_LEN, isDbSourceScope, DB_SOURCE_SCOPE_MAX } from "../../org/store/tokens.js";
 import { hasCredential, verifyOwnPassword } from "../../auth/local-accounts.js";
 import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../../org/auth/device-auth.js";
 import {
@@ -23,6 +23,14 @@ export const tokensReadCapabilities: Capability[] = [
     [{ method: "GET", paths: ["/api/ui/org/tokens"], parse: () => ({}) }],
     async () => ({ tokens: await listTokens() })),
 ];
+
+// org_token_mint 의 scopes 입력 검증.
+//  'db:<source>' 는 토큰에만 싣는다(멤버 scope 는 'db' 까지) — 유효 권한은 멤버 'db' 아래에서만 산다(computeEffectiveScopes).
+export function parseMintScopes(rawScopes: unknown[]): string[] {
+  const scopes = rawScopes.map((s) => str(s, "scopes[]", DB_SOURCE_SCOPE_MAX));
+  for (const s of scopes) if (!SCOPES_ALLOWED.has(s) && !isDbSourceScope(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
+  return scopes;
+}
 
 export const tokenMintCapabilities: Capability[] = [
   // ── 토큰 발급/회수 ──
@@ -46,8 +54,7 @@ export const tokenMintCapabilities: Capability[] = [
         rawScopes = mem?.scopes?.length ? mem.scopes : [...DEFAULT_MEMBER_SCOPES];
         followSafeScopes = !!mem;
       }
-      const scopes = rawScopes.map((s) => str(s, "scopes[]", 20));
-      for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
+      const scopes = parseMintScopes(rawScopes);
       const minted = await mintToken({
         userId,
         scopes,
@@ -63,7 +70,7 @@ export const tokenMintCapabilities: Capability[] = [
     }, {
       userId: z.string().optional().describe("토큰 주인 멤버 id(생략 시 memberId)"),
       memberId: z.string().optional().describe("연결할 멤버 id — 유효권한=intersection(토큰scope, 멤버 LIVE scope)"),
-      scopes: z.array(z.string()).optional().describe("토큰 scope: items|context|memory|db|code|admin|runtime. 생략하면 멤버 scope 로 굽고 admin·runtime 밖의 권한은 멤버의 지금 권한을 따른다. 주면 그 범위가 상한으로 고정된다"),
+      scopes: z.array(z.string()).optional().describe("토큰 scope: items|context|memory|db|code|admin|runtime, 또는 DB 소스 하나로 좁힌 db:<source>(멤버에게 db 가 있어야 유효). 생략하면 멤버 scope 로 굽고 admin·runtime 밖의 권한은 멤버의 지금 권한을 따른다. 주면 그 범위가 상한으로 고정된다"),
       label: z.string().optional().describe("토큰 라벨(용도 메모)"),
     }),
 

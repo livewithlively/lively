@@ -82,6 +82,8 @@ export async function memberHasDbSource(memberId: string, source: string): Promi
  */
 export async function dbSourceAllowed(user: LivelyUser, source: string): Promise<boolean> {
   if (!user.grants || source === SELF_SOURCE) return canAccessDbSource(user, source);
+  //  소스 한정 토큰(db:<source>)은 역할을 받은 구성원에게도 그 소스만 연다(org/store/tokens.dbSourceCeilingOf 머리말).
+  if (user.dbSourceCeiling && !user.dbSourceCeiling.includes(source)) return false;
   if (!allows(user.grants, { perm: "db", level: "read" })) return false;
   return memberHasDbSource(user.userId, source);
 }
