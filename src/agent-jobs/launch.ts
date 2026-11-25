@@ -13,6 +13,7 @@
 //
 //  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 그 박스는 박스 위 실행면(launch-host.ts #5082)을 쓴다. 어느 쪽인지는 surface.ts 가 고른다.
 import type { LivelyUser } from "../context.js";
+import { grantsField } from "../auth/permissions.js";
 import { logger } from "../log.js";
 import { HOMELESS_OS_USER, JOB_SESSION_ID_RE, homelessJobRefusal, jobSeatMember } from "./plan.js";
 import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV, TMUX_ARG_MAX } from "./runner.js";
@@ -60,7 +61,7 @@ export async function accountUser(memberId: string): Promise<LivelyUser> {
   const { getMember } = await import("../org/store/members.js");
   const m = await getMember(memberId);
   if (!m || m.state !== "active" || (m.kind && m.kind !== "human")) throw new JobLaunchError(`실행 계정(${memberId})이 활성 사람 구성원이 아닙니다`);
-  return { userId: m.id, email: m.email ?? undefined, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser;
+  return { userId: m.id, email: m.email ?? undefined, scopes: Array.isArray(m.scopes) ? m.scopes : [], ...grantsField(m) } as LivelyUser;
 }
 
 /**
