@@ -241,5 +241,10 @@ await ta("자동 정리에서 뺀 규칙(사실 판단이 필요한 규칙)은 a
   const long = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n" + "가".repeat(30000) }), on)) as Style).style!;
   assert.ok(long.findings.some((f) => f.rule === "body_length" && f.ask_human === true), JSON.stringify(long.findings));
 });
+await ta("고칠 수 있으면 style_fix·expected_version 을 함께 보내라고 한다 — 서버가 사실 보존과 그 사이 다른 저장을 대조한다(#1740)", async () => {
+  const st = ((await readStyleHint(BAD, on)) as Style).style!;
+  assert.match(st.note, /style_fix:true/);
+  assert.match(st.note, /expected_version/);
+});
 console.log(`read-style: ${pass} passed${failed.length ? `, ${failed.length} failed` : ""}`);
 if (failed.length) process.exit(1);

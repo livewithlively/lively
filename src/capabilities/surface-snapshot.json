@@ -2614,7 +2614,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "486915572c4cbceb"
+  "input_hash": "d1b334836edc5c63"
  },
  {
   "name": "knowledge_set_lifecycle",
