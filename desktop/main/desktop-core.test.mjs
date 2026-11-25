@@ -24,6 +24,7 @@ import { shouldCheckForUpdates, updateFailureNote, updateCheckDelayMs, UPDATE_IN
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
 import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
+import { hideWindow, LEAVE_FULLSCREEN_TIMEOUT_MS } from "./window-hide.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
@@ -2353,7 +2354,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.match(a, /if \(appLoaded\.url !== url \|\| appLoaded\.token !== token\)/, "재로그인·다른 게이트웨이에서 다시 싣지 않는다");
     assert.match(a, /appWin\.webContents\.on\("did-fail-load"/, "못 실었을 때를 다루지 않는다(빈 창이 남는다)");
     assert.match(a, /code === -3\) return/, "ERR_ABORTED 를 실패로 오인한다");
-    assert.match(a, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); appWin\.hide\(\); \} \}\)/, "웹 창을 닫으면 앱이 죽거나 자리를 잃는다");
+    assert.match(a, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); hideWindow\(appWin\); \} \}\)/, "웹 창을 닫으면 앱이 죽거나 자리를 잃는다(숨기기는 hideWindow — #5791 전체화면)");
     assert.match(a, /watchTokenRejection\(state\.gatewayUrl\)/, "401 감시를 안 건다");
     assert.match(main, /const WEB_PRELOAD = join\(HERE, "\.\.", "preload", "web\.cjs"\)/);
     // 마법사 창과 자리를 따로 기억하고, 크기 기본이 웹 셸에 맞다
@@ -2365,7 +2366,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.deepEqual(normalizeBounds(null, []), { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height }, "옵션 없으면 마법사 기본 그대로");
     // 준비 상태 전이 → 창 전환(syncWindows): 무너지면 웹 창 내리고 마법사, 마법사에서 갖춰지면 웹 창
     const sy = main.slice(main.indexOf("function syncWindows"), main.indexOf("function syncWindows") + 900);
-    assert.match(sy, /if \(wasReady && !ready\)/); assert.match(sy, /appWin\.hide\(\); showWindow\(\);/);
+    assert.match(sy, /if \(wasReady && !ready\)/); assert.match(sy, /hideWindow\(appWin\); showWindow\(\);/);
     assert.match(sy, /if \(!wasReady && ready && win/); assert.match(sy, /showApp\(\)/);
     assert.match(main, /syncWindows\(wasReady\)/, "refreshState 가 전이를 안 본다");
     // 업데이트 자동 적용의 '보고 있나' 는 두 창 다
@@ -3531,6 +3532,91 @@ t("SU7 배선 — 새 채널이 메인·preload·렌더러에 다 있다", () =>
   for (const id of ["scr-start", "scr-server", "scr-wait", "scr-setup", "scr-running", "scr-done", "scr-partial", "scr-home"]) assert.match(html, new RegExp(`id="${id}"`), `${id} 화면이 없다`);
   // 로고 SVG 에 스크립트가 없다(img 로 싣지만 파일 자체도 깨끗해야 한다)
   for (const id of HARNESS_ORDER) assert.ok(!/<script|on\w+=/i.test(readFileSync(fileURLToPath(new URL(`../renderer/logos/${id}.svg`, import.meta.url)), "utf8")), `${id} 로고에 스크립트`);
+});
+
+// ── 창 숨기기 (#5791) — ⌘W 로 닫으면 까만 화면만 남던 것 ──────────────────────────────
+//  | #   | 창                                     | 기대 |
+//  | WH1 | 전체화면 아님                           | 바로 숨긴다 · 전체화면은 건드리지 않는다 |
+//  | WH2 | 전체화면                               | 먼저 풀고(setFullScreen(false)) · leave-full-screen 뒤에 숨긴다(그 전엔 안 숨긴다) |
+//  | WH3 | 전체화면 · leave-full-screen 이 안 온다  | 시한 뒤에 그냥 숨긴다(숨기기를 영영 미루지 않는다) |
+//  | WH4 | 알림도 오고 시한도 지난다               | 한 번만 숨긴다 · 듣개를 떼고 시한을 지운다 |
+//  | WH5 | 이미 없는 창 · 전환 중에 없어진 창        | 아무것도 안 한다(던지지 않는다) |
+//  | WH6 | 배선 — main.mjs 의 창 숨기기가 전부 이 함수를 거친다 |
+function fakeWin({ fullscreen = false } = {}) {
+  const w = new EventEmitter();
+  Object.assign(w, {
+    destroyed: false, fs: fullscreen, hides: 0, fsCalls: [],
+    isDestroyed() { return this.destroyed; }, isFullScreen() { return this.fs; },
+    setFullScreen(v) { this.fsCalls.push(v); }, hide() { this.hides++; },
+  });
+  return w;
+}
+function fakeTimers() {
+  const q = [];
+  return {
+    setTimeout: (fn, ms) => { const h = { fn, ms, cleared: false }; q.push(h); return h; },
+    clearTimeout: (h) => { if (h) h.cleared = true; },
+    fire() { for (const h of q) if (!h.cleared) { h.cleared = true; h.fn(); } },
+    q,
+  };
+}
+
+t("WH1 전체화면이 아니면 바로 숨긴다", () => {
+  const w = fakeWin();
+  assert.equal(hideWindow(w), "hidden");
+  assert.equal(w.hides, 1);
+  assert.deepEqual(w.fsCalls, [], "전체화면을 건드렸다");
+});
+
+t("WH2 전체화면이면 먼저 풀고, 풀린 뒤에 숨긴다", () => {
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  assert.equal(hideWindow(w, T), "leaving-fullscreen");
+  assert.deepEqual(w.fsCalls, [false], "전체화면을 안 풀고 숨긴다 — 까만 Space 가 남는다");
+  assert.equal(w.hides, 0, "풀리기 전에 숨겼다 — 그 Space 가 까맣게 남는다");
+  w.fs = false; w.emit("leave-full-screen");
+  assert.equal(w.hides, 1);
+  assert.equal(T.q[0].ms, LEAVE_FULLSCREEN_TIMEOUT_MS);
+  assert.ok(T.q[0].cleared, "시한을 안 지웠다");
+});
+
+t("WH3 풀렸다는 알림이 안 오면 시한 뒤에 숨긴다", () => {
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  hideWindow(w, T);
+  assert.equal(w.hides, 0);
+  T.fire();
+  assert.equal(w.hides, 1, "알림이 안 오면 영영 안 숨는다");
+  assert.equal(w.listenerCount("leave-full-screen"), 0, "듣개가 남았다 — 다음 전체화면 해제 때 엉뚱하게 숨는다");
+});
+
+t("WH4 알림과 시한이 둘 다 와도 한 번만 숨긴다", () => {
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  hideWindow(w, T);
+  w.emit("leave-full-screen");
+  T.q[0].fn();   // 지워졌어도 이미 떠난 시한이 불린 경우
+  w.emit("leave-full-screen");
+  assert.equal(w.hides, 1);
+});
+
+t("WH5 없는 창 · 전환 중에 없어진 창은 건드리지 않는다", () => {
+  assert.equal(hideWindow(null), "gone");
+  const gone = fakeWin(); gone.destroyed = true;
+  assert.equal(hideWindow(gone), "gone");
+  assert.equal(gone.hides, 0);
+  const w = fakeWin({ fullscreen: true }); const T = fakeTimers();
+  hideWindow(w, T);
+  w.destroyed = true;
+  w.emit("leave-full-screen");
+  assert.equal(w.hides, 0, "없어진 창에 hide — Electron 은 여기서 던진다");
+});
+
+t("WH6 배선 — 앱 창 · 마법사 창 숨기기가 전부 hideWindow 를 거친다(⌘W 의 close 포함)", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  assert.match(main, /import \{ hideWindow \} from "\.\/window-hide\.mjs";/);
+  assert.doesNotMatch(main, /\b(win|appWin)\.hide\(\)/, "전체화면을 안 풀고 바로 숨기는 자리가 남았다");
+  assert.match(main, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); hideWindow\(appWin\); \} \}\);/,
+    "앱 창 close(⌘W)가 hideWindow 를 안 거친다");
+  assert.match(main, /win\.on\("close", \(e\) => \{ saveBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); hideWindow\(win\); \} \}\);/,
+    "마법사 창 close 가 hideWindow 를 안 거친다");
 });
 
 console.log(`\n${pass} passed`);
