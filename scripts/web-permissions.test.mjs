@@ -10,6 +10,7 @@
 //   W6 levelText — 없음 · 보기 · 고치기 · 있음(세션 · 원격 실행) · 조회(DB)
 //   W7 extraChoices — 역할이 이미 주는 것보다 높은 수준만 · 소유자는 얹을 것이 없다 · DB 는 조회뿐
 //   W8 suggestRole — admin+runtime → 소유자 · admin → 관리자 · 그 밖 → 구성원 · 권한 없음 → 게스트
+//   W10 배선 — DB 소스 화면이 조회 대상(구성원 · 팀)을 읽고 통째로 저장한다 · 팀 폼이 종류를 보낸다
 //   W9 배선 — 구성원 폼은 역할을 고르면 role · grants 만 보내고 scopes 를 보내지 않는다 · 옛 방식으로 되돌리면 role:null · 새 셸 메뉴는 역할 구성원을 역할로 올리고 내린다
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -126,6 +127,16 @@ t("W9 배선 — 폼과 새 셸 메뉴가 역할로 저장한다", () => {
   assert.match(form, /scopeWrap\.hidden = !!rk;/, "역할을 고르면 옛 체크박스를 감춘다");
   const people = code("web/v2/ws-people.ts");
   assert.match(people, /p\.newRole \? \{ id: p\.id, role: isAdmin \? 'member' : 'admin' \} : \{ id: p\.id, scopes \}/, "역할 구성원은 역할로 올리고 내린다");
+});
+
+t("W10 배선 — DB 소스의 조회 대상 · 팀 종류를 화면에서 정한다", () => {
+  const db = code("web/admin-db-sources.ts");
+  assert.match(db, /void renderDbAccessPanel\(apanel, sel, data\);/, "소스를 고르면 조회 대상 패널이 붙는다");
+  assert.match(db, /api\('\/api\/ui\/org\/db-source\/access', \{ method: 'POST', body: JSON\.stringify\(\{ name: source, members: \[\.\.\.chosen\], teams: teamChks\.filter\(\(x\) => x\.chk\.checked\)\.map\(\(x\) => x\.id\) \}\) \}\)/, "구성원 · 팀을 통째로 보낸다");
+  assert.match(db, /api\('\/api\/ui\/org\/db-source\/access\?name=' \+ encodeURIComponent\(source\)\)/, "그 소스의 지정을 읽는다");
+  const teams = code("web/admin-teams.ts");
+  assert.match(teams, /lead_member_id: leadM \? leadM\.member_id : null, kind: kindSel\.value \}/, "팀 저장이 종류를 보낸다");
+  assert.match(teams, /field\('종류', kindSel\)/, "팀 폼에 종류 칸이 있다");
 });
 
 console.log(`\nweb-permissions: ${pass} 통과`);
