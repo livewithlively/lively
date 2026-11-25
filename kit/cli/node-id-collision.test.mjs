@@ -65,6 +65,15 @@ t("C4 호스트 이름이 바뀌었으면 종전처럼 새 호스트 이름(#216
   assert.equal(pick({ prevId: "old-host-mina" }), "macbook-air");
   assert.equal(pick({ prevId: "macbook-airport" }), "macbook-air", "앞부분만 같은 다른 이름은 비킨 이름이 아니다");
 });
+t("C5 40자로 자른 호스트 이름이 '-' 로 끝나도 비킨 이름을 잇는다(collisionNodeId 는 끝 '-' 를 떼고 만든다)", () => {
+  const slug = "build-host-a1b2c3d4e-pool-17-concurrent-0-abcdef".slice(0, 40);   // 40자째가 '-' 다
+  assert.ok(slug.endsWith("-"), slug);
+  const alt = collisionNodeId(slug, "mina");
+  assert.equal(alt, "build-host-a1b2c3d4e-pool-17-concurrent-mina");
+  assert.equal(pick({ slug, prevId: alt }), alt);
+  assert.equal(pick({ slug, prevId: "build-host-a1b2c3d4e-pool-17-concurrentx-mina" }), slug, "앞부분만 같은 다른 이름은 비킨 이름이 아니다");
+  assert.equal(pick({ slug, prevId: alt, prevGw: "https://app.lvly.io" }), slug, "다른 게이트웨이의 기록은 그대로 잇지 않는다");
+});
 
 // ── D. 회전하기 전에 묻는 «남의 개인 컴퓨터인가» ─────────────────────────────
 //  서버는 관리자에게 남의 노드 회전도 내준다 — B 의 판정(409 + 403)은 관리자에게 성립하지 않는다(403 이 안 난다).

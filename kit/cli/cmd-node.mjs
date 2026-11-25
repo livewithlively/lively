@@ -482,6 +482,7 @@ export function nodeOwnedByOther(node, memberId) {
 /**
  * (순수) `--id` 없이 실행했을 때의 노드 id.
  *  기본은 호스트 이름(slug)이다. 다만 앞선 실행이 **이름이 겹쳐 비켜 등록한** 기록(`<slug>-…`, 같은 게이트웨이)이 있으면 그 이름을 잇는다 —
+ *  slug 끝의 '-' 는 collisionNodeId 처럼 떼고 대조한다(40자로 자른 호스트 이름의 끝이 '-' 일 수 있다).
  *  안 그러면 실행마다 «호스트 이름으로 등록 → 409 → 비켜 등록 → 열쇠 회전» 을 되풀이한다.
  *  ⚠ 그 밖의 기록(호스트 이름이 바뀌었다 · 다른 게이트웨이)은 잇지 않는다 — 종전처럼 지금 호스트 이름으로 새로 등록한다(#2161 의 판정 그대로).
  * @param {{slug: string, prevId?: string|null, prevGw?: string|null, gw: string}} inp
@@ -490,7 +491,7 @@ export function nodeOwnedByOther(node, memberId) {
 export function defaultNodeId(inp, norm) {
   const n = norm || ((u) => String(u || "").trim());
   const prevId = String(inp.prevId || "").trim();
-  if (prevId && prevId.startsWith(inp.slug + "-") && n(inp.prevGw) === n(inp.gw)) return prevId;
+  if (prevId && prevId.startsWith(inp.slug.replace(/-+$/, "") + "-") && n(inp.prevGw) === n(inp.gw)) return prevId;
   return inp.slug;
 }
 
