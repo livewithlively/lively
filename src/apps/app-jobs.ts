@@ -14,6 +14,7 @@ import { getApp, getActiveGrant } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope } from "../auth/scopes.js";
+import { cappedGrantsField, memberGrants } from "../auth/permissions.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { AwsError } from "../net/aws/aws-json.js";
 import { addressVariantFor, addressViewFor, canSeeApp, isAdminViewer } from "./visibility.js";
@@ -383,6 +384,7 @@ export async function resolveJobRunPrincipal(user: LivelyUser, raw: string): Pro
   const ceiling = j.source === MCP_TOOL_JOB_SOURCE ? new Set((await js.jobScopeCeiling(j.id)) ?? []) : null;
   return {
     userId: member.id, email: member.email ?? "", scopes: grant.scopes.filter((s) => isScope(s) && allowed.has(s) && (!ceiling || ceiling.has(s))), projects: ["*"],
+    ...cappedGrantsField(memberGrants(member), grant.scopes, ...(ceiling ? [[...ceiling]] : [])),   // #5799 — 새 권한 ∩ 앱 동의 ∩ (있으면) 작업 상한
     tokenSource: "db", tokenHashPrefix: user.tokenHashPrefix, appId: j.app_id, appServer: true, appAddress: j.variant, appJobId: j.id,
   };
 }

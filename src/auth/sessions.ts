@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import { itemsPool } from "../db/client.js";
 import { isScope } from "./scopes.js";
+import { memberGrants } from "./permissions.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import type { LivelyUser } from "../context.js";
 
@@ -62,12 +63,13 @@ export async function userFromSession(sessionId: string): Promise<LivelyUser | n
   if (!process.env.ITEMS_DATABASE_URL) return null;
   try {
     const r = await itemsPool.query(
-      `SELECT s.member_id, m.email, m.state, m.scopes
+      //  role · grants(#5799)는 칸 이름으로 고르지 않고 행에서 꺼낸다 — 롤 창에 칸이 아직 없어도 로그인이 깨지지 않게(없으면 NULL = 옛 구성원).
+      `SELECT s.member_id, m.email, m.state, m.scopes, to_jsonb(m) -> 'role' AS role, to_jsonb(m) -> 'grants' AS grants
          FROM web_session s JOIN org_member m ON m.id = s.member_id
         WHERE s.session_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND m.kind='human'`,
       [sha256(sessionId)],
     );
-    const row = r.rows[0] as { member_id: string; email: string | null; state: string; scopes: unknown } | undefined;
+    const row = r.rows[0] as { member_id: string; email: string | null; state: string; scopes: unknown; role: unknown; grants: unknown } | undefined;
     if (!row) return null;
     if (row.state !== "active") return null; // 비활성 멤버 → 세션 무효(즉시 차단)
     // 워크스페이스 게이트(#1750) — secondary 컨텍스트면 명부에 있어야 한다. 세션 자체는 박스 전역이라
@@ -77,7 +79,9 @@ export async function userFromSession(sessionId: string): Promise<LivelyUser | n
       ? (row.scopes as unknown[]).filter((x): x is string => typeof x === "string").filter(isScope)
       : [];
     itemsPool.query(`UPDATE web_session SET last_used_at=now() WHERE session_hash=$1`, [sha256(sessionId)]).catch(() => {});
-    return { userId: row.member_id, email: row.email ?? "", scopes, projects: ["*"], tokenSource: "session" };
+    //  역할을 받은 구성원이면 새 권한을 싣는다(#5799) — 웹 세션은 사람 본인이라 구성원의 권한 그대로다. 옛 구성원은 싣지 않는다(scopes 로 판정).
+    const grants = memberGrants(row);
+    return { userId: row.member_id, email: row.email ?? "", scopes, ...(grants ? { grants } : {}), projects: ["*"], tokenSource: "session" };
   } catch {
     return null;
   }

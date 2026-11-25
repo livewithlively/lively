@@ -3,7 +3,8 @@
 //
 //  강제 지점은 아래 permits 로 잰다(2단계). **새 권한(grants)이 실린 주체만** 새 규칙을 받고, 옛 scope 만 가진 주체는 종전 그대로
 //   «그 scope 를 갖고 있는가» 로 판정받는다 — 구성원을 역할로 옮기기 전에는 누구에게도 아무것도 바뀌지 않는다.
-//   ⚠ 지금은 어느 인증 경로도 grants 를 싣지 않는다(역할을 저장하는 단계에서 싣는다). 그래서 실행 중 판정은 아직 종전과 같다.
+//   grants 는 **역할을 받은 구성원**(org_member.role)의 주체에만 실린다 — 웹 세션 · 토큰 · 앱 주체가 구성원 행에서 읽어 싣는다
+//   (아래 «구성원 행 ↔ 권한»). 역할은 org_member_upsert 로 준다. 역할이 없는 구성원에게는 아무것도 바뀌지 않는다.
 //
 //  종전 체계에서 섞여 있던 세 가지를 뗀다:
 //   · 무슨 기능인가  = 권한(Permission) 10개 — 아래 PERMISSIONS
@@ -13,7 +14,7 @@
 //
 //  합치는 규칙은 하나다 — **합집합**. 본인 역할 · 개별 추가 · 소속 팀에서 온 것을 더하고, 거부 규칙은 두지 않는다
 //   («이 권한이 어디서 왔나» 를 한 줄로 답할 수 있어야 한다).
-import type { Scope } from "./scopes.js";
+import { SCOPES, type Scope } from "./scopes.js";
 
 export const PERMISSIONS = [
   "content", "pipeline", "external", "code", "session", "run", "db", "admin", "secrets", "harness",
@@ -211,3 +212,87 @@ export const ROLE_GRANTS: Readonly<Record<Role, Grants>> = {
     run: "write", db: "read", admin: "write", secrets: "write", harness: "write",
   },
 };
+
+// ── 구성원 행 ↔ 권한 (역할 저장) ──────────────────────────────────────────────────────────
+//  구성원 행의 새 칸 둘: role(역할 하나) · grants(역할 위에 개별로 얹은 권한). role 이 비어 있으면 **옛 구성원**이다 —
+//   그 사람과 그 사람의 토큰 · 앱은 종전 그대로 scopes 로 판정받는다(permits).
+
+/** 저장된 값(JSONB)을 권한으로 — 모르는 권한 · 모르는 수준 · 객체가 아닌 값은 버린다(fail-closed). */
+export function sanitizeGrants(x: unknown): Grants {
+  const out: Partial<Record<Permission, Level>> = {};
+  if (!x || typeof x !== "object" || Array.isArray(x)) return out;
+  for (const p of PERMISSIONS) {
+    if (!Object.hasOwn(x, p)) continue;
+    const lv = (x as Record<string, unknown>)[p];
+    if (lv === "read" || lv === "write") out[p] = lv;
+  }
+  return out;
+}
+
+/** 구성원 행의 새 권한 = 역할 ∪ 개별 추가. 역할이 없으면(옛 구성원) undefined — 개별 추가만 있고 역할이 없는 행도 옛 구성원이다. */
+export function memberGrants(row: { role?: unknown; grants?: unknown } | null | undefined): Grants | undefined {
+  if (!row || !isRole(row.role)) return undefined;
+  return mergeGrants(ROLE_GRANTS[row.role], sanitizeGrants(row.grants));
+}
+
+/**
+ * 새 권한을 옛 scope 이름으로 비춘 **사본**. 역할을 줄 때 구성원 행의 scopes 칸에 함께 적는다.
+ *  쓰임은 둘이다 — ① 아직 scopes 를 읽는 긴 꼬리(화면의 hasScope · 앱 화면의 관리자 판정 · 토큰 발급 상한)가 그 사람을 알아보게
+ *  ② 되돌렸을 때 옛 코드가 읽을 값. **판정에는 쓰지 않는다** — 새 권한이 실린 주체는 permits 가 grants 만 본다.
+ *  수준이 옛 이름에 없으므로 «그 scope 의 본줄기 일을 할 수 있는가» 로 비춘다: 보기만 가진 영역은 비치지 않는다(코드 · DB 는 원래 보기다).
+ *   게스트 → 없음 · 구성원 → 기본 구성원 scope 다섯 · 관리자 → + admin · 소유자 → + admin · runtime.
+ */
+export function grantsToLegacyScopes(g: Grants): Scope[] {
+  const has = (perm: Permission, level: Level): boolean => allows(g, { perm, level });
+  const on: Record<Scope, boolean> = {
+    items: has("external", "write"),
+    context: has("content", "write"),
+    memory: has("content", "write"),
+    code: has("code", "read"),
+    db: has("db", "read"),
+    admin: has("admin", "write"),
+    runtime: has("harness", "write"),
+  };
+  return SCOPES.filter((s) => on[s]);
+}
+
+/**
+ * 역할로 옮긴 구성원의 **한 주체**(웹 세션 · 토큰 · 앱)가 갖는 권한 = 구성원의 지금 권한 ∩ 그 주체에 발급된 상한.
+ *  상한은 아직 옛 이름으로 적혀 있다(토큰 scope · 앱 동의 scope) — 번역해서 교집합한다.
+ *   · follow "all"  — 구성원을 그대로 따른다(웹 세션 · 우리가 굽는 세션/박스 토큰. 종전 follow_member_scopes).
+ *   · follow "safe" — 위험 권한(관리 · 자격 · 하네스 설정 고치기)은 토큰에 실린 만큼만, 나머지는 구성원을 따른다(로그인 토큰 #5712).
+ *                     하네스 설정 **보기**는 따른다 — 구성원 역할의 바탕이고(무엇이 깔려 있는지는 누구나 본다) 바꾸는 권한이 아니다.
+ *   · follow "none" — 옛 이름으로 적힌 상한 안에서만(관리자가 골라 구운 토큰 · OAuth 발급분 · 앱 동의).
+ *  구성원을 내리면 그 사람의 모든 주체가 즉시 따라 내려간다(구성원이 상한이라는 종전 규칙 그대로).
+ */
+export function principalGrants(
+  member: Grants,
+  ceiling: { follow: "all" } | { follow: "safe" | "none"; scopes: readonly string[] | null | undefined },
+): Grants {
+  if (ceiling.follow === "all") return member;
+  const issued = legacyScopesToGrants(ceiling.scopes);
+  const capped = intersectGrants(member, issued);
+  if (ceiling.follow === "none") return capped;
+  const out: Partial<Record<Permission, Level>> = {};
+  for (const p of PERMISSIONS) {
+    const lv = DANGEROUS_PERMISSIONS.has(p) ? capped[p] : member[p];
+    if (lv !== undefined) out[p] = lv;
+  }
+  if (out.harness === undefined && member.harness !== undefined) out.harness = "read";
+  return out;
+}
+
+/** 구성원 행으로 만드는 주체에 **펼쳐 넣을 칸** — 역할을 받은 구성원이면 `{ grants }`, 옛 구성원이면 빈 객체(scopes 가 판정한다). */
+export function grantsField(row: { role?: unknown; grants?: unknown } | null | undefined): { grants?: Grants } {
+  const g = memberGrants(row);
+  return g ? { grants: g } : {};
+}
+
+/**
+ * 앱이 그 사람 이름으로 도는 주체에 펼쳐 넣을 칸 — 구성원의 새 권한 ∩ 옛 이름으로 적힌 상한들(앱 동의 scope · 부른 연결의 scope · 작업 상한).
+ *  ⚠ 앱 주체를 만들 때 사람의 주체를 `...user` 로 펼치면 그 사람의 권한이 통째로 실린다 — 반드시 이 값으로 덮는다(앱 동의가 상한이다).
+ */
+export function cappedGrantsField(member: Grants | null | undefined, ...ceilings: (readonly string[] | null | undefined)[]): { grants?: Grants } {
+  if (!member) return {};
+  return { grants: ceilings.reduce<Grants>((g, c) => intersectGrants(g, legacyScopesToGrants(c)), member) };
+}

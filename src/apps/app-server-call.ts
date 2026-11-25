@@ -13,6 +13,7 @@ import { getApp, getActiveGrant } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope } from "../auth/scopes.js";
+import { cappedGrantsField, memberGrants } from "../auth/permissions.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { AwsError } from "../net/aws/aws-json.js";
 import { parseReport } from "../net/aws/lambda-lite.js";
@@ -323,6 +324,7 @@ export async function resolveCallRunPrincipal(user: LivelyUser, raw: string, now
   const granted = new Set(grant.scopes);
   return {
     userId: member.id, email: member.email ?? "", scopes: row.scopes.filter((s) => isScope(s) && allowed.has(s) && granted.has(s)), projects: ["*"],
+    ...cappedGrantsField(memberGrants(member), row.scopes, grant.scopes),   // #5799 — 새 권한 ∩ 부른 연결의 상한 ∩ 앱 동의
     tokenSource: "db", tokenHashPrefix: user.tokenHashPrefix, appId: row.app_id, appServer: true, appAddress: row.variant, appCallId: row.id,
   };
 }
