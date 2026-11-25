@@ -85,6 +85,7 @@ export async function checkProjectText(
   id: number,
   user: LivelyUser,
   deps: ProjectTextDeps = projectTextDeps,
+  ctx?: { source?: string; client?: string } | null,   // 사람 판정에 쓴다 — 웹 화면의 토큰 편집(데스크톱 앱 등)은 사람이다(isHumanWriter)
 ): Promise<Awaited<ReturnType<typeof checkWriting>>> {
   const none = { info: {}, rejects: [], guide: "" };
   const appending = patch.append_description !== undefined;
@@ -93,7 +94,7 @@ export async function checkProjectText(
   const fmt = await deps.loadFormat().catch(() => null);
   if (!fmt || !fmt.enabled || !fmt.apply_to.includes("project")) return none;
   const loadFormat = async (): Promise<WritingFormat> => fmt;   // 위에서 읽은 그 형식으로 판정한다(두 번 읽지 않는다)
-  const human = isHumanWriter(user);
+  const human = isHumanWriter(user, ctx);
   if (appending) {
     const rest = withoutFirstPromptQuote(String(patch.append_description));
     if (!rest.trim()) return none;
@@ -542,7 +543,7 @@ const projectCreateV6: Capability = {
     // 서술 형식 — 세션 첫 지시로 만든 껍데기(name_source=rule)는 사람의 지시문 원문을 그대로 담으므로 보지 않는다.
     const { info: style, rejects, guide } = name_source === "rule"
       ? { info: {}, rejects: [], guide: "" }
-      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user) });
+      : await checkWriting("project", { title: null, body: input.description ?? null }, { human: isHumanWriter(user, ctx) });
     if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     //  같은 표식이 초안(#4170)의 입구다 — 기계가 이름을 지은 껍데기는 초안으로 태어나 목록 기본 뷰에서 따로 선다.
     //  초대제(#5598) — access 를 안 주면 createProject 가 워크스페이스의 새 프로젝트 공개 방식을 따른다(첫 지시 자동 생성 경로와 한 규칙).
@@ -888,7 +889,7 @@ const projectUpdateV6: Capability = {
     // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
     //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
     //  다른 수정까지 막히지 않게. 옮겨 붙인 첫 지시 인용(프로젝트 이관)은 사람의 지시문이라 그 절만 빼고 본다.
-    const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
+    const { info: style, rejects, guide } = await checkProjectText(patch, id, user, undefined, ctx);
     if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     try { project = await updateProject(id, patch, writeCtx); }
     catch (e) {
@@ -1382,7 +1383,7 @@ const taskCreateV6: Capability = {
     await assertProjectVisible(input.parentTaskId ?? input.projectId, ctx);
     // 서술 형식 — reject 규칙에 걸린 에이전트 본문은 받지 않는다(사람의 웹 입력은 안내만). 이어쓰기는 덧붙이는 조각만 본다.
     const { info: style, rejects, guide } = await checkWriting("project", { title: null, body: input.description ?? null },
-      { human: isHumanWriter(user) });
+      { human: isHumanWriter(user, ctx) });
     if (rejects.length) throw await rejectWriting("project", null, input.name, rejects, guide, ctx);
     const task = await createTask(input, writeCtx);
     // #5522 — 일부러 만든 태스크다(세션이 저절로 갖는 태스크는 session-task.ts 가 만들고 이 길을 안 지난다) → 초안이면 푼다.
@@ -1489,7 +1490,7 @@ const taskUpdateV6: Capability = {
     // 서술 형식 — reject 규칙에 **이번 수정이 새로 만든** 위반이 있으면 받지 않는다(사람의 웹 입력은 안내만).
     //  이어쓰기는 덧붙이는 조각만, 전체 교체는 기존 본문과 비교해 본다 — 사람이 쓴 본문의 원래 위반 때문에 에이전트의
     //  다른 수정까지 막히지 않게. 옮겨 붙인 첫 지시 인용(프로젝트 이관)은 사람의 지시문이라 그 절만 빼고 본다.
-    const { info: style, rejects, guide } = await checkProjectText(patch, id, user);
+    const { info: style, rejects, guide } = await checkProjectText(patch, id, user, undefined, ctx);
     if (rejects.length) throw await rejectWriting("project", String(id), null, rejects, guide, ctx);
     const task = await updateTask(id, patch, writeCtx);
     const rescheduled = before ? await propagateReschedule(id, before, task, writeCtx) : [];

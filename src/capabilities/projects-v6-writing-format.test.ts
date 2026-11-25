@@ -81,6 +81,15 @@ async function main(): Promise<void> {
     assert.deepEqual(rejected(r), ["local_path"]);
   });
 
+  await t("H4b 데스크톱 앱·토큰 로그인 웹(토큰이 db 라도 웹 화면 표식이 있으면)은 사람 — 안내만 받고 거부되지 않는다", async () => {
+    const { d } = deps(ON, { description: "옛 본문이다." });
+    const r = await checkProjectText({ description: "/Users/alice/x 를 고쳤다." }, 1, AGENT, d, { source: "web", client: "web-ui" });
+    assert.deepEqual(r.rejects, [], "웹 화면에서 사람이 고친 프로젝트 본문이 422 로 막혔다");
+    assert.ok((r.info as { style?: unknown }).style, "사람에게도 안내는 실려야 한다");
+    const viaMcp = await checkProjectText({ description: "/Users/alice/x 를 고쳤다." }, 1, AGENT, d, { source: "mcp", client: "web-ui" });
+    assert.deepEqual(rejected(viaMcp), ["local_path"], "MCP 경로는 표식이 있어도 에이전트다");
+  });
+
   await t("H5 형식을 못 읽으면 판정하지 않는다(fail-open) — 던지지 않고 이전 본문도 안 읽는다", async () => {
     const { calls, d } = deps(ON, { description: "옛 본문" });
     const r = await checkProjectText({ description: "/Users/alice/x 를 고쳤다." }, 1, AGENT,
