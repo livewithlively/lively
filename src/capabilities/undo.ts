@@ -135,7 +135,11 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
     const s = rec(d === "before" ? r.before : r.after);
     //  스냅샷의 후속으로 다시 전환한다 — 그 사이 후속이 지워졌거나 active 가 아니면 400 을 그대로 낸다(포인터 없이 되살리지 않는다).
     const supersededBy = s.lifecycle === "superseded" && "superseded_by" in s ? (s.superseded_by as string | null) : undefined;
-    await setKnowledgeLifecycle(String(r.entity_key), String(s.lifecycle), ctx, { supersededBy });
+    //  스냅샷 자체가 포인터 없는 superseded 면(이 칸 이전·배포 중 옛 버전이 만든 옛 행 — 칸이 없는 옛 스냅샷 포함) 그 상태 그대로
+    //   포인터 없이 되살린다. 막으면 옛 행을 보관하거나 후속을 붙인 전환을 되돌릴 길이 없다(400). 칸이 없는 스냅샷에 지금 포인터가
+    //   있으면 종전처럼 그 포인터를 둔다(supersededBy=undefined 는 «지금 포인터 유지»).
+    const allowNoPointer = s.lifecycle === "superseded" && !s.superseded_by;
+    await setKnowledgeLifecycle(String(r.entity_key), String(s.lifecycle), ctx, { supersededBy, allowNoPointer });
   },
   set_wiki: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);

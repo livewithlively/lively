@@ -629,9 +629,12 @@ export async function getKnowledgeVersion(name: string, db: Db = itemsPool): Pro
  *  superseded 가 되고, 후속을 지우는 쪽(deleteKnowledge)도 판정과 쓰기 사이에 끼어든다. 잠금 모드가 FOR NO KEY UPDATE 인 까닭은
  *  지식을 가리키는 FK 삽입(링크·분류·자료 연결)이 거는 KEY SHARE 와 부딪치지 않게다(derived-visibility.ts 와 같은 선택).
  *  판정 오류를 여기(스토어)에서 HttpError 로 던지는 까닭: 되돌리기(undo.ts)는 이 함수를 직접 불러 핸들러 가드를 거치지 않는다.
+ *  allowNoPointer — 되돌리기 전용. 스냅샷이 «포인터 없이 superseded»(이 칸 이전·배포 중 옛 버전이 만든 옛 행)일 때 그 상태 그대로
+ *   되살린다(후속을 안 주면 400 대신 포인터 없이). 새 전환의 길은 아니다 — 도구(knowledge_set_lifecycle)는 이 옵션을 넘기지 않는다.
+ *   후속을 준 경우(스냅샷에 포인터가 있는 경우)의 판정은 그대로라, 그 사이 후속이 사라졌으면 여전히 400 이다.
  */
 export async function setKnowledgeLifecycle(
-  name: string, lifecycle: string, ctx?: WriteCtx, opts: { supersededBy?: string | null } = {},
+  name: string, lifecycle: string, ctx?: WriteCtx, opts: { supersededBy?: string | null; allowNoPointer?: boolean } = {},
 ): Promise<KnowledgeRow> {
   const want = opts.supersededBy;
   if (lifecycle !== "superseded" && want != null) {
@@ -651,7 +654,10 @@ export async function setKnowledgeLifecycle(
       if (want === undefined && before.lifecycle === "superseded" && before.superseded_by) {
         pointer = before.superseded_by as string;
       } else if (!want) {
-        throw new HttpError(400, "superseded 로 바꾸려면 superseded_by(이 지식을 대체하는 후속 지식의 name)가 필요합니다. 후속이 없으면 archived 로 보관하세요.");
+        if (!opts.allowNoPointer) {
+          throw new HttpError(400, "superseded 로 바꾸려면 superseded_by(이 지식을 대체하는 후속 지식의 name)가 필요합니다. 후속이 없으면 archived 로 보관하세요.");
+        }
+        pointer = null;   // 되돌리기 — 포인터 없던 옛 superseded 스냅샷 그대로
       } else if (want === name) {
         throw new HttpError(400, "superseded_by 에 자기 자신을 지정할 수 없습니다.");
       } else {
