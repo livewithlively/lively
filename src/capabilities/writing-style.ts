@@ -192,14 +192,14 @@ function readStyleNote(findings: WritingFinding[], blocked: ReadStyleEditBlock |
   if (!self.length) {
     return `${head} 모두 ${ASK_HUMAN_WHY}(findings 의 ask_human). 혼자 고치지 않는다 — 이 지식을 작업 근거로 쓰고 있다면 그 사실을 사람에게 묻고, 답을 받은 뒤에만 knowledge_save mode='edit' 로 고친다.${readFull} 사실을 지어내지 않는다.`;
   }
-  // 제목이 마지막인 까닭: knowledge_set_title 은 편집자(updated_by)·시각은 바꾸고 confidence 는 그대로 둔다. 사람이 마지막으로 저장한 글의
-  //  제목부터 고치면 «내 마지막 저장»(updated_by 가 같고 confidence='ai')이 아니게 되어, 본문 고치기가 최근 편집 보호에 막힌다.
-  //  MCP 본문 저장(confidence='ai')이 먼저면 그 뒤 제목 변경도 내 마지막 저장으로 남는다.
+  // 제목이 마지막인 까닭: 본문 저장(style_fix · expected_version)이 판을 하나 올리므로, 제목을 먼저 고치면 읽을 때 받은 version 으로
+  //  보낸 본문 저장이 409 가 된다. 본문을 먼저 고치고 그 응답의 판으로 제목을 고치는 순서가 왕복이 적다.
+  //  (knowledge_set_title 도 저장 채널을 confidence 에 남기므로 — #1740 — 제목 변경 뒤에도 «내 마지막 저장» 판정은 유지된다.)
   const title = self.some((f) => f.rule.startsWith("title_")) ? " 제목은 본문을 고친 뒤 마지막에 knowledge_set_title 로 고친다." : "";
   const askLine = ask.length
     ? ` 사람 확인이 필요한 항목(findings 의 ask_human)은 ${ASK_HUMAN_WHY} — 지어내지 말고 사람에게 묻고, 답을 받은 뒤에만 고친다. 저장 응답의 안내가 한 번 더 고치라고 해도 사람 확인이 필요한 항목만 남으면 멈추고 사람에게 묻는다.`
     : "";
-  return `${head} 이 지식을 작업 근거로 쓰고 있다면 직접 고칠 항목을 지금 고친다.${readFull} 본문은 knowledge_save mode='edit' 로 그 부분만 고친다.${title} 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고친다. 저장 응답의 style 에 직접 고칠 항목이 남아 있으면 한 번 더 고치고, 같은 규칙이 그래도 남으면 더 고치지 않고 멈춘다.${askLine}`;
+  return `${head} 이 지식을 작업 근거로 쓰고 있다면 직접 고칠 항목을 지금 고친다.${readFull} 본문은 knowledge_save mode='edit' 로 그 부분만 고치고, style_fix:true 와 이 응답의 knowledge.version 을 expected_version 으로 함께 보낸다(서버가 사실·수치·링크가 그대로인지와 그 사이 다른 저장이 없었는지 본다).${title} 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고친다. 저장 응답의 style 에 직접 고칠 항목이 남아 있으면 한 번 더 고치고, 같은 규칙이 그래도 남으면 더 고치지 않고 멈춘다.${askLine}`;
 }
 
 /**
