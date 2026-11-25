@@ -124,6 +124,10 @@ async function api(path: string, opts: any = {}): Promise<any> {
   const token = localStorage.getItem(TOKEN_KEY);
   const headers: any = Object.assign({}, opts.headers);
   if (token) headers['Authorization'] = 'Bearer ' + token;
+  // 화면 표식 — 이 요청을 사람이 웹 화면에서 보냈다. 데스크톱 앱 · «토큰으로 로그인(고급)» 은 쿠키 세션이 아니라 위 토큰으로
+  //  인증하므로, 서버는 이 표식이 없으면 그 편집을 토큰 스크립트(에이전트)와 가르지 못한다 — 서술 형식이 reject 로 정한 규칙에
+  //  사람의 편집이 422 로 막힌다(src/capabilities/writing-style.ts isHumanWriter · 값 'web-ui' 는 거기 WEB_UI_CLIENT 와 같다).
+  headers['x-lively-client'] = 'web-ui';
   const ws = currentWorkspace();
   if (ws && ws !== 'primary') headers['x-lively-workspace'] = ws;
   // 화면 테마(#1683) — 이 브라우저가 지금 **실제로 보고 있는** 테마. 세션을 만들 때 서버가 이 값을

@@ -92,6 +92,14 @@ export function assetReloadPolicy(raw: string | undefined): "auto" | "notify" {
   return v === "1" || v === "true" || v === "yes" || v === "on" || v === "auto" ? "auto" : "notify";
 }
 
+/** 요청을 보낸 화면(x-lively-client) — 웹 화면의 api()(web/lib/net.ts)는 'web-ui' 를 싣는다. 짧은 낱말 꼴만 받고 그 밖은 없음으로 본다.
+ *  자기주장이라 권한에 쓰지 않는다(capabilities/types.ts CapabilityCtx.client). */
+function clientFromHeaders(headers: express.Request["headers"]): string | undefined {
+  const raw = headers["x-lively-client"];
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return typeof v === "string" && /^[a-z0-9-]{1,32}$/.test(v) ? v : undefined;
+}
+
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
   // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
   //  앱 서버 토큰(#4483)은 기본으로 403 이다(fail-closed — 여기 라우트를 더해도 닫힌 채로 생긴다). 사람 신원과 함께 받는 자리는
@@ -446,6 +454,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
         readOnly, // #1007 — me 가 반환(모드 관측). 강제는 위 게이트가 이미 수행.
         incognito, // #1007+ — me 가 mode 반환
         viewer: viewerOf(user), // #1291 — 열람 신원. MCP 어댑터와 같은 규칙(v2: admin 도 특권이 아니다 — 우회는 긴급열람으로만).
+        client: clientFromHeaders(req.headers), // 웹 화면 표식 — 서술 형식의 사람 판정(데스크톱 앱 · 토큰 로그인 웹은 쿠키가 아니라 토큰으로 온다)
       })));
     });
     for (const path of mount.paths) {
