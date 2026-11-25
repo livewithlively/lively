@@ -394,6 +394,8 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
  *   (빈자리는 제외된 순번 바로 뒤에서만 생긴다), 후보를 그 둘로 만들고 제외된 순번을 등호 안티조인으로 빼면 모든 조인이 등호다.
  *   순번을 범위 조건(rn <= n)이나 generate_series 로 펼치지 마라 — 추정치가 낮으면 플래너가 nested loop 를 골라, 산출 sha 가
  *   몰린 지식 하나가 (그 sha 수 × 모듈 커밋 수)를 훑는다(편중 데이터에서 같은 쿼리가 데이터 무작위성에 따라 3초와 10분으로 갈렸다).
+ *   제외 순번 표(excl_rank)는 그 지식이 낸 모듈 쌍(origin)으로만 만든다 — 지식을 낸 커밋이 다른 지식의 원천 모듈에도 붙어 있으면
+ *   그 쌍은 결과에 쓰이지 않는데(changed 가 origin 으로 거른다) 중간 표만 (그 커밋이 붙은 모듈 수)배로 불어난다.
  *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
  */
 export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
@@ -438,7 +440,8 @@ export async function findCodeDriftTouchCandidates(m: ManagerRow, limit: number)
       ), excl_rank AS (
         SELECT os.name, r.unit_id, r.rn
           FROM origin_sha os
-          JOIN ranked r ON r.commit_sha = os.commit_sha
+          JOIN origin o ON o.name = os.name
+          JOIN ranked r ON r.commit_sha = os.commit_sha AND r.unit_id = o.unit_id
       ), cand AS (
         SELECT o.name, o.unit_id, 1::bigint AS rn FROM origin o
         UNION

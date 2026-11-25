@@ -26,6 +26,8 @@
 //       · 분류 원천이 모자라면 작업 기록 원천이 남은 자리를 채운다
 //   E1  후보 SQL 오류(없는 열)는 빈 결과로 삼키지 않는다 — 함수는 던지고, 관리기 실행은 그 원천만 빼고 나머지를 위탁하며
 //       실패를 partial_error 로 싣는다
+//   T15 제외 순번 표(excl_rank)는 그 지식이 낸 모듈 쌍만 담는다 — 지식을 낸 커밋이 다른 지식의 원천 모듈에 붙어 있어도 그 쌍으로
+//       번지지 않는다(결과는 같고 중간 표만 준다 — 실행 계획의 실제 행 수로 본다)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -238,6 +240,37 @@ try {
   chk("M2 작업 기록 원천 후보가 자리를 넘쳐도 분류 원천 몫이 남는다", b2.includes(N(12)), show(b2));
   const b6 = await docsFor("cdt-mb6", 6);
   chk("M2 분류 원천이 모자라면 작업 기록 원천이 남은 자리를 채운다", b6.length === 6 && b6.includes(N(14)), show(b6));
+
+  // ── T15 제외 순번 표는 그 지식의 원천 모듈 쌍만 ──
+  //  N17 을 낸 커밋(same17)이 늦게 다시 기록되며 N18 의 원천 모듈(U17b)에 붙었다. U17b 의 커밋 순번: Y(40일) 1 · same17(30일) 2 · P18(0일) 3.
+  //   그 지식의 쌍만 담으면 excl_rank = (N17, U17a, 1) · (N18, U17b, 3) 두 행이고, 번지면 (N17, U17b, 2) 가 더해져 세 행이다.
+  const CX = await cat("cdt-x");
+  const U17a = await unit(R1, "src/s"), U17b = await unit(R1, "src/t");
+  await kn(N(17), 0, CX); await kn(N(18), 0, CX);
+  await act({ day: 0, sha: "same17", repoId: R1, touches: [{ unit: U17a }], refs: [{ name: N(17) }] });
+  await act({ day: 0, repoId: R1, touches: [{ unit: U17b }], refs: [{ name: N(18) }] });
+  await act({ day: 30, sha: "same17", committed: false, repoId: R1, touches: [{ unit: U17b }] });
+  await act({ day: 40, repoId: R1, touches: [{ unit: U17b }] });
+  const scopeX = { ...scope, match_categories: ["cdt-x"] };
+  const seen = [];
+  const origQuery = pg.Client.prototype.query;
+  pg.Client.prototype.query = function (text, ...rest) {
+    if (typeof text === "string" && text.includes("excl_rank")) seen.push({ text, values: Array.isArray(rest[0]) ? rest[0] : undefined });
+    return origQuery.call(this, text, ...rest);
+  };
+  let candX;
+  try { candX = await det.findCodeDriftTouchCandidates(scopeX, 50); } finally { pg.Client.prototype.query = origQuery; }
+  chk("T15 전제: 후보는 N18 하나(N17 을 낸 커밋은 변경이 아니다)", show(candX.map((c) => c.name)) === show([N(18)]), show(candX));
+  const sql15 = seen.at(-1);
+  const planOf = async () => (await Q(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql15.text}`, sql15.values))[0]["QUERY PLAN"][0].Plan;
+  const cteRows = (node, name) => {
+    if (!node) return undefined;
+    if (node["Subplan Name"] === `CTE ${name}`) return node["Actual Rows"];
+    for (const ch of node.Plans ?? []) { const v = cteRows(ch, name); if (v !== undefined) return v; }
+    return undefined;
+  };
+  const excl = sql15 ? cteRows(await planOf(), "excl_rank") : undefined;
+  chk("T15 excl_rank 는 그 지식이 낸 모듈 쌍만(두 행) — 다른 지식의 모듈로 번지지 않는다", excl === 2, show({ excl, captured: !!sql15 }));
 
   // ── E1 SQL 오류 ──  (DB 는 끝에 통째로 지우므로 열 이름을 되돌리지 않는다)
   await Q(`ALTER TABLE activity_knowledge RENAME COLUMN relation TO relation_cdt`);
