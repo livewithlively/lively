@@ -109,7 +109,7 @@ test("P6 역할은 게스트 ⊆ 구성원 ⊆ 관리자 ⊆ 소유자 로 넓�
 });
 
 test("P7 합의한 역할 표 그대로다", () => {
-  assert.deepEqual(ROLE_GRANTS.guest, { content: "read" }, "게스트는 맥락 보기만 — 세션 · 코드 · 맥락 관리 없음");
+  assert.deepEqual(ROLE_GRANTS.guest, { content: "read" }, "게스트는 맥락 보기만 — 세션 · 코드 · 수집 · 증류 없음");
   assert.deepEqual(ROLE_GRANTS.member, {
     session: "write", content: "write", pipeline: "write", external: "write", code: "read", run: "write", db: "read", harness: "read",
   });

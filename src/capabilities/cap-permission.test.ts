@@ -11,7 +11,7 @@
 //   C2 새 주체 — 보기만 받으면 조회는 되고 변경은 막힌다 · scopes 사본에 memory · admin 이 남아 있어도 얻는 것이 없다
 //   C3 새 주체의 grants 가 빈 객체(권한 0개) — scope 있는 기능은 전부 막힌다(사본에 scope 가 다 있어도) · 로그인만인 기능은 된다
 //   C4 permits 경계 — 요구 없음 · scope 없음 → 통과 / 주체 없음 · scopes 가 배열이 아님 → 거절 / grants 가 null 이면 옛 주체로 본다
-//   C5 isAdmin · canManageWorkspace — 옛 주체 128가지에서 종전 식과 같다 · 새 주체는 관리 고치기 / 맥락 관리 고치기만(보기는 아님)
+//   C5 isAdmin · canManageWorkspace — 옛 주체 128가지에서 종전 식과 같다 · 새 주체는 관리 고치기 / 수집 · 증류 고치기만(보기는 아님)
 //   C6 외부 앱 도구의 요구 — items 도구는 조회 등급(L0)만 보기, 그 밖 · 모르는 등급은 고치기 · 다른 scope 로 조인 도구는 그 조임을 잇는다
 //   C7 외부 앱 도구 × 옛 주체 — 그 도구의 호출 scope 를 가졌는가 그대로(5 scope × 등급 4가지 × 128 부분집합)
 //   C8 requireNeed — 막히면 종전 꼴의 문구(옛 scope 이름)로 던지고, 통과하면 조용하다
@@ -224,7 +224,7 @@ test("C10 막힘 문구", () => {
   // 역할 구성원 — 화면 이름과 수준으로
   const guest = { userId: "g", scopes: [], grants: ROLE_GRANTS.guest };
   assert.equal(capDenialText(guest, cap("knowledge_save"), "rest"), "forbidden: «맥락» 고치기 권한이 필요합니다 — 관리자에게 요청하세요");
-  assert.equal(capDenialText(guest, cap("org_distiller_list"), "rest"), "forbidden: «맥락 관리» 보기 권한이 필요합니다 — 관리자에게 요청하세요");
+  assert.equal(capDenialText(guest, cap("org_distiller_list"), "rest"), "forbidden: «수집 · 증류» 보기 권한이 필요합니다 — 관리자에게 요청하세요");
   assert.equal(capDenialText(guest, cap("org_hook_upsert"), "mcp"), "Forbidden: «하네스 설정» 고치기 권한이 필요합니다 — 관리자에게 요청하세요 (harness:write)");
   assert.equal(capDenialText(guest, cap("browser_navigate"), "rest"), "forbidden: «세션» 권한이 필요합니다 — 관리자에게 요청하세요", "있다/없다 권한은 수준을 말하지 않는다");
   assert.equal(capDenialText(guest, cap("delegate_status"), "rest"), "forbidden: «원격 실행» 권한이 필요합니다 — 관리자에게 요청하세요");

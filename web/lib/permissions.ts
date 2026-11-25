@@ -26,7 +26,7 @@ export const ROLE_GRANTS: Record<string, Grants> = {
 /** 수준을 고르는 방식 — read-write(보기/고치기) · read-only(DB 는 조회 전용) · on-off(세션 · 원격 실행은 있다/없다). */
 export const PERMISSION_INFO: Record<string, { label: string; definition: string; levels: 'read-write' | 'read-only' | 'on-off'; read?: string; write: string }> = {
   content: { label: '맥락', definition: '팀이 쌓는 내용을 읽고 쓴다', levels: 'read-write', read: '지식 · 프로젝트 · 자료를 찾아 읽습니다', write: '지식을 쓰고 프로젝트 · 태스크를 만들고 고칩니다' },
-  pipeline: { label: '맥락 관리', definition: '맥락 저장소를 구축하고 관리한다', levels: 'read-write', read: '수집 · 증류 설정과 실행 기록을 봅니다', write: '수집기 · 증류기 · 예약 실행 · 경보를 만들고 고칩니다' },
+  pipeline: { label: '수집 · 증류', definition: '맥락 저장소를 구축하고 관리한다', levels: 'read-write', read: '수집 · 증류 설정과 실행 기록을 봅니다', write: '수집기 · 증류기 · 예약 실행 · 경보를 만들고 고칩니다' },
   external: { label: '외부 앱', definition: 'AI 가 외부 앱 도구를 부른다', levels: 'read-write', read: 'AI 가 슬랙 · 깃허브 · 구글 등에서 찾아 읽습니다', write: 'AI 가 내 이름으로 메시지를 보내고 이슈를 만듭니다' },
   code: { label: '코드', definition: '등록된 레포의 코드를 본다', levels: 'read-write', read: '레포의 파일을 읽고 검색합니다', write: '레포를 등록하고 이름을 바꾸고 지웁니다' },
   session: { label: '세션', definition: '라이블리에서 AI 와 일한다', levels: 'on-off', write: 'AI 세션을 열고 브라우저 도구를 씁니다' },

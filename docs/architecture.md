@@ -122,7 +122,7 @@ The seven scopes above are being replaced by **10 feature areas × a level (read
 | Permission | UI name | Covers |
 |---|---|---|
 | `content` | 맥락 | Knowledge · sources · projects · tasks · categories · domain map · shared-folder files |
-| `pipeline` | 맥락 관리 | Collectors · distillers · classifiers · managers · schedules · alerts · embeddings · AI delivery |
+| `pipeline` | 수집 · 증류 | Collectors · distillers · classifiers · managers · schedules · alerts · embeddings · AI delivery |
 | `external` | 외부 앱 | External-app tool calls (granted per app) |
 | `code` | 코드 | Reading repo revisions · the repo registry (granted per repo) |
 | `session` | 세션 | Web terminal sessions · browser tools |
