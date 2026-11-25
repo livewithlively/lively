@@ -274,8 +274,24 @@ t("heading_symbol 헤딩 아닌 줄의 이모지는 통과", () =>
 
 // ───────────────────────── 작성 맥락 ─────────────────────────
 
-for (const w of ["오늘", "어제", "내일", "그저께", "엊그제", "지난주", "이번주", "다음주", "이번 세션", "지난 세션", "이 세션"]) {
+for (const w of ["오늘", "어제", "내일", "그저께", "엊그제", "지난주", "이번주", "다음주", "이번 세션", "지난 세션"]) {
   t(`relative_time '${w}' 발생`, () => assert.ok(has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}\n\n${w} 설정을 바꿨다.`)));
+}
+// 조사가 붙은 날짜 쪽 '주'·'세션' 은 상대시간이다.
+for (const [w, line] of [
+  ["다음 주에", "다음 주에 배포한다."], ["지난주에", "지난주에 설정을 바꿨다."], ["이번 주말", "이번 주말에 점검한다."],
+  ["다음 주부터", "다음 주부터 적용한다."], ["이번 세션에서", "이번 세션에서 설정을 바꿨다."],
+]) {
+  t(`relative_time '${w}' 발생`, () => assert.ok(has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}\n\n${line}`)));
+}
+// '주' 로 시작하는 다른 낱말, '요즘' 을 뜻하는 오늘날·어제오늘, 제품 용어 «이 세션»(세션 = 태스크)은 시점이 아니다.
+for (const [w, line] of [
+  ["다음 주소", "다음 주소로 요청을 보낸다."], ["다음 주석", "다음 주석을 지우지 않는다."], ["다음 주요", "다음 주요 항목을 정리한다."],
+  ["이번 주기", "이번 주기의 결과를 정리한다."], ["다음 주의사항", "다음 주의사항을 지킨다."],
+  ["오늘날", "오늘날 대부분의 서버가 이 방식을 쓴다."], ["어제오늘", "어제오늘 생긴 문제가 아니다."],
+  ["이 세션", "이 세션은 프로젝트의 태스크 하나를 맡는다."],
+]) {
+  t(`relative_time '${w}' 는 대상 아님`, () => assert.ok(!has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}\n\n${line}`)));
 }
 t("relative_time 인용 줄 안은 무시", () =>
   assert.ok(!has("relative_time", CLEAN_TITLE, `${CLEAN_BODY}\n\n> 오늘 설정을 바꿨다.`)));
@@ -305,12 +321,28 @@ t("local_path /Users/<이름> 발생", () =>
   assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 /Users/someone/app.conf 에 둔다.`)));
 t("local_path /home/<이름> 발생", () =>
   assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 /home/bob/app.conf 에 둔다.`)));
-t("local_path 공백 뒤 ~/ 발생", () =>
-  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 ~/work/app.conf 에 둔다.`)));
-t("local_path 괄호 뒤 ~/ 발생", () =>
-  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일을 둔다(~/work/app.conf).`)));
-t("local_path 줄시작 ~/ 발생", () =>
-  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n~/work/app.conf 에 둔다.`)));
+// '~/' 는 읽는 사람 자신의 홈을 가리키는 관례 표기다 — 남의 컴퓨터 경로가 아니다.
+for (const [where, body] of [
+  ["공백 뒤 ~/work/…", `${CLEAN_BODY}\n\n설정 파일은 ~/work/app.conf 에 둔다.`],
+  ["괄호 뒤 ~/work/…", `${CLEAN_BODY}\n\n설정 파일을 둔다(~/work/app.conf).`],
+  ["줄시작 ~/work/…", `${CLEAN_BODY}\n~/work/app.conf 에 둔다.`],
+  ["인라인 코드 속 ~/.lively/…", `${CLEAN_BODY}\n\n토큰은 \`~/.lively/config.json\` 에 있다.`],
+  ["~/.ssh/config", `${CLEAN_BODY}\n\n접속 설정은 ~/.ssh/config 에 둔다.`],
+]) {
+  t(`local_path ${where} 는 통과`, () => assert.ok(!has("local_path", CLEAN_TITLE, body)));
+}
+// 서버·공용 계정의 홈은 누구 자리에서든 같은 관례 위치다.
+for (const [what, body] of [
+  ["/home/ubuntu/app", `${CLEAN_BODY}\n\n앱은 서버의 /home/ubuntu/app 에 배포한다.`],
+  ["끝 슬래시 없는 /home/ubuntu", `${CLEAN_BODY}\n\n서버 계정의 홈은 \`/home/ubuntu\` 이다.`],
+  ["코드블록 속 /home/deploy/…", `${CLEAN_BODY}\n\n\`\`\`\ncd /home/deploy/releases/current\n\`\`\``],
+  ["/Users/Shared/…", `${CLEAN_BODY}\n\n빌드 산출물은 /Users/Shared/builds 에 모은다.`],
+  ["C:\\Users\\Public", `${CLEAN_BODY}\n\n공용 폴더는 C:\\Users\\Public 이다.`],
+]) {
+  t(`local_path ${what} 는 통과`, () => assert.ok(!has("local_path", CLEAN_TITLE, body)));
+}
+t("local_path 서버 계정 이름으로 시작하는 개인 이름은 발생(/home/gitae)", () =>
+  assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n메모는 /home/gitae/notes.md 에 있다.`)));
 t("local_path C:\\Users\\ 발생", () =>
   assert.ok(has("local_path", CLEAN_TITLE, `${CLEAN_BODY}\n\n설정 파일은 C:\\Users\\bob\\app.conf 에 둔다.`)));
 t("local_path 코드 안도 발생", () =>
@@ -374,6 +406,23 @@ t("revision_banner **vN→vM** 발생", () => assert.ok(has("revision_banner", C
 t("revision_banner 표식·날짜 없는 줄의 키워드는 통과", () =>
   assert.ok(!has("revision_banner", CLEAN_TITLE, banner("이 문서는 정산 규칙을 갱신한 결과다."))));
 t("revision_banner 키워드 없으면 통과", () => assert.ok(!has("revision_banner", CLEAN_TITLE, banner("> 참고로 적어 둔다."))));
+// 대소문자를 가린다 — 보통 낱말 'update' 는 배너가 아니다.
+for (const line of ["## How to update", "**How to update**: 아래 절차를 따른다."]) {
+  t(`revision_banner '${line}' 는 통과`, () => assert.ok(!has("revision_banner", CLEAN_TITLE, banner(line))));
+}
+t("revision_banner 배너 낱말로 시작하지 않는 헤딩은 통과(절차 헤딩)", () =>
+  assert.ok(!has("revision_banner", CLEAN_TITLE, banner("## 키 폐기 절차"))));
+for (const line of ["## UPDATE: 재시도 규칙", "## ⚠ 폐기 안내", "## [정정] 재시도 횟수", "## 2026-10-01 정정"]) {
+  t(`revision_banner 배너 낱말로 시작하는 헤딩 '${line}' 발생`, () => assert.ok(has("revision_banner", CLEAN_TITLE, banner(line))));
+}
+{
+  // 짧은 문서에선 끝의 「변경 이력」 이 앞부분 안에 든다 — 가이드가 권하는 자리라 배너가 아니다.
+  const history = "## 변경 이력\n- 2026-10-01 정정: 재시도 횟수를 5회에서 3회로 줄였다.";
+  t("revision_banner 짧은 문서 끝 「변경 이력」 속 정정은 통과", () =>
+    assert.ok(!has("revision_banner", CLEAN_TITLE, `${CLEAN_BODY}\n\n${history}`)));
+  t("revision_banner 「변경 이력」 앞의 배너는 발생", () =>
+    assert.ok(has("revision_banner", CLEAN_TITLE, `> 2026-10-01 정정: 재시도 횟수를 바꿨다.\n\n${CLEAN_BODY}\n\n${history}`)));
+}
 {
   // 20줄 문서: 앞부분 = max(15, 4) = 15줄
   const doc20 = (at: number) => {
