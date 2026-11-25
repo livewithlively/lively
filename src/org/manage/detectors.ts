@@ -7,7 +7,7 @@
 //
 //  ⚠ 판정기는 **발견만 만든다.** 고치는 것은 조치(apply-action.ts)가 하고, 그것도 action_level 이 허락할 때만.
 //   관리기는 '이미 사람이 정리해 둔 것'을 건드리므로 오탐 한 번의 반경이 크다 — 기본은 report(쌓기만)다.
-import { itemsPool, q } from "../../db/client.js";
+import { itemsPool, q, withTx } from "../../db/client.js";
 import type { ManagerRow } from "../store/managers.js";
 
 /** 판정 결과 1건 — 저장(upsertFinding)이 이 모양을 받는다. */
@@ -336,6 +336,8 @@ export interface CodeDriftCandidate {
 export interface CodeDriftKnowledgeCandidate {
   name: string; title: string | null; type: string | null;
   repos: string[]; category_keys: string[]; updated_at: string | null;
+  /** 작업 기록 원천(findCodeDriftTouchCandidates)만 — 지식 본문 뒤에 바뀐 모듈(repos[0] 의 것, 최근 순). */
+  changed_units?: Array<{ path: string; changed_at: string }>;
 }
 
 /** Postgres undefined_table — 선택 기능의 테이블이 없는 배포를 오류와 구분한다. */
@@ -368,6 +370,157 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
     if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
     throw e;
   }
+}
+
+/**
+ * 코드 괴리 후보 — **작업 기록 원천**. 지식을 산출·결정한 작업 기록이 건드린 모듈을, 지식 본문과 그 작업 뒤에 커밋 작업이 다시 건드린 것.
+ *  분류에 레포가 없어도 바뀐 모듈의 레포를 알기 때문에 그 레포를 싣는다(분류의 첫 레포는 대표값일 뿐 실제로 바뀐 곳이 아니다).
+ *
+ *  · 모듈 변경 시각은 그 모듈을 건드린 커밋 작업 기록의 시각이다 — 도메인맵의 모듈 내용 변경 시각이 아직 없어 대신 쓴다.
+ *    committed_at 이 없는 기록이면 커밋 시각이 아니라 기록 시각이다. 아래 findCodeDriftCandidates 가 쓰는 code_unit.updated_at 은
+ *    모듈이 생기거나 옮겨질 때만 오르는 구조 변경 시각이라(모듈 안 파일 수정은 refresh 가 건드리지 않는다) 여기 쓸 수 없다.
+ *  · 14일 여유: 같은 작업의 MR 이 늦게 머지돼 작업 기록 뒤 커밋이 다시 기록되는 경우를 오탐으로 올리지 않으려는 값이다.
+ *    본문 시각에도 붙이는 것은 본문을 고친 그 작업의 커밋이 뒤늦게 기록되는 경우도 같기 때문이다. 대가로 창 안의 변경은
+ *    뒤에 다른 변경이 오지 않는 한 영영 후보가 되지 않는다.
+ *  · 지식을 낸 작업의 커밋과 같은 sha 의 기록은 어느 모듈에서든 변경이 아니다 — 같은 커밋을 늦게 다시 기록한 것이다.
+ *    제외 집합은 지식 단위다(지식×모듈 단위로 모으면 다른 모듈에 붙은 재기록이 변경으로 세진다).
+ *  · 변경은 커밋이 달린 작업 기록의 touch 만 센다(유도·호출자 모두). 조사·리뷰 기록의 touch 는 «읽었다» 일 수 있다.
+ *  · 같은 모듈에 지식을 낸 작업이 여럿이면 가장 늦은 것을 기준으로 본다 — 변경 뒤 그 지식을 다시 냈으면 이미 대조한 것이다.
+ *  · 스코프의 lookback_days 는 걸지 않는다. 그 조건은 «최근에 고친 지식» 인데 이 원천은 «오래 안 고친 지식» 을 찾는다
+ *    — 걸면 lookback 을 둔 관리기에서 이 원천이 늘 빈다.
+ *  · 지식 하나는 한 레포(가장 최근 변경)로 접는다 — 레포마다 따로 위탁하면 같은 지식을 두 번 대조한다.
+ *  ⚠ 지식×모듈 행을 그 모듈의 touch 전부와 조인하지 마라 — 모듈당 touch 수의 제곱으로 커진다. 모듈별 커밋에 시각 순번을 한 번
+ *   매기고, 지식×모듈마다 «제외되지 않은 가장 작은 순번» 하나만 찾는다. 그 순번은 1 이거나 «제외된 순번 + 1» 중 하나라서
+ *   (빈자리는 제외된 순번 바로 뒤에서만 생긴다), 후보를 그 둘로 만들고 제외된 순번을 등호 안티조인으로 빼면 모든 조인이 등호다.
+ *   순번을 범위 조건(rn <= n)이나 generate_series 로 펼치지 마라 — 추정치가 낮으면 플래너가 nested loop 를 골라, 산출 sha 가
+ *   몰린 지식 하나가 (그 sha 수 × 모듈 커밋 수)를 훑는다(편중 데이터에서 같은 쿼리가 데이터 무작위성에 따라 3초와 10분으로 갈렸다).
+ *   제외 순번 표(excl_rank)는 그 지식이 낸 모듈 쌍(origin)으로만 만든다 — 지식을 낸 커밋이 다른 지식의 원천 모듈에도 붙어 있으면
+ *   그 쌍은 결과에 쓰이지 않는데(changed 가 origin 으로 거른다) 중간 표만 (그 커밋이 붙은 모듈 수)배로 불어난다.
+ *  ⚠ 테이블 없음(42P01)만 빈 결과다. 다른 SQL 오류를 삼키면 관리기가 매주 후보 0건을 ok 로 내며 조용히 죽는다.
+ *  ⚠ 문장 시간 상한(SET LOCAL statement_timeout)을 둔다 — 플랜이 틀어지거나 잠금에 막혀 오래 걸리면 57014 로 던지고, 관리기 실행은
+ *   이 원천만 빼고 partial_error 로 싣는다(runManager 의 touchError). 상한 없이 붙잡혀 있으면 관리기 실행 전체가 그만큼 멈춘다.
+ */
+export const CODE_DRIFT_TOUCH_GRACE_DAYS = 14;
+/** 작업 기록 원천 조회의 문장 시간 상한(ms) — 큰 배포의 합성 측정(작업 기록 20만 · touch 59만)에서 3초 안쪽이었다. */
+export const CODE_DRIFT_TOUCH_TIMEOUT_MS = 60_000;
+
+export async function findCodeDriftTouchCandidates(
+  m: ManagerRow, limit: number, opts: { timeoutMs?: number } = {},
+): Promise<CodeDriftKnowledgeCandidate[]> {
+  const params: unknown[] = [];
+  const conds = scopeConds({ ...m, lookback_days: null }, params, "k");
+  params.push(CODE_DRIFT_TOUCH_GRACE_DAYS);
+  const graceP = `$${params.length}`;
+  params.push(limit);
+  const limP = `$${params.length}`;
+  try {
+    //  읽기뿐이라 트랜잭션은 SET LOCAL 을 담는 그릇이다.
+    const rows = await withTx(async (c) => {
+      await c.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(opts.timeoutMs ?? CODE_DRIFT_TOUCH_TIMEOUT_MS))}`);
+      return q(c, `
+      WITH kk AS (
+        SELECT k.name, COALESCE(k.body_updated_at, k.updated_at) AS body_at
+          FROM knowledge k
+         WHERE ${conds.join(" AND ")}
+      ), origin AS (
+        SELECT ak.name, t.target_id AS unit_id, max(COALESCE(a.committed_at, a.created_at)) AS origin_at
+          FROM activity_knowledge ak
+          JOIN kk               ON kk.name = ak.name
+          JOIN activity a       ON a.id = ak.activity_id
+          JOIN activity_touch t ON t.activity_id = a.id AND t.target_kind = 'code_unit'
+         WHERE ak.relation IN ('produced', 'decided')
+         GROUP BY ak.name, t.target_id
+      ), origin_sha AS (
+        SELECT DISTINCT ak.name, a.commit_sha
+          FROM activity_knowledge ak
+          JOIN kk         ON kk.name = ak.name
+          JOIN activity a ON a.id = ak.activity_id AND a.commit_sha IS NOT NULL
+         WHERE ak.relation IN ('produced', 'decided')
+      ), unit_commit AS (
+        SELECT t2.target_id AS unit_id, a2.commit_sha, max(COALESCE(a2.committed_at, a2.created_at)) AS changed_at
+          FROM activity_touch t2
+          JOIN activity a2 ON a2.id = t2.activity_id AND a2.commit_sha IS NOT NULL
+         WHERE t2.target_kind = 'code_unit' AND t2.target_id IN (SELECT unit_id FROM origin)
+         GROUP BY t2.target_id, a2.commit_sha
+      ), ranked AS (
+        SELECT uc.unit_id, uc.commit_sha, uc.changed_at,
+               row_number() OVER (PARTITION BY uc.unit_id ORDER BY uc.changed_at DESC, uc.commit_sha) AS rn
+          FROM unit_commit uc
+      ), excl_rank AS (
+        SELECT os.name, r.unit_id, r.rn
+          FROM origin_sha os
+          JOIN origin o ON o.name = os.name
+          JOIN ranked r ON r.commit_sha = os.commit_sha AND r.unit_id = o.unit_id
+      ), cand AS (
+        SELECT o.name, o.unit_id, 1::bigint AS rn FROM origin o
+        UNION
+        SELECT e.name, e.unit_id, e.rn + 1 FROM excl_rank e
+      ), first_kept AS (
+        SELECT c.name, c.unit_id, min(c.rn) AS rn
+          FROM cand c
+          LEFT JOIN excl_rank e ON e.name = c.name AND e.unit_id = c.unit_id AND e.rn = c.rn
+         WHERE e.name IS NULL
+         GROUP BY c.name, c.unit_id
+      ), changed AS (
+        SELECT o.name, o.unit_id, r.changed_at
+          FROM origin o
+          JOIN kk            ON kk.name = o.name
+          JOIN first_kept f  ON f.name = o.name AND f.unit_id = o.unit_id
+          JOIN ranked r      ON r.unit_id = f.unit_id AND r.rn = f.rn
+         WHERE r.changed_at > kk.body_at + (${graceP} || ' days')::interval
+           AND r.changed_at > o.origin_at + (${graceP} || ' days')::interval
+      ), per_repo AS (
+        SELECT c.name, r.name AS repo, max(c.changed_at) AS changed_at,
+               json_agg(json_build_object('path', cu.path, 'changed_at', c.changed_at) ORDER BY c.changed_at DESC, cu.path) AS units
+          FROM changed c
+          JOIN code_unit cu ON cu.id = c.unit_id AND (cu.state = 'active' OR cu.state IS NULL)
+          JOIN repo r       ON r.id = cu.repo_id AND r.name IS NOT NULL AND (r.state = 'active' OR r.state IS NULL)
+         GROUP BY c.name, r.name
+      ), pick AS (
+        SELECT DISTINCT ON (p.name) p.name, p.repo, p.changed_at, p.units
+          FROM per_repo p
+         ORDER BY p.name, p.changed_at DESC, p.repo
+      )
+      SELECT k.name, k.title, k.type, k.updated_at, pick.repo, pick.units,
+             COALESCE((SELECT ARRAY_AGG(DISTINCT c.key) FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
+                        WHERE kc.name = k.name AND kc.state <> 'rejected'), ARRAY[]::text[]) AS category_keys
+        FROM pick JOIN knowledge k ON k.name = pick.name
+       ORDER BY pick.changed_at DESC, k.name
+       LIMIT ${limP}`, params);
+    });
+    return rows.map((r) => ({
+      name: String(r.name), title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
+      repos: [String(r.repo)], category_keys: (r.category_keys as string[]) ?? [],
+      updated_at: r.updated_at ? String(r.updated_at) : null,
+      changed_units: ((r.units as Array<{ path: string; changed_at: string }>) ?? [])
+        .map((u) => ({ path: String(u.path), changed_at: new Date(String(u.changed_at)).toISOString() })),
+    }));
+  } catch (e) {
+    if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // 도메인맵·작업 기록 표가 없는 배포 — 볼 것이 없다
+    throw e;
+  }
+}
+
+/**
+ * 두 지식 후보 원천을 limit 까지 합친다. 같은 지식은 작업 기록 원천의 것(바뀐 모듈의 레포)을 쓴다 — 지식 하나를 두 레포에서 대조하지 않게.
+ *  몫을 나누는 이유: 작업 기록 원천 후보는 본문을 고치기 전까지 빠지지 않아, 앞에서부터 채우면 매주 자리를 다 차지해 분류 원천이
+ *  영영 0건이 된다. 작업 기록 원천은 ceil(limit/2) 까지, 나머지는 분류 원천이고, 한쪽이 모자라면 다른 쪽이 남은 자리를 채운다.
+ */
+export function mergeCodeDriftKnowledgeCandidates(
+  touched: readonly CodeDriftKnowledgeCandidate[], byCategory: readonly CodeDriftKnowledgeCandidate[], limit: number,
+): CodeDriftKnowledgeCandidate[] {
+  const touchBy = new Map(touched.map((d) => [d.name, d] as const));
+  const out = new Map<string, CodeDriftKnowledgeCandidate>();
+  for (const d of touched.slice(0, Math.ceil(limit / 2))) out.set(d.name, d);
+  for (const d of byCategory) {
+    if (out.size >= limit) break;
+    if (!out.has(d.name)) out.set(d.name, touchBy.get(d.name) ?? d);
+  }
+  for (const d of touched) {
+    if (out.size >= limit) break;
+    if (!out.has(d.name)) out.set(d.name, d);
+  }
+  return [...out.values()];
 }
 
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {
