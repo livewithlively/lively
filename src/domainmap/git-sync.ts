@@ -84,10 +84,10 @@ export class CloneBusyError extends Error {
 }
 
 function cloneLockPath(repoName: string): string {
-  const safe = sanitizeName(repoName);
-  if (!safe) throw new Error("invalid repo name for clone dir");
-  // 클론 디렉터리 옆에 둔다 — 첫 clone 전에는 클론 디렉터리가 없다.
-  return join(reposDir(), `.${safe}.fetch.lock`);
+  // 클론 디렉터리 옆에 둔다 — 첫 clone 전에는 클론 디렉터리가 없다. 자리는 클론 자리(repoClonePath)를 그대로 따른다:
+  //  워크스페이스 열쇠가 있으면 reposDir/@ws/<id>/ 밑이다. reposDir 바로 밑에 두면 두 워크스페이스의 같은 이름 레포가 클론은
+  //  따로인데 잠금을 나눠, 한쪽 fetch 가 남의 웹훅을 «clone busy» 로 돌려보내고 git-pull · touch 유도를 건너뛰게 한다.
+  return join(dirname(repoClonePath(repoName)), `.${sanitizeName(repoName)}.fetch.lock`);
 }
 
 function lockAgeMs(path: string): number | null {
@@ -101,7 +101,7 @@ function lockAgeMs(path: string): number | null {
 /** 레포별 파일 잠금 아래에서 fn 을 돈다. waitMs 안에 못 얻으면 CloneBusyError. */
 export async function withCloneLock<T>(repoName: string, fn: () => Promise<T>, waitMs: number = CLONE_LOCK_WAIT_MS): Promise<T> {
   const path = cloneLockPath(repoName);
-  mkdirSync(reposDir(), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });   // 워크스페이스 자리(@ws/<id>)는 첫 clone 전에 없을 수 있다
   const token = randomUUID();
   const deadline = Date.now() + waitMs;
   for (;;) {
