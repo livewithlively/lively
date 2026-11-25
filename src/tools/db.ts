@@ -9,7 +9,8 @@ import { AuditWriteError, collectSubjectKeys, persistAccessBestEffort, persistAc
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs, resolveUnmaskKeys, peekMaskedSrcKeyToCol } from "../db/policy.js";
 import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from "../db/mask.js";
-import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess, confinedToAppTools, type LivelyUser } from "../context.js";
+import { resolveUser, hasAnyDbAccess, confinedToAppTools, type LivelyUser } from "../context.js";
+import { dbSourceAllowed, requireDbSourceAccess } from "../org/store/db-source-grants.js";
 import { requireAppTool } from "../apps/principal.js";
 
 import { SELF_SOURCE } from "../db/self-source.js";
@@ -63,7 +64,8 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
           throw new Error(`Forbidden: user '${user.userId}' lacks any 'db' scope`);
         }
         await refreshSources(); // env∪DB 병합 스냅샷 최신화(웹에서 추가한 소스 즉시 반영)
-        const sources = listSourceConfigs().map((s) => ({
+        //  allowed — #5799: 역할을 받은 구성원이면 소스별 지정까지 본다(dbSourceAllowed). 옛 구성원은 종전 판정 그대로.
+        const sources = await Promise.all(listSourceConfigs().map(async (s) => ({
           name: s.name,
           driver: s.driver,
           authMode: s.authMode,
@@ -71,8 +73,8 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
           rls: s.rls !== null, // GUC 이름 자체는 비노출 — 행수준 격리 적용 여부만
           maxRows: s.maxRows,
           timeoutMs: s.timeoutMs,
-          allowed: canAccessDbSource(user, s.name),
-        }));
+          allowed: await dbSourceAllowed(user, s.name),
+        })));
         return { content: [{ type: "text", text: JSON.stringify({ sources }, null, 2) }] };
       },
     },
@@ -111,7 +113,7 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
           });
         try {
           src = resolveSourceName(source);
-          requireDbSource(user, src);
+          await requireDbSourceAccess(user, src);
           await requireSelfSourceAllowed(user, src);
           const policy = getSourcePolicy(src); // 테이블 정책 오버레이(라이브 스키마 위)
           // P4(#746) — masked 표시도 요청자 언마스크를 반영(권한자에겐 db_query 가 raw 를 주므로 masked 로 오도하지 않게).
@@ -185,7 +187,7 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
         await refreshSources();
         await refreshPolicy();
         const src = resolveSourceName(source);
-        requireDbSource(user, src); // 방어선 0: 소스별 권한
+        await requireDbSourceAccess(user, src); // 방어선 0: 소스별 권한(#5799 — 역할을 받은 구성원은 소스별 지정까지)
         await requireSelfSourceAllowed(user, src); // 방어선 0-b(#1291): self 는 잠긴 맥락이 있으면 admin 만
         const cfg = getSourceConfig(src);
         if (!cfg) throw new Error(`db source '${src}' 설정을 찾을 수 없습니다`); // 리프레시-삭제 경합 방어

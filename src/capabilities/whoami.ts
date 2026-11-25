@@ -53,7 +53,8 @@ const me: Capability = {
       avatar: member?.avatar ?? null, // 우측 상단 '내 프로필' 아바타(없으면 이니셜+색상 폴백)
       avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null, // 이미지 없을 때 커스텀 글자/배경색
 
-      teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      //  #5799 — 소속 팀만(권한 그룹은 소속이 아니다 — 접근을 묶으려고 만든 것이라 프로필에 비치지 않는다).
+      teams: teams.filter((t) => t.kind !== "group").map((t) => ({ id: t.id, key: t.key, name: t.name })),
       // 실행 모드(#1007+) — 이 요청이 어느 모드로 게이트되는가(단일 x-lively-mode 헤더 파생, 어댑터가 ctx 에 주입).
       //  웹/AI 가 '모드가 실제로 켜졌는지' 확인하는 관측 지점. read_only 는 하위호환 유지.
       mode: ctx?.incognito ? "incognito" : ctx?.readOnly ? "readonly" : "normal",
@@ -170,7 +171,9 @@ const whoami: Capability = {
       //  하네스의 whoami 는 늘 로드되는 배관이라 base64 그림을 실으면 세션 컨텍스트를 잡아먹는다(me 를 MCP 에 안 여는 이유와 같다).
       ...(isApp ? { avatar: member?.avatar ?? null, avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null } : {}),
       // ── 소속 ── (#4233: 팀별 소유/이해관계 카테고리는 분류 담당 개념과 함께 걷었다)
-      teams: isApp ? [] : teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      //  teams = 소속 팀 · groups = 권한 그룹(#5799 — 접근 판정은 둘이 같다. 보이는 자리만 다르다).
+      teams: isApp ? [] : teams.filter((t) => t.kind !== "group").map((t) => ({ id: t.id, key: t.key, name: t.name })),
+      groups: isApp ? [] : teams.filter((t) => t.kind === "group").map((t) => ({ id: t.id, key: t.key, name: t.name })),
       // ── 이 요청의 접속 신원(게이트웨이가 헤더에서 본 것이 권위 — 자기보고 아님) ──
       session: {
         harness: ctx?.agent ?? null,        // x-lively-harness / User-Agent → claude-code·codex …(#182)

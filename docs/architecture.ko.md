@@ -136,6 +136,8 @@
 - **scope 가 있는 capability 를 새로 만들면 배정표에 한 줄을 더한다** — 빠뜨리면 `permission-map.test` 가 이름을 짚어 실패한다.
 - 그 시험이 전 기능 × 옛 scope 조합으로 «옛 scope 로 되던 일이 번역 뒤에도 되는가 · 위험 권한 쪽으로 넓어지지 않는가» 를 잰다. 일부러 좁히는 기능은 `NARROWED` 에 이유와 함께 적는다.
 - **역할 저장**: `org_member.role`(guest·member·admin·owner) + `org_member.grants`(역할 위에 얹은 개별 권한). 역할을 주면 `scopes` 칸에는 새 권한을 옛 이름으로 비춘 사본이 함께 적힌다(아직 `scopes` 를 읽는 자리·되돌리기용 — 판정에는 쓰지 않는다). 역할 구성원의 토큰·앱 주체는 «구성원의 새 권한 ∩ 발급된 상한(토큰 scope·앱 동의)» 을 싣는다(`principalGrants`·`cappedGrantsField`). 내가 갖지 않은 위험 권한의 고치기는 남에게 줄 수 없다. 역할 구성원에게 DB 소스는 기본 불가다(소스별 지정이 들어오기 전까지). 두 칸은 롤 창을 견디도록 `to_jsonb(행) -> 'role'` 로 읽는다.
+- **대상 지정 — DB 소스**: `org_db_source_grant`(소스 × 구성원·팀). 역할 구성원은 `db` 조회 권한과 이 지정이 **둘 다** 있어야 그 소스를 조회한다(`org/store/db-source-grants.ts` `dbSourceAllowed` — `db_sources`·`db_schema`·`db_query` 가 쓴다). 지정은 `org_db_source_access`·`org_db_source_access_set`(admin)으로 보고 바꾼다. 옛 구성원은 이 표와 무관하게 종전 그대로다.
+- **팀 종류**: `team.kind` = `team`(소속 팀) | `group`(권한 그룹). 접근 판정은 둘이 같고(`team_member`), 보이는 자리만 다르다(`whoami` 의 `teams`·`groups`). 팀이 DB 지정의 대상이 되면 팀 편집은 관리자 전용이 된다(`anyTeamGrant`).
 - `cap-permission.test` 는 옛 scope 만 가진 주체가 전 기능 × 부분집합 128가지에서 종전과 **정확히 같은** 판정을 받는지 잰다. 새 강제 지점을 만들 때는 `scopes.includes(...)` 를 직접 쓰지 말고 `permits(user, 옛scope, 요구)`(또는 `capAllowed`·`isAdmin`·`canManageWorkspace`)를 쓴다.
 
 ## 실행
