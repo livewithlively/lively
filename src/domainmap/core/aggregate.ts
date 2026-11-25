@@ -12,12 +12,14 @@
 //
 //   fileChanges = [{status, from?, to?, path?, score?}]  (same shape as refresh)
 //   unitPaths   = active code_unit paths for the repo
-//   → { unitChanges, summary }
+//   → { unitChanges, summary, contentChanged }
 //     unitChanges = unit-level [{status:'R',from,to,score} | {status:'A',path}]
 //                   (deduped) — fed straight into refresh()'s apply loop.
 //     summary     = { module_renames, new_dirs, noop_in_existing, noop_delete,
 //                     ambiguous_moves: [{from, to, votes, reason}] }
-export function aggregateFileChanges(fileChanges: unknown, unitPaths: unknown): { unitChanges: any[]; summary: any } {
+//     contentChanged = paths (post-diff) of existing units with a file added/modified/
+//                      deleted/renamed inside them — see the block above the return.
+export function aggregateFileChanges(fileChanges: unknown, unitPaths: unknown): { unitChanges: any[]; summary: any; contentChanged: string[] } {
   const changes: any[] = Array.isArray(fileChanges) ? fileChanges : [];
   // Existing units, longest-first so ownerOf picks the most specific (longest) unit.
   const units = (Array.isArray(unitPaths) ? unitPaths : []).filter((u): u is string => typeof u === "string" && u !== "");
@@ -183,5 +185,29 @@ export function aggregateFileChanges(fileChanges: unknown, unitPaths: unknown): 
     summary.new_dirs++;
   }
 
-  return { unitChanges, summary };
+  // Existing units whose files changed without a structural change of the unit itself.
+  // The unit-level loop treats these as no-ops, so without this set a module edited for
+  // months still looks untouched (code_drift needs "content changed after the knowledge").
+  // Reported under the unit's path AFTER this diff (a wholesale-renamed owner → its new path),
+  // because refresh() applies them once the renames have landed. Files carried by a wholesale
+  // module rename are the move itself, not a content change.
+  const contentChanged = new Set<string>();
+  const mark = (p: unknown) => {
+    const u = ownerOf(p);
+    if (u) contentChanged.add(renamedOwners.get(u) ?? u);
+  };
+  for (const c of changes) {
+    if (!c || typeof c !== "object") continue;
+    const status = (c.status ?? "").toUpperCase();
+    if (status === "M" || status === "A" || status === "D") mark(c.path ?? c.to ?? c.from);
+    else if (status === "R" && c.from && c.to) {
+      const uf = ownerOf(c.from);
+      const Q = uf ? renamedOwners.get(uf) : undefined;
+      if (Q !== undefined && (c.to === Q || c.to.startsWith(Q + "/"))) continue;
+      mark(c.from);
+      mark(c.to);
+    }
+  }
+
+  return { unitChanges, summary, contentChanged: [...contentChanged] };
 }

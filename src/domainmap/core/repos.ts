@@ -124,6 +124,8 @@ export async function hardDeleteRepo(name: string, force: boolean, actor: Actor)
     return { blocked: true, id: rid, name: nm, refs: { code_units, data_entities } };
   }
   return withTx(async (client) => {
+    // Same lock order as refresh() (repo row first), so a refresh in flight finishes before the delete.
+    await client.query("SELECT id FROM repo WHERE id=$1 FOR UPDATE", [rid]);
     const del = async (sql: string): Promise<number> => (await client.query(sql, [rid])).rowCount ?? 0;
     // 자식 먼저(참조 순서) — domainmap 엔 FK 가 없어 순서 무관하나 의미상 leaf→root. category 는 repo-free라 미삭제.
     const mappings = await del("DELETE FROM mapping WHERE repo_id=$1");

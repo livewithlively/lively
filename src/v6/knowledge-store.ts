@@ -5,6 +5,7 @@
 //  둘 다 아래에서 **재수출**한다 — 이 모듈이 지식 표면의 배럴이라 기존 호출부(40+)는 무수정이다.
 import { itemsPool } from "../db/client.js";
 import { q, one, withTx, type Db } from "../db/client.js";
+import { HttpError } from "../http-error.js";
 import { isJsonObject, jsonEqual, mergeFieldsPatch } from "./knowledge-fields.js";
 import { restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
@@ -512,9 +513,17 @@ export async function upsertKnowledge(
   const catKeys = Array.isArray(input.category) ? input.category : (input.category != null ? [input.category] : []);
   const catIds: number[] = [];
   for (const key of catKeys) {
-    const cat = await one(db, `SELECT id FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]);
+    const cat = await one(db, `SELECT id, state FROM category WHERE key=$1 AND state<>'merged' LIMIT 1`, [key]) as
+      { id: number; state: string } | undefined;
     if (!cat) throw new Error(`category '${key}' 없음 — category_list 로 확인하세요`);
-    catIds.push((cat as { id: number }).id);
+    //  비활성 분류는 새 지식을 받지 않는다 — 비활성 전환은 «활성 지식이 하나도 없다» 를 확인하고 하는데(assertDeprecatable),
+    //   저장이 비활성 분류를 받으면 그 약속이 뒤에서 깨진다. 이미 그 분류에 든 지식을 같은 분류로 다시 저장하는 것은 옮김이 아니라 받는다.
+    //   여기는 지식 행을 쓰기 전에 거절하려는 앞 검사다(잠금 없음). 경합까지 닫는 판정은 linkKnowledgeCategory 가 잠근 채로 다시 한다.
+    if (cat.state !== "active" && !(before && await one(db,
+      `SELECT 1 FROM knowledge_category WHERE name=$1 AND category_id=$2 AND state<>'rejected'`, [name, cat.id]))) {
+      throw new HttpError(400, inactiveCategoryMessage(key, cat.state));
+    }
+    catIds.push(cat.id);
   }
   // 신규 지식: category(단일) + type(page-type) 둘 다 필수(#290). 기존 편집은 보존(생략 허용).
   if (!before && !catIds.length) {
@@ -910,11 +919,34 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
 //  #1563: 그래서 **지우기 전에 기존 매핑을 읽어 before 에 싣는다.** 안 읽으면 감사에 '무엇에서 무엇으로'가
 //   없어 두 곳이 동시에 반쪽이 된다 — 이력 화면은 분류 변경을 '분류 지정'이라고만 쓸 수 있고,
 //   Cmd+Z(#702)는 아예 이 op 을 되돌릴 수 없다(그 한계 때문에 undo 행렬에서 제외돼 있었다).
+const inactiveCategoryMessage = (key: string, state: string): string =>
+  `category '${key}' 는 비활성(${state}) 분류라 지식을 새로 받지 않습니다 — category_list 에서 활성 분류를 골라 저장하세요.`;
+
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx, db: Db = itemsPool): Promise<void> {
+  //  교체(DELETE 뒤 INSERT)와 감사를 한 트랜잭션으로 한다. 따로 커밋하면 INSERT 가 실패할 때(없는 분류 · 경합의 23505) 옛 분류만
+  //   지워진 채 남아 지식이 미분류가 된다. client 를 받았으면 호출자의 트랜잭션 안이다 — 지식 행을 이미 잠근 트랜잭션에서는
+  //   반드시 그 client 를 넘긴다(풀로 부르면 아래 잠금이 제 트랜잭션을 기다린다).
+  if (db === itemsPool) return withTx((c) => linkKnowledgeCategory(name, categoryId, state, ctx, c));
+  //  linkKnowledgeCategory 끼리는 지식 행을 잠가 줄을 세운다 — 잠그지 않으면 나중 교체의 DELETE 가 먼저 교체의 커밋 전 행을 못 보고
+  //   INSERT 가 단일 분류 유니크(knowledge_category_single_uq)에 걸린다. FOR NO KEY UPDATE 는 매핑 FK 의 KEY SHARE 와 부딪치지 않는다.
+  //   이 잠금을 안 잡는 다른 매핑 쓰기(관리기 분류 보정 · 분류 제안)와 겹치면 여전히 23505 일 수 있다 — 그때도 트랜잭션이라 옛 분류는 남는다.
+  await db.query(`SELECT 1 FROM knowledge WHERE name=$1 FOR NO KEY UPDATE`, [name]);
   // single_uq 로 name 당 1행이지만 ORDER BY 로 결정적으로 고른다(이행기 다중 잔존 대비 — 비결정 스냅샷은 되돌리기를 복불복으로 만든다).
   const prev = await one(db,
     `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1`,
     [name]) as { category_id: number; state: string; mapped_by: string } | undefined;
+  //  비활성 분류는 지식을 새로 받지 않는다(upsertKnowledge 의 같은 규칙이 여기서 최종으로 걸린다 — 직접 연결 · 되돌리기도 이 문을 지난다).
+  //   FOR KEY SHARE 는 비활성 전환의 FOR UPDATE 와 부딪쳐, 전환이 진행 중이면 기다렸다가 바뀐 state 를 본다.
+  //   없는 id(삭제와 겹친 연결 포함)는 404 다 — INSERT 의 FK 오류로 두면 REST 래퍼가 500 으로 덮는다.
+  //   rejected 매핑을 rejected 가 아닌 상태로 올리는 것은 «이미 든 지식» 으로 치지 않는다 — 비활성 전환 검사가 rejected 를
+  //   세지 않으므로, 허용하면 rejected 로 걸어 두고 전환한 뒤 confirmed 로 다시 거는 두 번의 호출로 비활성 분류에 지식이
+  //   들어간다(pg-test L5). rejected 를 그대로 두는 재호출(되돌리기 포함)은 새로 받는 것이 아니라 막지 않는다(L6).
+  const cat = await one(db, `SELECT key, state FROM category WHERE id=$1 FOR KEY SHARE`, [categoryId]) as { key: string; state: string } | undefined;
+  if (!cat) throw new HttpError(404, `category id ${categoryId} 가 없습니다(삭제됐을 수 있습니다) — category_list 에서 활성 분류를 골라 연결하세요.`);
+  const alreadyIn = prev && Number(prev.category_id) === categoryId && (prev.state !== "rejected" || state === "rejected");
+  if (cat.state !== "active" && !alreadyIn) {
+    throw new HttpError(400, inactiveCategoryMessage(cat.key, cat.state));
+  }
   // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).
   await db.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
   await db.query(
@@ -1029,11 +1061,17 @@ export async function proposeKnowledgeCategory(
   // 분류기는 '빈 자리'만 채운다 — 이미 카테고리 행(어떤 state 든)이 있으면 건너뛴다(single_uq 위반 방지 + 사람/기존 판정 불가침).
   const ex = await itemsPool.query(`SELECT 1 FROM knowledge_category WHERE name=$1 LIMIT 1`, [name]);
   if (ex.rowCount) return { applied: false, state, threshold, skipped: "already_has_category" };
-  await itemsPool.query(
+  //  비활성 분류에는 제안도 넣지 않는다 — 비활성 전환 검사는 proposed 도 세므로, 넣으면 «비활성 분류는 비어 있다» 가 깨진다.
+  //   FOR KEY SHARE 로 고르면 진행 중인 비활성 전환(FOR UPDATE)을 기다렸다가 바뀐 state 로 다시 거른다.
+  const ins = await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, confidence, state, evidence, created_at)
-     VALUES($1,$2,'llm',$3,$4,$5,now())
+     SELECT $1, c.id, 'llm', $3, $4, $5, now() FROM category c WHERE c.id=$2 AND c.state='active' FOR KEY SHARE OF c
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state, confidence=EXCLUDED.confidence, evidence=EXCLUDED.evidence, mapped_by='llm'`,
     [name, categoryId, opts.confidence ?? null, state, opts.evidence]);
+  if (!ins.rowCount) {
+    const c = await one(itemsPool, `SELECT state FROM category WHERE id=$1`, [categoryId]) as { state: string } | undefined;
+    return { applied: false, state, threshold, skipped: c ? "inactive_category" : "missing_category" };
+  }
   await auditKnowledge(name, "propose_category", null, { category_id: categoryId, state, mapped_by: "llm", confidence: opts.confidence ?? null, threshold: threshold ?? null }, ctx);
   return { applied: true, state, threshold };
 }

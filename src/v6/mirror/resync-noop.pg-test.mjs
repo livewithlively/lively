@@ -19,6 +19,7 @@
 //   D8 원본 보관 → archived · +1 → 다시 나타남 → active · +1
 //   D9 pending(검토 대기) 행의 무변경 재싱크 → pending 유지 · 판 그대로
 //   D10 external_url · occurred_at · 부모 변경 → 각각 +1
+//   D11 본문 바뀐 재싱크 → 사람이 붙인 type 그대로(미러 insert 는 type 을 정하지 않고, 정해진 type 은 원본이 아니라 사람 · 에이전트의 것이다)
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { mirrorKnowledgeV6 } = await import(`${DIST}/v6/mirror/mirror-knowledge.js`);
@@ -139,6 +140,11 @@ try {
   chk("D10 occurred_at 변경 → 판 9", (await row()).version === 9);
   await mirror(item({ ...cur8, url: URL_B, occurred_at: "2026-11-02T00:00:00Z", parent: "doc-0" }));
   chk("D10 부모 변경 → 판 10", (await row()).version === 10);
+  // D11
+  await itemsPool.query(`UPDATE knowledge SET type='decision' WHERE name=$1`, [name]);
+  await mirror(item({ ...cur8, url: URL_B, occurred_at: "2026-11-02T00:00:00Z", parent: "doc-0", body: "본문 D11" }));
+  const r11 = (await itemsPool.query(`SELECT type, body_md FROM knowledge WHERE name=$1`, [name])).rows[0];
+  chk("D11 본문 바뀐 재싱크도 사람이 붙인 type 을 지우지 않는다", r11?.body_md === "본문 D11" && r11?.type === "decision", JSON.stringify(r11));
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e);
 } finally {
