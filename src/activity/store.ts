@@ -48,6 +48,11 @@ export interface LogActivityResult {
 //  존재 안 하는 지식은 침묵 skip(전체 트랜잭션이 FK 위반으로 abort 되는 것 방지 — 결과에 skippedKnowledge 로 보고).
 export async function logActivity(input: LogActivityInput, authorPerson: string | null): Promise<LogActivityResult> {
   const res = await logActivityTx(input, authorPerson);
+  //  커밋이 달린 기록이면 변경 파일로 touch 를 유도해 본다 — 브랜치 전용 커밋은 브랜치가 지워지면 클론에서 못 잡으므로 기록 직후가 기회다.
+  //   응답을 기다리게 하지 않고 오류도 삼킨다. 놓친 것은 일일 액션(derive_activity_touches)이 메운다.
+  if (typeof input.commit_sha === "string" && input.commit_sha) {
+    void import("./derive-touches.js").then((m) => m.deriveAfterLog(res.id)).catch(() => {});
+  }
   // #5522 — 프로젝트에 **직접 남긴** 작업기록이면 그 프로젝트가 초안에서 나온다(수집해 온 것 = external_id 보유는 세지 않는다).
   //  트랜잭션 밖에서 부른다 — 초안 표시는 이 기록의 일부가 아니고, 실패해도 기록은 남아야 한다.
   if (res.project != null && !(typeof input.external_id === "string" && input.external_id.length > 0)) {
@@ -120,8 +125,15 @@ async function logActivityTx(input: LogActivityInput, authorPerson: string | nul
       refs++;
     }
     let touches = 0;
-    for (const t of input.touches ?? []) {
-      await client.query("INSERT INTO activity_touch(activity_id,target_kind,target_id,created_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING", [id, t.target_kind, t.target_id, now()]);
+    //  (target_kind, target_id) 순으로 넣는다 — 유도 워커(derive-touches.ts)도 같은 순서로 잠가 둘이 엇갈려 교착하지 않는다.
+    //  충돌하면 derived=false 로 바꾼다: 유도 행이 먼저 있어도 호출자 선언이 이겨, sha 가 바뀔 때 유도 touch 와 함께 지워지지 않는다.
+    const sorted = [...(input.touches ?? [])].sort((a, b) =>
+      a.target_kind < b.target_kind ? -1 : a.target_kind > b.target_kind ? 1 : a.target_id - b.target_id);
+    for (const t of sorted) {
+      await client.query(
+        `INSERT INTO activity_touch(activity_id,target_kind,target_id,created_at) VALUES($1,$2,$3,$4)
+           ON CONFLICT (activity_id,target_kind,target_id) DO UPDATE SET derived=false`,
+        [id, t.target_kind, t.target_id, now()]);
       touches++;
     }
     return { id, action, project: projectId, refs, touches, skippedKnowledge };

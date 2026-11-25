@@ -27,10 +27,10 @@
 // 19 | 클론 디렉터리 없음 · git 실행 파일 없음(ENOENT) · 타임아웃 | throw
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseDiff, sanitizeName, repoClonePath, reposDir, isAncestorStrict, commitExists } from "./git-sync.js";
+import { parseDiff, sanitizeName, repoClonePath, reposDir, withCloneLock, CloneBusyError, CLONE_LOCK_STALE_MS, isAncestorStrict, commitExists } from "./git-sync.js";
 import { installWorkspaceDirKeyResolver } from "../ops/workspace-dir-key.js";
 
 let pass = 0;
@@ -94,6 +94,54 @@ t("repoClonePath 은 reposDir 하위 단일 세그먼트(경로탈출 불가)", 
   assert.equal(repoClonePath("../../etc"), reposDir() + "/.._.._etc");
   assert.throws(() => repoClonePath(""), /invalid repo name for clone dir/);
 });
+
+// ── 레포별 clone/fetch 잠금 — 두 색 프로세스·세 호출부(웹훅·git-pull·touch 유도)가 같은 클론을 fetch 한다 ──
+//  잠금이 조용히 새면 git 의 ref 잠금 충돌이 웹훅 502·유도 failed 로 번지고, 낡은 잠금을 못 걷으면 fetch 가 영영 멈춘다.
+{
+  const prevDir = process.env.DOMAINMAP_REPOS_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "clone-lock-"));
+  process.env.DOMAINMAP_REPOS_DIR = dir;
+  const lockFile = join(dir, ".r.fetch.lock");
+  const at = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+  try {
+    await at("잠금을 쥔 동안 다른 시도는 상한까지 기다린 뒤 CloneBusyError · 끝나면 잠금 파일이 없다", async () => {
+      let inner: unknown;
+      await withCloneLock("r", async () => {
+        inner = await withCloneLock("r", async () => "x", 150).catch((e) => e);
+      });
+      assert.ok(inner instanceof CloneBusyError, String(inner));
+      assert.equal(existsSync(lockFile), false);
+    });
+    await at("앞 잠금이 풀리면 기다리던 시도가 이어 받는다", async () => {
+      const order: string[] = [];
+      let release!: () => void;
+      const first = withCloneLock("r", () => new Promise<void>((r) => { order.push("a"); release = r; }));
+      await new Promise((r) => setTimeout(r, 20));
+      const second = withCloneLock("r", async () => { order.push("b"); }, 2_000);
+      setTimeout(() => release(), 150);
+      await Promise.all([first, second]);
+      assert.deepEqual(order, ["a", "b"]);
+    });
+    await at("낡은 잠금(상한 나이 초과)은 걷고 잡는다", async () => {
+      writeFileSync(lockFile, JSON.stringify({ pid: 1, at: Date.now() - CLONE_LOCK_STALE_MS - 1_000, token: "old" }));
+      assert.equal(await withCloneLock("r", async () => "ran", 100), "ran");
+    });
+    await at("내 잠금이 아닌 파일은 지우지 않는다(낡은 것으로 걷힌 뒤 남이 다시 잡은 경우)", async () => {
+      await withCloneLock("r", async () => {
+        writeFileSync(lockFile, JSON.stringify({ pid: 1, at: Date.now(), token: "someone-else" }));
+      });
+      assert.equal(JSON.parse(readFileSync(lockFile, "utf8")).token, "someone-else");
+      rmSync(lockFile);
+    });
+    await at("fn 이 던져도 잠금은 풀린다", async () => {
+      await assert.rejects(withCloneLock("r", async () => { throw new Error("boom"); }), /boom/);
+      assert.equal(existsSync(lockFile), false);
+    });
+  } finally {
+    if (prevDir === undefined) delete process.env.DOMAINMAP_REPOS_DIR; else process.env.DOMAINMAP_REPOS_DIR = prevDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 {
   const dir = mkdtempSync(join(tmpdir(), "git-sync-answer-"));
@@ -174,5 +222,43 @@ t("S3 열쇠 꼴이 틀리면 던진다", () => {
     assert.throws(() => repoClonePath("app"), /UUID 꼴이 아닙니다/);
   } finally { installWorkspaceDirKeyResolver(() => null); }
 });
+
+// ── 잠금 자리도 클론 자리를 따른다(워크스페이스마다 따로) ──────────────────────
+//  S4 | 열쇠 A 가 「app」 잠금을 쥔 동안 열쇠 B 의 「app」 | 막히지 않는다 — 잠금은 각 클론 자리 옆(@ws/<id>/.app.fetch.lock)
+//  S5 | 같은 열쇠의 「app」 두 번                          | 여전히 서로 막는다(CloneBusyError)
+//  두 워크스페이스가 같은 이름 레포를 가지면 클론은 따로인데 잠금이 공용 자리(reposDir/.app.fetch.lock)면, 한쪽의 fetch 가 남의
+//   웹훅을 200(clone busy)으로 돌려보내고 git-pull 을 건너뛰게 한다 — 남의 레포 때문에 내 구조 변경이 밀린다.
+{
+  const prevDir = process.env.DOMAINMAP_REPOS_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "clone-lock-ws-"));
+  process.env.DOMAINMAP_REPOS_DIR = dir;
+  const at = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+  try {
+    await at("S4 다른 워크스페이스의 같은 이름 레포는 잠금을 나누지 않는다 · 잠금은 그 클론 자리 옆", async () => {
+      installWorkspaceDirKeyResolver(() => WA);
+      let inner: unknown;
+      let lockOfA = false;
+      await withCloneLock("app", async () => {
+        lockOfA = existsSync(join(dir, "@ws", WA, ".app.fetch.lock"));
+        installWorkspaceDirKeyResolver(() => WB);
+        inner = await withCloneLock("app", async () => "b", 150).catch((e) => e);
+        installWorkspaceDirKeyResolver(() => WA);
+      });
+      assert.equal(inner, "b", `B 는 A 의 잠금에 막히지 않아야 한다: ${String(inner)}`);
+      assert.ok(lockOfA, "A 의 잠금 파일은 A 의 클론 자리 옆(@ws/<A>/.app.fetch.lock)");
+      assert.equal(existsSync(join(dir, ".app.fetch.lock")), false, "공용 자리에 잠금을 두지 않는다");
+    });
+    await at("S5 같은 워크스페이스 안에서는 여전히 서로 막는다", async () => {
+      installWorkspaceDirKeyResolver(() => WB);
+      let inner: unknown;
+      await withCloneLock("app", async () => { inner = await withCloneLock("app", async () => "x", 150).catch((e) => e); });
+      assert.ok(inner instanceof CloneBusyError, String(inner));
+    });
+  } finally {
+    installWorkspaceDirKeyResolver(() => null);
+    if (prevDir === undefined) delete process.env.DOMAINMAP_REPOS_DIR; else process.env.DOMAINMAP_REPOS_DIR = prevDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log(`\n${pass} passed`);

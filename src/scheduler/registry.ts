@@ -7,7 +7,7 @@
 //   · 'distiller'(#1289 자료 증류기 피커 — [자료 증류기] 섹션에서 등록한 것). 비-필수는 비워도 됨.
 import { runRefreshAll, runRefreshRepo, runRefreshBases } from "./actions/repo-refresh.js";
 import { runConnectorSync, runConnectorPush, runWikiPush } from "./actions/connector.js";
-import { runWikilinkSweep, runEvalDomainDebt, runEnsureManagedSessions, runPreviewReconcile } from "./actions/maintenance.js";
+import { runWikilinkSweep, runEvalDomainDebt, runEnsureManagedSessions, runPreviewReconcile, runDeriveActivityTouches } from "./actions/maintenance.js";
 import { runManagers } from "./actions/manage.js"; // #1419 T5 관리기
 import { runMapInject, runMapHeadless, runBootstrapInject } from "./actions/map-bootstrap.js";
 import { runClassifyKnowledgeInject, runClassifyKnowledgeHeadless } from "./actions/classify.js";
@@ -59,6 +59,9 @@ export const CRON_ACTIONS: CronActionDef[] = [
   // #976 위키 아웃바운드 — 등록 노션 feed_target(카테고리 N:M 매핑)로 정본 지식을 피드 카드로 투영. connector_push(프로젝트)의 위키판. 옵트인(매핑 없으면 무동작).
   { key: "wiki_push", label: "위키 push (산출 지식 → 노션 피드)", params: [], run: runWikiPush },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [], run: runEvalDomainDebt },
+  //  ⚠ 이 액션의 크론 행이 있는 DB 에서는 이 액션을 모르는 이전 릴리스가 부팅하지 못한다(org_cron_action_chk 를 다시 걸다 실패).
+  //   이전 릴리스로 돌아갈 때는 이 크론 행을 먼저 지운다.
+  { key: "derive_activity_touches", label: "작업 기록 커밋 → 코드 단위 연결(activity_touch) 유도", params: [], run: runDeriveActivityTouches },
   // #1419 T5 관리기 — 쌓인 지식을 계속 옳게 유지(분류 어긋남·아웃데이티드·모순·지식↔코드).
   //  결정적 종류(어긋남·아웃데이티드)는 이 틱 안에서 끝나고(LLM 비용 0), 판단이 필요한 종류만 배치로 나간다.
   { key: "run_managers", label: "관리기 실행 (지식 유지보수 — 어긋남·아웃데이티드·모순·코드괴리)", params: [

@@ -165,6 +165,7 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS knowledge_chunk_search BOOLEAN NOT NULL DEFAULT true;
     -- 지식 연결 루프 스위치(키별 boolean). 키가 없으면 꺼짐 — 머지된 코드가 일일 반영으로 바로 배포되므로 켜는 시점은 조직이 정한다.
     --  l2_autoresolve: 관리기(mismatch·outdated)가 실행 끝에 열린 발견을 다시 판정해 성립하지 않으면 닫는다.
+    --  l3_derive: 커밋 작업 기록의 변경 파일로 activity_touch 를 유도한다(activity/derive-touches.ts).
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ontology_loops JSONB NOT NULL DEFAULT '{}'::jsonb;
     -- #1291 맥락 유형별 공개범위 켜기/끄기. 키가 없으면 '켜짐'(현행 동작) — 새 축이 추가돼도 자동으로 켜진 채 시작한다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS visibility_axes JSONB NOT NULL DEFAULT '{}'::jsonb;
