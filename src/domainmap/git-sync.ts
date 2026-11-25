@@ -23,6 +23,8 @@ const execFileP = promisify(execFile);
 export interface GitOpts {
   /** 모든 git op 의 하드 타임아웃(ms). webhook 60_000 / git-pull 180_000 — 호출부 상수. */
   timeoutMs: number;
+  /** 표준출력 상한(바이트). 기본 16MB — 넘으면 execFile 이 ERR_CHILD_PROCESS_STDIO_MAXBUFFER 로 던진다. */
+  maxBuffer?: number;
 }
 
 // 클론 캐시 디렉 — 서비스 유저 쓰기가능 런타임 루트(#618 stateDir, 기본 <cwd>/data/repos) 하위.
@@ -48,6 +50,9 @@ export function repoClonePath(repoName: string): string {
   return join(reposDir(), ...workspaceDirSegments(), safe);
 }
 
+/** git 표준출력 기본 상한(바이트). */
+export const GIT_MAX_BUFFER = 16 * 1024 * 1024;
+
 // Run git with execFile (argv array — NEVER a shell string, no injection). SHAs
 // are validated by the caller; paths in output come from git (trusted). A
 // non-zero exit throws; we add a hard timeout to every git op.
@@ -55,7 +60,7 @@ export function repoClonePath(repoName: string): string {
 //  GIT_TERMINAL_PROMPT=0 항상 — 무자격(앰비언트) 폴백이어도 프롬프트로 매달리지 않고 즉시 실패.
 export async function git(args: string[], cwd: string | undefined, extraEnv: Record<string, string> | undefined, opts: GitOpts) {
   return execFileP("git", args, {
-    cwd, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024,
+    cwd, timeout: opts.timeoutMs, maxBuffer: opts.maxBuffer ?? GIT_MAX_BUFFER,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(extraEnv ?? {}) },
   });
 }

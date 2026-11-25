@@ -13,6 +13,8 @@
 //   A2b 머지 커밋은 first-parent 로 읽는다(0줄 거짓 empty 가 아니다) · 빈 커밋은 empty · 매칭 0건은 ok(unmatched=changed)
 //   A2c 클론에 없는 커밋은 failed(error 기록) · 모듈이 없는 레포는 no_units(fetch 하지 않는다)
 //   A2d blob·tree sha 는 커밋이 아니라 failed(거짓 ok·거짓 empty 가 아니다) · 지워진 레포의 행은 no_repo 이고 fetch 실패로 세지 않는다
+//   A2e 재시도해도 결과가 같은 실패는 바로 종착(expired, error 에 까닭)이고 다음 실행이 다시 잡지 않는다 — 커밋 sha 꼴이 아닌 기록 ·
+//       git 출력 상한(maxBuffer)을 넘는 거대한 커밋. 비활성(deprecated) 레포의 기록은 fetch 하지 않고 no_repo 로 닫는다
 //   I1  다시 돌리면 아무것도 바뀌지 않는다(종착 상태 · touch 수 그대로) · failed 는 다음 실행이 다시 잡고, 한 실행 안에서는 맴돌지 않는다
 //   L1  선점을 잃은 시도(attempted_at 이 다름)는 상태도 touch 도 쓰지 못한다
 //   L2  리스가 끝난 running 은 다시 선점되고, 옛 시도의 종료는 lost 다
@@ -178,6 +180,31 @@ try {
   chk("A2d 지워진 레포의 행은 no_repo 이고 fetch 실패로 세지 않는다", (await row(ADL)).status === "no_repo"
     && !runD.repos.some((r) => r.error) && dt.statusForDerive(runD.repos) === "ok", show({ r: await row(ADL), repos: runD.repos }));
   await Q(`UPDATE activity_touch_derive SET status='ok' WHERE activity_id = ANY($1)`, [[ABL, ATR]]);   // 뒤 단계의 재시도 수에 섞이지 않게
+
+  // ── A2e 재시도해도 같은 실패는 바로 종착 · 비활성 레포는 no_repo ──
+  const AIV = await log({ commit_sha: "not-a-sha!", repo: "r-main" });         // 커밋 sha 꼴이 아니다
+  const AMB = await log({ commit_sha: C1, repo: "r-main" });                   // git 출력 상한을 넘는 커밋(상한을 작게 바꿔 재현)
+  const R_DEP = await repo("r-dep", "file://" + BARE);
+  await unit(R_DEP, "src/a");
+  await Q(`UPDATE repo SET state='deprecated' WHERE id=$1`, [R_DEP]);
+  const ADP = await log({ commit_sha: C1, repo: "r-dep" });
+  const runIV = await dt.deriveActivityTouches({ activityId: AIV });
+  const iv0 = await row(AIV);
+  chk("A2e 커밋 sha 꼴이 아니면 바로 종착(expired) — 30일 재시도하지 않는다", iv0.status === "expired" && /invalid commit sha/.test(iv0.error ?? ""), show({ iv0, runIV }));
+  const limit0 = dt.DERIVE_GIT_LIMITS.maxBuffer;
+  dt.DERIVE_GIT_LIMITS.maxBuffer = 8;
+  let runMB;
+  try { runMB = await dt.deriveActivityTouches({ activityId: AMB }); } finally { dt.DERIVE_GIT_LIMITS.maxBuffer = limit0; }
+  const mb0 = await row(AMB);
+  chk("A2e git 출력 상한을 넘으면 바로 종착(expired) — 재시도해도 같다", mb0.status === "expired" && /출력 상한/.test(mb0.error ?? "") && (await touches(AMB)).length === 0,
+    show({ mb0, runMB }));
+  const again = [await dt.deriveActivityTouches({ activityId: AIV }), await dt.deriveActivityTouches({ activityId: AMB })];
+  chk("A2e 종착은 다음 실행이 다시 잡지 않는다", again.every((r) => r.claimed === 0) && (await row(AIV)).attempted_at === iv0.attempted_at
+    && (await row(AMB)).status === "expired", show({ again, iv: await row(AIV), mb: await row(AMB) }));
+  const runDP = await dt.deriveActivityTouches({ activityId: ADP });
+  chk("A2e 비활성(deprecated) 레포는 fetch 하지 않고 no_repo", (await row(ADP)).status === "no_repo" && (await touches(ADP)).length === 0
+    && !runDP.repos.some((r) => r.repo === "r-dep") && dt.statusForDerive(runDP.repos) === "ok", show({ r: await row(ADP), repos: runDP.repos }));
+  await Q(`UPDATE activity_touch_derive SET status='ok' WHERE activity_id = ANY($1)`, [[AIV, AMB, ADP]]);   // 뒤 단계의 재시도 수에 섞이지 않게
 
   // ── L1 · L2 ──
   const AL = await log({ commit_sha: C1, repo: "r-main" });
