@@ -3,11 +3,15 @@ import type { Capability } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import { SCOPES_ALLOWED } from "../scopes.js";
+import {
+  ROLES, ROLE_GRANTS, PERMISSIONS, PERMISSION_INFO, DANGEROUS_PERMISSIONS, isRole, isPermission, sanitizeGrants, mergeGrants, allows, grantsOf,
+  type Role, type Grants,
+} from "../../auth/permissions.js";
 import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
 import { listMembers, getMember, memberIdByEmail, upsertMember, removeMember, memberHasActiveToken, type MemberIdentity } from "../../org/store.js";
-import { unbindMemberIdentities, workspacePersonIds } from "../../org/store/members.js";
+import { unbindMemberIdentities, workspacePersonIds, resolveMemberAccess } from "../../org/store/members.js";
 import { managedMode } from "../../org/tenancy/state.js";
 import { itemsPool } from "../../db/client.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../../auth/local-accounts.js";
@@ -96,6 +100,39 @@ export const membersCapabilities: Capability[] = [
         scopes = input.scopes.map((s) => str(s, "scopes[]", 20));
         for (const s of scopes) if (!SCOPES_ALLOWED.has(s)) throw new HttpError(400, `허용되지 않은 scope: ${s}`);
       }
+      // 역할 · 개별 권한(#5799 새 권한 체계). role: null = 역할을 걷어 옛 구성원으로. 모르는 역할 · 권한 · 수준은 400(저장 전에 막는다).
+      let role: Role | null | undefined;
+      if (input.role !== undefined) {
+        if (input.role !== null && !isRole(input.role)) throw new HttpError(400, `role 은 ${ROLES.join("|")} 중 하나거나 null 입니다`);
+        role = input.role;
+      }
+      let grants: Grants | undefined;
+      if (input.grants !== undefined) {
+        const g = input.grants;
+        if (!g || typeof g !== "object" || Array.isArray(g)) throw new HttpError(400, "grants 는 {권한: \"read\"|\"write\"} 객체여야 합니다");
+        for (const [k, v] of Object.entries(g as Record<string, unknown>)) {
+          if (!isPermission(k)) throw new HttpError(400, `모르는 권한: ${k} — ${PERMISSIONS.join("|")}`);
+          if (v !== "read" && v !== "write") throw new HttpError(400, `권한 ${k} 의 수준은 read|write 입니다`);
+        }
+        grants = sanitizeGrants(g);
+      }
+      let access: ReturnType<typeof resolveMemberAccess> | null = null;
+      if (role !== undefined || grants !== undefined || (scopes !== undefined && existed?.role)) {
+        try { access = resolveMemberAccess(existed, { role, grants, scopes }); }
+        catch (e) { throw new HttpError(400, (e as Error).message); }
+      }
+      // 내가 갖지 않은 위험 권한의 **고치기**(관리 · 자격 · 하네스 설정)는 남에게도 줄 수 없다 — 관리자가 자기나 남을 소유자로 올리는 길을 막는다.
+      //  보기 수준은 재지 않는다: 하네스 설정 보기는 구성원 역할의 바탕이라, runtime 없는 관리자가 구성원 역할조차 못 주게 된다.
+      //  역할로 주는 저장에만 건다(scopes 로 주는 종전 저장은 종전 그대로). 주는 사람이 옛 구성원이면 그 scope 를 번역해 잰다.
+      if (access?.role) {
+        const giving = mergeGrants(ROLE_GRANTS[access.role], access.grants ?? {});
+        const mine = grantsOf(user);
+        for (const p of DANGEROUS_PERMISSIONS) {
+          if (giving[p] === "write" && !allows(mine, { perm: p, level: "write" })) {
+            throw new HttpError(403, `${PERMISSION_INFO[p].label} 고치기 권한은 그 권한을 가진 사람만 줄 수 있습니다`);
+          }
+        }
+      }
       // 개인레이어 본문(body_md)은 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
       const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
@@ -108,6 +145,8 @@ export const membersCapabilities: Capability[] = [
         body_md: memberBody,
         state: input.state === undefined ? undefined : (str(input.state, "state", 10) as "active" | "inactive"),
         scopes,
+        role,
+        grants,
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
       }, actorOf(user), "web");
       // 신원 '해제' 동기(#541) — identities 에서 뺀 행은 person_identity 에서도 지워야 커넥터 액터/어사이니
@@ -151,6 +190,8 @@ export const membersCapabilities: Capability[] = [
       body_md: z.string().optional().describe("개인 레이어(세션 컨텍스트에 실림)"),
       state: z.enum(["active", "inactive"]).optional(),
       scopes: z.array(z.string()).optional().describe("권한 scope: items|context|memory|db|code|admin|runtime. 새 구성원을 만들며 생략하면 기본 권한(items · context · memory · db · code), 기존 구성원이면 그대로 둔다"),
+      role: z.enum(ROLES).nullable().optional().describe("역할(새 권한 체계): guest(맥락 보기만) | member | admin | owner. 주면 그 사람은 새 권한으로 판정받고 scopes 는 그 사본으로 정해진다(scopes 와 함께 주지 않는다). null = 역할을 걷어 scopes 로 판정받는 옛 구성원으로. 생략 = 그대로"),
+      grants: z.record(z.enum(["read", "write"])).optional().describe("역할 위에 얹을 개별 권한 {권한: read|write} — 권한: content|pipeline|external|code|session|run|db|admin|secrets|harness. 역할이 있는 구성원에게만. 역할을 바꾸면서 생략하면 비운다"),
       sort: z.number().optional(),
     }),
   // ── 구성원 비밀번호 재설정 — 임시 비번(관리자가 정하거나 자동 발급). 첫 로그인 후 변경 권장(must_change). ──

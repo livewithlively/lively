@@ -403,7 +403,7 @@
   "rest": [
    "POST /api/ui/org/member"
   ],
-  "input_hash": "4ea9f07e509c403d"
+  "input_hash": "ac132f1c560e2f79"
  },
  {
   "name": "org_member_reset_password",
@@ -1957,6 +1957,26 @@
   "input_hash": "701b633e500d3ce4"
  },
  {
+  "name": "org_db_source_access",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/db-source/access"
+  ],
+  "input_hash": "beecd58885a6d7c0"
+ },
+ {
+  "name": "org_db_source_access_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/db-source/access"
+  ],
+  "input_hash": "25dc3031629cfda5"
+ },
+ {
   "name": "org_db_source_remove",
   "scope": "admin",
   "mcp": true,
@@ -2404,7 +2424,7 @@
   "rest": [
    "POST /api/ui/teams"
   ],
-  "input_hash": "874a95199b9c7766"
+  "input_hash": "e4ccea4492f73432"
  },
  {
   "name": "team_update",
@@ -2414,7 +2434,7 @@
   "rest": [
    "POST /api/ui/teams/:id"
   ],
-  "input_hash": "3b2300f7e686b895"
+  "input_hash": "a71dc2ff47578df4"
  },
  {
   "name": "team_delete",

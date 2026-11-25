@@ -14,11 +14,17 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import {
   listTeams, getTeam, createTeam, updateTeam, deleteTeam,
-  setTeamMembers, anyTeamGrant,
+  setTeamMembers, anyTeamGrant, setTeamKind, isTeamKind, type TeamKind,
 } from "../v6/team-store.js";
 
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
+/** 종류 입력 — 없으면 undefined(그대로), 모르는 값이면 400. */
+function parseKind(v: unknown): TeamKind | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (!isTeamKind(v)) throw new HttpError(400, "kind 는 team|group 입니다");
+  return v;
+}
 function parseKey(v: unknown): string {
   const key = String(v ?? "").trim().toLowerCase();
   if (!KEY_RE.test(key)) throw new HttpError(400, "key 는 소문자 슬러그(a-z0-9_-, 64자 이내)여야 합니다");
@@ -85,9 +91,11 @@ const teamGet: Capability = {
   },
 };
 
+const KIND_DESC = "종류 — team = 소속 팀(조직도 · 프로필에 보인다) / group = 권한 그룹(접근을 묶으려고 만든 것 · 권한 화면에만 보인다). 접근 판정은 같다";
 const teamCreateInput = {
   key: z.string(), name: z.string().optional(), description: z.string().optional(),
   body_md: z.string().optional(), lead_member_id: z.string().optional(),
+  kind: z.enum(["team", "group"]).optional().describe(`${KIND_DESC}. 생략 = team`),
 };
 type TeamCreateInput = z.infer<z.ZodObject<typeof teamCreateInput>>;
 const teamCreate: Capability = {
@@ -107,12 +115,16 @@ const teamCreate: Capability = {
           description: b.description != null ? String(b.description) : undefined,
           body_md: b.body_md != null ? String(b.body_md) : undefined,
           lead_member_id: b.lead_member_id ? String(b.lead_member_id) : undefined,
+          kind: parseKind(b.kind),
         };
       } }],
   },
   handler: async (input: TeamCreateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     await requireTeamWrite(user);
-    return { team: await createTeam(input, writeCtxOf(user, ctx)) };
+    const { kind, ...rest } = input;
+    const team = await createTeam(rest, writeCtxOf(user, ctx));
+    //  종류는 따로 쓴다(team-store.setTeamKind 머리말). 소속 팀(기본값)이면 쓸 것이 없다.
+    return { team: kind && kind !== "team" ? await setTeamKind(team.id, kind, writeCtxOf(user, ctx)) : { ...team, kind: "team" as const } };
   },
 };
 
@@ -121,6 +133,7 @@ const teamUpdateInput = {
   key: z.string().optional(), name: z.string().optional(), description: z.string().optional(),
   body_md: z.string().optional(), lead_member_id: z.string().nullable().optional(),
   state: z.enum(["active", "archived"]).optional(),
+  kind: z.enum(["team", "group"]).optional().describe(`${KIND_DESC}. 생략 = 그대로`),
 };
 type TeamUpdateInput = z.infer<z.ZodObject<typeof teamUpdateInput>>;
 const teamUpdate: Capability = {
@@ -143,13 +156,17 @@ const teamUpdate: Capability = {
           // 명시적 빈값/null → 리드 해제(null), 미포함 → 보존(undefined).
           lead_member_id: "lead_member_id" in b ? (b.lead_member_id ? String(b.lead_member_id) : null) : undefined,
           state: b.state === "archived" || b.state === "active" ? b.state : undefined,
+          kind: parseKind(b.kind),
         };
       } }],
   },
   handler: async (input: TeamUpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     await requireTeamWrite(user);
-    const { id, ...patch } = input;
-    return { team: await updateTeam(id, patch, writeCtxOf(user, ctx)) };
+    const { id, kind, ...patch } = input;
+    const team = await updateTeam(id, patch, writeCtxOf(user, ctx));
+    //  종류는 따로 쓴다(team-store.setTeamKind 머리말) — 준 값이 지금과 다를 때만.
+    const now = (await getTeam(id))?.kind ?? "team";
+    return { team: kind && kind !== now ? await setTeamKind(id, kind, writeCtxOf(user, ctx)) : { ...team, kind: now } };
   },
 };
 

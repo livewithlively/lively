@@ -9,7 +9,9 @@ export interface LivelyUser {
   email: string;
   scopes: string[]; // 접근 가능 capability: items | context | admin | runtime | db | memory | code (단일 출처: capabilities/scopes.ts)
   // 새 권한(#5799 auth/permissions.ts) — 영역마다 보기 · 고치기. **실려 있으면 판정은 이것만 본다**(grantsOf): scopes 는 옛 코드 ·
-  //  되돌리기용 사본이 된다. 없으면(undefined) scopes 를 번역해 쓴다 — 지금은 어느 인증 경로도 이 칸을 채우지 않는다(역할 저장 단계에서 채운다).
+  //  되돌리기용 사본이 된다. 없으면(undefined) 종전 그대로 scopes 로 판정한다. 역할을 받은 구성원(org_member.role)의 주체에만 실린다 —
+  //  웹 세션(auth/sessions.ts) · 토큰(org/store/tokens.ts) · 앱 주체(앱 동의로 좁혀서). ⚠ 주체를 `...user` 로 펼쳐 새 주체를 만들면 이 칸이
+  //  통째로 따라간다 — 권한을 좁혀야 하는 자리(앱 주체)는 cappedGrantsField 로 반드시 덮는다(capabilities/app-principal.test A7).
   grants?: Grants;
   projects: string[]; // 접근 가능 프로젝트 슬러그, "*" = 전체
   // 인증 출처 — 'static'=AUTH_TOKENS_JSON(회수 불가), 'db'=auth_token(즉시 회수 가능),
@@ -92,6 +94,11 @@ export function canAccessProject(user: LivelyUser, project: string): boolean {
 //   'db'          → 모든 소스 허용(후방호환 — 기존 db 스코프 토큰 무변경)
 //   'db:<source>' → 특정 소스만 허용(세밀화)
 export function canAccessDbSource(user: LivelyUser, source: string): boolean {
+  //  #5799 — 역할을 받은 구성원에게 DB 소스는 **기본 불가**다(결정 2026-11-25: 등록한 관리자도 자동으로는 조회하지 못한다).
+  //   소스마다 지정한 사람 · 팀만 본다 — 그 판정은 DB 를 읽어야 해서 org/store/db-source-grants.ts dbSourceAllowed 가 한다
+  //   (db_sources · db_schema · db_query 는 그것을 부른다). 이 동기 함수가 답할 수 있는 것은 내장 self 소스뿐이다(아래 #604 와 같은 예외).
+  //   옛 구성원은 아래 종전 판정 그대로다.
+  if (user.grants) return source === SELF_SOURCE && permits(user, "admin", { perm: "admin", level: "write" });
   if (user.scopes.includes("db") || user.scopes.includes(`db:${source}`)) return true;
   // #604: 내장 self 소스(게이트웨이 자기 items DB, 콘텐츠 allow-list)는 admin 이면 별도 db 스코프 없이 읽기 허용.
   if (source === SELF_SOURCE && user.scopes.includes("admin")) return true;
@@ -107,5 +114,7 @@ export function requireDbSource(user: LivelyUser, source: string): void {
 // 디스커버리(db_sources) 진입 게이트 — 어떤 형태든 db 권한이 하나라도 있으면 목록 열람 가능.
 //  #604: admin 은 내장 self 소스를 발견/사용할 수 있어야 하므로 db 스코프가 없어도 목록 열람 허용(내용은 canAccessDbSource 로 재차 게이트).
 export function hasAnyDbAccess(user: LivelyUser): boolean {
+  //  #5799 — 역할을 받은 구성원: DB 조회 자격이 있거나 관리자면 목록을 본다(어느 소스가 열리는지는 canAccessDbSource 가 다시 잰다).
+  if (user.grants) return permits(user, "db", { perm: "db", level: "read" }) || permits(user, "admin", { perm: "admin", level: "write" });
   return user.scopes.includes("admin") || user.scopes.some((s) => s === "db" || s.startsWith("db:"));
 }

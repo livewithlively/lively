@@ -117,7 +117,7 @@ Single source of truth for allowed scopes: **`src/auth/scopes.ts`** (the types u
 
 ### New permission model (in transition, #5799)
 
-The seven scopes above are being replaced by **10 feature areas × a level (read · write) + 4 roles**. The enforcement points (MCP and REST adapters · the app screen bridge · external-app tools) share one decision, `permits`: **only a principal that carries the new `grants`** is judged by the new rule, while a principal with old scopes only is judged exactly as before. No auth path attaches `grants` yet (that comes with role storage), so runtime decisions are still unchanged.
+The seven scopes above are being replaced by **10 feature areas × a level (read · write) + 4 roles**. The enforcement points (MCP and REST adapters · the app screen bridge · external-app tools) share one decision, `permits`: **only a principal that carries the new `grants`** is judged by the new rule, while a principal with old scopes only is judged exactly as before. `grants` is attached only to principals of **members that have a role** (`org_member.role` — `role` · `grants` on `org_member_upsert`). Nothing changes for a member without a role.
 
 | Permission | UI name | Covers |
 |---|---|---|
@@ -136,6 +136,9 @@ The seven scopes above are being replaced by **10 feature areas × a level (read
 - The level is derived from whether the capability mutates the context store (`capMutates`). Targets (DB sources · repos · external apps) are not encoded in the permission name; people and teams are granted on the target.
 - **When you add a capability that has a scope, add one line to the table** — otherwise `permission-map.test` fails and names it.
 - That test checks every capability against every combination of old scopes: what an old scope allowed is still allowed after translation, and nothing widens toward the dangerous permissions. Capabilities that are narrowed on purpose are listed in `NARROWED` with the reason.
+- **Role storage**: `org_member.role` (guest · member · admin · owner) + `org_member.grants` (individual permissions on top of the role). Assigning a role also writes a mirror of the new permissions in old scope names into `scopes` (for code that still reads `scopes` and for rollback — never used for decisions). Tokens and app principals of a role member carry "the member's permissions ∩ the issued ceiling (token scopes · app consent)" (`principalGrants` · `cappedGrantsField`). You cannot grant write on a dangerous permission you do not hold. DB sources are denied by default for role members (until per-source grants land). Both columns are read as `to_jsonb(row) -> 'role'` to survive the rollout window.
+- **Target grants — DB sources**: `org_db_source_grant` (source × member · team). A role member needs **both** the `db` permission and this grant to query a source (`dbSourceAllowed` in `org/store/db-source-grants.ts`, used by `db_sources` · `db_schema` · `db_query`). Grants are read and replaced with `org_db_source_access` · `org_db_source_access_set` (admin). Members without a role are unaffected.
+- **Team kind**: `team.kind` = `team` (affiliation) | `group` (permission group). Access checks treat both the same (`team_member`); only where they are shown differs (`teams` · `groups` in `whoami`). Once a team is the subject of a DB grant, editing teams becomes admin-only (`anyTeamGrant`).
 - `cap-permission.test` checks that a principal with old scopes only gets **exactly the same** decision as before for every capability × all 128 scope subsets. When you add an enforcement point, do not call `scopes.includes(...)` directly; use `permits(user, oldScope, need)` (or `capAllowed` · `isAdmin` · `canManageWorkspace`).
 
 ## Running
