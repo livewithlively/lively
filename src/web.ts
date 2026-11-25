@@ -25,7 +25,7 @@ import { registerNotifyRoutes } from "./v6/notify-routes.js";
 import { registerBrowserRoutes } from "./browser/routes.js";   // #4993 AI·사람 공용 브라우저 — 화면 쪽 스트림·답
 import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
-import { restMounts, isReadOnlyBlocked, capAllowed } from "./capabilities/index.js";
+import { restMounts, isReadOnlyBlocked, capAllowed, capDenialText } from "./capabilities/index.js";
 import type { Capability } from "./capabilities/types.js";
 import { LEGACY_DEFAULT } from "./capabilities/permission-map.js";
 import { permits, type Need } from "./auth/permissions.js";
@@ -129,7 +129,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     //  #5799 — 판정은 capAllowed 가 한다(새 권한이 실린 주체는 영역 × 보기 · 고치기, 옛 scope 만 가진 주체는 종전 그대로).
     const scope = cap.scope;
     if (scope && !capAllowed(user, cap)) {
-      const plain = (): void => { res.status(403).json({ error: `forbidden: '${scope}' 권한이 필요합니다` }); };
+      const plain = (): void => { res.status(403).json({ error: capDenialText(user, cap, "rest") }); };
       if (!user.appId) { plain(); return; }
       void appRegrantError(user, { scope }).catch(() => null).then((e) => {
         if (res.headersSent) return;
@@ -422,7 +422,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const user = userOf(req);
       // B3 defense-in-depth: 미들웨어(mw)에 더해 핸들러 경계에서도 scope 재확인(단일층 의존 제거).
       if (!capAllowed(user, cap)) {
-        throw new HttpError(403, `forbidden: '${cap.scope}' 권한이 필요합니다`);
+        throw new HttpError(403, capDenialText(user, cap, "rest"));
       }
       // B5: 회수 불가한 정적 토큰(AUTH_TOKENS_JSON)으로는 fleet 제어·정책 변경(admin/runtime) 금지(세션·DB 토큰은 허용).
       if (cap.scope && DANGEROUS_SCOPES.has(cap.scope) && user.tokenSource === "static") {

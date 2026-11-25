@@ -250,6 +250,8 @@ interface Person {
   id: string; name: string; email: string | null; role: Role;
   avatar?: string | null; avatar_char?: string | null; avatar_color?: string | null;
   scopes?: string[];
+  /** 역할을 받은 구성원이면 그 역할(#5799) — 없으면 옛 방식. */
+  newRole?: string | null;
 }
 interface View {
   wsName: string; kind: 'personal' | 'team'; count: number; canManage: boolean;
@@ -406,6 +408,8 @@ async function loadBoxView(wsName: string): Promise<View> {
     const scopes: string[] = Array.isArray(m.scopes) ? m.scopes : [];
     return { id: String(m.id), name: personName(m as never) || String(m.id), email: m.email || null,
       role: scopes.includes('admin') ? 'admin' : 'member', scopes,
+      //  #5799 — 역할을 받은 구성원이면 그 역할(guest · member · admin · owner). 없으면 옛 방식(scopes 로 판정받는다).
+      newRole: typeof m.role === 'string' && m.role ? m.role : null,
       avatar: f.avatar ?? m.avatar, avatar_char: f.avatar_char ?? m.avatar_char, avatar_color: f.avatar_color ?? m.avatar_color };
   });
   return { wsName, kind: 'team', count: people.length, canManage: !!(org && org.canEdit), delivery: 'inapp', people, pending: [], candidates: [] };
@@ -588,7 +592,9 @@ function personRow(v: View, p: Person, slug: string, primary: boolean, meId: str
       const isAdmin = p.role === 'admin';
       rows.push({ label: isAdmin ? '관리자에서 내리기' : '관리자로 올리기', run: async () => {
         const scopes = isAdmin ? (p.scopes || []).filter((s) => s !== 'admin') : [...new Set([...(p.scopes || []), 'admin'])];
-        try { await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ id: p.id, scopes }) }); toast(isAdmin ? `${p.name} 님을 관리자에서 내렸어요.` : `${p.name} 님을 관리자로 올렸어요.`); again(); }
+        //  #5799 — 역할을 받은 구성원은 역할로 올리고 내린다(scopes 는 그 사본이라 따로 바꾸면 서버가 거절한다). 옛 방식 구성원은 종전 그대로.
+        const body = p.newRole ? { id: p.id, role: isAdmin ? 'member' : 'admin' } : { id: p.id, scopes };
+        try { await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify(body) }); toast(isAdmin ? `${p.name} 님을 관리자에서 내렸어요.` : `${p.name} 님을 관리자로 올렸어요.`); again(); }
         catch (e: any) { toast('바꾸지 못했어요 — ' + (e?.message || e), true); }
       } });
       rows.push({ label: '비밀번호 재설정', run: async () => {
