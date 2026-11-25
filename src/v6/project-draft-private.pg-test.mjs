@@ -34,6 +34,8 @@
 //   I3  초안이 아닌 프로젝트의 세션 초대는 팀원을 만들지 않는다
 //   I4  프로젝트에 나중에 붙인 세션(project_id 변경)도 초대받은 사람을 팀원으로 맞춘다
 //   T1  지운 초안은 휴지통 개수에서 만든 사람에게만 센다
+//  ⚠ #5598 — 이 시험은 **«전체 공개» 방식의 초안**(풀리면 전원에게 보인다)을 잰다. 그래서 프로젝트를 invite_only:false 로
+//   못 박아 만든다(생략하면 워크스페이스의 새 프로젝트 공개 방식 — 기본 초대제 — 을 따른다). 초대제는 project-invite-only.pg-test 가 잰다.
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const ps = await import(`${DIST}/v6/project-store.js`);
@@ -63,9 +65,9 @@ const SHELL = `> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝�
 
 const draftOf = async (id) => (await itemsPool.query(`SELECT draft FROM project WHERE id=$1`, [id])).rows[0].draft;
 const mkShell = async (name, actor = A) =>
-  (await ps.createProject({ name: `${TAG} ${name}`, description: SHELL, dedupe: false, name_source: "rule", draft: true }, { actor, source: "web" })).id;
+  (await ps.createProject({ name: `${TAG} ${name}`, description: SHELL, dedupe: false, name_source: "rule", draft: true, invite_only: false }, { actor, source: "web" })).id;
 const mkPlain = async (name, actor = A) =>
-  (await ps.createProject({ name: `${TAG} ${name}`, description: "사람이 만든 것", dedupe: false }, { actor, source: "web" })).id;
+  (await ps.createProject({ name: `${TAG} ${name}`, description: "사람이 만든 것", dedupe: false, invite_only: false }, { actor, source: "web" })).id;
 const inList = async (viewer, id) => (await ps.listProjects({ viewerVis: viewer })).some((p) => p.id === id);
 const inSearch = async (viewer, q, id) => (await ps.searchProjects(q, { viewer, plain: true, limit: 100 })).some((p) => p.id === id);
 const fresh = () => vis.invalidateVisibilityCache();
@@ -310,11 +312,11 @@ try {
   {
     const id = await mkShell("T1 지울 초안");
     const base = { gate: true, visibleListIds: null };
-    const beforeA = (await trash.countDeleted({ ...base, draftViewer: A })).project;
-    const beforeB = (await trash.countDeleted({ ...base, draftViewer: B })).project;
+    const beforeA = (await trash.countDeleted({ ...base, privateViewer: A })).project;
+    const beforeB = (await trash.countDeleted({ ...base, privateViewer: B })).project;
     await ps.deleteProject(id, ctxA);
-    const afterA = (await trash.countDeleted({ ...base, draftViewer: A })).project;
-    const afterB = (await trash.countDeleted({ ...base, draftViewer: B })).project;
+    const afterA = (await trash.countDeleted({ ...base, privateViewer: A })).project;
+    const afterB = (await trash.countDeleted({ ...base, privateViewer: B })).project;
     chk("T1 ★지운 초안 — 만든 사람의 휴지통 개수에는 는다", afterA === Math.min(beforeA + 1, trash.TRASH_COUNT_CAP), JSON.stringify({ beforeA, afterA }));
     chk("T1b ★지운 초안 — 남의 휴지통 개수에는 안 는다", afterB === beforeB, JSON.stringify({ beforeB, afterB }));
     const rows = await trash.listDeleted(500, 0, "project", false);

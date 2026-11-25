@@ -17,6 +17,20 @@ export function transferHttpError(e: unknown): HttpError | null {
   return null;
 }
 
+/** 올리기 상한을 넘었을 때 사람에게 보이는 문구. 화면은 올리기 전에 같은 문구로 막는다(web/v2/transfer.ts). */
+export const UPLOAD_TOO_LARGE = "파일이 100MB 를 넘습니다 — 옮기기 파일이 맞는지 확인해 주세요. 맞다면 보내는 쪽에서 자료를 빼거나 분류를 나눠 다시 내보내 주세요";
+
+/**
+ * 올리기 경로의 본문 파서 오류 → 응답(순수). express.raw 가 상한을 넘는 본문을 거절하면(type 'entity.too.large', 413)
+ *  기본 오류 처리는 영어 HTML 을 돌려줘 화면에 «요청 실패 (413)» 만 보였다(2026-11-18 — 설치 파일 zip 을 잘못 올린 경우).
+ *  모르는 오류면 null(다음 처리로 넘긴다).
+ */
+export function uploadBodyError(err: unknown): { status: number; body: { error: string; code: string } } | null {
+  const e = err as { type?: unknown; status?: unknown } | null;
+  if (e && e.type === "entity.too.large") return { status: 413, body: { error: UPLOAD_TOO_LARGE, code: "too_large" } };
+  return null;
+}
+
 /** 감싸서 던진다 — 모르는 오류는 그대로(wrap 이 500 으로 낸다). */
 export async function mapTransferErrors<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); }

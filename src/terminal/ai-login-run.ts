@@ -49,6 +49,9 @@ export function loginEnvFor(o: {
   osUser: string | null; harness: AiLoginHarness; profileDir: string | null;
   platform?: string; multiprofile?: string | undefined;
 }): Record<string, string> {
+  // Cursor 2026.11.19 실측: NO_OPEN_BROWSER=1 agent login 은 원격 자리에서도
+  // cursor.com 로그인 URL을 출력하고 브라우저 인증을 기다린다.
+  if (o.harness === "cursor") return { NO_OPEN_BROWSER: "1" };
   if (o.osUser || o.harness !== "claude" || !o.profileDir) return {};
   if ((o.platform ?? process.platform) === "darwin") return {};
   if (("multiprofile" in o ? o.multiprofile : process.env.LIVELY_MULTIPROFILE) === "0") return {};
@@ -57,6 +60,7 @@ export function loginEnvFor(o: {
 
 /** 그 사람에 대한 loginEnvFor — 프로필 폴더는 profiles.ts 가 정본이다(동적 import: 이 러너를 무거운 모듈에 묶지 않는다). */
 async function loginEnvForUser(osUser: string | null, h: AiLoginHarness, user: LivelyUser | null): Promise<Record<string, string>> {
+  if (h === "cursor") return loginEnvFor({ osUser, harness: h, profileDir: null });
   if (osUser || h !== "claude" || !user) return {};
   const { profileConfigDir } = await import("./profiles.js");
   return loginEnvFor({ osUser, harness: h, profileDir: profileConfigDir(user) });

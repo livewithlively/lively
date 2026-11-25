@@ -39,6 +39,9 @@
 //      인라인 동기 블로킹이라 백그라운드가 안 된다 → 그런 건 CLI(`lively delegate`)를
 //      Bash(run_in_background)로 남긴다(지식 delegate-background-cli-not-mcp-wait).
 //      여기엔 **몇 초 안에 동기 완결되는 로컬 조작만**.
+//      예외 꼴 하나: 호출마다 시간 예산을 두고 넘으면 멈춰 done:false 를 돌려주고, 같은 호출을 다시 하면
+//      이어서 하는 도구(lively_local_nas_pull). 예산은 일 단위(파일 하나) 사이에서 보므로 한 호출의 실제 상한은
+//      예산 + 일 하나의 제한 시간이다(nas-pull-core.mjs FILE_TIMEOUT_MS).
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { readFileSync, realpathSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
@@ -127,18 +130,28 @@ function makeCtx(callCwd) {
       //  워크트리가 서버 대장에 안 잡혀 workspace_reclaim 이 회수 대상을 통째로 못 봤다). 어느 주소로 물었는지도
       //  함께 말한다: 주소가 예상과 다르면 그 자체가 답이고(파일이 비어 env 로 폴백한 경우), 맞으면 토큰 문제로
       //  좁혀진다. 진단은 `lively doctor` 한 곳으로 모은다 — 한 조직이 두 곳에서 다르게 진단하면 안 된다.
+      //  상태코드를 오류에 함께 싣는다(e.status · lively.mjs 의 api 와 같은 규약) — 문구만으로는 부른 쪽이 «없는 길(404 — 옛 게이트웨이)» 과
+      //   그 밖의 실패를 가를 수 없다(repo-worktree-core leaseFor).
+      const fail = (msg) => Object.assign(new Error(msg), { status: res.status });
       if (!res.ok && (res.status === 401 || res.status === 403)) {
-        throw new Error(`게이트웨이 ${res.status} (${path}) — ${gw} 에 접속 열쇠가 통하지 않습니다`
+        throw fail(`게이트웨이 ${res.status} (${path}) — ${gw} 에 접속 열쇠가 통하지 않습니다`
           + "(만료·해제됨? 또는 이 주소가 그 열쇠를 발급한 곳이 아님). `lively doctor` 로 진단하고, 열쇠 문제면 `lively login` 으로 다시 등록하세요.");
       }
-      if (!res.ok) throw new Error(`게이트웨이 ${res.status} (${path})`);
+      if (!res.ok) throw fail(`게이트웨이 ${res.status} (${path})`);
       return await res.json();
     } finally { clearTimeout(timer); }
   };
   // 로컬 셸 명령 — 로컬 조작의 본체. 기본 cwd 는 하네스가 spawn 한 작업 디렉토리.
-  const sh = (cmd, args = [], { cwd = callCwd, input, allowFail = false } = {}) => {
+  //  env — 그 호출에만 얹는 환경변수(상속 환경 위에 병합). 원격에 닿는 git 이 «묻지 않기» 와 받아 온 자격을 여기로 받는다
+  //   (repo-worktree-core netGit). 안 주면 종전대로 이 프로세스의 환경 그대로다.
+  //  noTty — 이 호출을 제어 터미널 없이 띄운다(POSIX: 새 세션). 이 프로세스는 하네스와 같은 터미널에 붙어 있어, 자식이 터미널에
+  //   직접 묻는 프롬프트(ssh 의 호스트키 지문 · 키 암호)가 사람의 세션 화면에 끼어들고 키 입력을 가로챈 채 끝없이 기다린다. 여기선
+  //   사람이 답할 길이 없으므로 물을 터미널을 주지 않는다 → 곧바로 실패하고 코어가 고치는 길을 안내한다. 윈도우는 제어 터미널
+  //   개념이 달라(같은 옵션이 새 콘솔 창을 띄운다) 그대로 둔다.
+  const sh = (cmd, args = [], { cwd = callCwd, input, allowFail = false, env, noTty = false } = {}) => {
     try {
-      const stdout = execFileSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+      const stdout = execFileSync(cmd, args, { cwd, input, encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
+        ...(env ? { env: { ...process.env, ...env } } : {}), ...(noTty && process.platform !== "win32" ? { detached: true } : {}) });
       return { stdout, stderr: "", code: 0 };
     } catch (e) {
       if (allowFail) return { stdout: e.stdout ? String(e.stdout) : "", stderr: e.stderr ? String(e.stderr) : "", code: e.status ?? 1 };
@@ -214,6 +227,8 @@ registerTool({
     + "다른 세션 것인지 주인 불명인지를 note 가 구분해 말한다). path 를 명시하면 그 자리를 그대로 주되, 남의 세션 자리면 warning 을 달고 "
     + "주인 표시가 없는 자리면 이 세션 것으로 입양한다. "
     + "반환 admin 은 그 워크트리의 등록 id(프로젝트별 고유), warning 은 슬롯 브랜치가 갈아타져 있거나 남의 자리를 지목했을 때. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
+    + "— https 주소로 등록된 사설 레포는 라이블리에 등록한 내 HTTPS 토큰(me_git_credential_set {kind:\"https\"})으로 받는다(이 컴퓨터에 git 자격을 따로 설정하지 않아도 된다 · 등록이 없으면 이 컴퓨터의 git 자격). "
+    + "fetch_warning 이 오면 원격에서 새 커밋을 받지 못한 것이다 — 그 워크트리는 받아 둔 origin 기준이라 최신이 아닐 수 있다 "
     + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다). "
     + "⚠ path 로 스크래치패드 같은 임시경로를 지정하지 마라(기본값을 그대로 써라): 워크트리는 임시파일이 아니라 **작업면(영속 자산)**이다. "
     + "'임시파일은 스크래치패드' 규칙은 여기 적용 안 된다 — 스크래치패드는 하네스가 청소하는 휘발성이라 커밋 전 작업이 사라지고, "
@@ -291,7 +306,9 @@ registerTool({
   description: "코드를 근거로 판단하기 전(리뷰·분석·설계) **먼저 호출하라**. 대상 레포를 이 머신에 확보(없으면 clone·있으면 fetch)한 뒤 "
     + "origin/<ref> 를 detached(브랜치 없음 = SHA 고정) 워크트리로 떠서 경로와 SHA 를 돌려준다. 이후 그 레포의 코드 인용·grep 은 "
     + "반드시 이 핀 경로에서만 하라 — stale 클론·남의 작업 브랜치 오독·분석 중 HEAD 드리프트로 잘못된 코드 근거 결론이 나오는 걸 막는다. "
-    + "리포트·지식엔 경로가 아니라 repo@sha 로 앵커한다(다음 세션이 그 SHA 로 재핀하면 동일 truth 재현). 끝나면 lively_local_repo_pin_remove.",
+    + "리포트·지식엔 경로가 아니라 repo@sha 로 앵커한다(다음 세션이 그 SHA 로 재핀하면 동일 truth 재현). 끝나면 lively_local_repo_pin_remove. "
+    + "https 주소로 등록된 사설 레포는 라이블리에 등록한 내 HTTPS 토큰으로 받는다(이 컴퓨터에 git 자격을 따로 설정하지 않아도 된다). "
+    + "⚠ 반환에 fetch_warning 이 있으면 원격에서 새 커밋을 받지 못한 것이다 — 그 SHA 는 받아 둔 origin 의 것이라 최신이라고 말하지 마라.",
   inputSchema: {
     type: "object",
     properties: {
@@ -304,6 +321,78 @@ registerTool({
     additionalProperties: false,
   },
   handler: async (args, ctx) => ctx.json(await repoPin(ctx, args)),
+});
+
+// NAS 파일·폴더 받기 — nas_find·nas_list(게이트웨이)가 찾은 것을 이 기계의 ~/NAS사본 아래로 받는다(자동승인이라 그 밖은 거부 — nas-pull-core.mjs resolveDest).
+//  dynamic import 인 이유: 코어 파일이 없는 설치(구버전 설치기)에서도 이 서버 전체가 부팅에 실패하지 않게(#905 회귀와 같은 함정).
+registerTool({
+  name: "lively_local_nas_pull",
+  title: "NAS 파일·폴더를 이 기계로 받기",
+  description: "NAS(본인 FTP 계정 권한)에서 파일이나 폴더를 통째로 이 기계의 폴더로 내려받는다. 받은 뒤 그 파일을 직접 열어 내용을 본다. "
+    + "대상은 nas_find·nas_list 결과 항목(p·type·path·size)을 targets 로 그대로 넘긴다(여러 개 가능). 폴더는 그 폴더 이름부터 하위 구조를 유지한다. "
+    + "받는 자리는 ~/NAS사본 아래만 된다 — dest 는 그 안의 상대 경로로 준다(예: dest «프로젝트A» → ~/NAS사본/프로젝트A, 절대 경로도 ~/NAS사본 아래만). 같은 크기로 이미 받은 파일은 건너뛴다. "
+    + "한 번에 약 50초만 받고 멈춘다 — remaining 이 남았거나 폴더 목록을 만드는 중이면(note) 같은 호출을 다시 하고, truncated 가 상한이면 같은 호출을 반복하지 말고 하위 폴더로 나눠 부른다.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      targets: {
+        type: "array",
+        description: "받을 대상 — nas_find·nas_list 결과 항목을 그대로. p 필수, path·type·size 는 있으면 넣는다(path 가 없으면 이름을 못 정해 건너뛴다)",
+        items: {
+          type: "object",
+          properties: {
+            p: { type: "string" }, path: { type: "string" }, type: { type: "string", enum: ["file", "dir"] }, size: { type: "number" },
+          },
+          required: ["p"],
+        },
+      },
+      path: { type: "string", description: "targets 대신 NAS 경로 하나(사람이 읽는 꼴, 예: /공유/2026 계약)" },
+      dest: { type: "string", description: "받을 폴더 — ~/NAS사본 아래만 된다. 상대 경로는 ~/NAS사본 기준, 절대 경로도 ~/NAS사본 아래여야 한다. 기본 ~/NAS사본" },
+    },
+    additionalProperties: false,
+  },
+  handler: async (args, ctx) => {
+    let nasPull;
+    try { ({ nasPull } = await import("./nas-pull-core.mjs")); }
+    catch (e) {
+      if (e?.code !== "ERR_MODULE_NOT_FOUND") throw e;
+      throw new Error("NAS 받기 모듈(nas-pull-core.mjs)이 이 설치에 없습니다 — `lively update` 로 키트를 갱신한 뒤 새 세션에서 다시 하세요");
+    }
+    return ctx.json(await nasPull(ctx, args, { home: HOME, fetchImpl: fetch }));
+  },
+});
+
+// NAS 로 올리기 — 이 기계의 파일·폴더를 NAS 폴더로. 본체는 nas-push-core.mjs(dynamic import 인 이유는 nas_pull 과 같다).
+registerTool({
+  name: "lively_local_nas_push",
+  title: "이 기계의 파일·폴더를 NAS 로 올리기",
+  description: "로컬 파일이나 폴더를 NAS(본인 FTP 계정 권한)의 폴더로 올린다. 폴더는 그 이름부터 하위 구조를 유지하고 필요한 NAS 폴더를 만든다. "
+    + "dest_p 는 nas_find·nas_list 결과의 폴더 p(또는 dest_path 에 사람이 읽는 경로). 같은 이름 파일이 NAS 에 있으면 덮지 않는다 — "
+    + "크기가 같으면 이미 올린 것으로 세고, 다르면 conflicts 로 알린다(덮으려면 사람 확인 뒤 overwrite:true). 로컬 링크는 따라가지 않는다. "
+    + "src 는 홈 아래만 되고 숨김 파일·폴더(. 으로 시작)와 ~/Library·~/AppData 는 올리지 않는다(폴더 안의 숨김 항목도 건너뛴다). "
+    + "올릴 대상(src·dest)은 사람이 확인한다. "
+    + "한 번에 약 50초만 올리고 멈춘다 — remaining·pending_dirs 가 남았으면 같은 호출을 다시 하고, truncated 면 같은 호출을 반복하지 말고 하위 폴더로 나눠 부른다. "
+    + "폴더 만들기·지우기·이름 바꾸기는 nas_manage.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      src: { type: "string", description: "올릴 로컬 파일·폴더(절대 경로 또는 작업 폴더 기준 상대 경로)" },
+      dest_p: { type: "string", description: "올릴 NAS 폴더의 p(nas_find·nas_list 결과)" },
+      dest_path: { type: "string", description: "dest_p 대신 NAS 폴더 경로(사람이 읽는 꼴, 예: /공유/2026 계약)" },
+      overwrite: { type: "boolean", description: "true 면 같은 이름 파일을 덮는다(기본 false — 사람 확인 뒤에만)" },
+    },
+    required: ["src"],
+    additionalProperties: false,
+  },
+  handler: async (args, ctx) => {
+    let nasPush;
+    try { ({ nasPush } = await import("./nas-push-core.mjs")); }
+    catch (e) {
+      if (e?.code !== "ERR_MODULE_NOT_FOUND") throw e;
+      throw new Error("NAS 올리기 모듈(nas-push-core.mjs)이 이 설치에 없습니다 — `lively update` 로 키트를 갱신한 뒤 새 세션에서 다시 하세요");
+    }
+    return ctx.json(await nasPush(ctx, args, { fetchImpl: fetch, home: HOME }));
+  },
 });
 
 registerTool({
@@ -403,9 +492,9 @@ const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
 //  «어디서나» 방식의 제외 폴더면 같은 명령(work-root add)이 제외 목록에서 빼는 일을 한다 — 문구만 둘로 가른다.
 const outsideToolText = (reason = "outside") => (reason === "excluded"
   ? "이 폴더는 라이블리 제외 폴더라서 라이블리가 꺼져 있습니다. "
-    + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 켜세요(제외 목록에서 뺍니다) — 다음 메시지부터 연결됩니다.`
+    + `여기서 쓰려면 /lively-mode on(코덱스는 $lively-mode on)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 켜세요(제외 목록에서 뺍니다) — 다음 메시지부터 연결됩니다.`
   : "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
-    + `여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`);
+    + `여기서 쓰려면 /lively-mode on(코덱스는 $lively-mode on)나 ${scopeMod?.workRootAddVia?.({ cliPath: join(LIVELY, "lib", "lively.mjs") }) || "셸의 `lively work-root add`"} 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.`);
 let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
 async function loadScopeModule() {
   if (scopeMod !== undefined) return scopeMod;

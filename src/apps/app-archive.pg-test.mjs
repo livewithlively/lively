@@ -1,4 +1,4 @@
-// 앱 보관 표 정리(#4733 앱 v2-19) PG 통합 테스트 — **실제 Postgres 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 보관 표 정리(#4733 앱 v2-19) PG 통합 테스트 — **실제 Postgres 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-archive.pg-test.mjs
 //
 // 보관 표(앱 데이터를 말없이 잃지 않으려고 옮겨 둔 표)의 주인 기록 · 관리자 목록 · 비우기 · 앱 지우기 때 함께 지우기 · 되살리기에서 건너뛰기 ·

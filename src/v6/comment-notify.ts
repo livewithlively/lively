@@ -19,6 +19,7 @@ import { logger } from "../log.js";
 import { notifySystem } from "../apps/notify.js";
 import { listMembers } from "../org/store.js";
 import { withSubjectParticle } from "./notify-store.js";
+import { canSeeProjectRowVis, projectVisFor } from "./visibility.js";   // #5598 — 못 보는 사람에게는 알리지 않는다
 
 export interface CommentEvent { author: string | null; body: string }
 export interface NamedMember { id: string; display_name?: string | null; nickname?: string | null; use_nickname?: boolean | null }
@@ -75,7 +76,9 @@ const ROOT_JOIN = `
                                                WHEN p.level='task'    THEN par.id
                                                ELSE p.id END`;
 
-async function fanOut(o: { author: string | null; body: string; where: string; href: string; mentioned: string[]; participants: string[]; key: string }): Promise<number> {
+async function fanOut(o: { author: string | null; body: string; where: string; href: string; mentioned: string[]; participants: string[]; key: string;
+  /** 이 사람이 그 대상을 볼 수 있나 — 못 보는 사람에게는 보내지 않는다(없으면 전부 보낸다). 판정을 못 하면 안 보낸다(닫는 쪽). */
+  canSee?: (memberId: string) => Promise<boolean> }): Promise<number> {
   const members = await listMembers().catch(() => [] as NamedMember[]);
   const byId = new Map(members.map((m) => [m.id, m]));
   const author = o.author ? byId.get(o.author) : undefined;
@@ -84,6 +87,7 @@ async function fanOut(o: { author: string | null; body: string; where: string; h
   const body = snippet(o.body);
   let n = 0;
   const send = async (memberId: string, mention: boolean): Promise<void> => {
+    if (o.canSee && !(await o.canSee(memberId).catch(() => false))) return;
     const res = await notifySystem({
       kind: mention ? "mention" : "comment", memberId, actor: o.author,
       title: commentTitle(who, o.where, mention), body, href: o.href,
@@ -119,6 +123,11 @@ export async function notifyTaskComment(taskId: number, ev: CommentEvent, commen
     href: `#/projects2/p/${Number(row.id)}`,
     mentioned: mentionedMembers(ev.body, members), participants,
     key: `comment:task:${taskId}:${commentId ?? Date.now()}`,
+    // #5598 — 알림에는 태스크 이름과 댓글 발췌가 실린다. 그 프로젝트를 못 보는 사람(초대제 · 초안의 팀원이 아닌 사람 · 잠긴
+    //  리스트의 대상이 아닌 사람)을 언급했거나, 예전 담당자가 참여자로 남아 있으면 그 글이 알림으로 샌다 — 눌러도 404 인 채로.
+    //  읽는 쪽(notify-store listMyNotifications)은 이미 거르지만 배너 · 푸시는 저장하는 순간 나간다. 그래서 보내기 전에 거른다.
+    //  언급으로 사람을 프로젝트에 넣지는 않는다(초대는 프로젝트 [공유] 와 세션 초대 두 길뿐이다).
+    canSee: async (memberId) => canSeeProjectRowVis(Number(row.root_id ?? row.id), await projectVisFor(memberId)),
   });
 }
 

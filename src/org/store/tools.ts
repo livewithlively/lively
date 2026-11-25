@@ -2,6 +2,7 @@
 //  (#1313 R18) 구 org/store.ts 에서 verbatim 분리.
 import { itemsPool } from "../../db/client.js";
 import { audit, type WriteCtx } from "./audit.js";
+import { builtinAutoApproveDefault } from "../../mcp/mcp-surface.js";
 
 // ════════ 조직 정의 MCP 툴 — org_tool ════════
 export type ToolKind = "http_proxy" | "builtin" | "prompt";
@@ -167,7 +168,8 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? (kind === "builtin"), alwaysLoad, level, authKind, authScopeKey, piiScrub, logArgs,
+     // 새 builtin 행의 자동승인은 행이 없을 때와 같은 기본값 — 노출·주입 방식만 바꾼 저장이 자동승인을 켜지 않게
+     t.auto_approve ?? before?.auto_approve ?? (kind === "builtin" && builtinAutoApproveDefault(t.name)), alwaysLoad, level, authKind, authScopeKey, piiScrub, logArgs,
      t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0, ctx.actor ?? null],
   );
   const after = await getTool(t.name);

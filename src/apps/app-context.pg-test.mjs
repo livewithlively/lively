@@ -1,4 +1,4 @@
-// 앱 맥락 범위(#5100 앱 v2-43) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 맥락 범위(#5100 앱 v2-43) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-context.pg-test.mjs
 //
 // 왜 이 계층인가: 범위는 전부 **SQL 의 모양**이다 — 공개범위 술어에 AND 로 붙는 카테고리 조건 · 하이브리드 검색의 두 후보 CTE · 벡터 채널의

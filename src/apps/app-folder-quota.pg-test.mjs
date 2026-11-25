@@ -1,4 +1,4 @@
-// 앱 폴더 상한 · 사용량(#4785 앱 v2-20) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 앱 폴더 상한 · 사용량(#4785 앱 v2-20) PG 통합 테스트 — **실제 Postgres 필요**(CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/apps/app-folder-quota.pg-test.mjs
 //
 // 한 프로세스에 게이트웨이를 띄운다 — 진짜 인증(구성원 토큰) · 능력 REST(권한 범위 검사 포함). CP 의 쿼터 정비가 부르는 두 길

@@ -21,6 +21,7 @@ import { itemsPool } from "../db/client.js";
 import { axisOn } from "./visibility-axes.js";
 import { q } from "../db/client.js";
 import { readScopeFor, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 앱 맥락 범위
+import { ensureInviteOnlyColumn, inviteOnlySql, onInviteOnlyColumnAppeared } from "./project-invite-column.js";   // #5598 롤 창 — 칸이 아직 없는 DB
 
 // viewer 규약: 문자열=그 멤버로 판정 / null=특권(내부 시스템 경로·긴급열람, 필터 없음).
 //  ⚠ undefined 를 특권으로 쓰지 않는다 — '깜빡하고 안 넘김'과 '의도적 특권'이 구분돼야 한다(호출부에서 명시).
@@ -169,53 +170,65 @@ export function listVisible(ids: Set<number> | null, listId: number): boolean {
   return ids === null || ids.has(Number(listId));
 }
 
-// ── 초안 프로젝트(#5522) — 만든 사람과 팀원만 본다 ──────────────────────────────────
-//  세션 첫 지시로 저절로 생긴 프로젝트(project.draft, #4170)는 리스트가 없어 종전엔 «미분류 = 전원» 이었다. 그런데 본문에
-//  **첫 지시 원문**이 들어 있고, 그 세션은 만든 사람과 초대받은 사람만 본다(#1876) — 세션은 닫혀 있는데 첫 지시는
-//  프로젝트로 전원에게 보였다. 그래서 초안인 동안은 **만든 사람(created_by)과 팀원(project_member)** 만 본다.
-//  세션에 초대하면 그 사람이 팀원으로 들어간다(sessions/session-state.ts syncDraftInviteMembers). 무언가를 남겨
-//  초안이 풀리면(v6/project-draft.ts) 그때부터는 리스트 공개범위만 탄다.
+// ── 비공개 프로젝트(#5522 초안 · #5598 초대제) — 만든 사람과 팀원만 본다 ─────────────────────
+//  두 가지가 프로젝트를 «만든 사람(created_by)과 팀원(project_member)만 보는» 상태로 만든다.
+//   · **초안**(project.draft, #4170 · #5522) — 세션 첫 지시로 저절로 생긴 프로젝트. 본문에 첫 지시 원문이 들어 있는데 그 세션은
+//     만든 사람과 초대받은 사람만 본다(#1876). 무언가를 남겨 초안이 풀리면(v6/project-draft.ts) 이 조건에서 빠진다.
+//   · **초대제**(project.invite_only, #5598) — 프로젝트마다 찍히는 표시. 워크스페이스의 «새 프로젝트 공개 방식» 이 초대제면
+//     (v6/project-access.ts — 기본값) 사람이 만드는 프로젝트가 이 표시를 달고 태어나고, 만든 사람이 «전체 공개» 로 바꾸기 전까지
+//     초안이 풀려도 그대로 닫혀 있다. 워크스페이스 설정은 **새 프로젝트의 기본값**일 뿐이라, 설정을 바꿔도 이미 있는 프로젝트의
+//     공개 범위는 움직이지 않는다(설정 변경이 «공개 사건» 이 되지 않게 — visibility-axes.ts 머리말과 같은 까닭).
+//  세션에 초대하면 그 사람이 팀원으로 들어간다(sessions/session-state.ts syncPrivateInviteMembers).
+//  둘 다 아니면 리스트 공개범위만 탄다.
 //
 //  ⚠ 판정은 리스트 술어와 **한 함수**(projectVisPredicate)로 나간다. 프로젝트 행을 거르는 자리는 listIdPredicate 를
-//   직접 부르지 않는다 — 그러면 초안이 그 자리에서만 전원에게 보인다(visibility-callsites.test.ts 가 막는다).
-//  ⚠ 프로젝트 축이 꺼져 있거나 · 특권(null)이거나 · 전체 스코프 긴급 열람이면 초안도 거르지 않는다(리스트와 같은 규칙).
+//   직접 부르지 않는다 — 그러면 비공개 프로젝트가 그 자리에서만 전원에게 보인다(visibility-callsites.test.ts 가 막는다).
+//  ⚠ 프로젝트 축이 꺼져 있거나 · 특권(null)이거나 · 전체 스코프 긴급 열람이면 비공개 프로젝트도 거르지 않는다(리스트와 같은 규칙).
 
-/** 프로젝트 행 판정에 필요한 두 가지 — 가시 리스트 집합과, 초안을 누구 기준으로 거를지(null = 초안을 거르지 않는다). */
-export interface ProjectVis { lists: Set<number> | null; draftViewer: string | null }
+/** 프로젝트 행이 «만든 사람과 팀원만 보는» 상태인가 — alias 는 그 행의 별칭. 이 조건의 SQL 은 여기 한 벌이다. */
+export function privateProjectSql(alias: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/.test(alias)) throw new Error(`privateProjectSql: 별칭이 아니다(${alias})`);
+  //  칸이 아직 없는 DB(롤 창 — project-invite-column.ts)에서는 `false` 가 들어간다 = 초안만 닫힌다(초대제가 없던 때와 같다).
+  return `(${alias}.draft OR ${inviteOnlySql(alias)})`;
+}
+
+/** 프로젝트 행 판정에 필요한 두 가지 — 가시 리스트 집합과, 비공개(초안 · 초대제) 프로젝트를 누구 기준으로 거를지(null = 거르지 않는다). */
+export interface ProjectVis { lists: Set<number> | null; privateViewer: string | null }
 /** 필터 없음(특권 · 축 꺼짐 · 전체 긴급 열람). */
-export const PROJECT_VIS_ALL: ProjectVis = { lists: null, draftViewer: null };
+export const PROJECT_VIS_ALL: ProjectVis = { lists: null, privateViewer: null };
 
 /** 이 뷰어의 프로젝트 판정 재료. 다행 쿼리는 이걸 한 번 뽑아 projectVisPredicate 에 넘긴다. */
 export async function projectVisFor(viewer: Viewer): Promise<ProjectVis> {
   if (viewer === null) return PROJECT_VIS_ALL;
+  await ensureInviteOnlyColumn();   // 술어를 짜기 전에 칸이 있는지 잰다(롤 창 — 없으면 초안만 본다)
   if (!(await axisOn("project"))) return PROJECT_VIS_ALL;
   const bg = await activeBreakGlass(viewer);
   if (bg.some((b) => !b.kind)) return PROJECT_VIS_ALL;
-  return { lists: await visibleListIds(viewer), draftViewer: viewer };
+  return { lists: await visibleListIds(viewer), privateViewer: viewer };
 }
 
-/** «이 뿌리 프로젝트가 초안이면 viewer 가 만든 사람이거나 팀원이다» — rootIdCol 은 **뿌리 프로젝트 id** 를 가리키는 SQL 식.
+/** «이 뿌리 프로젝트가 비공개(초안 · 초대제)면 viewer 가 만든 사람이거나 팀원이다» — rootIdCol 은 **뿌리 프로젝트 id** 를 가리키는 SQL 식.
  *  viewer 는 글자로 넣는다(다행 쿼리마다 자리표시자 번호가 달라 술어를 조립할 수 없다) — pg.escapeLiteral 이 따옴표 · 역슬래시를 겹친다. */
-export function draftVisibleSql(rootIdCol: string, viewer: string): string {
+export function privateVisibleSql(rootIdCol: string, viewer: string): string {
   // ⚠ rootIdCol 은 **별칭이 붙은 식**이어야 한다(`p.id` · `COALESCE(root.id, p.id)`). 맨 `id` 를 넘기면 아래 하위 질의 안에서
-  //  그 이름이 dft.id 로 풀려 `dft.id = dft.id` 가 된다 — «안 보이는 초안이 하나라도 있으면 모든 행이 안 보인다» 로 뒤집힌다
+  //  그 이름이 dft.id 로 풀려 `dft.id = dft.id` 가 된다 — «안 보이는 비공개 프로젝트가 하나라도 있으면 모든 행이 안 보인다» 로 뒤집힌다
   //  (2026-11-16 실 PG 시험이 잡았다: 남의 초안이 하나 생기자 내 초안까지 «숨은 프로젝트» 가 됐다). 그래서 형식을 여기서 막는다.
-  if (!/[.(]/.test(rootIdCol)) throw new Error(`draftVisibleSql: rootIdCol 에 별칭이 없다(${rootIdCol}) — 하위 질의의 dft.id 로 풀린다`);
+  if (!/[.(]/.test(rootIdCol)) throw new Error(`privateVisibleSql: rootIdCol 에 별칭이 없다(${rootIdCol}) — 하위 질의의 dft.id 로 풀린다`);
   const v = pg.escapeLiteral(String(viewer));
-  return `NOT EXISTS (SELECT 1 FROM project dft WHERE dft.id = ${rootIdCol} AND dft.level = 'project' AND dft.draft
+  return `NOT EXISTS (SELECT 1 FROM project dft WHERE dft.id = ${rootIdCol} AND dft.level = 'project' AND ${privateProjectSql("dft")}
             AND dft.created_by IS DISTINCT FROM ${v}
             AND NOT EXISTS (SELECT 1 FROM project_member dpm WHERE dpm.project_id = dft.id AND dpm.member_id = ${v}))`;
 }
 
 /**
- * 프로젝트 행(과 그 태스크)을 거르는 **유일한** SQL 술어 — 리스트 공개범위 ∧ 초안.
+ * 프로젝트 행(과 그 태스크)을 거르는 **유일한** SQL 술어 — 리스트 공개범위 ∧ 비공개(초안 · 초대제).
  *  listCol = 뿌리 프로젝트의 list_id 를 가리키는 식 · rootIdCol = 뿌리 프로젝트의 id 를 가리키는 식.
- *  태스크 행에서 부르면 둘 다 **조상 프로젝트**를 가리켜야 한다(태스크의 list_id · draft 는 비어 있다).
+ *  태스크 행에서 부르면 둘 다 **조상 프로젝트**를 가리켜야 한다(태스크의 list_id · draft · invite_only 는 비어 있다).
  */
 export function projectVisPredicate(listCol: string, rootIdCol: string, vis: ProjectVis): string {
   const list = listIdPredicate(listCol, vis.lists);
-  if (vis.draftViewer === null) return list;
-  return `(${list} AND ${draftVisibleSql(rootIdCol, vis.draftViewer)})`;
+  if (vis.privateViewer === null) return list;
+  return `(${list} AND ${privateVisibleSql(rootIdCol, vis.privateViewer)})`;
 }
 
 // 행(프로젝트 · 태스크 · 서브태스크) → 뿌리 프로젝트. canSeeProjectRow · projectRowListId 가 같은 조인을 쓴다.
@@ -239,7 +252,7 @@ export async function canSeeProjectRow(id: number, viewer: Viewer): Promise<bool
 
 /** 판정 재료를 이미 뽑아 둔 호출자용(여러 행을 잇달아 볼 때 가시 리스트 조회를 되풀이하지 않는다). 다행 술어와 **같은 SQL** 로 판정한다. */
 export async function canSeeProjectRowVis(id: number, vis: ProjectVis): Promise<boolean> {
-  if (vis.lists === null && vis.draftViewer === null) return true;
+  if (vis.lists === null && vis.privateViewer === null) return true;
   const rows = await q(itemsPool, `
     SELECT (${projectVisPredicate("COALESCE(pr.list_id, p.list_id)", "COALESCE(pr.id, p.id)", vis)}) AS ok
       ${ROW_ROOT_JOIN}
@@ -284,16 +297,18 @@ export async function hiddenProjects(viewer: Viewer): Promise<HiddenProjects> {
   try {
     // v2: admin 이라고 건너뛰지 않는다 — 세션 화면엔 그 프로젝트의 대화·파일이 그대로 흐르고,
     //  admin 신원을 물려받은 AI 세션이 그걸 읽어 공개 지식으로 되뱉을 수 있다. 긴급열람은 projectVisFor 가 반영한다.
-    // #5522 — 실제 구성원에게는 **남의 초안**도 숨은 프로젝트다(그 세션 · 파일 · 자료가 함께 가려진다).
+    // #5522 · #5598 — 실제 구성원에게는 **남의 비공개 프로젝트**(초안 · 초대제)도 숨은 프로젝트다(그 세션 · 파일 · 자료가 함께 가려진다).
     //  ⚠ PUBLIC_VIEWER 는 예외로 리스트만 본다. 그 뷰어로 묻는 자리는 «이 프로젝트가 **잠겼나**» 를 묻는다 —
-    //   세션 기록 범위 파생(write-cap) · 잠긴 폴더 배지 · ClickUp 반출. 초안을 거기 넣으면 새 세션이 전부 «잠긴 프로젝트의
+    //   세션 기록 범위 파생(write-cap) · 잠긴 폴더 배지 · ClickUp 반출. 비공개 프로젝트를 거기 넣으면 새 세션이 전부 «잠긴 프로젝트의
     //   세션» 이 되어 거기서 남긴 지식이 대상 제한으로 찍힌다(#1876 D2 «세션이 사적이어도 산출물은 공개» 가 뒤집힌다).
+    //   초대제 프로젝트를 밖으로 내보내지 않는 일은 ClickUp 반출이 따로 본다(inviteOnlyProjectIds).
+    await ensureInviteOnlyColumn();   // 아래 조회가 칸을 읽는다(PUBLIC_VIEWER 갈래는 projectVisFor 를 안 거친다)
     const vis = viewer === PUBLIC_VIEWER
-      ? { lists: await visibleListIds(viewer), draftViewer: null }
+      ? { lists: await visibleListIds(viewer), privateViewer: null }
       : await projectVisFor(viewer);
-    const rows = vis.lists === null && vis.draftViewer === null ? [] : await q(itemsPool, `
+    const rows = vis.lists === null && vis.privateViewer === null ? [] : await q(itemsPool, `
       SELECT hp.id, hp.folder FROM project hp
-       WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft)
+       WHERE hp.level='project' AND (hp.list_id IS NOT NULL OR hp.draft OR ${inviteOnlySql("hp")})
          AND NOT (${projectVisPredicate("hp.list_id", "hp.id", vis)})`, []);
     const v: HiddenProjects = {
       ids: new Set(rows.map((r) => Number(r.id))),
@@ -310,8 +325,24 @@ export async function hiddenProjects(viewer: Viewer): Promise<HiddenProjects> {
   }
 }
 
+/**
+ * 초대제(invite_only) 프로젝트의 id — **밖으로 내보내는 자리**(ClickUp 반출)가 쓴다. 뷰어와 무관하다.
+ *  hiddenProjects(PUBLIC_VIEWER) 는 비공개 프로젝트를 «잠긴 프로젝트» 로 세지 않는다(위 주석 — 기록 범위가 뒤집힌다). 그런데
+ *  반출은 되돌릴 수 없는 일이라, 만든 사람이 «초대한 사람만» 으로 둔 프로젝트의 본문이 ClickUp 카드로 나가면 안 된다.
+ *  초안은 넣지 않는다 — 초안의 반출은 #5522 가 종전대로 두기로 했다(곧 풀려 공개되는 상태다).
+ *  프로젝트 축이 꺼져 있으면 빈 집합(그 조직에서는 초대제 표시가 아무것도 가리지 않는다).
+ */
+export async function inviteOnlyProjectIds(): Promise<Set<number>> {
+  if (!(await axisOn("project"))) return new Set();
+  if (!(await ensureInviteOnlyColumn())) return new Set();   // 칸이 아직 없다(롤 창) — 초대제 프로젝트도 있을 수 없다
+  const rows = await q(itemsPool, `SELECT id FROM project WHERE level='project' AND invite_only`, []);
+  return new Set(rows.map((r) => Number(r.id)));
+}
+
 /** grant·공개범위가 바뀌면 즉시 반영되도록 캐시를 버린다(설정 변경 경로에서 호출). */
 export function invalidateVisibilityCache(): void { hiddenCache.clear(); }
+//  #5598 롤 창 — 초대제 칸이 «없다 → 있다» 로 바뀌면 그동안 뽑아 둔 «숨은 프로젝트» 집합(초대제가 빠져 있다)을 버린다.
+onInviteOnlyColumnAppeared(invalidateVisibilityCache);
 
 /** 지식 1건이 이 뷰어에게 보이나 — 직접 grant 또는 컨테이너(리스트) 참조 grant. 앱 토큰 요청이면 그 앱의 맥락 범위 안이어야 한다(#5100). */
 export async function canSeeKnowledge(name: string, viewer: Viewer): Promise<boolean> {

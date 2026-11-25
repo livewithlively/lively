@@ -14,6 +14,16 @@ export interface ToolCandidate {
   kind: "capability" | "db";
   inputSchema?: unknown;   // MCP inputSchema(JSON Schema) — 하네스가 보는 입력 필드/타입. zod→JSON Schema 변환(SDK 와 동일 표면).
   alwaysLoadDefault?: boolean; // 코드 기본 주입모드(cap.meta 의 anthropic/alwaysLoad). 운영자 override(org_tool.always_load)가 최종 결정. 웹 토글의 '기본' 표시용(#187).
+  autoApproveDefault?: boolean; // 행이 없을 때의 자동승인 기본값(builtinAutoApproveDefault). 웹 토글의 초기값 — 저장하면 이 값이 행에 실린다.
+}
+
+// 행이 없을 때도 자동승인하지 않는 builtin — NAS 파일을 지우거나 덮는 도구(FTP 에는 휴지통이 없다).
+//  이 판정의 출처는 여기 하나다. 자동승인 목록(org/delivery/auto-approve.ts)·행 저장 기본값(org/store/tools.ts upsertTool)·
+//  관리 화면 초기값(후보의 autoApproveDefault)이 같이 쓴다 — 한 곳이라도 따로 true 를 기본으로 두면, 노출만 바꾼 저장이 자동승인 행을 만든다.
+//  운영자가 org_tool 행의 auto_approve 를 명시로 켜면 그 값을 따른다.
+export const CONFIRM_BY_DEFAULT_BUILTINS: ReadonlySet<string> = new Set(["nas_manage"]);
+export function builtinAutoApproveDefault(name: string): boolean {
+  return !CONFIRM_BY_DEFAULT_BUILTINS.has(name);
 }
 
 let _candidates: ToolCandidate[] = [];

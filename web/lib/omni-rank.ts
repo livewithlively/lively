@@ -2,8 +2,8 @@
 //  원준: «관련도가 적당히 있는 걸 시간순으로 보여 줘야지. 지금 완전 관련도만 갖고 보여 주니까 문제 좀 있는 듯. 슬랙도 좀 참고하고.»
 //
 //  ── 순서(슬랙 Recent + Top Results) ──
-//   ① 맨 위 «가장 맞는 결과» 최대 셋 — 번호·key 로 부른 것 > 이름이 검색어와 같은 것 > 이름에 낱말이 모두 든 것 >
-//      서버가 «가장 맞는 대화» 로 표시한 세션 > key 의 일부를 친 것.
+//   ① 맨 위 «가장 맞는 결과» 최대 셋 — 번호·key 로 부른 것 > 그 번호를 단 세션(맡은 태스크 번호, #5607) > 이름이 검색어와 같은 것 >
+//      이름에 낱말이 모두 든 것 > 서버가 «가장 맞는 대화» 로 표시한 세션 > key 의 일부를 친 것.
 //   ② 그 아래 **낱말이 모두 글자로 맞은 것**(관련도의 문턱)을 최근 것부터, 날짜 묶음으로.
 //   ③ 뜻만 비슷한 지식은 섞지 않는다 — 맨 아래 «뜻이 비슷한 지식» 묶음에만(점검 실측: 뜻 점수 0.48 문턱이 무관한 것을
 //      0.49~0.66 으로 통과시켜 관련도순 10줄 중 8~9줄을 채웠다).
@@ -226,6 +226,8 @@ export interface RankHit {
   /** 비교에 쓰는 이름(지식은 머리말을 뗀 제목). */
   name: string;
   ident?: string;
+  /** 세션이 단 번호(그 세션이 맡은 태스크 번호 — 세션 머리줄의 `#번호`, #5607). ident(그 번호의 주인)와 다르다. */
+  sno?: string;
   at?: number;
   /** 서버가 «가장 맞는 대화» 로 표시했나(대화 결과). */
   serverTop?: boolean;
@@ -236,6 +238,9 @@ export interface RankHit {
 export function topTier(h: RankHit, terms: Term[], qNorm: string): number | null {
   const id = identKind(h.ident, terms);
   if (id === 'exact') return 0;
+  //  0.5 — 세션이 단 번호를 쳤다(#5607). 세션 머리줄의 `#번호` 를 보고 친 사람은 그 세션을 찾는다 — 번호의 주인(태스크, 0층) 바로 다음.
+  //   번호는 정확일치만(identKind 와 같은 규칙: «183» 이 1835 를 잡지 않는다).
+  if (h.sno && /^[0-9]+$/.test(h.sno) && identKind(h.sno, terms) === 'exact') return 0.5;
   const name = String(h.name || '').trim().toLowerCase();
   if (name && name === qNorm) return 1;
   if (name && matchAll(name, terms)) return 2;

@@ -155,7 +155,7 @@ export const MEANING: Record<string, FieldMeaning> = {
     reach: "db 권한을 가진 구성원의 AI(해당 소스 접근 권한자).",
     when: "저장 즉시 — 재시작 없이 다음 db_query 부터 조회 가능합니다.",
     where: "구성원 AI가 'db_sources' 로 소스를 고르고 'db_query' 로 그 DB를 읽을 때 쓰입니다.",
-    example: "분석용 리플리카를 추가하면 다음 대화부터 그 DB를 조회할 수 있습니다. 접속 비밀번호는 저장하지 않고 환경변수 이름(auth_ref)으로만 참조하며, 읽기전용 role + RLS 전제입니다.",
+    example: "분석용 리플리카를 추가하면 다음 대화부터 그 DB를 조회할 수 있습니다. 접속 비밀번호는 저장하지 않고 참조(auth_ref)로만 가리키며 — 게이트웨이 환경변수 이름이나 시크릿 저장소(GCP Secret Manager · AWS Secrets Manager) — 읽기전용 role + RLS 전제입니다.",
     tone: "infra",
   },
   "display_name": {

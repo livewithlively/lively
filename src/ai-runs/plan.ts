@@ -98,8 +98,9 @@ export function serviceSeatConsented(s: AiAccountSettings, member: string): bool
 }
 
 /**
- * 공용 시트 계정이 가져도 되는 권한 — 허용 목록이라 여기서 따로 정한다. 지금은 구성원 기본값(org/store/members.upsertMember)과 같은 셋이지만
- *  기본값이 넓어져도 이 셋은 함께 넓어지지 않는다(넓히려면 여기를 고친다). 그 밖(admin · runtime · db · db:<소스> · code)이 하나라도 있으면
+ * 공용 시트 계정이 가져도 되는 권한 — 허용 목록이라 여기서 따로 정한다. 새 구성원 기본값(auth/scopes.ts DEFAULT_MEMBER_SCOPES)은
+ *  2026-11-23 에 db · code 까지 넓어졌지만 이 셋은 함께 넓어지지 않았다(넓히려면 여기를 고친다) — 그래서 기본값 그대로 만든 구성원은
+ *  db · code 를 내려야 공용 시트가 된다. 그 밖(admin · runtime · db · db:<소스> · code)이 하나라도 있으면
  *  «높은 권한» 이다(seatElevated).
  */
 export const SEAT_BASIC_SCOPES: ReadonlySet<string> = new Set(["items", "context", "memory"]);
@@ -192,7 +193,8 @@ export function executorFor(kind: RunKind, account: AiAccount): Executor {
  *  앱 선언 도구의 server 실행기)도 받는다 — 보낸 사람은 그 신원의 사람이다. 사람 신원이 없는 앱 서버 자체 호출 · 자동화(#4491)는 보낸 사람이
  *  구성원이 아니라(앱 서버 id) requesterActive 에서 걸린다. 작업 AI 자신의 토큰은 부르는 쪽(service.submitRun)이 그 전에 거절한다.
  *  ⚠ #4491 이 자동화를 «만든 사람 id + 앱 서버» 꼴로 열면 이 판정을 그대로 통과한다 — 그때 자동화 주체를 가르는 표지를 LivelyUser 에 두고
- *   여기서 거절해야 한다(«자동화는 계속 거절» · 상민 2026-10-28).
+ *   여기서 거절해야 한다(«자동화는 계속 거절» · 상민 2026-10-28). → 표지는 requester.automation(#1782)이고, 2026-11-22 부터 공용 시트는 자동화도 받는다
+ *   (상민 «구독써도돼. 막는게 잘못된거야» — 아래 AUTOMATION_REFUSAL). 개인 구독은 계속 거절한다.
  *
  *  앱 서버가 보낸 본인 요청(#1639 · 상민 2026-11-02): 앱 서버가 실은 사람 신원이 구독 주인 본인이면 받는다. 실행 계정(앱별 · 작업별 · 워크스페이스 기본값)에 구독을 거는 것은
  *   그 사람 본인이고(accountSetRefusal) 그 사람이 앱을 부른 것이라 한 사람의 사용이다. 남의 요청 · 사람 신원 없는 앱 서버 호출은 그대로 거절한다.
@@ -207,8 +209,18 @@ export interface SessionTie { owner: string | null; participant: boolean; human:
  * 구독 판정의 요청자 — member = 보낸 사람(앱 서버가 실은 사람 신원이면 그 사람). unattended(#1639) = 앱 서버가 실은 그 신원이 사람이 보지 않는 자리
  *  (위탁 · 상시 세션 · 작업 AI)에서 왔다(service.callerUnattended). 앱 서버의 본인 구독 판정만 본다.
  */
-export interface RunRequester { member: string; kind: "member" | "app_server"; unattended?: boolean }
+export interface RunRequester { member: string; kind: "member" | "app_server"; unattended?: boolean; automation?: boolean }
 const MACHINE_SESSION_REFUSAL = "이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 구독은 사람이 보는 세션에서만 쓸 수 있어요. 자동화는 워크스페이스 API 키가 필요합니다";
+/**
+ * #1782 사람이 시키지 않은 작업(슬랙 다리가 워크플로 · 봇 글을 run_as 구성원 이름으로 시작한 작업 · 앱 v2 #121 앱 정기 작업과 그 안에서 시작한 작업)의 거절 —
+ *  **개인 구독만** 거절한다. 위 머리말의 ⚠(«자동화를 «만든 사람 id + 앱 서버» 꼴로 열면 이 판정을 그대로 통과한다 — 그때 자동화 주체를 가르는 표지를 두고
+ *  여기서 거절해야 한다»)가 가리킨 바로 그 꼴이다 — 표지는 작업 행의 automation(apps/app-jobs-store.appJobAutomation)이고 service 가 requester.automation 으로 넘긴다.
+ *  공용 시트는 받는다(상민 2026-11-22 «구독써도돼. 막는게 잘못된거야» — 2026-10-28 «자동화는 계속 거절» 을 공용 시트에 한해 뒤집음): 공용 시트는 관리자와 그 계정
+ *   본인이 «워크스페이스가 함께 쓰는 자리» 로 지정한 구독이고, 그 자리의 쓰임(사람당 동시 · 앱당 분당 · 하루 토큰 상한)은 접수(service.submitRun)가 그대로 센다.
+ *   자동화가 보낸 사람(run_as · 앱 책임자)은 활성 사람 구성원이어야 한다(아래 seat.requesterActive) — 구성원이 아닌 주체는 여전히 막힌다.
+ *  개인 구독(공용 시트가 아닌 구독)은 그대로 거절한다 — 한 사람의 구독이 그 사람이 시키지 않은 일로 도는 모양이라서.
+ */
+export const AUTOMATION_REFUSAL = "이 실행은 사람이 시키지 않은 자동화(슬랙 다리 · 앱 정기 작업)에서 왔습니다 — 자동화는 개인 구독을 쓸 수 없습니다. 공용 시트(관리자와 그 계정 본인이 지정한 구독)나 워크스페이스 API 키를 이 앱의 실행 계정으로 정하세요. 사람이 양식을 내고 답을 기다리는 슬랙 워크플로라면 관리자가 그 다리의 run_as_human 을 켜면(bot_ids 로 그 워크플로를 고른 뒤) 사람의 질문으로 봅니다";
 export function subscriptionRefusal(
   account: AiAccount, requester: RunRequester, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
 ): string | null {
@@ -218,6 +230,8 @@ export function subscriptionRefusal(
     if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;
     return null;
   }
+  //  자동화는 공용 시트까지만(위 AUTOMATION_REFUSAL) — 개인 구독은 주인 본인의 이름으로 돌아도 거절한다.
+  if (requester.automation === true) return AUTOMATION_REFUSAL;
   //  지정은 됐는데 높은 권한 때문에 공용으로 안 쓰는 계정 — 거절 문장에 까닭을 붙인다(그대로 두면 «초대받은 사람만» 으로 읽혀 무엇을 고칠지 모른다).
   const elevatedSeat = seat?.facts.consented && seat.facts.active && seat.facts.elevated
     ? ` ${account.member}님 계정은 공용 시트로 지정됐지만 높은 권한(관리자 · 실행 · DB · 코드)이 있어 공용으로 쓰지 않습니다 — 기본 권한(items · context · memory)만 가진 전용 계정을 공용 시트로 지정하세요.` : "";

@@ -8,6 +8,7 @@ import type { BoxAlert } from "./box-watch.js";
 import { readFileSync } from "node:fs";
 import {
   cronPhaseOf, cronFailureReason, cronAlertFor, delegatedWork, delegatedPhaseOf, DELEGATION_LISTS, tickOnce, stopCronWatch,
+  failureRecordedAt, inheritsAlertedFailure,
   type BatchTaskState, type CronJobHealth,
 } from "./cron-watch.js";
 
@@ -454,4 +455,127 @@ const healthy: CronJobHealth = { id: "j1", action: "agent_headless", last_status
   stopCronWatch();
 }
 
-console.log("cron-watch.test.ts ok — 상태 판정(정상/관측없음/실패) · 전이시만 알림(침묵·첫관측·경고·복구) · last_summary 사유 추출(우선순위·공백/타입건너뜀·개행접기·300자 상한) · detail 필드 · 상태기계(재통지 금지·미발송 복구 침묵·skipped 보존·접수창 요동 없음·레인 회차 판정·관리 잡 요동 없음·조회 실패 보존·사라진 잡 폐기) · warn 정상 · 사유 가림");
+// ── 재시작: 직전 프로세스가 이미 봤을 만큼 오래된 실패는 다시 알리지 않는다 ──
+//  관측 상태는 메모리라 재시작하면 비워진다. 격주로 도는 잡의 실패 하나가 다음 회차까지 게이트웨이 재시작마다
+//  같은 «크론 실패» 로 되살아났다. 기록 시각이 기동보다 두 주기 넘게 앞서면 «보냈음» 으로 이어받는다.
+{
+  const MIN = 60_000, CHECK = 5 * MIN, BOOT = Date.parse("2026-11-16T10:55:00Z");
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  const work = delegatedWork({ task_id: 5 });
+  const failedAt = (ms: number | null): Map<string, BatchTaskState> =>
+    new Map([["5", { status: "failed", finished_at: ms === null ? null : iso(ms) }]]);
+
+  assert.equal(failureRecordedAt({ ...failing, updated_at: iso(BOOT - 60 * MIN) }, work, failedAt(BOOT - 30 * MIN)), BOOT - 30 * MIN,
+    "행보다 늦게 끝난 실패 위탁이 있으면 그 시각이다(되먹임이 덮여 행이 먼저 멈춘 경우)");
+  assert.equal(failureRecordedAt({ ...failing, updated_at: iso(BOOT - 10 * MIN) }, work, failedAt(BOOT - 30 * MIN)), BOOT - 10 * MIN,
+    "행이 더 늦게 바뀌었으면 행 시각이다(편집은 이어받기를 늦추는 쪽으로만 틀린다)");
+  assert.equal(failureRecordedAt({ ...failing, updated_at: iso(BOOT - 60 * MIN) }, work, failedAt(null)), null,
+    "끝난 위탁의 종료 시각을 모르면 모른다");
+  const lanes = delegatedWork({ batches: [{ distiller: "A", task_id: 7 }, { distiller: "B", task_id: 8 }] });
+  assert.equal(failureRecordedAt({ ...failing, updated_at: iso(BOOT - 60 * MIN) }, lanes, new Map([
+    ["7", { status: "failed", finished_at: iso(BOOT - 60 * MIN) }], ["8", { status: "done", finished_at: iso(BOOT + MIN) }],
+  ])), BOOT + MIN, "회차는 마지막 위탁이 끝나야 판정된다 — 실패한 레인이 아니라 가장 늦게 끝난 레인의 시각이다");
+  assert.equal(failureRecordedAt(failing, work, failedAt(BOOT - 30 * MIN)), null, "행 시각을 모르면 모른다");
+  assert.equal(failureRecordedAt({ id: "x", action: "a", last_status: "error", updated_at: iso(BOOT - 20 * MIN) }, null, null), BOOT - 20 * MIN,
+    "위탁을 내지 않는 잡은 행 시각");
+
+  assert.equal(inheritsAlertedFailure(BOOT - 2 * CHECK - 1, BOOT, CHECK), true, "두 주기 넘게 앞선 실패는 직전 프로세스가 봤다");
+  assert.equal(inheritsAlertedFailure(BOOT - 2 * CHECK, BOOT, CHECK), false, "경계는 알리는 쪽");
+  assert.equal(inheritsAlertedFailure(BOOT - MIN, BOOT, CHECK), false, "기동 직전의 실패는 직전 프로세스가 못 봤을 수 있다");
+  assert.equal(inheritsAlertedFailure(null, BOOT, CHECK), false, "시각을 모르면 알린다");
+}
+{
+  //  상태기계: 오래된 실패는 첫 관측에 침묵하고, 복구는 그대로 알린다. 갓 기록된 실패는 종전처럼 알린다.
+  const BOOT = Date.now() - 1_000;
+  const old = new Date(BOOT - 24 * 3600_000).toISOString();
+  const tasks = (fin: string): Map<string, BatchTaskState> => new Map([
+    ["5", { status: "failed", error: "timeout(21600s)", finished_at: fin }], ["6", { status: "done" }],
+  ]);
+  const sent: BoxAlert[] = [];
+  const d = (job: CronJobHealth, fin: string): Parameters<typeof tickOnce>[0] =>
+    ({ listJobs: async () => [job], taskStates: async () => tasks(fin), send: async (a) => { sent.push(a); return true; }, bootedAt: BOOT });
+
+  stopCronWatch();
+  await tickOnce(d({ ...failing, updated_at: old }, old));
+  await tickOnce(d({ ...failing, updated_at: old }, old));
+  assert.equal(sent.length, 0, "재시작 전부터 실패해 있던 잡을 다시 알리지 않는다");
+  await tickOnce(d({ ...healthy, updated_at: new Date().toISOString() }, old));
+  assert.equal(sent.length, 1, "이어받은 실패에서 나으면 복구를 알린다");
+  assert.equal(sent[0].severity, "ok");
+
+  stopCronWatch();
+  const fresh = new Date(BOOT - 60_000).toISOString();
+  await tickOnce(d({ ...failing, updated_at: fresh }, fresh));
+  assert.equal(sent.length, 2, "기동 직전에 기록된 실패는 알린다");
+  assert.equal(sent[1].severity, "warn");
+  stopCronWatch();
+}
+
+{
+  //  레인 하나가 재시작 전에 실패했어도 다른 레인이 재시작 뒤에 끝났으면, 직전 프로세스는 회차를 판정한 적이 없다.
+  //   되먹임 id 가드·취소로 행 updated_at 이 실패 시각에 멈춰 있어도 알려야 한다(리뷰가 재현한 침묵 경로).
+  const BOOT = Date.now() - 1_000;
+  const old = new Date(BOOT - 24 * 3600_000).toISOString();
+  const job: CronJobHealth = { id: "lanes", action: "distill_sources_headless", last_status: "error", updated_at: old,
+    last_summary: { batches: [{ distiller: "A", task_id: 5 }, { distiller: "B", task_id: 7 }], task_id: 7, task_status: "failed" } };
+  for (const last of ["done", "canceled"]) {
+    stopCronWatch();
+    const sent: BoxAlert[] = [];
+    let states = new Map<string, BatchTaskState>([["5", { status: "running" }], ["7", { status: "failed", error: "레인 B 실패", finished_at: old }]]);
+    const d: Parameters<typeof tickOnce>[0] =
+      { listJobs: async () => [job], taskStates: async () => states, send: async (a) => { sent.push(a); return true; }, bootedAt: BOOT };
+    await tickOnce(d);
+    assert.equal(sent.length, 0, "회차가 아직 안 끝났다");
+    states = new Map([["5", { status: last, finished_at: new Date().toISOString() }], ["7", { status: "failed", error: "레인 B 실패", finished_at: old }]]);
+    await tickOnce(d);
+    assert.equal(sent.length, 1, `재시작 뒤에 회차가 끝났으면(${last}) 실패를 알린다`);
+    assert.equal(sent[0].severity, "warn");
+  }
+  stopCronWatch();
+}
+
+{
+  //  이어받기는 «재시작 뒤 첫 스캔» 에 이미 켜져 있던 잡에만 건다. 그 뒤에 목록에 들어온 잡(다시 켬·새로 만듦)은 직전
+  //   프로세스가 지켜보던 잡이 아니다. 수집기·커넥터 싱크 잡은 다시 켤 때 updated_at 을 올리지 않아(org/store/collectors.ts ·
+  //   connectors.ts 의 ON CONFLICT … enabled=true) 행 시각이 옛 실패에 머문다 — 거기에 이어받기를 걸면 고치지 못한 채 다시 켠
+  //   수집기가 계속 실패해도 경보가 한 번도 나가지 않는다.
+  const BOOT = Date.now() - 3600_000;   // 한 시간 전에 뜬 프로세스
+  const old = new Date(BOOT - 24 * 3600_000).toISOString();
+  const sync: CronJobHealth = { id: "sync-slack", action: "connector_sync", last_status: "error", last_summary: { error: "401" }, updated_at: old };
+  for (const firstScanList of [[], [{ ...sync, last_status: "ok", last_summary: {} }]] as CronJobHealth[][]) {
+    stopCronWatch();
+    const sent: BoxAlert[] = [];
+    let jobs: CronJobHealth[] = firstScanList;
+    const d: Parameters<typeof tickOnce>[0] = { listJobs: async () => jobs, send: async (a) => { sent.push(a); return true; }, bootedAt: BOOT };
+    await tickOnce(d);              // 재시작 뒤 첫 스캔 — 꺼져 있었거나(목록에 없음) 정상이었다
+    jobs = [];
+    await tickOnce(d);              // 사람이 껐다(관측 상태 폐기)
+    jobs = [sync];
+    await tickOnce(d);              // 다시 켰다 — 행은 하루 전 실패 그대로
+    assert.equal(sent.length, 1, `다시 켠 잡이 실패해 있으면 알린다(첫 스캔 목록 ${firstScanList.length}건)`);
+    assert.equal(sent[0].severity, "warn");
+    await tickOnce(d);
+    assert.equal(sent.length, 1, "알린 뒤엔 상태 그대로라 침묵");
+  }
+  stopCronWatch();
+}
+{
+  //  목록을 못 읽은 tick(null)은 첫 스캔을 소비하지 않는다 — 읽기에 성공한 다음 tick 이 첫 스캔이라 오래된 실패를 이어받는다.
+  const BOOT = Date.now() - 3600_000;
+  const old = new Date(BOOT - 24 * 3600_000).toISOString();
+  stopCronWatch();
+  const sent: BoxAlert[] = [];
+  let jobs: CronJobHealth[] | null = null;
+  const d: Parameters<typeof tickOnce>[0] = {
+    listJobs: async () => jobs,
+    taskStates: async () => new Map([["5", { status: "failed", error: "timeout", finished_at: old }]]),
+    send: async (a) => { sent.push(a); return true; }, bootedAt: BOOT,
+  };
+  await tickOnce(d);
+  jobs = [{ ...failing, updated_at: old }];
+  await tickOnce(d);
+  assert.equal(sent.length, 0, "목록 읽기에 실패한 tick 뒤의 첫 성공 스캔도 첫 스캔이다");
+  stopCronWatch();
+}
+
+console.log("cron-watch.test.ts ok — 상태 판정(정상/관측없음/실패) · 전이시만 알림(침묵·첫관측·경고·복구) · last_summary 사유 추출(우선순위·공백/타입건너뜀·개행접기·300자 상한) · detail 필드 · 상태기계(재통지 금지·미발송 복구 침묵·skipped 보존·접수창 요동 없음·레인 회차 판정·관리 잡 요동 없음·조회 실패 보존·사라진 잡 폐기·재시작 뒤 오래된 실패 이어받기·재시작 뒤 끝난 레인의 실패 알림·첫 스캔 뒤 다시 켠 잡은 이어받지 않음·읽기 실패 tick 은 첫 스캔이 아님) · warn 정상 · 사유 가림");

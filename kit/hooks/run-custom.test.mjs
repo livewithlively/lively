@@ -870,4 +870,19 @@ const graceHook = (id) => ({ id, src: decide({ decision: "deny", reason: id }) }
     : bad("W10b stdin EPIPE", dbg({ ...r, stderr: r.stderr.slice(-600) }));
 }
 
+// ── §Q 훅 고르기(#5675) — Cursor 어댑터가 한 이벤트를 «기다릴 몫»(맥락 훅)과 «뒤에서 돌 몫»(동기화 훅)으로 나눠 부른다 ──
+//  둘 중 하나라도 새면: 동기화 훅이 두 번 돌거나(내려받기·올리기 중복) 아예 안 돈다(공유 폴더가 멈춘다).
+{
+  const hooks = [{ id: "h-a", src: sayHook("CTX-A") }, { id: "h-b", src: sayHook("CTX-B") }, { id: "h-c", src: sayHook("CTX-C") }];
+  const payload = { session_id: "s-h", prompt: "q" };
+  const only = run("UserPromptSubmit", hooks, { payload, env: { LIVELY_HOOK_ONLY: "h-b" } });
+  const skip = run("UserPromptSubmit", hooks, { payload, env: { LIVELY_HOOK_SKIP: "h-b" } });
+  const all = run("UserPromptSubmit", hooks, { payload });
+  const has = (r) => ["CTX-A", "CTX-B", "CTX-C"].map((t) => r.stdout.includes(t));
+  JSON.stringify([has(only), has(skip), has(all)]) === JSON.stringify([[false, true, false], [true, false, true], [true, true, true]])
+    && [only, skip, all].every((r) => r.status === 0)
+    ? ok("Q1 LIVELY_HOOK_ONLY 는 그 훅만 · LIVELY_HOOK_SKIP 은 그 훅을 빼고 · 둘 다 없으면 전부")
+    : bad("Q1 훅 고르기", JSON.stringify({ only: only.stdout, skip: skip.stdout, all: all.stdout }));
+}
+
 finish("run-custom");

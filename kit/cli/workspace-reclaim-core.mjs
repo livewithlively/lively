@@ -12,6 +12,9 @@
 //  되돌릴 수 없는 삭제를 데몬에게 맡기지 않고, **맥락을 아는 주체(프로젝트를 마무리하는 에이전트/사람)가 생애주기
 //  경계에서** 회수한다. 이 모듈은 그 주체가 호출하는 **도구**다 — 판단은 호출자가, **삭제 규칙은 코드가 강제**한다
 //  (LLM 이 rm -rf 를 즉흥적으로 치는 것보다 훨씬 안전하다).
+//  ⚠ 한 가지는 무인으로 돈다(#5368) — **파생물 축출**(planEviction). 같은 결정의 «회수 = 캐시 축출(LRU) · 디스크 압박이
+//   있을 때만 · 오래 안 쓴 것부터» 를 그대로 옮긴 것이다(지식: workspace-storage-model-asset-vs-derived-cache). 축출은
+//   derived 만 지우므로 다시 설치·빌드하면 돌아온다. **워크트리 제거는 무인으로 돌지 않는다** — 워크트리는 보존 자산이다.
 //
 // 무엇을 지우나 — **두 조건을 모두** 만족해야 한다:
 //  ① git 이 ignored 라고 말한 것(`git clean -Xdn` — 즉 "커밋 안 하는 것" = 재생성 가능 후보)
@@ -60,6 +63,83 @@ export const PROTECTED_NAMES = [
 export function isInside(child, parent) {
   const rel = path.relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+// ── 이 워크트리에서 누가 일하고 있나 (#5368) ──
+//  종전 판정은 «세션의 현재 경로가 워크트리 **안**인가» 하나였다. 두 자리를 놓쳤다(2026-11-05 맥미니 정리에서 실제로 밟았다):
+//   ① 프로젝트 폴더(`project/<id>`)에서 도는 세션이 그 아래 워크트리(`project/<id>/<repo>`)를 쓴다 — 세션 경로가 워크트리의
+//      **부모**라 안쪽 판정에 안 걸린다.
+//   ② 세션이 자기 스크래치(`…/claude-<uid>/<작업 폴더를 납작하게 편 이름>/<세션>/scratchpad/…`)에 띄운 워크트리 — 세션 경로는
+//      프로젝트 폴더인데 워크트리는 임시 폴더에 있다. 살아 있는 세션 5321 의 스크래치 워크트리가 이렇게 지워졌다.
+//  부모는 **바로 위 한 칸**만 본다. 더 위(홈·workspace 루트)까지 올리면 홈에서 도는 셸 하나가 모든 워크트리를 «작업 중» 으로
+//   만들어 회수가 영영 안 돈다.
+const flat = (p) => String(p).replace(/[^A-Za-z0-9]/g, "-");
+/** 하네스 스크래치 안의 경로면 그 «작업 폴더를 납작하게 편 이름», 아니면 null. */
+export function scratchOwnerSlug(p) {
+  const m = /(?:^|\/)claude-\d+\/(-[^/]+)\//.exec(String(p) + "/");
+  return m ? m[1] : null;
+}
+/** dirs(살아 있는 세션·프로세스의 현재 경로) 중 이 워크트리를 쓰고 있을 수 있는 것이 있나. */
+export function isWorktreeActive(wt, dirs) {
+  const parent = path.dirname(wt);
+  const owner = scratchOwnerSlug(wt);
+  for (const d of dirs ?? []) {
+    if (!d) continue;
+    if (isInside(d, wt)) return true;                 // 워크트리 안에서 돈다
+    if (path.resolve(d) === parent) return true;      // ① 바로 위 폴더(프로젝트 폴더)에서 돈다
+    if (owner) {                                       // ② 그 세션의 스크래치에 뜬 워크트리
+      const f = flat(path.resolve(d));
+      if (f === owner || f.startsWith(owner + "-") || scratchOwnerSlug(d) === owner) return true;
+    }
+  }
+  return false;
+}
+
+// ── 파생물 축출 계획 (#5368) — 순수 함수. 무엇을 잴지·지울지는 호출자가, 고르는 규칙은 여기 한 벌. ──
+//  규칙은 스토리지 모델 결정 그대로다: 디스크 압박이 있을 때만 · 일하는 중이 아니고 · idleDays 동안 손대지 않은 워크트리의
+//   파생물을 · 오래 안 쓴 것부터 · 목표 사용률에 닿을 만큼만. 디스크가 넉넉하면 아무것도 고르지 않는다(다시 빌드하는 값만 든다).
+export const EVICT_DEFAULTS = { pressurePct: 85, targetPct: 75, idleDays: 3 };
+/**
+ * @param {{
+ *   candidates: Array<{ worktree: string, reclaimableBytes: number, lastUsedMs: number|null, active: boolean }>,
+ *   disk: { usedPct: number, totalBytes: number } | null,
+ *   policy?: { pressurePct?: number, targetPct?: number, idleDays?: number, force?: boolean },
+ *   now?: number,
+ * }} input
+ */
+export function planEviction({ candidates, disk, policy = {}, now = Date.now() }) {
+  const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? n : d; };
+  const pressurePct = num(policy.pressurePct, EVICT_DEFAULTS.pressurePct, 1, 100);
+  const targetPct = Math.min(num(policy.targetPct, EVICT_DEFAULTS.targetPct, 0, 100), pressurePct);
+  const idleDays = num(policy.idleDays, EVICT_DEFAULTS.idleDays, 0, 3650);
+  const force = policy.force === true;
+  const out = { pressure: false, forced: force, pressurePct, targetPct, idleDays, needBytes: 0, picks: [], pickedBytes: 0,
+    skipped: { active: 0, fresh: 0, unknown_age: 0, empty: 0 }, reason: null };
+  // 디스크를 못 쟀으면 고르지 않는다 — «압박 없음» 으로 읽는 것이지 «다 지워라» 가 아니다. force 는 사람이 준 것이라 그대로 간다.
+  if (!force) {
+    if (!disk || !Number.isFinite(disk.usedPct) || !Number.isFinite(disk.totalBytes) || disk.totalBytes <= 0) {
+      out.reason = "디스크 사용률을 재지 못했습니다"; return out;
+    }
+    if (disk.usedPct < pressurePct) { out.reason = `디스크 사용률 ${disk.usedPct.toFixed(1)}% — 기준 ${pressurePct}% 미만이라 지우지 않습니다`; return out; }
+    out.pressure = true;
+    out.needBytes = Math.ceil(((disk.usedPct - targetPct) / 100) * disk.totalBytes);
+  }
+  const cutoff = now - idleDays * 86_400_000;
+  const idle = [];
+  for (const c of candidates ?? []) {
+    if (c.active) { out.skipped.active++; continue; }
+    if (!(c.reclaimableBytes > 0)) { out.skipped.empty++; continue; }
+    // 마지막으로 쓴 때를 모르면 «방금 썼다» 로 본다(지우지 않는 쪽).
+    if (c.lastUsedMs == null || !Number.isFinite(c.lastUsedMs)) { out.skipped.unknown_age++; continue; }
+    if (c.lastUsedMs > cutoff) { out.skipped.fresh++; continue; }
+    idle.push(c);
+  }
+  idle.sort((a, b) => a.lastUsedMs - b.lastUsedMs || b.reclaimableBytes - a.reclaimableBytes);
+  for (const c of idle) {
+    if (!force && out.pickedBytes >= out.needBytes) break;
+    out.picks.push(c); out.pickedBytes += c.reclaimableBytes;
+  }
+  return out;
 }
 
 /** @param {string} rel @returns {EntryKind} */
@@ -235,12 +315,42 @@ async function checkWorktree(wt) {
   return { removable: true, reason: null, dirty, unpushed, branch };
 }
 
+/** 워크트리 제거가 함께 지워 버릴 **지키는 무시 파일**(보호 · 미분류) 목록. 못 읽으면 null(호출부가 거부한다).
+ *  파생물은 다시 만들 수 있고, 심링크는 링크만 사라지므로(대상은 그대로) 세지 않는다. */
+async function keptIgnored(wt) {
+  const clean = await git(["clean", "-Xdn"], wt);
+  if (!clean.ok) return null;
+  const kept = [];
+  for (const line of clean.out.split("\n")) {
+    const m = /^Would remove (.+?)\/?$/.exec(line.trim());
+    if (!m || !m[1]) continue;
+    if (classify(m[1]) === "derived") continue;
+    let symlink = false;
+    try { symlink = (await fsp.lstat(path.join(wt, m[1]))).isSymbolicLink(); } catch { continue; /* 그 사이 사라졌다 */ }
+    if (!symlink) kept.push(m[1]);
+  }
+  return kept;
+}
+
+/** 이 워크트리를 마지막으로 쓴 때(ms) — 워크트리 폴더와 그 git 관리 파일(index · HEAD · logs/HEAD) 중 가장 늦은 수정 시각.
+ *  체크아웃 · 커밋 · add 는 관리 파일을, 최상위 파일 생성 · 삭제는 폴더를 건드린다. 못 재면 null(축출이 «방금 썼다» 로 본다). */
+async function worktreeLastUsed(wt) {
+  const r = await git(["rev-parse", "--absolute-git-dir"], wt);
+  const gitDir = r.ok ? r.out.trim() : "";
+  const files = [wt, ...(gitDir ? [path.join(gitDir, "index"), path.join(gitDir, "HEAD"), path.join(gitDir, "logs", "HEAD")] : [])];
+  let last = null;
+  for (const f of files) {
+    try { const t = (await fsp.stat(f)).mtimeMs; if (last === null || t > last) last = t; } catch { /* 없으면 건너뛴다 */ }
+  }
+  return last;
+}
+
 /** 회수 계획 — **아무것도 지우지 않는다.** 무엇을 지울지/못 지울지와 그 이유만 돌려준다.
  *  activeSessionDirs: 지금 살아있는 세션들의 작업 디렉터리(호출자가 수집). 이 워크트리 안에 있으면
  *  회수를 통째로 막는다 — 빌드 중인 워크트리의 node_modules 를 지우면 그 세션이 깨진다. */
 async function planReclaim(wt, opts = {}) {
   const sizeBudgetMs = opts.sizeBudgetMs ?? 4000;
-  const active = (opts.activeSessionDirs ?? []).some((d) => isInside(d, wt));
+  const active = isWorktreeActive(wt, opts.activeSessionDirs ?? []);
   const entries = [];
   // git 에게 '삭제'를 시키지 않는다 — **후보 나열만**(-n) 시키고, 무엇을 지울지는 우리가 필터링해서 정한다.
   const clean = await git(["clean", "-Xdn"], wt);
@@ -329,8 +439,15 @@ async function applyReclaim(plan, opts = {}) {
   if (opts.removeWorktree) {
     // ⚠ 계획 수립 이후 상태가 바뀌었을 수 있다(그 사이 누가 작업했을 수도) → **실행 직전에 다시 확인**한다.
     const recheck = await checkWorktree(plan.worktree);
+    // #5368 — `git worktree remove` 는 무시된 파일을 막지 않고 폴더째 지운다. 파생물 회수에서는 지키던 것(.env · data/ · 로그 ·
+    //  backups/ 같은 보호 · 미분류 항목)이 워크트리 제거에서는 함께 사라졌다. 남아 있으면 제거하지 않고 무엇이 남았는지 말한다.
+    const kept = recheck.removable ? await keptIgnored(plan.worktree) : null;
     if (!recheck.removable) {
       worktreeSkippedReason = recheck.reason;
+    } else if (kept === null) {
+      worktreeSkippedReason = "무시된 파일 목록을 읽지 못했습니다(git clean 실패) — 확인 전에는 제거하지 않습니다";
+    } else if (kept.length) {
+      worktreeSkippedReason = `지키는 무시 파일이 남아 있어 제거하지 않습니다 — ${kept.slice(0, 3).join(" · ")}${kept.length > 3 ? ` 외 ${kept.length - 3}건` : ""}`;
     } else if (!opts.repoRoot) {
       worktreeSkippedReason = "베이스 레포 경로를 몰라 워크트리를 제거하지 못했습니다";
     } else {
@@ -347,5 +464,5 @@ async function applyReclaim(plan, opts = {}) {
   return { removed, freedBytes, worktreeRemoved, worktreeSkippedReason };
 }
 
-  return { git, dirSizeFast, dirSizesFast, baseRepoOf, checkWorktree, planReclaim, applyReclaim };
+  return { git, dirSizeFast, dirSizesFast, baseRepoOf, checkWorktree, planReclaim, applyReclaim, keptIgnored, worktreeLastUsed };
 }

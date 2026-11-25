@@ -139,7 +139,12 @@ export function looksLikeZip(buf: Buffer): boolean {
 }
 
 /** zip 을 메모리에서 푼다. 경로 → 내용. 상한을 넘거나 형식이 어긋나면 ZipFormatError. */
-export function readZip(buf: Buffer, limits: ZipLimits = BUNDLE_ZIP_LIMITS): Map<string, Buffer> {
+/**
+ * @param only 이 이름만 푼다(나머지는 목록에서 건너뛰고 **풀지도 검사하지도 않는다**). 옮기기 묶음을 읽을 때 목록 파일(manifest.json)만
+ *  먼저 풀어 «묶음이 아님» 을 바로 가르고, 그다음 목록에 있는 파일만 푼다 — 다른 zip(설치 파일 등)을 올리면 상한(512MB)까지
+ *  다 푼 뒤에야 거절하던 것을 막는다(2026-11-18 실측: 한글 설치 파일 zip 을 잘못 올림).
+ */
+export function readZip(buf: Buffer, limits: ZipLimits = BUNDLE_ZIP_LIMITS, only?: (name: string) => boolean): Map<string, Buffer> {
   let end = -1;
   // 끝 레코드를 뒤에서 찾는다(설명 칸이 최대 64KB 붙을 수 있다).
   for (let i = buf.length - 22; i >= 0 && i >= buf.length - 22 - 0xffff; i--) {
@@ -173,6 +178,7 @@ export function readZip(buf: Buffer, limits: ZipLimits = BUNDLE_ZIP_LIMITS): Map
     p += 46 + nameLen + extraLen + commentLen;
 
     if (name.endsWith("/")) continue; // 폴더 항목 — 내용이 없다
+    if (only && !only(name)) continue; // 고르지 않은 항목 — 풀지 않는다(크기·방식·CRC 도 보지 않는다)
     assertSafeEntryPath(name);
     if (out.has(name)) throw new ZipFormatError(`같은 경로가 두 번 들어 있습니다: ${name}`);
     if (flags & FLAG_ENCRYPTED) throw new ZipFormatError(`암호를 건 압축 항목은 받지 않습니다: ${name}`);

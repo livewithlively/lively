@@ -277,11 +277,12 @@ export function consentPresentation(appTitle: string, d: AppMcpToolDecl): { titl
 /**
  * 동의 자리 — 라이블리 화면 `#/app-grant/<앱>?v=<판>&from=mcp`(web/v2/main.ts). 앱 주소의 동의(apps/app-front-api.ts consentUrlFor)와 같은 자리지만
  *  앱 주소를 만들 수 있어야 하는 조건이 없다 — AI 대화창에서 온 사람은 앱 주소로 돌아가지 않는다(from=mcp 면 화면이 «대화창으로 돌아가» 를 말한다).
+ *  from:null(#1644 앱 화면에서 온 앱 서버 호출) — `?v=<판>` 만. 동의 뒤 화면이 지금 워크스페이스의 그 앱 주소를 스스로 만들어 돌아간다(못 만들면 «앱으로 돌아가» 만 말한다).
  *  공개 주소를 모르면(org 프로필 · PUBLIC_URL 없음) null.
  */
-export function appConsentUrl(base: string | null, appId: string, variant: "pub" | "draft"): string | null {
+export function appConsentUrl(base: string | null, appId: string, variant: "pub" | "draft", from: "mcp" | null = "mcp"): string | null {
   if (!base) return null;
-  return `${base.replace(/\/+$/, "")}/ui/#/app-grant/${encodeURIComponent(appId)}?${new URLSearchParams({ v: variant, from: "mcp" }).toString()}`;
+  return `${base.replace(/\/+$/, "")}/ui/#/app-grant/${encodeURIComponent(appId)}?${new URLSearchParams({ v: variant, ...(from ? { from } : {}) }).toString()}`;
 }
 
 /**

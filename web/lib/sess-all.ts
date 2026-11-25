@@ -31,6 +31,8 @@ export interface AllSessLike {
   listId?: number | null;
   /** #5579 — 사람이 아니라 세션 안의 AI(위탁)나 예약 작업이 연 세션인가(lib/liv-work isMachineOpened). 없으면 사람이 연 것으로 본다. */
   machine?: boolean;
+  /** #5630 — 프로젝트 줄(프로젝트 보드 리스트 뷰)의 «나와의 관계»(lib/proj-relation — invited · mine · open). 세션 줄엔 없다. */
+  rel?: string;
 }
 
 export interface AllSessQuery {
@@ -85,7 +87,7 @@ export function ownerCounts(rows: readonly AllSessLike[] | null | undefined, q: 
 /** 묶기 기준. #4233 2안(원준 2026-09-25 «2안이 좋아»): **사이드바 머리의 [시간별 ⌄] 드롭다운 하나**가 고른다. 본문 도구줄에는 없다.
  *  'none' = 묶지 않음: 묶음 머리 없이 전부 최근 순 한 목록(원준 «안묶은 완전 raw 한 전체보기도»).
  *  'project' 는 드롭다운에 없다 — 사이드바에서 카드를 고르면 본문이 그 아래 단계(프로젝트)로 묶을 때 쓴다(mainGroupBy). */
-export type SessGroupBy = 'day' | 'list' | 'owner' | 'state' | 'project' | 'none';
+export type SessGroupBy = 'day' | 'list' | 'owner' | 'state' | 'project' | 'rel' | 'none';
 /** 사이드바 드롭다운의 칸 — 순서 그대로 그린다. 'none' 은 구분선 아래. */
 export const SESS_GROUP_BYS: ReadonlyArray<{ key: SessGroupBy; label: string }> = [
   { key: 'day', label: '시간별' }, { key: 'list', label: '리스트별' }, { key: 'owner', label: '사람별' }, { key: 'state', label: '상태별' },
@@ -102,6 +104,8 @@ export function dayBucket(ms: number, now: number): string {
 }
 
 export interface SessGroup<T> { key: string; rows: T[] }
+/** #5630 관계 묶음 순서 — lib/proj-relation RELATIONS 와 같다(잎 모듈끼리 import 하지 않으려 글로 둔다). */
+const REL_ORDER = ['invited', 'mine', 'open'];
 
 /** 이 세션이 그 기준에서 드는 묶음 key — 묶기(groupAllSess) · 사이드바 카드(sideCards) · 카드 거르기(selectAllSess group)가 같은 값을 쓴다. */
 export function sessGroupKey(s: AllSessLike, by: SessGroupBy, now: number): string {
@@ -110,6 +114,7 @@ export function sessGroupKey(s: AllSessLike, by: SessGroupBy, now: number): stri
   if (by === 'project') return String(Number(s.projectId) || 0);
   if (by === 'owner') return String(s.owner || '');
   if (by === 'state') return String(s.stateKey || '');
+  if (by === 'rel') return String(s.rel || 'open');
   return '';
 }
 
@@ -133,6 +138,7 @@ export function groupAllSess<T extends AllSessLike>(rows: readonly T[] | null | 
   const cmp: (a: SessGroup<T>, b: SessGroup<T>) => number = by === 'day'
     ? (a, b) => DAY_BUCKETS.indexOf(a.key as (typeof DAY_BUCKETS)[number]) - DAY_BUCKETS.indexOf(b.key as (typeof DAY_BUCKETS)[number])
     : by === 'project' || by === 'list' ? (a, b) => Number(a.key === '0') - Number(b.key === '0') || top(b) - top(a)
+    : by === 'rel' ? (a, b) => REL_ORDER.indexOf(a.key) - REL_ORDER.indexOf(b.key)
     : by === 'owner' ? (a, b) => Number(b.key === 'me') - Number(a.key === 'me') || b.rows.length - a.rows.length || a.key.localeCompare(b.key)
     : (a, b) => rank(a.key) - rank(b.key) || top(b) - top(a);
   return groups.sort(cmp);

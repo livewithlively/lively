@@ -1,5 +1,5 @@
 // 워크스페이스 활성화가 앱 역할 비밀번호를 **평문으로 SQL 에 싣지 않는지** — 실제 Postgres 필요(기본 유닛 체인 밖,
-//  CI pg-test 잡 · .github/workflows/test.yml 에 등록).
+//  CI pg-test 잡 · .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/org/tenancy/activate-role-password.pg-test.mjs
 //
 // 왜 이 계층인가: 활성화는 소유자(대개 슈퍼유저)로 붙어 CREATE/ALTER ROLE 을 보낸다. 서버가 log_statement=all 로

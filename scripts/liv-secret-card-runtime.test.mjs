@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 리브 자격 입력칸의 저장 위치(#1610 격리 리뷰 B1, 런타임) — 실제 카드 코드(web/liv-cards.ts livAskCard)를 헤드리스 크롬에 띄워 잰다.
+// 리브 자격 입력칸의 저장 위치(#1610 격리 리뷰 B1, 런타임) — 실제 카드 코드(web/asks/* — askCard)를 헤드리스 크롬에 띄워 잰다.
 //
 //  계약: 본인 금고 요청은 서버가 만든 저장 위치 문장(ask.dest — src/org/delivery/liv-secret.ts vaultAskDest)을 싣는다.
 //   카드는 그것을 리브가 준 label·why 와 **다른 칸**에 보인다 — 리브가 고른 칸을 리브의 말로만 설명하면, 사람은 자기가 친 토큰이
@@ -22,7 +22,14 @@ if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BI
 
 const CSS = ["01-base.css", "03-components.css", "35-liv.css"].map((f) => path.join(ROOT, "public/styles", f)).filter(existsSync);
 const sc = buildSync({
-  stdin: { contents: "export { livAskCard } from './web/liv-cards.ts';", resolveDir: ROOT, loader: "ts" },
+  stdin: { contents: [
+    //  #5713 — 카드는 리브 전용(web/liv-cards.ts)에서 세션 요청(web/asks/*)으로 옮겼다. 시험은 종전처럼 «요청의 내용» 만 주고,
+    //   이 얇은 포장이 그것을 요청 한 건(payload)으로 싸서 실제 카드(askCard)에 넘긴다.
+    "import { askCard } from './web/asks/registry.ts';",
+    "import './web/asks/kinds.ts';",
+    "let n = 0;",
+    "export const livAskCard = (ask, hooks) => askCard({ id: 'ask_test_' + (++n), kind: ask.kind || 'secret', kind_label: '', title: '', session_id: null, status: 'open', created_at: '', resolved_at: null, payload: ask, result: null }, hooks);",
+  ].join('\n'), resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "LC", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 

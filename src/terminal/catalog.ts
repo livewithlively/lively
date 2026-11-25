@@ -301,20 +301,16 @@ export const HARNESSES: Harness[] = [
     //  ⚠ 낡은 문자열에 사용자가 묶이는 것은 여전히 막는다 — 화면은 이 값을 **기억에 저장하지 않는다**(사람이
     //   직접 고른 값만 저장). 그래서 codex 가 기본을 올려 이 줄을 고치면, 손대지 않은 사람은 그대로 따라온다.
     flags: [
-      //  #5332 — 2026-11-04 codex-cli 0.166.0 `codex debug models` 실측(visibility=list 만): 6.1-sol · 6-sol · 6-luna 가 새로 생기고
-      //   gpt-5.5 · 5.4 · 5.4-mini 는 목록에서 빠졌다(`/model gpt-5.4` → «Model 'gpt-5.4' is unavailable»). 없어진 모델을 남기면 고르는 즉시 실패한다.
-      //   무인 자동화 기본(AUTOMATION_DEFAULTS)은 비용 결정이라 여기서 따라 바꾸지 않는다.
-      //  ⚠ #5332 2차(2026-11-06 실측) — 목록은 **배포된 codex 판**이 받는 모델만 둔다. 테넌트 이미지·중앙 박스의 codex 는 0.157.1 이고
-      //   그 판엔 gpt-6.1-sol 이 없다(`codex debug models`): `-m gpt-6.1-sol` 로 띄우면 매 턴 «400 The 'gpt-6.1-sol' model is not supported
-      //   when using Codex with a ChatGPT account (model_not_found)» 로 실패했다 — 1차가 기본으로 올린 값이라 새 codex 세션이 첫 지시부터 죽었다.
-      //   기본은 두 판(0.157.1·0.166.0) 모두 맨 윗줄인 gpt-6-sol. 이미지의 codex 를 올리면(≥0.166.0) gpt-6.1-sol 을 다시 넣는다.
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], default: "gpt-6-sol" },
+      // 중앙 세션 이미지와 함께 갱신한다 — codex-cli 0.172.0 `codex debug models` 실측(2026-11-24).
+      // 자동화·새 세션 기본 모델은 유지하고, 지원하는 6.1 두 모델을 명시적으로 고를 수 있게 한다.
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], default: "gpt-6-sol" },
       // Codex CLI는 현재 launch-time reasoning effort를 config로 받는다. 일반 --effort 플래그가 아니라
       // session 생성기에서 별도 argv로 정규화한다. UI 계약은 다른 하네스와 동일하게 유지한다.
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"], default: "medium" },
     ],
-    effortsByModel: {   // `codex debug models` 의 supported_reasoning_levels 그대로(0.166.0 · 0.157.1 도 같다)
-      "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],   // 목록엔 없다(위 ⚠) — 이미 그 모델로 뜬 세션(새 판 노드)의 강도 거르기용
+    effortsByModel: {   // codex-cli 0.172.0 `codex debug models` 의 supported_reasoning_levels
+      "gpt-6.1-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
       "gpt-6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
       "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
       "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
@@ -394,6 +390,15 @@ export const HARNESSES: Harness[] = [
     //  그래서 antigravity 는 id 복원이 정상 경로이고(어댑터가 conversationId 를 세션 id 로 보고한다 — 매핑 존재),
     //  폴백은 매핑이 없을 때의 차선이다.
     resumeArgv: (id) => (id ? ["--conversation", id] : ["--continue"]),
+  },
+  {
+    key: "cursor", label: "Cursor", bin: "agent", provider: { id: "cursor", label: "Cursor" },
+    autoApproveFlag: "--force",      // Cursor 2026.11.19 --help: 명시적 거부를 제외하고 명령 자동 허용
+    autoModeArgv: ["--auto-review"], // 같은 CLI 도움말: 안전한 도구는 자동 실행, 나머지는 질문
+    flags: [{ name: "--model", label: "모델", desc: "agent --list-models 에 나오는 모델 ID를 입력합니다", type: "text" }],
+    failHint: ["로그인이 필요하면 터미널에  agent login  을 입력하세요."],
+    loginSteps: ["터미널에  NO_OPEN_BROWSER=1 agent login  을 입력합니다", "표시된 주소를 브라우저에서 열고 Cursor 계정으로 로그인합니다"],
+    resumeArgv: (id) => (id ? [`--resume=${id}`] : ["--continue"]),
   },
   {
     // #1701 로 배선 완료(hook-file + config.toml 센티넬 + rules 주입) — 5번째 하네스.
@@ -1088,6 +1093,15 @@ const LOGIN_CLI: Record<string, { bin: string; label: string; status: string }> 
   grok: { bin: "grok", label: "Grok", status: "grok models" },
 };
 export function harnessLoginArgv(harnessKey: string): string[] | null {
+  if (harnessKey === "cursor") {
+    const script = [
+      "printf '\\nCursor 로그인을 시작합니다. 표시되는 주소를 브라우저에서 열어 주세요.\\n\\n'",
+      "NO_OPEN_BROWSER=1 agent login || true",
+      "printf '\\n다시 확인하려면  agent status  를 입력하세요.\\n'",
+      "exec \"${SHELL:-/bin/sh}\" -il",
+    ].join("\n");
+    return ["sh", "-c", script];
+  }
   const c = LOGIN_CLI[harnessKey];
   if (!c) return null;
   const line = "─".repeat(60);
@@ -1312,4 +1326,32 @@ export function harnessThemeEnvArgs(harnessKey: string, theme: unknown, platform
   const h = HARNESS_THEME[String(harnessKey || "")];
   if (!t || !h?.env) return [];
   return h.env(t).flatMap((kv) => ["-e", kv]);
+}
+
+// ── 하네스 상태 DB 자리 (#5648) ────────────────────────────────────────────────────────────────
+//  매니지드 세션 컨테이너(#2545)는 세션마다 따로 뜨지만 멤버 홈(/home/box_<slug>)은 **모든 세션 컨테이너가 9p 로 같이 붙는**
+//   공유 저장소다. codex(0.157.1 실측)는 `~/.codex` 에 WAL 모드 SQLite(state_5·thread_history_1·logs_2·goals_1·memories_1·queue_1)를
+//   두는데, WAL 은 공유 메모리(-shm mmap)가 프로세스 사이에서 맞아야 성립한다 — 샌드박스가 다른 codex 둘이 같은 파일을 쓰면 그
+//   전제가 깨져 파일이 상한다(2026-11-21 실측: thread_history_1 ptrmap 손상, logs_2 «database disk image is malformed»).
+//  증상: 세션이 종료 규칙(#4690)으로 꺼진 뒤 다시 들어가 지시를 보내면 `codex resume <id>` 가 «thread/resume failed … malformed» 로
+//   죽고, 런처 ②(LAUNCH_STOP_SH)가 **새 대화**로 떨어진다(맥락·보낸 지시 유실). 새 대화마저 죽으면 ③ 안내 + 셸만 남는다.
+//  처방: SQLite 자리(CODEX_SQLITE_HOME)만 컨테이너 안의 휘발 폴더로 옮긴다. 대화 원본(rollout jsonl)·자격·설정은 그대로 홈에 남고,
+//   codex 는 빈 SQLite 에서 rollout 을 읽어 대화를 다시 세운다(같은 손상 홈에서 이 env 만 주고 resume → 이전 대화 복원 실측).
+//   폴더가 없으면 codex 가 만든다(실측). 잃는 것: 그 DB 에만 있는 기억(memories)·목표(goals)의 세션 간 지속 — 대화 복원보다 작다.
+//  ⚠ 세션 컨테이너 밖(셀프호스트·노드)은 로컬 파일시스템이라 SQLite 잠금이 선다 → 종전대로 홈에 둔다(무회귀).
+//  ⚠ 다른 하네스는 이 자리를 안 쓰거나(claude = jsonl) 실측이 없다 — 얹지 않는다.
+//  ⚠ 남은 자리: 훅 신뢰 1회 조회(codex-hook-trust-apply.ts — 몇 초 도는 app-server)는 CODEX_HOME 만 준다. 짧고 드물어 이번엔 두었다.
+export const CODEX_SQLITE_HOME_IN_CONTAINER = "/tmp/lively-codex-sqlite";
+
+/** 하네스 상태 DB 를 세션 컨테이너 안으로 옮기는 env (순수, 단일 출처). 해당 없으면 빈 객체.
+ *  두 실행 통로가 쓴다 — tmux pane(아래 harnessStateEnvArgs · sessions.ts)과 매니지드 app-server 의 컨테이너 exec
+ *  (codex-chat-runtime.ts managedAppServerEnv — 그 exec 은 pane 의 자식이 아니라 tmux `-e` 가 안 닿는다). */
+export function harnessStateEnv(harnessKey: string, opts: { inSessionContainer: boolean }): Record<string, string> {
+  if (harnessKey !== "codex" || !opts.inSessionContainer) return {};
+  return { CODEX_SQLITE_HOME: CODEX_SQLITE_HOME_IN_CONTAINER };
+}
+
+/** 위 env 를 tmux `-e` 인자로 (순수). 해당 없으면 빈 배열. */
+export function harnessStateEnvArgs(harnessKey: string, opts: { inSessionContainer: boolean }): string[] {
+  return Object.entries(harnessStateEnv(harnessKey, opts)).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
 }

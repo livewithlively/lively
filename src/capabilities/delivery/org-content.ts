@@ -14,7 +14,7 @@ import {
   getOrgProfile, updateOrgProfile, listSections, updateSection, deleteSection, setSectionsOrder, sectionNameInUse, getRuntimeConfig
 } from "../../org/store.js";
 import { learnGroundTruth } from "../../org/knowledge.js";
-import { actorOf, restRead, restWork, str } from "./shared.js";
+import { actorOf, restOnly, restRead, restWork, str } from "./shared.js";
 import { registryModeActive } from "../../org/tenancy/state.js";
 import { PRIMARY_TENANT_ID, syncPrimaryWorkspaceName } from "../../org/tenancy/registry.js";
 import { currentTenant } from "../../org/tenant-context.js";
@@ -168,8 +168,13 @@ export const orgContentCapabilities: Capability[] = [
 
   // ── 항상-주입 섹션(injection='always' 문서) 관리 — N개 생성/편집/삭제/재정렬 (#335). ──
   //  매 세션 컨텍스트에 sort 순으로 조립된다. 죽은 ${rules}(지식-always)·고정 3섹션 화이트리스트 폐기.
-  restWork("org_update_section", "조직 섹션 저장",
-    "항상-주입 섹션(injection='always' markdown 문서)을 생성/편집한다. 신규는 sort 말미. 본문에 ${team}/${categories}/${wiki} 치환됨. "
+  //  #5801(상민 2026-11-25) — 저장 · 삭제 · 순서 셋은 **관리자만**(restOnly). #3872(9/12)에서 구성원에게 열었던 것을 되돌린다.
+  //   까닭: 이 글은 관리자 세션을 포함한 모든 구성원의 AI 세션에 지시문으로 들어간다. 구성원이 고칠 수 있으면 관리자 권한으로
+  //   도는 AI 에 일을 시킬 수 있고, 구성원 컴퓨터에서 셸을 쓰는 AI 에도 닿는다(self_update 를 관리자 몫으로 남긴 것과 같은 근거).
+  //   memory 는 위험 scope 가 아니라 정적 토큰 · OAuth 클라이언트 · 설치 앱에도 열려 있었다. 주입을 켜고 끄는 스위치는 그대로 구성원 몫이다
+  //   (org_injection_update). 지식 표면으로 같은 행을 고치는 길은 knowledge/shared.ts assertKnowledgeWritable 이 막는다.
+  restOnly("org_update_section", "조직 섹션 저장",
+    "항상-주입 섹션(injection='always' markdown 문서)을 생성/편집한다(관리자). 신규는 sort 말미. 본문에 ${team}/${categories}/${wiki} 치환됨. "
     + "⚠ 제품 소유 가이드(context-ontology-guide)는 편집 불가 — 코드가 단일 출처(릴리스마다 자동 갱신)이고, 주입 여부만 org_runtime_update 의 inject_ontology_guide 로 제어한다(#1245).",
     [{ method: "POST", paths: ["/api/ui/org/section"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -200,8 +205,8 @@ export const orgContentCapabilities: Capability[] = [
     }),
 
   // ── 섹션 삭제 — 지식과 같은 길로 지워 휴지통 ▸ 지식 탭에 선다(#3778 — 종전엔 «복원가능» 이라 말만 하고 휴지통에 안 섰다). ──
-  restWork("org_delete_section", "조직 섹션 삭제",
-    "항상-주입 섹션을 삭제한다. 휴지통(지식)에 남아 사람이 content_restore {entity:'knowledge', key:<섹션 키>} 로 되살릴 수 있다 — 되살리면 다시 주입된다.",
+  restOnly("org_delete_section", "조직 섹션 삭제",
+    "항상-주입 섹션을 삭제한다(관리자). 휴지통(지식)에 남아 사람이 content_restore {entity:'knowledge', key:<섹션 키>} 로 되살릴 수 있다 — 되살리면 다시 주입된다.",
     [{ method: "POST", paths: ["/api/ui/org/section/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const section = str(input.section, "section", 64);
@@ -211,8 +216,8 @@ export const orgContentCapabilities: Capability[] = [
     }),
 
   // ── 섹션 주입 순서 — sort 일괄 설정(orderedNames 순서 = 조립 순서). ──
-  restWork("org_reorder_sections", "조직 섹션 순서",
-    "항상-주입 섹션의 주입 순서(sort)를 일괄 설정한다(order 배열 순서대로).",
+  restOnly("org_reorder_sections", "조직 섹션 순서",
+    "항상-주입 섹션의 주입 순서(sort)를 일괄 설정한다(order 배열 순서대로 · 관리자).",
     [{ method: "POST", paths: ["/api/ui/org/sections/order"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const order = Array.isArray(input.order) ? input.order.map((x) => String(x)) : [];

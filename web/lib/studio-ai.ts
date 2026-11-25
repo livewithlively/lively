@@ -26,6 +26,8 @@ export const STUDIO_AI: ReadonlyArray<{ key: string } & StudioAiRun> = [
   { key: 'claude', model: 'opus', effort: 'high' },
   { key: 'codex', model: 'gpt-5.6-sol', effort: 'high' },
   { key: 'antigravity', model: 'gemini-3.8-flash-high', effort: 'high' },
+  // Cursor 의 ACP 모델 ID 는 계정별 목록에서 고른다. 기본 모델로 열고 로그인 확인이 된 경우에만 선택한다.
+  { key: 'cursor', model: '', effort: '' },
   { key: 'grok', model: 'grok-4.6', effort: 'high' },
 ];
 export const studioAiRun = (key: string): StudioAiRun | null => {
@@ -75,8 +77,8 @@ export function studioAiInputs(catalog: readonly string[], nodes: ReadonlyArray<
 export function studioAiFlags(key: string, models: readonly string[], efforts: (model: string) => readonly string[]): Record<string, string> {
   const r = studioAiRun(key); if (!r) return {};
   const out: Record<string, string> = {};
-  if (!models.length || models.includes(r.model)) out['--model'] = r.model;
+  if (r.model && (!models.length || models.includes(r.model))) out['--model'] = r.model;
   const es = efforts(out['--model'] || '');
-  if (!es.length || es.includes(r.effort)) out['--effort'] = r.effort;
+  if (r.effort && (!es.length || es.includes(r.effort))) out['--effort'] = r.effort;
   return out;
 }

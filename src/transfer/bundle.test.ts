@@ -16,11 +16,13 @@
 //   C12 내용 지문 — 필드 키 순서만 다름 / 본문 한 글자 다름        → 같다 / 다르다
 //   C13 목록에 없는 여분 파일                                   → 읽지 않는다
 //   C14 대소문자만 다른 두 이름                                 → 파일 경로가 대소문자 없이도 겹치지 않고, 둘 다 읽힌다(stage 실측)
+//   C15 옮기기 파일이 아닌 zip(목록 파일 없음 · 다른 항목이 망가짐) → «옮기기 파일이 아닙니다» — 다른 항목을 풀다 난 오류가 아니다
+//   C16 정상 묶음 + 목록에 없는 망가진 여분 파일                  → 정상으로 읽힌다(여분은 풀지 않는다)
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   knowledgeToMarkdown, parseFrontMatter, writeBundleZip, readBundle, bundleContentHash, sha256Hex,
-  BundleFormatError, BundlePasswordRequiredError, BUNDLE_VERSION, BUNDLE_FORMAT,
+  BundleFormatError, BundlePasswordRequiredError, BUNDLE_VERSION, BUNDLE_FORMAT, NOT_A_BUNDLE,
   type BundleKnowledge, type BundleManifest,
 } from "./bundle.js";
 import { readZip, writeZip } from "./zip.js";
@@ -181,4 +183,29 @@ test("C14 대소문자만 다른 두 이름은 파일 경로가 대소문자 없
   assert.equal(new Set(paths.map((p) => p.toLowerCase())).size, 2, JSON.stringify(paths));
   const { bundle } = await readBundle(zip);
   assert.deepEqual(bundle.knowledge.map((x) => x.ref).sort(), ["2026-06-11-PM툴", "2026-06-11-pm툴"]);
+});
+
+/** 중앙 목록에서 그 항목의 CRC 를 뒤집는다 — 그 항목을 풀면 거절된다. */
+function corruptCrc(zip: Buffer, name: string): Buffer {
+  const out = Buffer.from(zip);
+  for (let p = 0; p + 46 <= out.length; p++) {
+    if (out.readUInt32LE(p) !== 0x02014b50) continue;
+    const nameLen = out.readUInt16LE(p + 28);
+    if (out.subarray(p + 46, p + 46 + nameLen).toString("utf8") === name) { out.writeUInt32LE((out.readUInt32LE(p + 16) ^ 0xffffffff) >>> 0, p + 16); return out; }
+  }
+  throw new Error(`중앙 목록에 ${name} 이 없다`);
+}
+
+test("C15 옮기기 파일이 아닌 zip 은 다른 항목을 풀기 전에 «옮기기 파일이 아닙니다» 로 거절한다", async () => {
+  // 설치 파일 zip 같은 것 — 목록 파일이 없고, 항목 하나는 풀면 깨진다(풀었다면 그 오류가 먼저 났을 것이다)
+  const zip = corruptCrc(writeZip([{ path: "setup/readme.txt", data: Buffer.from("설치 안내") }, { path: "setup/data.bin", data: Buffer.alloc(8192, 7) }]), "setup/data.bin");
+  await assert.rejects(readBundle(zip), (e: unknown) => e instanceof BundleFormatError && e.message === NOT_A_BUNDLE);
+});
+
+test("C16 목록에 없는 여분 파일은 망가져 있어도 풀지 않으므로 정상으로 읽힌다", async () => {
+  const { zip } = writeBundleZip({ manifest: manifestBase(), knowledge: [k()], categories: [], sources: [] });
+  const withExtra = corruptCrc(replaceEntry(zip, "extra/broken.bin", Buffer.alloc(4096, 1)), "extra/broken.bin");
+  assert.throws(() => readZip(withExtra), "여분 파일은 정말 망가져 있다(배선 확인)");
+  const { bundle } = await readBundle(withExtra);
+  assert.deepEqual(bundle.knowledge.map((x) => x.ref), ["doc-a"]);
 });

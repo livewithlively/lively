@@ -1,4 +1,4 @@
-// 지식 조각 색인(#5203) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 에 등록).
+// 지식 조각 색인(#5203) PG 통합 테스트 — **실제 Postgres(pgvector) 필요**(기본 npm test 체인 밖, CI services:postgres 스텝 — .github/workflows/test.yml 의 pg 잡이 자동 수집).
 //    npm run build && ITEMS_DATABASE_URL=postgres://postgres:test@localhost:5432/lively_test node src/v6/knowledge-chunk.pg-test.mjs
 //
 // 왜 이 계층인가: 약속이 전부 «어느 행이 살아남아 벡터를 지키나 · 어느 행이 비어 임베딩을 기다리나» 다. 행과 pgvector 칸을 실제로 봐야 한다.

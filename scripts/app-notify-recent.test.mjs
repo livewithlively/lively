@@ -64,7 +64,8 @@ check(/page === 'open' && segs\[1\]/.test(main) && /openInstalledApp\(a, null, \
 check(/noteInstalledAppOpened\(instance\.app_id\)/.test(main) && /noteAppUse\(installedRecentKey\(appId\)\)/.test(fnBody(apps, "noteInstalledAppOpened")),
   "W5b ★ #/i/<인스턴스> 를 그릴 때 설치 앱을 최근 기록 · 목록에 올린다(#4878 — 자를 거친 한 길 noteInstalledAppOpened)");
 check(/if \(p === 'open'\) return \{ title: '앱 여는 중', noAside: true \}/.test(main), "W5c 탭 제목 표에 open");
-check(/\(app-open\|app-grant\|full\|open\)/.test(read("web/v2/tabs.ts")), "W5d ★ #/open 은 지나가는 주소(저장본에서 빠진다)");
+//  (#5713) 같은 표에 요청 주소(ask)가 더해졌다 — open 이 표에 있는지만 본다(뒤에 다른 지나가는 주소가 붙어도 된다).
+check(/\(app-open\|app-grant\|full\|open(\|[a-z-]+)*\)/.test(read("web/v2/tabs.ts")), "W5d ★ #/open 은 지나가는 주소(저장본에서 빠진다)");
 check(/state: \(instance\.state && typeof instance\.state === 'object'\)/.test(main), "W5e #/i 가 앱 프레임에 인스턴스 state 를 넘긴다");
 
 const ui = read("web/v2/app-ui.ts");

@@ -100,7 +100,9 @@ try {
   const putDisk = (rel, body = "x") => { const abs = disk(rel); mkdirSync(path.dirname(abs), { recursive: true }); writeFileSync(abs, body); };
 
   // ── 준비: 열린 프로젝트(가 · 나 다 본다) · 숨은 프로젝트(가만 본다) ──
-  const open = await createProject({ name: "자료 보기 시험", dedupe: false }, { actor: "pgt-a" });
+  // #5598 — 이 시험의 프로젝트는 «다른 구성원에게도 보이는» 것이 전제다(가리는 것은 리스트 잠금으로만 잰다). 그래서 invite_only:false 로
+  //  못 박는다 — 생략하면 워크스페이스의 새 프로젝트 공개 방식(기본 초대제)을 따라 만든 사람만 본다.
+  const open = await createProject({ name: "자료 보기 시험", dedupe: false, invite_only: false }, { actor: "pgt-a" });
   const P = `/api/ui/v6/projects/${open.id}`;
   await call("pgt-a", "GET", `${P}/files`);                                  // 폴더 만들기(ensureFolder)
   const FOLDER = (await getProject(open.id)).folder;
@@ -113,7 +115,7 @@ try {
 
   const L = Number((await itemsPool.query(`INSERT INTO project_list(name, visibility) VALUES('pgt 숨은 리스트', 'members') RETURNING id`)).rows[0].id);
   await itemsPool.query(`INSERT INTO project_list_member(list_id, member_id) VALUES($1, 'pgt-a')`, [L]);
-  const hidden = await createProject({ name: "숨은 프로젝트", dedupe: false, list_id: L }, { actor: "pgt-a" });
+  const hidden = await createProject({ name: "숨은 프로젝트", dedupe: false, invite_only: false, list_id: L }, { actor: "pgt-a" });
   const HF = await createProjectFolder(hidden.id); await setProjectFolder(hidden.id, HF, { source: "web" });
   putDisk(path.join("shared", HF, "숨은.md"));
   invalidateVisibilityCache();
@@ -223,7 +225,7 @@ try {
   await itemsPool.query(`UPDATE source SET visibility='open' WHERE id=$1`, [SRC]);
 
   // ── E15 ── 끝난 프로젝트 폴더가 legacy-project/ 로 옮겨졌는데 DB folder 는 project/ 꼴 그대로
-  const drift = await createProject({ name: "끝난 프로젝트", dedupe: false }, { actor: "pgt-a" });
+  const drift = await createProject({ name: "끝난 프로젝트", dedupe: false, invite_only: false }, { actor: "pgt-a" });
   const DF = await createProjectFolder(drift.id); await setProjectFolder(drift.id, DF, { source: "web" });
   const LF = DF.replace(/^project\//, "legacy-project/");
   putDisk(path.join("shared", LF, "끝.md"));
@@ -234,7 +236,7 @@ try {
   // ── S1 · S2 · S4 ──
   mkdirSync(disk("shared", FOLDER, "archive", "2026"), { recursive: true });
   renameSync(disk("shared", FOLDER, "docs", "설계.md"), disk("shared", FOLDER, "archive", "2026", "설계.md"));   // 셸 mv — 서버는 모른다(기록 없음)
-  const other = await createProject({ name: "다른 프로젝트", dedupe: false }, { actor: "pgt-a" });
+  const other = await createProject({ name: "다른 프로젝트", dedupe: false, invite_only: false }, { actor: "pgt-a" });
   const OF = await createProjectFolder(other.id); await setProjectFolder(other.id, OF, { source: "web" });
   putDisk(path.join("shared", OF, "설계.md"));
   const s1 = await similar("pgt-b", "shared", `${FOLDER}/docs/설계.md`);

@@ -260,6 +260,25 @@
 .vax-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; }
 .vax-row + .vax-row { border-top: 1px solid var(--line); }
 .vax-row:hover { background: rgba(var(--tint-ink), .06); }
+/* #5598 관리탭 ▸ 맥락 공개범위 ▸ 새 프로젝트 공개 방식(초대제 | 전체 공개) */
+.pax { display: flex; flex-direction: column; gap: 10px; }
+.pax + .vax-list-bare { margin-top: 18px; padding-top: 6px; border-top: 1px solid var(--line); }
+.pax-head { display: flex; flex-direction: column; gap: 3px; }
+.pax-opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.pax-opt { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.pax-opt:hover { border-color: var(--line-net); }
+.pax-opt.on { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); cursor: default; }
+.pax-radio { flex: none; width: 14px; height: 14px; margin-top: 2px; border: 1.5px solid var(--muted-2); border-radius: 50%; box-sizing: border-box; }
+.pax-opt.on .pax-radio { border: 4.5px solid var(--blue); }
+.pax-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pax-t { font-size: 13.5px; }
+.pax-d { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.pax-note { margin: 0; font-size: 12.5px; line-height: 1.5; }
+.pax-warn { padding: 8px 10px; border-radius: 8px; background: var(--bg-tint); color: var(--ink); }
+.pax-existing { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--line); }
+.pax-existing-t, .pax-existing.done { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 220px; font-size: 12.5px; line-height: 1.5; }
+.pax-existing b { font-size: 13px; }
+
 .vax-row.off .vax-label { opacity: .6; }
 .vax-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .vax-label { font-weight: 600; }
@@ -289,3 +308,8 @@
 .pjv-sl-count { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 /* 4판 — 줄 = 프로젝트. 「세션」 칸: 가장 급한 상태 알약 + «외 N» */
 .pjv-sl .c-sess .n { flex: none; font-size: 12px; color: var(--muted); }
+
+/* #5630 타임라인의 사람 한 벌 — 시트 이름 옆 얼굴(글자 없이) · 바 옆 얼굴 + 이름 */
+.pjv-gt-sheet .pj-ppl { flex: none; margin-left: 4px; }
+.pjv-gt-faces.pjv-gt-ppl { top: 7px; }
+.pjv-gt-ppl .pj-ppl-t { font-weight: 500; color: var(--ink-sub); }

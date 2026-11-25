@@ -89,7 +89,7 @@ await t("[K3] 첫 시딩 — 토큰은 stdin 으로만(argv 무노출)·gateway-
   assert.equal(st.hooks, "sentinel", "user-install 이 돌았다");
   assert.equal(st.token, minted[0], "설치가 토큰을 env 로 받았다(.lively/token 경유)");
   assert.equal(fs.readFileSync(path.join(home, ".mcp-registered"), "utf8"), "http://localhost:8080/mcp", "register-clients 가 돌았다");
-  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded")), "마커");
+  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded-v2")), "마커");
   assert.ok(!fs.existsSync(path.join(home, ".lively", "kit-bundle.tgz")), "번들 임시파일 정리");
   for (const c of calls()) assert.ok(!c.argv.join(" ").includes("SECRET"), "토큰이 argv 에 노출되면 안 된다");
 });
@@ -97,13 +97,23 @@ await t("[K3] 첫 시딩 — 토큰은 stdin 으로만(argv 무노출)·gateway-
 await t("[K2] 마커 존재(새 프로세스 상태 가정 = 다른 osUser 로 흉내) — stat 1회, 민팅·설치 0회", async () => {
   const home = path.join(process.env.LIVELY_MEMBER_HOME_BASE!, "box_u-k2");
   fs.mkdirSync(path.join(home, ".lively"), { recursive: true });
-  fs.writeFileSync(path.join(home, ".lively", ".kit-seeded"), "ok");
+  fs.writeFileSync(path.join(home, ".lively", ".kit-seeded-v2"), "ok");
   resetLog();
   const { deps, minted } = okDeps();
   await ensureMemberKitSeeded(user("u-k2") as never, "box_u-k2", deps);
   assert.equal(minted.length, 0, "민팅 없음");
   assert.equal(calls().length, 1, "stat 1회뿐");
   assert.ok(calls()[0]!.argv.join(" ").includes("node"), "stat 은 node one-liner");
+});
+
+await t("[K2b] 이전 설치 마커만 있는 홈은 새 하네스 배선을 다시 설치한다", async () => {
+  const home = path.join(process.env.LIVELY_MEMBER_HOME_BASE!, "box_u-k2b");
+  fs.mkdirSync(path.join(home, ".lively"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".lively", ".kit-seeded"), "ok");
+  const { deps, minted } = okDeps();
+  await ensureMemberKitSeeded(user("u-k2b") as never, "box_u-k2b", deps);
+  assert.equal(minted.length, 1, "기존 멤버도 재설치한다");
+  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded-v2")), "새 설치 마커");
 });
 
 await t("[K4] 동시 2회 — 시딩 1회 공유(민팅 1회·마커 1개)", async () => {
@@ -125,7 +135,7 @@ await t("[K5] 설치 실패(가짜 번들에 user-install 없음) — 던지고 
   deps.buildBundle = async () => badTar;
   await assert.rejects(() => ensureMemberKitSeeded(user("u-k5") as never, "box_u-k5", deps));
   const home = path.join(process.env.LIVELY_MEMBER_HOME_BASE!, "box_u-k5");
-  assert.ok(!fs.existsSync(path.join(home, ".lively", ".kit-seeded")), "실패엔 마커 없음");
+  assert.ok(!fs.existsSync(path.join(home, ".lively", ".kit-seeded-v2")), "실패엔 마커 없음");
 });
 
 await t("[K6] 비멤버(getMember null) — 민팅·설치 없음(stat 만)", async () => {
@@ -142,7 +152,7 @@ await t("[K7] installScript(순수) — set -e · 번들 검사 · user-install 
   assert.ok(s.startsWith("set -e"));
   const a = idx("user-install.mjs\" --allow-host-effects --harness claude");
   const b = idx("register-clients.sh");
-  const c = idx(".kit-seeded");
+  const c = idx(".kit-seeded-v2");
   assert.ok(a < b && b < c, "설치 → MCP 등록 → 마커 순서");
 });
 
@@ -204,7 +214,7 @@ await t("[K9] ★★ 세션 자리를 주면 **설치 스크립트만** 세션 �
 
   // 산출물의 자리·내용은 한 글자도 안 바뀐다(세션 컨테이너에도 같은 홈이 마운트돼 있다는 전제).
   const home = path.join(process.env.LIVELY_MEMBER_HOME_BASE!, "box_u-k9");
-  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded")), "마커");
+  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded-v2")), "마커");
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8")).hooks, "sentinel");
   delete process.env.LIVELY_SESSION_EXEC;
 });
@@ -234,7 +244,7 @@ await t("[K11] ★ 같은 사람이 워크스페이스 B 에서 처음 세션을
   await withTenant({ id: "t-b", slug: "ws-b" }, () => ensureMemberKitSeeded(user("u-k11") as never, "box_u-k11", b.deps));
   assert.ok(calls().length > 0, "B 에서 마커조차 안 봤다 — A 의 «이미 심었다» 기록을 B 에 그대로 썼다");
   assert.equal(b.minted.length, 1, "B 홈에도 토큰을 심어야 한다");
-  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded")), "B 마커");
+  assert.ok(fs.existsSync(path.join(home, ".lively", ".kit-seeded-v2")), "B 마커");
   // 같은 워크스페이스 안에서는 여전히 프로세스 내 1회다(무회귀).
   resetLog();
   const b2 = okDeps();

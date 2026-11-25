@@ -5,6 +5,7 @@
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { labelOf, purgeAxesOf, TRASHABLE_SOURCE_SYSTEMS } from "./trash-shape.js";
+import { ensureInviteOnlyColumn, inviteOnlySql } from "./project-invite-column.js";   // #5598 롤 창
 export { previewOf, PREVIEW_BODY_MAX, isMirroredSourceSnapshot, purgeAxesOf, type DeletePreview } from "./trash-shape.js";
 
 // 휴지통 대상 엔티티 — knowledge/project/category + source(#3778: 자료도 지우면 되살릴 문이 있어야 한다.
@@ -28,9 +29,13 @@ export interface DeletedRow {
   // #5522 — 지운 것이 **초안**이었나와 만든 사람. 초안은 만든 사람과 팀원만 보던 것이라, 지웠다고 제목이 전원에게 보이면 안 된다.
   //  팀원 행(project_member)은 삭제와 함께 사라져 스냅샷에 없다 — 지운 뒤에는 만든 사람만 근거가 남는다.
   draft: boolean;              // project
+  invite_only: boolean;        // project — #5598 초대제(만든 사람과 팀원만 보던 프로젝트)
   created_by: string | null;   // project
   // #3778 — 휴지통 네 탭이 줄을 가르는 재료. 본문은 여기 싣지 않는다(위 #1291 과 같은 이유) — 본문은 getDeletePreview 가 게이트 뒤에서 준다.
   level: string | null;        // project — project|task|subtask (태스크 삭제도 entity='project' 로 쌓인다, #1850 F4)
+  // #5598 — 지운 태스크 · 서브태스크의 부모(태스크면 프로젝트 · 서브태스크면 태스크). 태스크 행에는 list_id · draft · invite_only 가
+  //  없어 제 스냅샷만으로는 «남의 닫힌 프로젝트의 태스크» 인지 알 수 없다 — 뿌리 프로젝트를 찾아 판정하는 재료다(deletedTaskRootId).
+  parent_id: number | null;    // project
   kind: string | null;         // source — slack·transcript·local_file …
   doc_type: string | null;     // knowledge — decision·how-to …
 }
@@ -70,7 +75,9 @@ export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity 
     visibility: (r.before?.visibility as string) ?? null,
     list_id: r.before?.list_id == null ? null : Number(r.before.list_id),
     draft: r.entity === "project" && r.before?.draft === true,
+    invite_only: r.entity === "project" && r.before?.invite_only === true,
     created_by: r.entity === "project" ? ((r.before?.created_by as string | null) ?? null) : null,
+    parent_id: r.entity === "project" && r.before?.parent_id != null ? Number(r.before.parent_id) : null,
     level: r.entity === "project" ? ((r.before?.level as string) ?? null) : null,
     kind: r.entity === "source" ? ((r.before?.kind as string) ?? null) : null,
     doc_type: r.entity === "knowledge" ? ((r.before?.type as string) ?? null) : null,
@@ -87,8 +94,9 @@ export async function listDeleted(limit = 200, offset = 0, entity?: TrashEntity 
  */
 export const TRASH_COUNT_CAP = 500;
 export async function countDeleted(opts: { gate: boolean; visibleListIds: number[] | null;
-  /** #5522 — 지운 초안은 만든 사람에게만 센다. null = 초안을 거르지 않는다(특권 · 프로젝트 축 꺼짐). */
-  draftViewer?: string | null }): Promise<{ knowledge: number; project: number; source: number }> {
+  /** #5522 · #5598 — 지운 비공개 프로젝트(초안 · 초대제)는 만든 사람에게만 센다. null = 거르지 않는다(특권 · 프로젝트 축 꺼짐). */
+  privateViewer?: string | null }): Promise<{ knowledge: number; project: number; source: number }> {
+  await ensureInviteOnlyColumn();   // 아래 조회가 뿌리 프로젝트의 칸을 읽는다(롤 창 — 없으면 false 로 읽는다)
   const rows = await q(itemsPool,
     `SELECT latest.entity, LEAST(count(*), $5)::int AS n
        FROM (
@@ -97,21 +105,56 @@ export async function countDeleted(opts: { gate: boolean; visibleListIds: number
           WHERE entity = ANY($1)
           ORDER BY entity, entity_key, at DESC, id DESC
        ) latest
+       -- #5598 지운 태스크 · 서브태스크의 뿌리 프로젝트(살아 있는 행). tpar = 스냅샷의 부모(태스크면 프로젝트 · 서브태스크면 태스크).
+       LEFT JOIN project tpar ON latest.entity = 'project' AND latest.before->>'level' IN ('task', 'subtask')
+              AND tpar.id = CASE WHEN latest.before->>'parent_id' ~ '^[0-9]+$' THEN (latest.before->>'parent_id')::int END
+       LEFT JOIN project troot ON troot.level = 'project'
+              AND troot.id = CASE WHEN latest.before->>'level' = 'task' THEN tpar.id ELSE tpar.parent_id END
       WHERE latest.op = 'delete'
         AND latest.before IS NOT NULL
         AND (latest.entity <> 'source' OR COALESCE(latest.before->>'external_system', '') = ANY($2))
         AND (NOT $3::boolean
              OR (latest.entity IN ('knowledge', 'source') AND COALESCE(latest.before->>'visibility', '') <> 'members')
-             OR (latest.entity = 'project' AND ($4::int[] IS NULL OR latest.before->>'list_id' IS NULL
+             -- 프로젝트 행 — 제 스냅샷의 list_id · 초안 · 초대제로.
+             OR (latest.entity = 'project' AND COALESCE(latest.before->>'level', 'project') NOT IN ('task', 'subtask')
+                 AND ($4::int[] IS NULL OR latest.before->>'list_id' IS NULL
                    OR CASE WHEN latest.before->>'list_id' ~ '^[0-9]+$' THEN (latest.before->>'list_id')::int = ANY($4) ELSE false END)
-                 AND ($6::text IS NULL OR COALESCE(latest.before->>'draft', '') <> 'true'
-                   OR latest.before->>'created_by' IS NOT DISTINCT FROM $6::text)))
+                 AND ($6::text IS NULL
+                   OR (COALESCE(latest.before->>'draft', '') <> 'true' AND COALESCE(latest.before->>'invite_only', '') <> 'true')
+                   OR latest.before->>'created_by' IS NOT DISTINCT FROM $6::text))
+             -- #5598 태스크 · 서브태스크 행 — 뿌리 프로젝트(살아 있는 행)의 공개범위로(capabilities/trash.ts deletedProjectRowVisible 과 같은 판정).
+             --  뿌리를 못 찾으면(뿌리도 지워졌다 · 부모 태스크가 지워졌다) 그 태스크를 만든 사람에게만.
+             OR (latest.entity = 'project' AND latest.before->>'level' IN ('task', 'subtask')
+                 AND (($4::int[] IS NULL AND $6::text IS NULL)
+                   OR (troot.id IS NOT NULL
+                       AND ($4::int[] IS NULL OR troot.list_id IS NULL OR troot.list_id = ANY($4))
+                       AND ($6::text IS NULL OR NOT (COALESCE(troot.draft, false) OR ${inviteOnlySql("troot")})
+                         OR troot.created_by IS NOT DISTINCT FROM $6::text
+                         OR EXISTS (SELECT 1 FROM project_member tpm WHERE tpm.project_id = troot.id AND tpm.member_id = $6::text)))
+                   OR (troot.id IS NULL AND $6::text IS NOT NULL AND latest.before->>'created_by' IS NOT DISTINCT FROM $6::text))))
       GROUP BY latest.entity`,
     [["knowledge", "project", "source"], TRASHABLE_SOURCE_SYSTEMS as unknown as string[], !!opts.gate, opts.visibleListIds, TRASH_COUNT_CAP,
-     opts.draftViewer ?? null]);
+     opts.privateViewer ?? null]);
   const out = { knowledge: 0, project: 0, source: 0 };
   for (const r of rows as Array<{ entity: string; n: number }>) if (r.entity in out) (out as Record<string, number>)[r.entity] = Number(r.n) || 0;
   return out;
+}
+
+/**
+ * 지운 태스크 · 서브태스크의 **뿌리 프로젝트**(지금 살아 있는 행)의 id — 못 찾으면 null(#5598).
+ *  level = 스냅샷의 level · parentId = 스냅샷의 parent_id(태스크면 프로젝트 · 서브태스크면 태스크).
+ *  서브태스크의 부모 태스크가 함께 지워졌으면 뿌리로 올라갈 길이 없다(null) — 부르는 쪽이 닫는 쪽으로 판정한다.
+ *  countDeleted 의 tpar · troot 조인과 같은 해소다(한쪽을 고치면 다른 쪽도 고친다 — 개수 = 목록 길이).
+ */
+export async function deletedTaskRootId(level: string | null, parentId: number | null): Promise<number | null> {
+  if ((level !== "task" && level !== "subtask") || parentId == null || !Number.isInteger(Number(parentId))) return null;
+  const row = await one(itemsPool, `
+    SELECT troot.id
+      FROM project tpar
+      JOIN project troot ON troot.level = 'project'
+       AND troot.id = CASE WHEN $2 = 'task' THEN tpar.id ELSE tpar.parent_id END
+     WHERE tpar.id = $1`, [Number(parentId), level]);
+  return row ? Number(row.id) : null;
 }
 
 // 복원용 스냅샷 — 해당 (entity, key) 의 가장 최근 delete 의 before(전문 행). 없으면 undefined.

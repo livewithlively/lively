@@ -7,6 +7,7 @@
 import { api, el, toast } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox } from '../learn.js';
+import { loadAccessConfig } from './access-ui.js';   // #5598 새 프로젝트 공개 범위
 import { memberPicker } from './files.js';
 import { pjvSubtaskIcon } from './icons.js';
 import { openListForm } from './list-forms.js';
@@ -193,6 +194,14 @@ export function openProjectV2Form(reload, prefill?: any) {
     paintKn();
     knRow = el('div', { class: 'cf-row np-inherit-row' }, el('span', { class: 'cf-label', text: '이어받는 지식' }), chips);
   }
+  // 공개 범위(#5598) — 만들기 전에 «이 프로젝트를 누가 보게 되나» 를 보여 주고 고르게 한다. 처음 값은 워크스페이스의
+  //  새 프로젝트 공개 방식(기본 초대제). 프로젝트 공개범위를 안 쓰는 워크스페이스(enforced=false)에서는 줄을 세우지 않는다
+  //  (가려지는 것이 없는데 «나만 봐요» 를 고르게 하면 거짓 안심이다) — 그때는 값을 안 보내 서버 기본값을 따른다.
+  const accessSel = el('select', { class: 'np-access-sel', 'aria-label': '공개 범위' },
+    el('option', { value: 'invite', text: '초대한 사람만 — 나와 아래 팀원만 봐요' }),
+    el('option', { value: 'open', text: '전체 공개 — 구성원 모두가 봐요(잠긴 리스트 안이면 그 리스트 대상만)' })) as HTMLSelectElement;
+  const accessRow = el('div', { class: 'cf-row np-access-row', hidden: '' }, el('span', { class: 'cf-label', text: '공개 범위' }), accessSel) as HTMLElement;
+  void loadAccessConfig().then((cfg) => { if (!cfg.enforced) return; accessSel.value = cfg.mode; accessRow.hidden = false; });
   // 태스크(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
   const taskEd = npTaskEditor();
   const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기', 'data-tour': 'pd-create-btn' });   // #853 '프로젝트 체험' 투어 앵커
@@ -213,7 +222,7 @@ export function openProjectV2Form(reload, prefill?: any) {
       el('div', { class: 'np-meta' },
         el('div', { class: 'cf-row' }, el('span', { class: 'cf-label', text: '리스트' }), listPick.box),
         el('div', { class: 'np-meta-cap', text: '카테고리는 소속 리스트에서 물려받아요. 레포·팀원은 비워둬도 되고 나중에 언제든 바꿀 수 있어요.' }),
-        repoField.row, memberField.row, knRow)),
+        repoField.row, accessRow, memberField.row, knRow)),
     el('div', { class: 'ov-actions' }, saveBtn, runBtn, defaultsBtn, cancelBtn));
   setTimeout(() => { nameIn.focus(); nameIn.select(); growDesc(); }, 0); // 프리필된 이름 전체 선택 + 설명 높이 초기화
   const go = async (withRun?) => {
@@ -227,6 +236,7 @@ export function openProjectV2Form(reload, prefill?: any) {
     try {
       const r = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
         name, description: descIn.value.trim() || undefined, members: memberField.getSelected(),
+        ...(accessRow.hidden ? {} : { access: accessSel.value }),   // #5598 — 줄이 안 섰으면 서버 기본값(워크스페이스 설정)
       }) });
       const np = r && (r.project || r);
       // 인라인 그룹에서 연 경우 그 상태로 생성(기본 생성은 active=진행 중). 커스텀 상태면 status_raw 도 함께(#475).
