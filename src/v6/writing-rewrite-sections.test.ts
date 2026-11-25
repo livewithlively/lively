@@ -296,4 +296,9 @@ t("unrewrittenOutcome: 시도한 조각이 전부 떨어졌으면 거부다", ()
 t("unrewrittenOutcome: 재작성된 조각이 하나라도 있으면 결과 없음(합친 문서 검사로 넘어간다)", () => {
   assert.equal(unrewrittenOutcome([{ section: "kept" }, { section: "rewritten" }]), null);
 });
+t("unrewrittenOutcome: 시도로 세는 건 kept 뿐이다 — 모르는 조각 상태·빈 목록은 건너뜀으로 본다(어느 쪽이든 저장은 없다)", () => {
+  assert.deepEqual(unrewrittenOutcome([{ section: "clean" }, { section: "unknown_state" }]), { status: "skipped", reason: "no_section_target" });
+  assert.deepEqual(unrewrittenOutcome([]), { status: "skipped", reason: "no_section_target" });
+  assert.deepEqual(unrewrittenOutcome([{ section: "unknown_state" }, { section: "kept" }]), { status: "rejected", reason: "no_section_passed" });
+});
 console.log(`writing-rewrite-sections: ${pass} passed`);

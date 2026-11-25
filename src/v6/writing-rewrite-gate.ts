@@ -86,9 +86,10 @@ function splitInline(text: string): { codes: string[]; rest: string } {
 
 // 번호 목록 표지(«1. », «2) »)는 사실이 아니라 모양이다 — arrow_chain 을 고치면 번호 목록이 생기는 게 정상이다.
 //  세 자리까지만 표지로 본다 — «2024. 그 해에» 같은 연도가 줄머리에 오면 표지가 아니라 사실이다.
-//  헤딩·볼드를 연 바로 뒤(«### 1) », «**1.**»)도 줄머리다 — 헤딩 기호·볼드를 정리하며 번호를 떼는 건 모양 변화다(howto-263 계열).
-//  «2\. » 는 목록으로 렌더되지 않게 이스케이프한 같은 표지다 — 볼드 번호(«**2. »)를 풀 때 모델이 이렇게 쓴다(holiday-schedule-adjustment).
-const LIST_MARKER_RE = /^(\s*(?:#{1,6}\s+)?(?:\*\*|__)?)\d{1,3}\\?[.)](?=\s|\*\*|__|$)/gm;
+//  표지는 줄머리(들여쓰기만 앞에 둔다)에서 공백이 뒤따르는 목록 표지뿐이다. 헤딩·볼드 머리의 번호(«### 3) 단계»·«**2.** 실행»)와
+//  이스케이프한 번호(«2\. »)는 목록으로 렌더되지 않는 글자라 센다 — 빼면 «### 3) 단계» → «### 단계» 처럼 번호를 지운 재작성이
+//  숫자 보존을 통과한다. 볼드 번호를 «2\. » 로 푼 재작성(holiday-schedule-adjustment)은 양쪽에서 같은 수를 세어 그대로 통과한다.
+const LIST_MARKER_RE = /^(\s*)\d{1,3}[.)](?=\s)/gm;
 // 천단위 쉼표는 뒤에 정확히 세 자리일 때만 토큰에 붙인다 — «1,2,3» 같은 나열은 숫자 셋이다.
 //  앞의 '-' 는 글자·숫자 뒤가 아닐 때만 부호로 본다 — «-5도»→«5도» 는 뜻이 뒤집히지만 날짜·범위의 '-' 는 부호가 아니다.
 const NUMBER_RE = /(?:(?<![\p{L}\p{N}])-)?\d+(?:,\d{3}(?!\d))*(?:\.\d+)*(?:-\d+)*%?/gu;
@@ -243,10 +244,13 @@ function subtractAllowance(xs: string[], allow: Map<string, number>, otherSide: 
 }
 
 const codeInner = (code: string): string => code.replace(/^(`+)([\s\S]*)\1$/, "$2").trim();
-// 낱말 경계로만 센다 — 부분문자열로 세면 지운 `id` 가 평문 "identity" 로, 새 `a` 가 사라진 "data" 로 상쇄돼
-//  코드 소실이 면제된다. 한글 조사는 오른쪽에만 붙으므로 오른쪽은 ASCII 경계만 본다(retry_max이다 는 계속 센다).
+// 홀로 선 글자로만 센다 — 부분문자열로 세면 지운 `id` 가 평문 "identity" 로, 새 `a` 가 사라진 "data" 로 상쇄돼
+//  코드 소실이 면제된다. 양옆에 ASCII 식별자·경로 글자([A-Za-z0-9_.\-/:])가 붙은 것도 세지 않는다 — 지운 `timeout` 이
+//  "timeout-ms" 로, `retry` 가 "config.retry"·"retry-after" 로 남은 건 백틱을 벗긴 게 아니라 다른 식별자로 바꾼 것이다.
+//  한글 조사는 오른쪽에만 붙으므로 오른쪽은 ASCII 글자만 본다(retry_max이다·timeout을 은 센다). 왼쪽은 한글 낱말 속(가한글키)도 막는다.
+//  문장 끝 «retry_max.» 처럼 마침표가 바로 붙은 것도 세지 않는다 — 경로 «config.retry» 와 가르지 않고 탈락 쪽에 둔다.
 const occurrences = (hay: string, needle: string): number =>
-  needle ? (hay.match(new RegExp(`(?<![\\p{L}\\p{N}_])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`, "gu")) ?? []).length : 0;
+  needle ? (hay.match(new RegExp(`(?<![\\p{L}\\p{N}_.\\-/:])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_.\\-/:])`, "gu")) ?? []).length : 0;
 
 /**
  * 백틱만 씌우거나 벗긴 인라인 코드는 위반에서 뺀다 — 글자는 그대로고 코드 표기만 바뀐 것이다(compute 의 +`OCR-A`).
@@ -422,6 +426,8 @@ export interface SectionOutcome { status: "skipped" | "rejected"; reason: "no_se
  */
 export function unrewrittenOutcome(report: ReadonlyArray<{ section: string }>): SectionOutcome | null {
   if (report.some((r) => r.section === "rewritten")) return null;
+  // 시도로 세는 건 kept 뿐이다 — clean·oversized 와 모르는 상태(배치가 아직 쓰지 않는 값)·빈 목록은 LLM 에 보낸 흔적이 없어 건너뜀이다.
+  //  어느 쪽이든 재작성된 조각이 없어 저장은 없고 리포트 집계만 갈린다. 시도를 뜻하는 조각 상태를 새로 만들면 여기서 kept 와 함께 세라.
   return report.some((r) => r.section === "kept")
     ? { status: "rejected", reason: "no_section_passed" }
     : { status: "skipped", reason: "no_section_target" };
@@ -538,8 +544,8 @@ const asText = (x: unknown): string => (x == null ? "" : typeof x === "string" ?
 
 // 위험도 기호를 같은 등급의 글로 옮긴 것은 재작성 프롬프트가 시킨 변환이다. 그런데 판정기는 이 항목을 category=risk 로
 //  분류하면서 reason 엔 «등급 유지»라고 적는 일이 잦았다(2026-10-03 E 재처리 측정: 위험도 항목 80개 중 65개).
-//  판정기의 fact_changed=false 와 기계 대조(등급 표지의 순서·등급이 같고 기호가 실제로 글로 바뀌었다) 두 신호가
-//  모두 맞을 때만 비사실로 본다. 기호를 지우기만 했거나 🔴 를 «주의» 로 낮춘 것은 등급 열이 어긋나 그대로 탈락한다.
+//  판정기의 fact_changed=false 와 기계 대조(등급 표지의 순서·등급이 같고 기호가 실제로 글로 바뀌었으며 나머지 글은 문장부호·공백만
+//  다르다) 두 신호가 모두 맞을 때만 비사실로 본다. 기호를 지우기만 했거나 🔴 를 «주의» 로 낮춘 것은 등급 열이 어긋나 그대로 탈락한다.
 // 등급 표지를 등장 순서대로 뽑아 «등급 열»로 비교한다 — 개수만 보면 이웃한 두 문장의 높음·중간이 서로 바뀐 재작성본도 통과한다.
 //  🟠·🚨 는 프롬프트가 글 대응을 정하지 않았으니 그대로 남아야 하는 표지로 둔다(지우면 열 길이가 달라져 탈락).
 const GRADE_TOKEN = /🔴|🟡|🟢|🟠|🚨|⚠\uFE0F?|위험도\s*[:：]\s*(?:높음|중간|낮음)|주의\s*[:：]/gu;
@@ -547,12 +553,19 @@ const gradeOf = (t: string): string =>
   /🔴|높음/u.test(t) ? "high" : /🟡|중간/u.test(t) ? "mid" : /🟢|낮음/u.test(t) ? "low"
     : t === "🟠" ? "orange" : t === "🚨" ? "siren" : "caution";
 const isSymbol = (t: string): boolean => !/위험도|주의/u.test(t);
+// 등급 표지를 빼고 남는 글 — 문장부호(\p{P}: 기호→글 교환에 따라붙는 «:»·«—»·«.»·볼드 «**»·헤딩 «#»)와 공백만 버린다.
+//  기호(\p{S})는 남긴다 — 취소선 «~~»·«✅»→«❌» 같은 차이는 뜻이다.
+const besidesGrade = (s: string): string => s.replace(GRADE_TOKEN, "").replace(/[\p{P}\s]/gu, "");
 
-/** 원문의 위험도 기호가 재작성본에서 같은 등급의 글로 옮겨졌고, 등급 표지의 순서·등급이 그대로인가. */
+/**
+ * 원문의 위험도 기호가 재작성본에서 같은 등급의 글로 옮겨졌고, 등급 표지의 순서·등급이 그대로이며, 표지 말고는 문장부호·공백만 다른가.
+ *  등급 열만 보면 표지 옆 글을 바꾼 재작성(«🔴 삭제 금지» → «위험도: 높음 삭제 허용»)이 판정기의 fact_changed=false 하나로 통과한다.
+ */
 export function riskGradePreserved(orig: string, rewritten: string): boolean {
   const a = orig.match(GRADE_TOKEN) ?? [];
   const b = rewritten.match(GRADE_TOKEN) ?? [];
   if (a.length !== b.length || a.some((t, i) => gradeOf(t) !== gradeOf(b[i]))) return false;
+  if (besidesGrade(orig) !== besidesGrade(rewritten)) return false;
   return a.filter(isSymbol).length > b.filter(isSymbol).length;
 }
 
@@ -601,16 +614,18 @@ const MOVABLE_CATEGORIES = new Set<string>(["meta", "date", "subject"]);
 
 /**
  * 판정 여러 번의 항목을 합쳐 통과를 가른다. 통과는 요구 횟수를 다 채우고 사실 변화가 하나도 없을 때뿐이다.
- *  rewritten(재작성본 전문)을 주면 이동 대조를 한다: 판정기가 fact_changed=false 라 했고 원문 쪽 대목이 재작성본에 공백만 빼고
- *  그대로 있으면 meta·date·subject 범주에 한해 «옮겨졌을 뿐» 으로 받는다. 판정기는 제목 날짜·부제를 첫 줄로 옮긴 것을
- *  reason 엔 «값은 그대로» 라 적고 category 는 meta 로 달아 떨어뜨렸다(r2 재처리, cis-socket-buildchain 등 5건).
+ *  rewritten(재작성본 전문)을 주면 이동 대조를 한다: 판정기가 원문에만 있다(missing)·fact_changed=false 라 했고 원문 쪽 대목이
+ *  재작성본에 공백만 빼고 그대로 있으면 meta·date·subject 범주에 한해 «옮겨졌을 뿐» 으로 받는다. 판정기는 제목 날짜·부제를 첫 줄로
+ *  옮긴 것을 reason 엔 «값은 그대로» 라 적고 category 는 meta 로 달아 떨어뜨렸다(r2 재처리, cis-socket-buildchain 등 5건).
  *  reason 은 믿지 않고 원문 글자가 재작성본에 남았는지로만 확인한다 — 마크다운 기호까지 맞아야 하니 볼드·헤딩을 벗긴 대목은 못 건진다.
  */
 export function meaningVerdict(runs: MeaningItem[][], requiredRuns: number, rewritten?: RewriteDoc): MeaningVerdict {
   const hay = rewritten ? squash(`${String(rewritten.title ?? "")}\n${String(rewritten.body_md ?? "")}`) : "";
   // 짧은 값("40"·"높음")은 문서 다른 자리에 같은 글자가 흔해 치환이 이동으로 새므로 대조하지 않는다.
+  //  changed·added 는 이동이 될 수 없다 — changed 는 판정기가 재작성본 쪽에 다른 대목(b)이 있다고 본 것이라, 원문 대목이 다른 자리에
+  //  남아 있어도 b 는 상반된 값을 덧붙인 것일 수 있다(제목의 «배포일 2024-05-01» 은 그대로 두고 본문에 «배포일 2024-06-01»).
   const isMoved = (x: MeaningItem): boolean =>
-    !!hay && x.fact_changed && !x.judge_fact_changed && MOVABLE_CATEGORIES.has(x.category)
+    !!hay && x.kind === "missing" && x.fact_changed && !x.judge_fact_changed && MOVABLE_CATEGORIES.has(x.category)
     && squash(x.a).length >= MOVED_MIN_CHARS && hay.includes(squash(x.a));
   const all = runs.flat().map((x) => (isMoved(x) ? { ...x, fact_changed: false, moved: true } : x));
   const factual = all.filter((x) => x.fact_changed);
