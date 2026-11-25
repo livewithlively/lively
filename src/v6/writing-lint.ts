@@ -56,12 +56,15 @@ export const MR_REF_RE = /\bMR\s*!?\d+|(?:^|[\s(·,])!\d{2,}\b/;
 // '주' 는 날짜 쪽 쓰임(뒤가 끝·한글 아님·조사·주말·주초·주중)만 본다 — «다음 주소·주석·주요», «이번 주기», «다음 주의사항» 은 다른 낱말이다.
 //  «주로»(대개)·«주가»(주식 값)와 겹칠 수 있지만, «다음 주로 미룬다»·«이번 주가 마감» 을 놓치는 쪽이 더 잦아 넣는다.
 //  «오늘날»·«어제오늘» 은 '요즘' 이고, «이 세션» 은 제품 용어(세션 = 태스크)라 넣지 않는다.
-const RELATIVE_TIME_RE = /(?<!어제)오늘(?!날)|어제(?!오늘)|(?<!안)내일|그저께|엊그제|(?:지난|이번|다음) ?주(?=$|[^가-힣]|[에의는도로가를와엔부까말초중])(?!의(?:사항|점))|이번 세션|지난 세션/g;
+export const RELATIVE_TIME_RE = /(?<!어제)오늘(?!날)|어제(?!오늘)|(?<!안)내일|그저께|엊그제|(?:지난|이번|다음) ?주(?=$|[^가-힣]|[에의는도로가를와엔부까말초중])(?!의(?:사항|점))|이번 세션|지난 세션/g;
 // 개인 경로만 잡는다 — 서버·공용 계정의 홈(/home/ubuntu·deploy …, /Users/Shared, C:\Users\Public)은 누구 자리에서든 같은 관례 위치다.
 //  계정 이름 뒤는 '/' 가 아니라 «이름 글자가 아님»으로 끊는다 — 끝 슬래시 없이 쓴 `/home/ubuntu` 도 빼야 한다.
 //  '~/' 는 넣지 않는다 — 읽는 사람 자신의 홈을 가리키는 관례 표기다(`~/.lively/…`·`~/.ssh/config`).
-const LOCAL_PATH_RE = /\/Users\/(?!Shared(?![\w-]))[A-Za-z0-9._-]+|\/home\/(?!(?:ubuntu|ec2-user|deploy|admin|git|runner|app|node|www-data)(?![\w-]))[a-z][A-Za-z0-9._-]*|[A-Za-z]:\\Users\\(?!Public(?![\w-]))/g;
-const UNDATED_STATUS_RE = /아직|진행 ?중|대기 ?중|배포 ?대기|머지 ?대기|미배포|미머지|예정(?:이다|입니다|임)/;
+//  경로 앞에 글자·경로 문자가 붙어 있으면 홈 경로가 아니다 — «/scim/v2/Users/<id>»·URL·«s3://b/Users/x» 는 API·저장소 경로다.
+//  /Users/<계정> 은 뒤에 하위 경로가 있을 때만 본다(«/Users/me»·문장 끝은 API 경로의 id 와 구별할 수 없다).
+//  Windows 는 계정 이름(공백 포함)까지 잡는다 — 자동 정리(writing-resolve)가 그 자리를 바꾼다.
+export const LOCAL_PATH_RE = /(?<![\w.~\/:$%-])\/Users\/(?!Shared(?![\w-]))[A-Za-z0-9._-]+(?=\/)|(?<![\w.~\/:$%-])\/home\/(?!(?:ubuntu|ec2-user|deploy|admin|git|runner|app|node|www-data)(?![\w-]))[a-z][A-Za-z0-9._-]*|(?<![A-Za-z])[A-Za-z]:\\Users\\(?!(?:Public|Default|All Users)\\)[^\\\r\n<>:"|?*]+(?=\\)/g;
+export const UNDATED_STATUS_RE = /아직|진행 ?중|대기 ?중|배포 ?대기|머지 ?대기|미배포|미머지|예정(?:이다|입니다|임)/;
 // '갱신'은 넣지 않는다 — «토큰 갱신 절차» 같은 헤딩이 배너로 잡힌다.
 //  대소문자를 가린다 — `i` 를 붙이면 «## How to update» 같은 보통 낱말까지 잡는다.
 const BANNER_WORD = String.raw`\bUPDATE\b|정정|폐기|방향 ?전환|더 이상 유효하지|\bv\d+\s*→\s*v\d+`;
@@ -97,8 +100,8 @@ export const PROSE_LINE_MAX = 2000;
 // 따옴표 안은 남의 말이거나 낱말 자체를 가리키는 언급이다(«"아직" 같은 표현»). 시점·상태 판정에서 뺀다.
 //  홑따옴표는 넣지 않는다 — 영문 아포스트로피(don't … isn't) 사이를 통째로 지운다.
 //  길이를 300자로 묶는다 — 닫힘 없는 여는 기호마다 줄 끝까지 훑으면 긴 한 줄에서 제곱 시간이 된다.
-const unquoted = (l: string): string => l.replace(/"[^"\n]{0,300}"|“[^”\n]{0,300}”|「[^」\n]{0,300}」|『[^』\n]{0,300}』|‘[^’\n]{0,300}’/g, "");
-const isQuote = (l: string): boolean => /^\s*>/.test(l);
+export const unquoted = (l: string): string => l.replace(/"[^"\n]{0,300}"|“[^”\n]{0,300}”|「[^」\n]{0,300}」|『[^』\n]{0,300}』|‘[^’\n]{0,300}’/g, "");
+export const isQuote = (l: string): boolean => /^\s*>/.test(l);
 
 /** 본문의 «첫 문단»이 서술로 시작하는지 — 맨 앞 H1(제목 반복)은 한 번 건너뛴다. */
 function leadLine(body: string): string | null {

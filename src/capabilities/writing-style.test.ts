@@ -5,7 +5,7 @@
 //  회귀 대상 ③: 기존 문서에 원래 있던 위반으로 에이전트의 수정·이어쓰기가 거부되는 것 — 거부는 새로 생긴 위반에만 건다.
 //  회귀 대상 ④: 사람의 웹 편집이 거부되는 것, 반대로 토큰 스크립트가 사람으로 취급돼 거부를 비껴가는 것.
 import assert from "node:assert/strict";
-import { checkWriting, isHumanWriter, writingRejectError, rejectWriting } from "./writing-style.js";
+import { checkWriting, isHumanWriter, writingRejectError, rejectWriting, BODY_LENGTH_REJECT_GUIDE } from "./writing-style.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
 const fmt = (raw: Record<string, unknown>) => async () => resolveWritingFormat({ enabled: true, ...raw });
@@ -24,6 +24,33 @@ await ta("위반이 있으면 findings·note·guide 를 싣는다", async () => 
   assert.match(st.note, /mode='edit'/);
   assert.ok(st.guide_md.length > 0);
   assert.deepEqual(rejects, [], "warn 만 있으면 거부 없음");
+});
+await ta("저장 응답 — 기준 날짜를 찾은 시점 위반은 사람 확인으로 두지 않고 고치는 법(fix)과 기준 날짜(anchors)를 싣는다 — 사람의 웹 편집엔 독촉 문구를 싣지 않는다", async () => {
+  type F = { rule: string; fix?: string; anchors?: Array<{ date: string }>; ask_human?: true };
+  const anchors = [{ line: "오늘 바꿨다.", rules: ["relative_time" as const], date: "2026-11-24", basis: "this_save" as const }];
+  const st = ((await checkWriting("knowledge", BAD, { anchors }, on)).info as { style: { findings: F[]; note: string } }).style;
+  const rel = st.findings.find((f) => f.rule === "relative_time");
+  assert.ok(rel?.fix && rel.anchors?.[0].date === "2026-11-24", JSON.stringify(rel));
+  assert.ok(st.findings.every((f) => !("ask_human" in f)));
+  assert.match(st.note, /anchors 의 기준 날짜/);
+  assert.doesNotMatch(st.note, /사람에게 확인/, "사실을 찾아 준 위반을 사람에게 물으라고 했다");
+  const byHuman = ((await checkWriting("knowledge", BAD, { anchors, human: true }, on)).info as { style: { note: string } }).style;
+  assert.doesNotMatch(byHuman.note, /anchors 의 기준 날짜/);
+  const fixable = { title: "🔴 배포 노트 범위", body: "노트는 직전 배포 이후 커밋을 싣는다." };
+  const st2 = ((await checkWriting("knowledge", fixable, {}, on)).info as { style: { findings: F[]; note: string } }).style;
+  assert.doesNotMatch(st2.note, /anchors/, "고치는 법이 없는 규칙만 있으면 안내를 붙이지 않는다");
+});
+await ta("서버 처리 판정 — 홈 경로는 지식 저장에서 치환으로 다 풀릴 때만 사람 확인을 뺀다(다른 표면·남는 경로는 사람 확인)", async () => {
+  type F = { rule: string; ask_human?: true };
+  const lp = (fs: F[]) => fs.find((f) => f.rule === "local_path");
+  const mac = { title: "배포 노트 범위", body: "결론이다. 설정은 /Users/bob/app.conf 에 둔다." };
+  const home = { title: "배포 노트 범위", body: "결론이다. 설정은 /home/alice/app.conf 에 둔다." };
+  const st = (r: Awaited<ReturnType<typeof checkWriting>>) => (r.info as { style: { findings: F[] } }).style.findings;
+  assert.ok(lp(st(await checkWriting("knowledge", mac, {}, on))) && !lp(st(await checkWriting("knowledge", mac, {}, on)))!.ask_human);
+  assert.ok(lp(st(await checkWriting("knowledge", home, {}, on)))?.ask_human, "치환되지 않는 /home/<개인 계정> 을 서버가 처리한다고 했다");
+  const act = await checkWriting("activity", { title: "배포 노트", body: mac.body }, {}, on);
+  const actLp = lp(((act.info as { style?: { findings: F[] } }).style?.findings) ?? []);
+  if (actLp) assert.ok(actLp.ask_human, "작업기록 표면엔 경로 치환이 없는데 서버가 처리한다고 했다");
 });
 await ta("형식이 꺼져 있거나 위반이 없으면 아무것도 싣지 않는다", async () => {
   assert.deepEqual(await checkWriting("knowledge", BAD, {}, async () => resolveWritingFormat({})), { info: {}, rejects: [], guide: "" });
@@ -193,5 +220,73 @@ await ta("저장 안내 — 글에 없는 사실이 있어야 고칠 수 있는 
   const askOnly = (await checkWriting("knowledge", { title: "배포 노트 범위", body: "결론이다. 오늘 배포했다." }, {}, on)).info as Style;
   assert.match(askOnly.style!.note, /지어내지 말고 사람에게 확인/);
   assert.doesNotMatch(askOnly.style!.note, /mode='edit' 로 그 부분만/, "사람 확인 항목만 남았는데 지금 고치라고 했다");
+});
+const mk = (n: number) => ("결론은 이 문장이다. ".repeat(Math.ceil(n / 10) + 1).slice(0, n - 1)) + "다";
+const lenWarn = fmt({ rules: { body_length: "warn" }, limits: { body_max_chars: 500 } });
+const lenRej = fmt({ rules: { body_length: "reject" }, limits: { body_max_chars: 500 } });
+const T = "결론 제목";
+const hasLen = (r: { rejects: Array<{ rule: string }> }) => r.rejects.some((f) => f.rule === "body_length");
+
+await ta("길이: 신규 저장이 상한을 넘으면 거부한다", async () => {
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: null }, lenRej)));
+});
+await ta("길이: 이전 본문이 상한 이하인데 초과로 저장하면 거부한다", async () => {
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: { title: T, body: mk(400) } }, lenRej)));
+});
+await ta("길이: 이미 초과한 글을 더 길게 저장하면 거부한다(코드포인트 기준)", async () => {
+  const before = { title: T, body: mk(300) + "𠀀".repeat(300) };
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(650) }, { before }, lenRej)));
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(601) }, { before }, lenRej)), "UTF-16 길이로는 더 짧아도 코드포인트로 길면 거부");
+});
+await ta("길이: 이미 초과한 글이 같거나 짧아지면 거부하지 않고 legacy 로 보고한다", async () => {
+  for (const len of [600, 550]) {
+    const r = await checkWriting("knowledge", { title: T, body: mk(len) }, { before: { title: T, body: mk(600) } }, lenRej);
+    assert.ok(!hasLen(r), `len ${len}`);
+    assert.ok((r.info as Style & { style: { legacy: string[] } }).style.legacy.includes("body_length"), `legacy ${len}`);
+  }
+});
+await ta("길이: 상한 이하면 거부도 보고도 없다", async () => {
+  for (const before of [null, { title: T, body: mk(750) }]) {
+    const r = await checkWriting("knowledge", { title: T, body: mk(500) }, { before }, lenRej);
+    assert.ok(!hasLen(r));
+    const st = (r.info as { style?: { findings: Array<{ rule: string }>; legacy: string[] } }).style;
+    assert.ok(!st?.findings.some((f) => f.rule === "body_length"));
+    assert.ok(!st?.legacy.includes("body_length"));
+  }
+});
+await ta("길이: 수준이 warn 이면 거부하지 않는다", async () => {
+  for (const before of [null, { title: T, body: mk(400) }, { title: T, body: mk(600) }]) {
+    assert.ok(!hasLen(await checkWriting("knowledge", { title: T, body: mk(750) }, { before }, lenWarn)));
+  }
+  assert.ok(!hasLen(await checkWriting("knowledge", { title: T, body: mk(750) }, {}, fmt({ limits: { body_max_chars: 500 } }))), "기본 수준");
+});
+
+const LEN_REJ = [{ rule: "body_length" as const, level: "reject" as const, message: "본문이 너무 길다" }];
+const OTHER_REJ = [{ rule: "title_leading_emoji" as const, level: "reject" as const, message: "제목 이모지" }];
+const restStyle = (e: ReturnType<typeof writingRejectError>) => (e.body as { style?: Record<string, unknown> } | undefined)?.style;
+await ta("길이 거부는 메시지와 REST body 에 분리 지침을 싣고, 그대로 다시 보내라는 문구는 쓰지 않는다", async () => {
+  const e = writingRejectError(LEN_REJ, "가이드");
+  assert.ok(e.message.includes(BODY_LENGTH_REJECT_GUIDE));
+  assert.doesNotMatch(e.message, /같은 호출로 다시 저장/);
+  assert.equal(restStyle(e)?.length_guide, BODY_LENGTH_REJECT_GUIDE);
+});
+await ta("길이 외 규칙만 거부되면 종전 재저장 문구를 쓰고 분리 지침은 싣지 않는다", async () => {
+  const e = writingRejectError(OTHER_REJ, "가이드");
+  assert.match(e.message, /같은 호출로 다시 저장/);
+  assert.ok(!e.message.includes(BODY_LENGTH_REJECT_GUIDE));
+  assert.equal(restStyle(e)?.length_guide, undefined);
+});
+await ta("길이 위반은 저장 경로가 나눌 수 있다고 판정한 저장(canSplit)에서만 사람 확인을 뺀다", async () => {
+  type F = { rule: string; ask_human?: true };
+  const len = (r: Awaited<ReturnType<typeof checkWriting>>) => r.rejects.find((f) => f.rule === "body_length") as F | undefined;
+  assert.equal(len(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: null }, lenRej))?.ask_human, true);
+  assert.equal(len(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: null, canSplit: true }, lenRej))?.ask_human, undefined);
+});
+await ta("서버가 나누지 않는 지식(ask_human)의 길이 거부엔 직접 나누는 절차를 싣지 않고 사람에게 확인하게 한다", async () => {
+  const e = writingRejectError([{ ...LEN_REJ[0], ask_human: true as const }], "가이드");
+  assert.ok(!e.message.includes(BODY_LENGTH_REJECT_GUIDE));
+  assert.match(e.message, /직접 나누지도 말고/);
+  assert.match(e.message, /사람에게 확인/);
+  assert.equal(restStyle(e)?.length_guide, undefined);
 });
 console.log(`writing-style: ${pass} passed`);

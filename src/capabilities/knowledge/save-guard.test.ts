@@ -80,6 +80,18 @@ t("같은 계정이라도 마지막 저장이 사람 웹 편집(confidence human
     assert.equal(e?.status, 409, String(confidence));
   }
 });
+t("지금 판을 만든 저장이 같은 계정의 MCP 저장이면 confidence 가 human 이어도 보호 창을 걸지 않는다(confidence 를 안 바꾸는 저장 — set_fields 등)", () => {
+  const titled = before({ updated_at: RECENT, updated_by: "bob", confidence: "human", last_write: { actor: "bob", channel: "mcp" } });
+  assert.equal(thrown(() => assertStyleFixSafe({ ...agent, styleFix: true, before: titled, after: FORMAT_ONLY })), null);
+});
+t("지금 판을 만든 저장이 같은 계정의 웹 편집이면 confidence 가 ai 여도 보호 창을 건다", () => {
+  const webTitled = before({ updated_at: RECENT, updated_by: "bob", confidence: "ai", last_write: { actor: "bob", channel: "web" } });
+  assert.equal(thrown(() => assertStyleFixSafe({ ...agent, styleFix: true, before: webTitled, after: FORMAT_ONLY }))?.status, 409);
+});
+t("지금 판을 만든 저장이 다른 계정이면 MCP 저장이어도 보호 창을 건다", () => {
+  const other = before({ updated_at: RECENT, updated_by: "bob", confidence: "ai", last_write: { actor: "alice", channel: "mcp" } });
+  assert.equal(thrown(() => assertStyleFixSafe({ ...agent, styleFix: true, before: other, after: FORMAT_ONLY }))?.status, 409);
+});
 t("원문에 제목이 없으면 고친 글에도 제목을 요구하지 않는다", () => {
   const untitled = before({ title: null });
   assert.equal(thrown(() => assertStyleFixSafe({ ...agent, styleFix: true, before: untitled, after: { title: undefined, body_md: untitled.body_md } })), null);

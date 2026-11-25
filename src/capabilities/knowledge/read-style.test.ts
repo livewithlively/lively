@@ -229,17 +229,34 @@ await ta("부분읽기도 잘라낸 줄이 아니라 본문 전체를 판정하�
   const lim = await knowledgeGetResult(row({ body_md: body }), { limit: 5 }, {}, { staged: false }, on) as Style;
   assert.match(lim.style!.note, /본문 전체 기준/);
 });
-await ta("자동 정리에서 뺀 규칙(사실 판단이 필요한 규칙)은 ask_human 으로 표시하고, 모양만 보고 고칠 규칙엔 붙이지 않는다", async () => {
-  const body = ["## ⚠ 정정", "", "오늘 배포했다 → 확인 → 끝.", "/Users/someone/a.md 에 있다.", "아직 대기 중이다."].join("\n");
-  const st = ((await readStyleHint(row({ title: "🔴 배포 규칙", body_md: body }), on)) as Style).style!;
-  const ask = new Set<string>(st.findings.filter((f) => f.ask_human === true).map((f) => f.rule));
-  const self = new Set<string>(st.findings.filter((f) => f.ask_human !== true).map((f) => f.rule));
-  for (const r of ["relative_time", "local_path", "undated_status", "revision_banner"]) assert.ok(ask.has(r), `${r} 는 사람에게 묻는다: ${JSON.stringify(st.findings)}`);
-  for (const r of ["title_leading_emoji", "heading_symbol", "lead_missing"]) assert.ok(self.has(r), `${r} 는 직접 고친다: ${JSON.stringify(st.findings)}`);
-  assert.match(st.note, /ask_human/);
-  // 본문 길이도 사실 판단(어디서 나눌까)이라 사람에게 묻는다.
+await ta("사실이 필요한 규칙도 서버가 사실을 찾았거나 직접 처리하면 사람 확인으로 두지 않고 고치는 법(fix)과 기준 날짜(anchors)를 싣는다", async () => {
+  const body = ["## 배포", "", "오늘 배포했다 → 확인 → 끝.", "/Users/someone/a.md 에 있다.", "아직 대기 중이다."].join("\n");
+  const anchorsOf = async () => [
+    { line: "오늘 배포했다 → 확인 → 끝.", rules: ["relative_time" as const], date: "2026-09-04", basis: "first_version" as const },
+    { line: "아직 대기 중이다.", rules: ["undated_status" as const], date: "2026-09-05", basis: "first_version" as const },
+  ];
+  const st = ((await readStyleHint(row({ title: "🔴 배포 규칙", body_md: body }), on, { anchorsOf })) as Style).style!;
+  const byRule = new Map<string, any>(st.findings.map((f) => [f.rule as string, f as typeof f & { fix?: string; anchors?: Array<{ date: string; hint: string }> }]));
+  for (const r of ["relative_time", "local_path", "undated_status"]) {
+    assert.ok(byRule.get(r)?.fix, `${r} 에 고치는 법이 있다: ${JSON.stringify(st.findings)}`);
+    assert.ok(!("ask_human" in (byRule.get(r) ?? {})), `${r} 에 ask_human 이 없다`);
+  }
+  assert.equal(byRule.get("relative_time")?.anchors?.[0].date, "2026-09-04");
+  assert.match(byRule.get("relative_time")!.anchors![0].hint, /2026-09-03/, "어제는 기준 날짜 하루 전");
+  assert.equal(byRule.get("undated_status")?.anchors?.[0].date, "2026-09-05");
+  assert.doesNotMatch(st.note, /사람에게 확인/);
+  // 배너를 옮길지는 정정이 본문에 반영됐는지에 달린 판단이라 사람에게 묻는다.
+  const banner = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n\n## ⚠ 정정\n\n범위를 바꿨다." }), on, { anchorsOf })) as Style).style!;
+  assert.equal((banner.findings.find((f) => f.rule === "revision_banner") as { ask_human?: true } | undefined)?.ask_human, true, JSON.stringify(banner.findings));
   const long = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n" + "가".repeat(30000) }), on)) as Style).style!;
-  assert.ok(long.findings.some((f) => f.rule === "body_length" && f.ask_human === true), JSON.stringify(long.findings));
+  // 본문 길이는 고치는 법(fix)을 싣되, 읽기에선 서버가 이 지식을 나눌 수 있는지(공개범위·수명주기 등) 판정하지 않으므로 사람 확인으로 둔다.
+  assert.ok(long.findings.some((f) => f.rule === "body_length" && "fix" in f && f.ask_human === true), JSON.stringify(long.findings));
+});
+await ta("기준 날짜 조회 자체가 실패하면 읽기는 되고 시점 위반은 사람 확인(ask_human)으로 남는다 — 날짜를 지어내지 않게", async () => {
+  const st = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n오늘 고쳤다." }), on, { anchorsOf: async () => { throw new Error("db down"); } })) as Style).style!;
+  const rel = st.findings.find((f) => f.rule === "relative_time") as { fix?: string; anchors?: unknown; ask_human?: true } | undefined;
+  assert.ok(rel?.ask_human && !rel.fix && !rel.anchors, JSON.stringify(rel));
+  assert.match(st.note, /사람에게 묻/);
 });
 await ta("고칠 수 있으면 style_fix·expected_version 을 함께 보내라고 한다 — 서버가 사실 보존과 그 사이 다른 저장을 대조한다(#1740)", async () => {
   const st = ((await readStyleHint(BAD, on)) as Style).style!;
