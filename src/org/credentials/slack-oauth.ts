@@ -130,7 +130,7 @@ export function buildSlackAppManifest(redirectUrls: string[]): Record<string, un
 }
 /** #1782 슬랙 다리용 봇 권한 — 답하기(chat:write) · 받기(채널 · 비공개 채널 · DM 글, 태그) · 사람 매핑(users:read.email) · 받음 표시(reactions:write). */
 export const SLACK_BRIDGE_BOT_SCOPES = [
-  "chat:write", "channels:history", "groups:history", "im:history", "app_mentions:read", "users:read", "users:read.email", "reactions:write",
+  "chat:write", "channels:history", "groups:history", "im:history", "app_mentions:read", "users:read", "users:read.email", "reactions:write", "files:read",
 ] as const;
 /** #1782 슬랙 다리가 구독하는 봇 이벤트 — 소켓 모드라 요청 주소(request_url)가 필요 없다. */
 export const SLACK_BRIDGE_BOT_EVENTS = ["app_mention", "message.channels", "message.groups", "message.im"] as const;

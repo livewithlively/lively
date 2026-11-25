@@ -4785,6 +4785,16 @@
   "input_hash": "c7bd11b4bc9f7b89"
  },
  {
+  "name": "slack_bridge_file",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/slack-bridge/file"
+  ],
+  "input_hash": "27185c05f3183a66"
+ },
+ {
   "name": "org_notion_collect",
   "scope": "memory",
   "mcp": true,

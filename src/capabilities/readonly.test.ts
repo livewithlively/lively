@@ -221,11 +221,13 @@ t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == �
   //  · browser_status / browser_screenshot / browser_read / browser_text / browser_console — AI 브라우저(#4993)를 **보기만** 한다.
   //    스토어도 페이지도 바꾸지 않는다(POST 인 것은 세션 문맥을 본문 없이 실어 보내는 툴 표면이라서다). 이동·조작·코드 실행
   //    (browser_navigate·act·fill·eval·tabs·handoff)은 쓰기로 남아 읽기전용 세션에서 소거된다 — 사람이 열어 둔 탭을 볼 수만 있다.
+  //  · slack_bridge_file — 앱이 슬랙 다리로 그 채널의 파일을 **읽는다**. 슬랙에도 스토어에도 쓰지 않는다(호출 기록 한 줄뿐 — slack_bridge_call 의 기록과 같다).
+  //    POST 인 것은 앱 서버가 slack_bridge_call 과 같은 꼴(JSON 본문)로 부르기 때문이다.
   assert.deepEqual(notBlockedPost, [
     "broker_run", "browser_console", "browser_read", "browser_screenshot", "browser_status", "browser_text",
     "delegate_cancel", "delegate_run", "file_url", "knowledge_recall", "link_preview", "me_git_credential_lease", "org_distiller_preview", "org_guide_preview",
     "project_find_by_origin_v6", "recall_route", "repo_check", "repo_discover", "session_project_context_applied",
-    "transfer_export_preview",
+    "slack_bridge_file", "transfer_export_preview",
   ]);
 });
 

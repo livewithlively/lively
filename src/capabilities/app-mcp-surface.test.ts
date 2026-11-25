@@ -1,7 +1,7 @@
 // 앱 토큰의 MCP 도구 표면(#1780 v2.1 R4-M1) — 사양 spec-h8: EXEMPT 배관 도구는 앱 토큰 tools/list 에서 사라지고, 일반 세션은 무회귀.
 //  readonly.test 의 가짜 서버 관례(registerTool 이름만 수집)를 그대로 쓴다 — 무엇이 실제로 등록되나가 이 테스트의 전부.
 import assert from "node:assert/strict";
-import { registerMcpCapabilities } from "./index.js";
+import { registerMcpCapabilities, registry } from "./index.js";
 import { APP_TOOL_EXEMPT } from "../apps/principal.js";
 
 let pass = 0;
@@ -27,8 +27,21 @@ t("앱 토큰: EXEMPT 8종은 tools/list 에서 사라지고 나머지 표면은
   const plain = registered(null);
   const app = registered("browser");
   for (const ex of APP_TOOL_EXEMPT) assert.ok(!app.includes(ex), `앱 토큰엔 ${ex} 가 없어야 한다`);
-  assert.deepEqual(app, plain.filter((n) => !APP_TOOL_EXEMPT.has(n)), "EXEMPT 외엔 차이가 없어야 한다(grant 축소는 핸들러 몫)");
-  assert.equal(plain.length - app.length, [...APP_TOOL_EXEMPT].filter((n) => plain.includes(n)).length, "빠진 개수 = 등록돼 있던 EXEMPT 개수");
+  //  앱만 부르는 도구(mcpAppOnly)는 앱 토큰의 목록에만 있다 — 그것을 빼고 견준다(아래 시험이 따로 본다).
+  const appOnly = new Set([...registry.values()].filter((c) => c.mcpAppOnly).map((c) => c.name));
+  const appRest = app.filter((n) => !appOnly.has(n));
+  assert.deepEqual(appRest, plain.filter((n) => !APP_TOOL_EXEMPT.has(n)), "EXEMPT · 앱 전용 외엔 차이가 없어야 한다(grant 축소는 핸들러 몫)");
+  assert.equal(plain.length - appRest.length, [...APP_TOOL_EXEMPT].filter((n) => plain.includes(n)).length, "빠진 개수 = 등록돼 있던 EXEMPT 개수");
+});
+
+t("앱만 부르는 도구(mcpAppOnly — slack_bridge_file): 앱 토큰의 tools/list 에만 있고 구성원 세션에는 없다", () => {
+  const appOnly = [...registry.values()].filter((c) => c.mcpAppOnly).map((c) => c.name);
+  assert.ok(appOnly.includes("slack_bridge_file"), "슬랙 다리의 파일 읽기는 앱 전용이다");
+  for (const n of appOnly) {
+    assert.ok(registry.get(n)!.expose.mcp, `${n} 는 MCP 도구다`);
+    for (const appId of [undefined, null]) assert.ok(!registered(appId).includes(n), `구성원 세션엔 ${n} 가 없어야 한다`);
+    assert.ok(registered("browser").includes(n), `앱 토큰엔 ${n} 가 있어야 한다(부를 수 있는지는 핸들러 · 앱 도구 게이트가 정한다)`);
+  }
 });
 
 console.log(`\napp-mcp-surface tests: ${pass} passed`);

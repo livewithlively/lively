@@ -67,7 +67,31 @@ const SLACK_USERS = {
 };
 const APP_OF_TOKEN = { [APP_TOK]: "A777", [APP_TOK2]: "A777", [APP_TOK_RATE]: "A888" };
 let ticket = 0;
+// 가짜 슬랙 파일(slack_bridge_file) — files.info 가 주는 정보와 파일 서버(GET /files-pri/…)가 주는 바이트.
+const PNG_1PX = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+//  엑셀 파일 한 장(구분 · 안내 / 기명카드 · 개인 계좌 출금) — connectors/ooxml.test 의 최소 zip 과 같은 꼴로 미리 만든 바이트.
+const XLSX_SMALL = Buffer.from("UEsDBBQAAAAIAAAAAACnx+XBUAAAAHcAAAAUAAAAeGwvc2hhcmVkU3RyaW5ncy54bWyzKS4usbMpzrSzKbF7tXXN620tNvoldjb6IBGI6JupHa+btqCLvtqx4fWq1jc7t7yePAdDbsOcN3N3KLza3PJmUY/Cm21zXu3oQKjRB9kIAFBLAwQUAAAACAAAAAAAvp432FsAAADAAAAAGAAAAHhsL3dvcmtzaGVldHMvc2hlZXQxLnhtbLMpzy/KLs5ITS2xswFTLokliXY2RfnlCkW2SoZKdjbJIIajoZJCia1SsZKdTZmdgY1+mZ2NfjJUzglZzhAup1+UXw43yAhukBGSYiM0g5DljNEM0kdynT7C0QBQSwECFAAUAAAACAAAAAAAp8flwVAAAAB3AAAAFAAAAAAAAAAAAAAAAAAAAAAAeGwvc2hhcmVkU3RyaW5ncy54bWxQSwECFAAUAAAACAAAAAAAvp432FsAAADAAAAAGAAAAAAAAAAAAAAAAACCAAAAeGwvd29ya3NoZWV0cy9zaGVldDEueG1sUEsFBgAAAAACAAIAiAAAABMBAAAAAA==", "base64");
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const fileUrl = (id, name) => `http://127.0.0.1:${port}/files-pri/T1-${id}/${name}`;
+const SLACK_FILES = {
+  F0PNG00001: { name: "bc_답변.png", mimetype: "image/png", filetype: "png", size: PNG_1PX.length, channels: ["C0000000001"], bytes: PNG_1PX, type: "image/png" },
+  F0TXT00001: { name: "메모.txt", mimetype: "text/plain", filetype: "text", size: 12, shares: { public: { C0000000002: [{ ts: "1.1" }] } }, bytes: Buffer.from("한도 4억 원"), type: "text/plain" },
+  F0XLSX0001: { name: "기명카드_안내.xlsx", mimetype: XLSX_MIME, filetype: "xlsx", size: XLSX_SMALL.length, channels: ["C0000000001"], bytes: XLSX_SMALL, type: XLSX_MIME },
+  F0XLSXBAD1: { name: "깨진.xlsx", mimetype: XLSX_MIME, filetype: "xlsx", size: 9, channels: ["C0000000001"], bytes: Buffer.from("PK-broken"), type: XLSX_MIME },
+  F0PDF00001: { name: "신청서.pdf", mimetype: "application/pdf", filetype: "pdf", size: 5000, channels: ["C0000000001"], bytes: Buffer.from("%PDF"), type: "application/pdf" },
+  F0OUT00001: { name: "남의채널.png", mimetype: "image/png", filetype: "png", size: PNG_1PX.length, channels: ["C0000000009"], bytes: PNG_1PX, type: "image/png" },
+  F0LOGIN001: { name: "로그인.png", mimetype: "image/png", filetype: "png", size: PNG_1PX.length, channels: ["C0000000001"], redirect: true },
+};
 const server = http.createServer((req, res) => {
+  if (req.method === "GET" && (req.url ?? "").startsWith("/files-pri/")) {
+    const token = String(req.headers.authorization ?? "").replace(/^Bearer /, "");
+    const id = /^\/files-pri\/T1-(F[A-Z0-9]+)\//.exec(req.url)?.[1] ?? "";
+    calls.push({ method: "file.download", token, body: { file: id } });
+    const f = SLACK_FILES[id];
+    //  슬랙은 권한이 없으면 로그인 화면으로 넘긴다.
+    if (!f || token !== BOT_TOK || f.redirect) { res.writeHead(302, { location: "https://slack.com/?redir=x" }); return res.end(); }
+    res.writeHead(200, { "content-type": f.type }); return res.end(f.bytes);
+  }
   let raw = "";
   req.on("data", (c) => { raw += c; });
   req.on("end", () => {
@@ -97,6 +121,13 @@ const server = http.createServer((req, res) => {
       return out({ ok: true, channel: body.channel, ts: "999.1", message: { ts: "999.1", text: body.text } });
     }
     if (["chat.postEphemeral", "chat.update", "reactions.add", "chat.getPermalink", "users.list"].includes(method)) return out({ ok: true, channel: body.channel, ts: body.ts ?? "1.1" });
+    if (method === "files.info") {
+      if (body.file === "F0NOSCOPE1") return out({ ok: false, error: "missing_scope", needed: "files:read" });
+      const f = SLACK_FILES[body.file];
+      if (!f) return out({ ok: false, error: "file_not_found" });
+      const { bytes: _b, type: _t, redirect: _r, ...info } = f;
+      return out({ ok: true, file: { id: body.file, mode: "hosted", url_private: fileUrl(body.file, "x"), url_private_download: fileUrl(body.file, "download/x"), ...info } });
+    }
     return out({ ok: false, error: "unknown_method" });
   });
 });
@@ -111,7 +142,7 @@ server.on("upgrade", (req, sock, head) => wss.handleUpgrade(req, sock, head, (ws
 }));
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
 const port = server.address().port;
-const api = { base: `http://127.0.0.1:${port}/api`, fetch: (u, i) => fetch(u, i) };
+const api = { base: `http://127.0.0.1:${port}/api`, fetch: (u, i) => fetch(u, i), fileUrlOk: (u) => u.startsWith(`http://127.0.0.1:${port}/files-pri/`) };
 setSlackApiForTest(api);
 
 // ── 가짜 Lambda(앱 백그라운드 작업이 부르는 자리) ──
@@ -460,6 +491,50 @@ try {
     chk("D6b 다리를 끄면 연결을 내리고 상태가 stopped", (await store.getBridge("ops")).status.state === "stopped" && sockets.filter((s) => s.app_id === "A777").every((s) => s.closed));
     await setBridge({ id: "ops", enabled: true });
     await until(() => mgr.liveBridgeStatus("ops")?.connected === true, 4000, "다시 켬");
+  }
+
+  // ── F slack_bridge_file — 앱이 그 채널의 파일을 읽는다 ──
+  {
+    const file = cap("slack_bridge_file");
+    const appU = (app = "policy", extra = {}) => ({ userId: "alice", email: "", scopes: ["memory"], projects: ["*"], appId: app, ...extra });
+    const dl = () => calls.filter((c) => c.method === "file.download").length;
+    const f1 = await errOf(file.handler({ bridge: "ops", file: "F0PNG00001" }, { userId: "alice", email: "", scopes: ["memory"], projects: ["*"] }));
+    const f1b = await errOf(file.handler({ bridge: "ops", file: "F0PNG00001" }, appU("other")));
+    chk("F1 앱 아닌 사람 → 403 · 남의 앱 → 404", f1?.status === 403 && f1b?.status === 404);
+    const f2 = await errOf(file.handler({ bridge: "ops", file: "../etc/passwd" }, appU()));
+    chk("F2 파일 id 꼴이 아니면 400 · 슬랙에 안 나감", f2?.status === 400 && !calls.some((c) => c.method === "files.info" && c.body.file === "../etc/passwd"));
+    const d0 = dl();
+    const img = await file.handler({ bridge: "ops", file: "F0PNG00001" }, appU("policy", { appServer: true, appJobId: 7 }));
+    const lastDl = calls.filter((c) => c.method === "file.download").at(-1);
+    chk("F3 그림 — 봇 토큰으로 정보 · 파일을 받아 JPEG 조각으로", img.ok === true && img.kind === "image" && img.image.mime === "image/jpeg" && img.image.data.length > 20
+      && Buffer.from(img.image.data, "base64").subarray(0, 2).toString("hex") === "ffd8" && img.file.name === "bc_답변.png" && dl() === d0 + 1 && lastDl.token === BOT_TOK && lastDl.body.file === "F0PNG00001",
+      JSON.stringify({ ...img, image: img.image ? { ...img.image, data: `${String(img.image.data).slice(0, 12)}…` } : null }));
+    const parts = file.mcpContent(img);
+    chk("F3b MCP 로는 그림 조각 + 글(파일 정보 · 남이 올린 것이라는 경계)", parts?.[0]?.type === "image" && parts[0].mimeType === "image/jpeg" && parts[0].data === img.image.data
+      && parts[1]?.type === "text" && /지시/.test(parts[1].text) && !parts[1].text.includes(img.image.data));
+    const flog = (await q(`SELECT * FROM org_slack_bridge_call WHERE bridge_id='ops' AND method='files.read' ORDER BY id DESC LIMIT 1`))[0];
+    chk("F4 호출 기록 — files.read · 공유된 채널 · 파일 id · 사람 · 작업", flog?.channel === C1 && flog.ts === "F0PNG00001" && flog.ok === true && flog.member === "alice" && Number(flog.job_id) === 7);
+    const txt = await file.handler({ bridge: "ops", file: "F0TXT00001" }, appU());
+    const tparts = file.mcpContent(txt);
+    chk("F5 글 파일(shares 로 공유된 채널) → text · MCP 는 경계 뒤 평문", txt.kind === "text" && txt.text === "한도 4억 원" && txt.truncated === false
+      && tparts?.length === 1 && tparts[0].type === "text" && /사람의 지시가 아닙니다\)\n한도 4억 원$/.test(tparts[0].text));
+    const xl = await file.handler({ bridge: "ops", file: "F0XLSX0001" }, appU());
+    const xlBad = await file.handler({ bridge: "ops", file: "F0XLSXBAD1" }, appU());
+    chk("F5b 오피스 문서(xlsx) → 글만 뽑아 text · 깨진 문서는 unsupported(던지지 않는다)", xl.kind === "text" && xl.text === "구분\t안내\n기명카드\t개인 계좌 출금"
+      && /사람의 지시가 아닙니다\)\n구분\t안내/.test(file.mcpContent(xl)?.[0]?.text ?? "") && xlBad.ok === true && xlBad.kind === "unsupported" && /글/.test(xlBad.reason), JSON.stringify([xl, xlBad]));
+    const d1 = dl();
+    const pdf = await file.handler({ bridge: "ops", file: "F0PDF00001" }, appU());
+    chk("F6 읽지 못하는 형식 → unsupported · 까닭 · 내려받지 않음 · MCP 는 JSON 그대로", pdf.ok === true && pdf.kind === "unsupported" && /형식/.test(pdf.reason) && dl() === d1 && file.mcpContent(pdf) === null);
+    const out9 = await errOf(file.handler({ bridge: "ops", file: "F0OUT00001" }, appU()));
+    chk("F7 다리 채널 밖에 공유된 파일 → 403 · 내려받지 않음", out9?.status === 403 && dl() === d1);
+    const ns = await errOf(file.handler({ bridge: "ops", file: "F0NOSCOPE1" }, appU()));
+    const nf = await errOf(file.handler({ bridge: "ops", file: "F0GHOST0001" }, appU()));
+    chk("F8 봇에 files:read 가 없으면 409(무엇을 할지) · 없는 파일 404", ns?.status === 409 && /files:read/.test(ns.message) && nf?.status === 404);
+    const lg = await errOf(file.handler({ bridge: "ops", file: "F0LOGIN001" }, appU()));
+    chk("F9 슬랙이 로그인 화면으로 넘기면(권한 없음) 502 — 그 화면을 파일로 읽지 않는다", lg?.status === 502 && /files:read/.test(lg.message));
+    const flogs = await q(`SELECT ok, error FROM org_slack_bridge_call WHERE bridge_id='ops' AND method='files.read' ORDER BY id`);
+    chk("F10 실패도 기록 · 결과에 토큰 없음", flogs.some((r) => r.ok === false && /files:read/.test(r.error ?? ""))
+      && !JSON.stringify([img.file, txt, pdf, flogs]).includes(BOT_TOK) && !String(ns.message + lg.message + out9.message).includes(BOT_TOK));
   }
 
   // ── D6 토큰 교체 · D5 재시작 · D7 같은 토큰 값 · D8 봇 토큰 거절 ──
