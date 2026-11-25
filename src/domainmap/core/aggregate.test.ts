@@ -23,6 +23,11 @@
 // 16 | 합의 rename + 그 목적지(Q) 아래 A 파일              | [u]                  | A 는 renamedTargets 스킵(new_dirs 안 늠, noop 도 아님)
 // 17 | 같은 rename 클러스터 중복 입력                      | [u]                  | R 1건만(emittedRename dedup)
 // 18 | unitPaths 에 비문자열/'' 섞임                       | [u, '', 42]          | 무시(문자열만 필터) — #2와 같은 방어 계열
+// [contentChanged — 구조 변경 없이 안의 파일이 바뀐 기존 unit(refresh 가 content_changed_at 을 올리는 대상)]
+// 19 | M·A·D 가 서로 다른 기존 unit 안 / M 이 어느 unit 에도 미소유 | [u, v, w, x] | u·v·w 만(x 와 미소유 경로 없음)
+// 20 | 합의 rename(u→Q) 파일들 + u 안 남은 파일 수정 M     | [u]                  | 이동 파일은 제외, M 은 새 경로 Q 로 보고
+// 21 | unit 안 하위경로 개명(R, 합의 rename 아님)          | [u]                  | u (파일 개명도 내용 변경)
+// 22 | 신규 dir 추가(A) 만                                  | [u]                  | [] — 새 unit 후보는 내용 변경이 아니다
 import assert from "node:assert/strict";
 import { aggregateFileChanges } from "./aggregate.js";
 
@@ -214,6 +219,44 @@ t("#18 unitPaths 에 ''/숫자 섞임 → 문자열 unit 만 유효", () => {
   const r = aggregateFileChanges([A("src/mod/x.ts")], ["src/mod", "", 42 as unknown as string]);
   assert.equal(r.summary.noop_in_existing, 1);
   assert.deepEqual(r.unitChanges, []);
+});
+
+// 19. 내용 변경 집합 — 기존 unit 안의 M·A·D 만, 같은 unit 은 한 번, 미소유·무변경 unit 은 빠진다.
+t("#19 M·A·D 가 닿은 기존 unit 만 contentChanged", () => {
+  const r = aggregateFileChanges(
+    [M("src/u/a.ts"), M("src/u/b.ts"), A("src/v/new.ts"), D("src/w/old.ts"), M("README.md")],
+    ["src/u", "src/v", "src/w", "src/x"],
+  );
+  assert.deepEqual([...r.contentChanged].sort(), ["src/u", "src/v", "src/w"]);
+});
+
+// 20. 모듈 통째 이동에 실린 파일은 이동 자체라 제외. 같은 diff 의 남은 파일 수정은 이동 뒤 경로로 보고한다
+//  (refresh 는 rename 을 먼저 적용하고 그 경로로 갱신한다).
+t("#20 합의 rename 파일은 제외 · 같은 owner 의 M 은 새 경로로", () => {
+  const r = aggregateFileChanges(
+    [R("src/old/a.ts", "src/new/a.ts", 90), R("src/old/b.ts", "src/new/b.ts", 90), M("src/old/c.ts")],
+    ["src/old"],
+  );
+  assert.deepEqual(r.unitChanges, [{ status: "R", from: "src/old", to: "src/new", score: 90 }]);
+  assert.deepEqual(r.contentChanged, ["src/new"]);
+});
+
+t("#20b 합의 rename 만 있으면 contentChanged 는 비어 있다", () => {
+  const r = aggregateFileChanges([R("src/old/a.ts", "src/new/a.ts", 90), R("src/old/b.ts", "src/new/b.ts", 90)], ["src/old"]);
+  assert.deepEqual(r.contentChanged, []);
+});
+
+// 21. unit 안 파일 개명(suffix 불일치 → 합의 rename 아님)도 그 unit 의 내용 변경이다.
+t("#21 unit 안 하위경로 개명 → 그 unit", () => {
+  const r = aggregateFileChanges([R("src/u/a.ts", "src/u/sub/b.ts", 60)], ["src/u"]);
+  assert.deepEqual(r.contentChanged, ["src/u"]);
+});
+
+// 22. 신규 dir 은 새 unit 후보(A)로 나갈 뿐 기존 unit 의 내용 변경이 아니다.
+t("#22 신규 dir 추가만 → contentChanged 비어 있음", () => {
+  const r = aggregateFileChanges([A("src/fresh/x.ts")], ["src/u"]);
+  assert.deepEqual(r.unitChanges, [{ status: "A", path: "src/fresh" }]);
+  assert.deepEqual(r.contentChanged, []);
 });
 
 console.log(`\n${pass} passed`);
