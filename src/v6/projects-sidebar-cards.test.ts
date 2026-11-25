@@ -515,7 +515,7 @@ test("D10 배선(격리 리뷰 반영): 첫 착지 후보 끝에 「초안」 ·
   assert.match(BOARD, /text: draftScope \? \(scopeRaw\.length \? PJV_NO_DRAFTS_FILTERED : PJV_NO_DRAFTS\) : mineOnly \?/);
 });
 
-test("D11 ★「초안 보기」 토글 값 — 기본 보임 · 끄면 '0' 하나만 · 켜면 지운다 · 저장소가 없거나 던져도 기본값 · 끄면 초안만 뺀다", async () => {
+test("D11 ★「초안 보기」 토글 값 — 기본 숨김(#5794) · 켜면 '1' 하나만 · 끄면 지운다 · 옛 '0' 도 숨김 · 저장소가 없거나 던져도 기본값 · 끄면 초안만 뺀다", async () => {
   const m = await loadDraft();
   const g = globalThis as unknown as { localStorage?: unknown };
   const saved = g.localStorage;
@@ -523,20 +523,20 @@ test("D11 ★「초안 보기」 토글 값 — 기본 보임 · 끄면 '0' 하�
     const store = new Map<string, string>();
     g.localStorage = { getItem: (k: string) => (store.has(k) ? store.get(k)! : null), setItem: (k: string, v: string) => { store.set(k, String(v)); }, removeItem: (k: string) => { store.delete(k); } };
     assert.equal(m.DRAFTS_SHOWN_KEY, "pjv:showDrafts");
-    assert.equal(m.draftsShown(), true, "기본은 보임");
-    m.setDraftsShown(false);
-    assert.equal(store.get("pjv:showDrafts"), "0");
-    assert.equal(m.draftsShown(), false);
+    assert.equal(m.draftsShown(), false, "기본은 숨김");
     m.setDraftsShown(true);
-    assert.equal(store.has("pjv:showDrafts"), false, "켜면 키를 지운다 — 남는 것은 «숨김» 하나뿐");
+    assert.equal(store.get("pjv:showDrafts"), "1");
     assert.equal(m.draftsShown(), true);
-    store.set("pjv:showDrafts", "1");
-    assert.equal(m.draftsShown(), true, "'0' 이 아니면 보임");
+    m.setDraftsShown(false);
+    assert.equal(store.has("pjv:showDrafts"), false, "끄면 키를 지운다 — 남는 것은 «보임» 하나뿐");
+    assert.equal(m.draftsShown(), false);
+    store.set("pjv:showDrafts", "0");
+    assert.equal(m.draftsShown(), false, "옛 값 '0'(기본이 보임이던 때 끈 사람)도 숨김");
     g.localStorage = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => { throw new Error("blocked"); } };
-    assert.equal(m.draftsShown(), true, "읽다 던지면 기본값");
-    assert.doesNotThrow(() => m.setDraftsShown(false), "쓰다 던져도 조용히 넘어간다");
+    assert.equal(m.draftsShown(), false, "읽다 던지면 기본값");
+    assert.doesNotThrow(() => m.setDraftsShown(true), "쓰다 던져도 조용히 넘어간다");
     g.localStorage = undefined;
-    assert.equal(m.draftsShown(), true, "저장소가 없으면 기본값");
+    assert.equal(m.draftsShown(), false, "저장소가 없으면 기본값");
   } finally { g.localStorage = saved; }
   const rows = [{ id: 1, draft: true, status: "todo" }, { id: 2, draft: false, status: "todo" }, { id: 3, draft: true, status: "done" }, { id: 4 }];
   assert.deepEqual(m.withDraftToggle(rows, true).map((r: { id: number }) => r.id), [1, 2, 3, 4]);

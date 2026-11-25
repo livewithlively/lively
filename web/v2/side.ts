@@ -2312,7 +2312,7 @@ function renderProjects(): void {
   const me = meId();
   let invitedN = 0;
   let mineN = 0;
-  //  #5522 — 「전체」 · 「기타」 · 리스트 수는 보드의 「초안 보기」 토글을 따른다(켜짐 = 초안도 센다, 기본). 「초안」 줄은 늘 초안 전부를 센다.
+  //  #5522 — 「전체」 · 「기타」 · 리스트 수는 보드의 「초안 보기」 토글을 따른다(켜짐 = 초안도 센다 · 기본은 꺼짐 #5794). 「초안」 줄은 늘 초안 전부를 센다.
   const showDrafts = draftsShown();
   for (const p of data.projects) {
     if (isArchivedProj(p) || isTrashedProj(p) || p.status_category === 'done') continue;

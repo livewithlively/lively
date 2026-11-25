@@ -375,7 +375,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     personFace(meId, 'pjv-ava', '나'), el('span', { class: 'pjv-mine-btn-label', text: '내 항목' }));
   // '완료 표시' — 닫힌(완료) 프로젝트/태스크 노출 스위치 팝오버.
   const closedBtn = iconBtn('pjv-closed-btn', '완료된 항목 표시', pjvTbIcon('check'));
-  // '초안 보기'(#5522, 상민 2026-11-16 «위쪽에 토글 하나 두고 초안 안 볼지 볼지 고르게 · 디폴트는 초안 봄») — 글 + 작은 스위치.
+  // '초안 보기'(#5522, 상민 2026-11-16 «위쪽에 토글 하나 두고 초안 안 볼지 볼지 고르게») — 글 + 작은 스위치. 기본은 꺼짐(#5794).
   //  끄면 초안이 이 보드의 모든 뷰 · 묶음 · 수에서 빠진다(셸 [프로젝트] 사이드바 수도 같은 값을 따른다 — lib/proj-draft).
   //  「초안」 스코프에선 숨긴다 — 거기선 토글과 상관없이 초안을 본다.
   const draftSw = el('span', { class: 'pjv-switch', 'aria-hidden': 'true' }, el('span', { class: 'pjv-switch-knob' }));
