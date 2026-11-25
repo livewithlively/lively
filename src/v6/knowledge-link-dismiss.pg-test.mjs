@@ -22,8 +22,11 @@
 //   C14 관리기 링크를 반대 방향으로 해제해도 해제된다(경고엔 방향이 없다)
 //   C15 반려의 링크 해제 감사는 호출 채널을 남긴다
 //   C16 관리기 링크와 반대 방향 사람 링크가 함께 있으면 경고의 links 에 두 방향이 다 실리고, 각 방향을 해제해야 경고가 사라진다
-//   X2  반려한 사람이 볼 수 없는 지식이 낀 쌍은 발견만 반려하고 관리기 링크는 그대로 둔다(링크 해제와 같은 문턱)
-//   X1  보고자가 볼 수 없는 지식과의 모순은 발견만 저장하고 링크를 만들지 않는다 · 응답에 링크 여부가 없다(없는 이름과 같은 모양)
+//   X2  반려한 사람이 볼 수 없는 지식이 낀 쌍은(거는 끝이든 받는 끝이든) 발견만 반려하고 관리기 링크는 그대로 둔다(링크 해제와 같은 문턱)
+//   X1  보고자가 볼 수 없는 지식과의 모순은(거는 끝이든 받는 끝이든) 발견만 저장하고 링크를 만들지 않는다 · 응답에 링크 여부가 없다(없는 이름과 같은 모양)
+//   X3  관리기 링크는 정규 방향(a=least → b=greatest)으로 걸리고 knowledge_link 와 같은 비대칭 문턱을 탄다 — 거는 끝(a)은 쓰기 게이트
+//       (세션 주입 문구는 관리자만), 받는 끝(b)은 곁가지 게이트(공개범위만). 비관리자도 주입 문구를 받는 끝으로는 잇고, 거는 끝이면 발견만
+//   X4  반려의 링크 해제도 같은 비대칭 — 비관리자는 주입 문구가 받는 끝인 링크만 해제하고, 관리자는 거는 끝이어도 해제한다
 //   B5  INSERT 가 body_updated_at 을 실으면 그 값을 둔다(가져오기·되살리기)
 //   P6  단건 승인 — 낡은 조치는 result=stale, 적용 오류는 result=failed 로 열린 채
 //   P5  단건 승인(apply)이 적용 도중 반려되면 accepted 로 덮지 않는다 · 적용되면 사람이 쓴 처리 메모가 남는다 · 응답에 적용 결과(result)
@@ -342,20 +345,25 @@ try {
   chk("S1 knowledge_get 응답의 links.superseded", gs1.ok && gs1.v.knowledge.links?.superseded?.length === 2, show(gs1.ok ? gs1.v.knowledge.links : gs1));
 
   // ── V 공개범위 — 지식 축을 켜고 members(대상 없음)로 잠근다 ──
-  const [W1, W2, S5, W3] = [k("w1"), k("w2"), k("s5"), k("w3")];
-  for (const n of [W1, W2, S5, W3]) await mk(n);
+  const [W1, W2, S5, W3, W0] = [k("w1"), k("w2"), k("s5"), k("w3"), k("w0")];
+  for (const n of [W1, W2, S5, W3, W0]) await mk(n);
   await kst.linkKnowledge(W1, W2, "contradicts", { actor: ME, source: "web" });
   await kst.linkKnowledge(S1, S5, "related", { actor: ME, source: "web" });
   await kst.setKnowledgeLifecycle(S5, "superseded", { actor: ME, source: "web" }, { supersededBy: S3 });
-  await q(`UPDATE knowledge SET visibility='members' WHERE name = ANY($1::text[])`, [[W2, S3, S5, W3]]);
+  await q(`UPDATE knowledge SET visibility='members' WHERE name = ANY($1::text[])`, [[W2, S3, S5, W3, W0]]);
   await setVisAxes({ knowledge: true });
   invalidateVisibilityCache();
   const MX = await mstore.upsertManager({ key: `${TAG}-mx`, kind: "contradiction", enabled: true }, ME, "web");
+  //  관리기 링크의 거는 끝(from)은 쌍의 least, 받는 끝(to)은 greatest 다 — 안 보이는 쪽을 두 끝에 하나씩 둔다.
+  const [pw13, pw01] = [await pairOf(W1, W3), await pairOf(W1, W0)];
+  chk("X1 전제: 안 보이는 W3 은 받는 끝, W0 은 거는 끝", pw13.a === W1 && pw13.b === W3 && pw01.a === W0 && pw01.b === W1, show({ pw13, pw01 }));
   const X1h = await attempt(() => report.handler({ manager_key: MX.key, target_ref: W1, dedup_key: W3, severity: "warn", summary: "s" }, user(OTHER), web(OTHER)));
+  const X1f = await attempt(() => report.handler({ manager_key: MX.key, target_ref: W1, dedup_key: W0, severity: "warn", summary: "s" }, user(OTHER), web(OTHER)));
   const X1n = await attempt(() => report.handler({ manager_key: MX.key, target_ref: W1, dedup_key: k("없음"), severity: "warn", summary: "s" }, user(OTHER), web(OTHER)));
   const xLinks = await q(`SELECT 1 FROM knowledge_link WHERE origin=$1`, [`manager:${MX.key}`]);
-  chk("X1 볼 수 없는 지식과의 모순은 링크를 만들지 않는다 · 발견은 저장", X1h.ok && xLinks.length === 0 && (await findingRows(MX.id, W1, W3)).length === 1,
-    show({ X1h, xLinks }));
+  chk("X1 볼 수 없는 지식과의 모순은 링크를 만들지 않는다(받는 끝 · 거는 끝 모두) · 발견은 저장",
+    X1h.ok && X1f.ok && xLinks.length === 0 && (await findingRows(MX.id, W1, W3)).length === 1 && (await findingRows(MX.id, W0, W1)).length === 1,
+    show({ X1h, X1f, xLinks }));
   chk("X1 응답은 안 보이는 이름과 없는 이름이 같은 모양(링크 여부 없음)",
     X1h.ok && X1n.ok && show(Object.keys(X1h.v).sort()) === show(Object.keys(X1n.v).sort()) && X1h.v.result === X1n.v.result && !("linked" in X1h.v),
     show({ X1h, X1n }));
@@ -365,9 +373,17 @@ try {
   const lx2a = await linkRows(W1, W3);
   const rx2 = await attempt(() => resolveCap.handler({ id: Number(fx2.id), state: "rejected" }, user(OTHER), web(OTHER)));
   const lx2b = await linkRows(W1, W3);
-  chk("X2 못 보는 지식이 낀 쌍의 반려는 발견만 반려하고 링크는 그대로",
+  chk("X2 못 보는 지식이 낀 쌍의 반려는 발견만 반려하고 링크는 그대로(받는 끝)",
     lx2a.length === 1 && lx2a[0].dismissed_at === null && rx2.ok && rx2.v.links_dismissed === 0 && (await findingById(fx2.id)).state === "rejected" && lx2b[0]?.dismissed_at === null,
     show({ lx2a, rx2: rx2.ok || rx2, lx2b }));
+  await mstore.reportContradiction(MX, { target_kind: "knowledge", target_ref: W1, dedup_key: W0, severity: "warn", summary: "s" });
+  const [fx2f] = await findingRows(MX.id, W0, W1);
+  const lx2fa = await linkRows(W0, W1);
+  const rx2f = await attempt(() => resolveCap.handler({ id: Number(fx2f.id), state: "rejected" }, user(OTHER), web(OTHER)));
+  const lx2fb = await linkRows(W0, W1);
+  chk("X2 못 보는 지식이 낀 쌍의 반려는 발견만 반려하고 링크는 그대로(거는 끝)",
+    lx2fa.length === 1 && lx2fa[0].from_name === W0 && rx2f.ok && rx2f.v.links_dismissed === 0 && (await findingById(fx2f.id)).state === "rejected" && lx2fb[0]?.dismissed_at === null,
+    show({ lx2fa, rx2f: rx2f.ok || rx2f, lx2fb }));
   const gw = await kget(W1, OTHER);
   chk("V1 안 보이는 모순 이웃은 경고에서 빠진다", gw.ok && !("contradicts_warning" in gw.v), show(gw.ok ? gw.v.contradicts_warning : gw));
   const vl = await kst.listKnowledgeLinks(S1, OTHER);
@@ -378,6 +394,47 @@ try {
   });
   await setVisAxes({ knowledge: false });
   invalidateVisibilityCache();
+
+  await section("X3", async () => {
+  // ── X3 · X4 주입 문구 — 관리기 링크는 정규 방향(a=least → b=greatest)으로 걸린다. knowledge_link 와 같은 비대칭:
+  //    거는 끝(a)은 쓰기 게이트(주입 문구는 관리자만), 받는 끝(b)은 곁가지 게이트(공개범위만 — 받는 문서는 바뀌지 않는다) ──
+  const member = (id) => ({ userId: id, email: `${id}@x`, scopes: ["memory"], projects: ["*"] });
+  const MI = await mstore.upsertManager({ key: `${TAG}-mi`, kind: "contradiction", enabled: true }, ME, "web");
+  const [XA, XB, XC, XD, XE, XF, XG, XH, XI, XJ, XK, XL] = ["xa", "xb", "xc", "xd", "xe", "xf", "xg", "xh", "xi", "xj", "xk", "xl"].map(k);
+  for (const n of [XA, XB, XC, XD, XE, XF, XG, XH, XI, XJ, XK, XL]) await mk(n);
+  await q(`UPDATE knowledge SET injection='always' WHERE name = ANY($1::text[])`, [[XB, XC, XE, XH, XI, XK]]);
+  const pairs = [[XA, XB], [XC, XD], [XE, XF], [XG, XH], [XI, XJ], [XK, XL]];
+  const ord = [];
+  for (const [x, y] of pairs) ord.push(await pairOf(y, x));
+  chk("X3 전제: 쌍의 거는 끝(least)", ord.every((p, i) => p.a === pairs[i][0] && p.b === pairs[i][1]), show(ord));
+  const dir = async (x, y) => (await linkRows(x, y)).map((l) => [l.from_name, l.to_name, l.dismissed_at === null]);
+  const repBy = (who, x, y) => attempt(() => report.handler({ manager_key: MI.key, target_ref: x, dedup_key: y, severity: "warn", summary: "s" }, who, web(who.userId)));
+  //  보고 방향은 거꾸로 준다 — 방향은 서버가 정한다
+  const x3a = await repBy(member(OTHER), XB, XA);
+  chk("X3 비관리자 — 주입 문구가 받는 끝이면 링크를 건다", x3a.ok && show(await dir(XA, XB)) === show([[XA, XB, true]]), show({ x3a, l: await dir(XA, XB) }));
+  const x3b = await repBy(member(OTHER), XD, XC);
+  chk("X3 비관리자 — 주입 문구가 거는 끝이면 링크 없이 발견만", x3b.ok && (await linkRows(XC, XD)).length === 0 && (await findingRows(MI.id, XC, XD)).length === 1,
+    show({ x3b, l: await dir(XC, XD) }));
+  const x3c = await repBy(user(ME), XF, XE);
+  chk("X3 관리자 — 주입 문구가 거는 끝이어도 링크를 건다", x3c.ok && show(await dir(XE, XF)) === show([[XE, XF, true]]), show({ x3c, l: await dir(XE, XF) }));
+  //  X4 — 관리기 링크를 특권 경로로 만든 뒤 반려한다
+  for (const [x, y] of [[XG, XH], [XI, XJ], [XK, XL]]) {
+    await mstore.reportContradiction(MI, { target_kind: "knowledge", target_ref: y, dedup_key: x, severity: "warn", summary: "s" });
+  }
+  const rejBy = async (who, x, y) => {
+    const [f] = await findingRows(MI.id, x, y);
+    return attempt(() => resolveCap.handler({ id: Number(f.id), state: "rejected" }, who, web(who.userId)));
+  };
+  const x4a = await rejBy(member(OTHER), XG, XH);
+  chk("X4 비관리자 — 주입 문구가 받는 끝이면 반려가 관리기 링크를 해제한다", x4a.ok && x4a.v.links_dismissed === 1 && show(await dir(XG, XH)) === show([[XG, XH, false]]),
+    show({ x4a, l: await dir(XG, XH) }));
+  const x4b = await rejBy(member(OTHER), XI, XJ);
+  chk("X4 비관리자 — 주입 문구가 거는 끝이면 발견만 반려하고 링크는 그대로", x4b.ok && x4b.v.links_dismissed === 0 && x4b.v.finding?.state === "rejected" && show(await dir(XI, XJ)) === show([[XI, XJ, true]]),
+    show({ x4b, l: await dir(XI, XJ) }));
+  const x4c = await rejBy(user(ME), XK, XL);
+  chk("X4 관리자 — 주입 문구가 거는 끝이어도 반려가 링크를 해제한다", x4c.ok && x4c.v.links_dismissed === 1 && show(await dir(XK, XL)) === show([[XK, XL, false]]),
+    show({ x4c, l: await dir(XK, XL) }));
+  });
 
   await section("P·M·A", async () => {
   // ── P 발견 적용(한 트랜잭션) ──
