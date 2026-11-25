@@ -34,10 +34,12 @@ import { assertNoContentSecrets, assertNoSecretKeys } from "../content-secrets.j
 import { checkWriting, isHumanWriter, rejectWriting } from "../writing-style.js";
 import { assertExpectedVersion, assertStyleFixSafe, lastContentWrite, rethrowVersionConflict, versionConflictError } from "./save-guard.js";
 import { getKnowledgeVersion } from "../../v6/knowledge-store.js";   // 판 대조 — 수정 제안 접수 직전에 다시 본다
-import { knowledgeAnchors, type AnchorCache } from "./style-resolve.js";
+import { autoSplitBody, knowledgeAnchors, markSplitChild, splitLegacyOf, splitParentMeta, type AnchorCache } from "./style-resolve.js";
 import { allowedAnchorDates, countHomePaths, normalizeHomePaths } from "../../v6/writing-resolve.js";
 import { ruleLevel } from "../../org/policies/writing-format.js";
 import { getWritingFormat } from "../../org/store/runtime-config.js";
+import { slugify } from "../../v6/knowledge-common.js";
+import { itemsPool } from "../../db/client.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -145,8 +147,8 @@ export const knowledgeSave: Capability = {
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
     "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라. " +
-    "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라. " +
-    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. 위반마다 style.findings 의 fix 에 고치는 법이 있고, 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓴다. ask_human 이 붙은 위반(서버도 사실을 찾지 못한 것)만 사람에게 확인한 뒤 고치고, 나머지는 묻지 않고 고친다. 에이전트가 보낸 글의 개인 홈 경로는 서버가 $HOME 으로 바꾼다(응답 home_paths).",
+    "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라. 단 본문 길이(body_length) 거부는 서버가 자동으로 나누지 못한 경우에만 오며, 본문을 줄여 다시 보내지 말고 메시지의 분리 절차(절을 원문 그대로 새 지식으로 옮기고 원래 자리를 링크로 바꾸기)를 따르라. " +
+    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. 위반마다 style.findings 의 fix 에 고치는 법이 있고, 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓴다. ask_human 이 붙은 위반(서버도 사실을 찾지 못한 것)만 사람에게 확인한 뒤 고치고, 나머지는 묻지 않고 고친다. 에이전트가 보낸 글의 개인 홈 경로는 서버가 $HOME 으로 바꾸고(응답 home_paths), 본문이 상한을 넘으면 서버가 절을 원문 그대로 하위 지식으로 나눈다(응답 split).",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -217,6 +219,7 @@ export const knowledgeSave: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSaveInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const splitLegacy = splitLegacyOf(input);
     // #4501 평문 시크릿 차단 — 맨 앞(어떤 조회·게이트보다 먼저). edit 의 old 는 «지금 본문» 이라 건너뛴다(지우는 편집을 막지 않게).
     assertNoContentSecrets(input, new Set(["edits.*.old"]));
     // #1442 짧은 메타 필드 조정 — **맨 앞에서 한 번**. 아래 경로 전체(인입 게이트·리비전 제안·store)가
@@ -276,6 +279,9 @@ export const knowledgeSave: Capability = {
 
     // ── #783 인입 허용선 게이트 — 정책 규칙 0개면 create=auto·update=auto(현행과 100% 동일). ──
     const gate = await resolveKnowledgeGate(input, ctx, { nameResolved: true });
+    // 분리 하위 지식은 새로 만들 때만 저장한다 — 이름을 고른 뒤 같은 이름이 생겼으면(동시 분리 등) 남의 지식을 덮지 않고 실패한다.
+    //  그래야 분리 실패의 롤백이 이 호출이 만든 행만 지운다.
+    if (splitLegacy != null && !gate.isCreate) throw new HttpError(409, `분리 하위 지식 이름 '${gate.name}' 이(가) 이미 있습니다 — 덮지 않았습니다.`);
     //  외부 미러는 어떤 저장 모드든(replace 포함) 다음 재싱크가 덮는다 — 쓰기 전에 거절(mirror-guard.ts).
     //   edit·append 의 provenance 가드보다 앞이라, 좌표가 있는 미러는 이 문구로 거절된다.
     const mirrorDenied = denyMirrorContentWrite(gate.before, "save");
@@ -293,7 +299,7 @@ export const knowledgeSave: Capability = {
     const isEdit = input.mode === "edit";
     let appendBase: string | null = null;
     //  human 은 형식 정리 저장(style_fix)의 본인 판정 몫이고(assertStyleFixSafe — 웹 로그인 세션만), humanWriter 는 웹 화면 요청까지
-    //   사람으로 본다(isHumanWriter(user, ctx)) — 형식 판정·홈 경로 치환은 사람이 웹 화면에서 쓴 글에 걸지 않는다.
+    //   사람으로 본다(isHumanWriter(user, ctx)) — 형식 판정·홈 경로 치환·길이 분리는 사람이 웹 화면에서 쓴 글에 걸지 않는다.
     const human = isHumanWriter(user);
     const humanWriter = isHumanWriter(user, ctx);
     //  외부 관찰 기록인지는 저장된 행으로만 본다 — 입력 provenance 로 판정을 비껴가지 않게(checkWriting observed 와 같은 근거).
@@ -302,7 +308,8 @@ export const knowledgeSave: Capability = {
     //  조직이 그 규칙을 켰을 때만, 이번 저장이 보낸 글(replace 전문·append 조각·edit 의 new)에만 건다. 손대지 않은 기존
     //  본문까지 바꾸는 것은 형식 정리 저장(style_fix)뿐이다. 사람의 웹 편집은 쓴 그대로 둔다.
     const writingFmt = await getWritingFormat();
-    const homeFix = !humanWriter && !observedSave && writingFmt.enabled && writingFmt.apply_to.includes("knowledge")
+    // 분리가 옮기는 하위 지식은 원문 그대로여야 한다 — 이번 저장이 보내지 않은 기존 절이다.
+    const homeFix = !humanWriter && !observedSave && splitLegacy == null && writingFmt.enabled && writingFmt.apply_to.includes("knowledge")
       && ruleLevel(writingFmt, "local_path") !== "off";
     let homePaths = 0;
     const fixHome = (text: string): string => {
@@ -391,7 +398,43 @@ export const knowledgeSave: Capability = {
     // 서술 형식 — 최종 제목·본문을 조직 형식에 비춰 본다. reject 규칙에 **이번 저장이 새로 만든** 위반이 있으면 받지 않는다.
     //  판정이 서버에 있으므로 클라이언트(훅·키트) 버전과 무관하게 걸린다. 기존 문서에 원래 있던 위반은 거부 사유가 아니다 —
     //  그걸 막으면 깨끗한 조각을 붙이는 append 까지 전부 422 가 되고, 조각으로는 본문 위반을 고칠 수 없다.
-    const { info, rejects, guide } = await checkWriting("knowledge",
+    const proposed = !gate.isCreate && gate.update === "stage";
+    // 본문 길이 분리 자격 — 판정(judge)이 길이 위반을 사람 확인으로 둘지(canSplit)에 쓰므로 판정 앞에서 정한다. 조직이 길이를
+    //  거부 규칙으로 두고 에이전트 저장이 상한을 넘을 때만 본다. forbidden 은 옮긴 사본이 원래 지식과 다르게 공개·검색될 수 있거나
+    //  저장 자체가 막히는 경우다 — 그때는 직접 나누는 절차도 안내하지 않고 사람에게 묻게 한다.
+    type SplitBlock = { reason: string; forbidden: boolean };
+    let splitTarget: { category: string; type: string } | null = null;
+    const splitBlockOf = async (): Promise<SplitBlock | null> => {
+      const no = (reason: string): SplitBlock => ({ reason, forbidden: true });
+      if (observedSave || input.is_folder === true) return no("외부 미러·폴더");
+      if (proposed) return no("수정 제안(검토 대기)으로 접수되는 저장");
+      if (gate.isCreate ? gate.create !== "auto" : gate.update === "drop") return no("인입 허용선 정책상 그대로 저장되지 않는 지식");
+      // 옮긴 지식은 active 로 생긴다 — 검토 대기 초안·보관·대체된 지식의 내용을 검색되는 지식으로 꺼내지 않는다.
+      if (input.lifecycle === "pending" || (gate.before && gate.before.lifecycle !== "active")) return no("활성 지식이 아님(검토 대기·보관·대체)");
+      if (derivedIds.length) return no("자료에서 증류한 지식(공개범위가 자료를 따른다)");
+      if (input.searchable === false) return no("검색 제외 지식");
+      const stamped = await sessionStampListId(ctx?.session).catch(() => -1);
+      if (stamped) return no("비공개 프로젝트 세션이거나 그 여부를 확인하지 못함 — 옮긴 지식의 공개범위가 원래 지식과 달라질 수 있다");
+      const meta = gate.before ? await splitParentMeta(gate.before.name) : null;
+      if (gate.before && meta?.visibility !== "open") return no("공개범위가 좁은 지식");
+      // 자료에 이어진 지식은 자료가 좁혀지면 함께 좁혀진다(derived-visibility) — 옮긴 사본은 그 연결이 없어 열린 채 남는다.
+      if (meta?.derived) return no("자료에서 증류한 지식(공개범위가 자료를 따른다)");
+      if (meta && meta.searchable === false && input.searchable !== true) return no("검색 제외 지식");
+      const category = input.category ?? meta?.category ?? null;
+      const type = input.type ?? meta?.type ?? gate.before?.type ?? null;
+      if (!category || !type) return { reason: "분류·유형을 알 수 없음", forbidden: false };
+      const probe = await resolveKnowledgeGate({ title: "본문 분리", body_md: "본문 분리", type, category, provenance: "authored" }, ctx);
+      if (probe.create !== "auto") return no("새 지식이 검토 대기로 저장되는 조직 정책");
+      splitTarget = { category, type };
+      return null;
+    };
+    const lengthOver = !humanWriter && splitLegacy == null && writingFmt.enabled && writingFmt.apply_to.includes("knowledge")
+      && ruleLevel(writingFmt, "body_length") === "reject" && [...saveInput.body_md].length > writingFmt.limits.body_max_chars;
+    const splitBlock = lengthOver
+      ? await splitBlockOf().catch((e: unknown): SplitBlock => ({ reason: e instanceof HttpError ? e.message : "분리 자격을 확인하지 못함", forbidden: true }))
+      : null;
+    const canSplit = lengthOver && !splitBlock;
+    const judge = async () => checkWriting("knowledge",
       { title: input.title ?? gate.before?.title, body: saveInput.body_md },
       {
         // 외부 관찰 기록(observed)인지는 **저장된 행**으로 본다 — 입력 provenance:"observed" 하나로 판정을 건너뛰면 신규든 기존
@@ -401,8 +444,9 @@ export const knowledgeSave: Capability = {
         // 폴더는 본문이 빌 때만 건너뛴다 — is_folder:true 를 실었다는 것만으로 본문까지 판정을 비껴가지 않게.
         //  기존 폴더를 고칠 땐 input.is_folder 가 없을 수 있다 — 그때는 판정하고, 빈 본문엔 본문 규칙이 안 걸려 제목만 본다.
         folder: input.is_folder === true && !String(saveInput.body_md ?? "").trim(),
-        proposed: !gate.isCreate && gate.update === "stage",
-        before: gate.before ? { title: gate.before.title, body: gate.before.body_md } : null,
+        proposed,
+        before: gate.before ? { title: gate.before.title, body: gate.before.body_md }
+          : splitLegacy != null ? { title: null, body: splitLegacy } : null,
         human: humanWriter,
         // 시점 표현 줄의 기준 날짜 — 이번 저장에 없던 줄은 오늘, 있던 줄은 처음 들어간 판의 날(감사 기록).
         //  형식 정리 저장(style_fix)은 새 사실을 쓰지 않으므로 고친 줄도 오늘로 보지 않고 감사 기록에서 찾는다(읽기와 같은 판정).
@@ -410,9 +454,85 @@ export const knowledgeSave: Capability = {
           name: gate.name, body: saveInput.body_md, updatedAt: gate.before?.updated_at, cache: anchorCache,
           ...(input.style_fix && gate.before ? {} : { beforeBody: gate.before?.body_md ?? null }),
         }).catch(() => []),
+        canSplit,
       });
-    const style = homePaths ? { ...info, home_paths: { replaced: homePaths, note: "개인 홈 경로를 $HOME(Windows 는 %USERPROFILE%)으로 바꿔 저장했습니다." } } : info;
+    let { info: style, rejects, guide } = await judge();
+    const homePathsInfo = homePaths ? { home_paths: { replaced: homePaths, note: "개인 홈 경로를 $HOME(Windows 는 %USERPROFILE%)으로 바꿔 저장했습니다." } } : {};
+    style = { ...style, ...homePathsInfo };
+
+    // 본문 길이 — 에이전트 저장이 상한을 넘으면 서버가 원문 그대로 나눈다(writing-split.ts). 새로 넘은 거부뿐 아니라 이미 넘어
+    //  있던 글의 저장도 나눈다. 하위 지식을 먼저 저장하고 원래 지식을 쓰는데, 그 사이 어디서든 실패하면 이번 호출이 만든 하위
+    //  지식을 지운다(rollbackSplit) — 실패한 저장마다 사본이 쌓이지 않게. 원래 지식은 판 대조로 쓴다(나누는 사이 낀 저장을 덮지 않게).
+    let splitChildren: string[] = [];
+    const rollbackSplit = async (): Promise<void> => {
+      const names = splitChildren.reverse();
+      splitChildren = [];
+      for (const n of names) await deleteKnowledge(n, writeCtx).catch((e: unknown) => console.warn(`[knowledge_save] 분리 하위 지식 ${n} 을 지우지 못함: ${(e as Error)?.message ?? e}`));
+    };
+    const runSplit = async () => {
+      const { category, type } = splitTarget!;
+      // 새 지식은 이름을 여기서 정한다 — 옮긴 조각이 원래 지식을 이름으로 가리켜야 한다(upsertKnowledge 의 자동 이름과 같은 규칙).
+      //  그 사이 같은 이름이 생기면 원래 지식 쓰기가 insertOnly 로 실패하고 하위 지식은 지워진다.
+      let parentName = gate.name ?? input.name ?? null;
+      if (!parentName) {
+        const base = slugify(input.title || saveInput.body_md.slice(0, 40));
+        parentName = base;
+        for (let i = 2; (await itemsPool.query(`SELECT 1 FROM knowledge WHERE name=$1`, [parentName])).rowCount; i++) parentName = `${base}-${i}`;
+        input.name = parentName;
+        saveInput = { ...saveInput, name: parentName };
+      }
+      return autoSplitBody({
+        parentName, parentTitle: String(input.title ?? gate.before?.title ?? parentName), body: saveInput.body_md,
+        limit: writingFmt.limits.body_max_chars, category, type,
+      }, {
+        saveChild: async (c) => {
+          const childInput = {
+            name: c.name, title: c.title, body_md: c.body_md, category: c.category, type: c.type,
+            // 새 지식이면 원래 지식이 아직 없다 — 트리 위치는 건너뛰고 본문의 [[링크]] 로 잇는다(대상이 생기면 엣지가 이어진다).
+            ...(gate.before ? { parent_name: c.parent_name } : {}),
+            provenance: c.provenance, change_note: c.change_note,
+          } as KnowledgeSaveInput;
+          markSplitChild(childInput, c.legacyBody);
+          const out = await knowledgeSave.handler(childInput, user, ctx) as { knowledge?: { name: string; lifecycle?: string | null } };
+          if (!out?.knowledge?.name) throw new Error("분리 지식 저장 응답에 이름이 없습니다");
+          splitChildren.push(out.knowledge.name);
+          return { name: out.knowledge.name, lifecycle: out.knowledge.lifecycle ?? null };
+        },
+      });
+    };
+
+    let splitDone = false;
+    let splitSkipped: string | null = splitBlock?.reason ?? null;
+    const bodyOverLimit = ((style as { style?: { findings?: Array<{ rule: string }> } }).style?.findings ?? []).some((f) => f.rule === "body_length");
+    if (bodyOverLimit && canSplit && rejects.every((f) => f.rule === "body_length")) {
+      try {
+        const split = await runSplit();
+        if (split) {
+          saveInput = { ...saveInput, body_md: split.body };
+          ({ info: style, rejects, guide } = await judge());
+          if (rejects.length) {
+            await rollbackSplit();
+            guide = `서버가 본문을 나눠 봤지만 나눈 본문이 아래 사유로 거부돼 옮긴 하위 지식도 지웠습니다. 아무것도 저장하지 않았습니다.\n\n${guide}`;
+          } else {
+            splitDone = true;
+            style = { ...style, ...homePathsInfo, split: { children: split.children, note: "본문이 상한을 넘어 서버가 절을 원문 그대로 하위 지식으로 옮기고 원래 자리를 링크로 바꿨습니다. 옮긴 내용은 children 의 지식에 있습니다." } };
+          }
+        } else {
+          splitSkipped = "본문 구조상 원문 그대로 나눌 계획을 세우지 못함";
+        }
+      } catch (e) {
+        await rollbackSplit();
+        //  내부 오류 문구(DB 등)는 응답에 싣지 않는다 — 호출자에게 의미 있는 거절(HttpError)만 그대로 전한다.
+        splitSkipped = e instanceof HttpError ? e.message : "하위 지식을 저장하지 못함";
+        if (!(e instanceof HttpError)) console.warn(`[knowledge_save] 본문 분리 실패: ${(e as Error)?.message ?? e}`);
+      }
+      if (!splitDone && splitSkipped && rejects.length) guide = `서버가 자동으로 나누지 못했습니다(${splitSkipped}). 아래 절차대로 직접 나누세요.\n\n${guide}`;
+    } else if (bodyOverLimit && splitBlock && rejects.length) {
+      guide = `서버가 이 지식을 나누지 않았습니다(${splitBlock.reason}).\n\n${guide}`;
+    }
     if (rejects.length) throw await rejectWriting("knowledge", gate.name ?? input.name ?? null, input.title ?? gate.before?.title, rejects, guide, ctx);
+    //  거부 없이 저장되는(원래 상한을 넘어 있던) 글을 나누지 못했으면 사유를 응답에 남긴다 — 조용히 넘어가지 않게.
+    if (bodyOverLimit && !splitDone && splitSkipped) style = { ...style, split_skipped: splitSkipped };
 
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로
     //  stringify 해 에이전트에 돌려주므로, 전문을 에코하면 '전문을 컨텍스트에 안 싣는다'는 이 모드의 목적이 무효가 된다.
@@ -427,7 +547,9 @@ export const knowledgeSave: Capability = {
         appended: {
           added_chars: body.length - appendBase.length, added_lines: lineCount(body) - lineCount(appendBase),
           total_chars: body.length, total_lines: lineCount(body), version: rest?.version,
-          note: "본문 끝에 덧붙였습니다(기존 원문 그대로 보존). 응답에 전문은 넣지 않습니다 — 확인이 필요하면 knowledge_get 부분읽기(offset/limit)로 보세요.",
+          note: splitDone
+            ? "덧붙인 뒤 본문이 상한을 넘어 서버가 절을 하위 지식으로 옮겼습니다(split 참고) — 그래서 글자 수가 줄었습니다. 옮긴 내용은 하위 지식에 원문 그대로 있습니다."
+            : "본문 끝에 덧붙였습니다(기존 원문 그대로 보존). 응답에 전문은 넣지 않습니다 — 확인이 필요하면 knowledge_get 부분읽기(offset/limit)로 보세요.",
         },
       };
     };
@@ -478,7 +600,16 @@ export const knowledgeSave: Capability = {
           } : {}),
         };
       } else {
-        const r = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx, { nameResolved: true });
+        //  나눈 저장은 이름을 미리 정했다 — 그 사이 같은 이름이 생겼으면 덮지 않고 실패한다(하위 지식은 지운다).
+        const r = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx,
+          { nameResolved: true, ...(splitDone || splitLegacy != null ? { insertOnly: true } : {}) })
+          .catch(async (e: unknown) => {
+            await rollbackSplit();
+            if (e instanceof KnowledgeExistsError) {
+              throw new HttpError(409, `지식 '${e.knowledgeName}' 이(가) 방금 다른 저장으로 생겼습니다 — 아무것도 저장하지 않았습니다(분리한 하위 지식도 지웠습니다). knowledge_get 으로 그 지식을 보고 다시 저장하세요.`);
+            }
+            throw e;
+          });
         ({ wikilinks, ...knowledge } = r);
         // ── 세션 산출물 스탬핑(#1291 v2) — **신규 생성에만** 건다. ──
         //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
@@ -590,7 +721,10 @@ export const knowledgeSave: Capability = {
       wikilinks = await post?.();
     } else {
       //  판 대조 — 미리 한 대조 뒤에 다른 저장이 끼었으면 쓰는 순간 409(행을 잡고 대조한다). expected_version 이 없으면 종전과 같다.
-      ({ wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx, { nameResolved: true, expectedVersion: input.expected_version })
+      //  나눈 저장은 읽은 판으로 쓴다 — 나누는 사이 낀 저장이 있으면 덮지 않고 409(하위 지식은 지운다).
+      ({ wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx,
+        { nameResolved: true, expectedVersion: input.expected_version ?? (splitDone ? Number(before.version) : undefined) })
+        .catch(async (e: unknown) => { await rollbackSplit(); throw e; })
         .catch(rethrowVersionConflict));
     }
     const wl = wikiLinkInfo(wikilinks);

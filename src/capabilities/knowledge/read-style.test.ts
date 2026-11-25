@@ -249,8 +249,8 @@ await ta("사실이 필요한 규칙도 서버가 사실을 찾았거나 직접 
   const banner = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n\n## ⚠ 정정\n\n범위를 바꿨다." }), on, { anchorsOf })) as Style).style!;
   assert.equal((banner.findings.find((f) => f.rule === "revision_banner") as { ask_human?: true } | undefined)?.ask_human, true, JSON.stringify(banner.findings));
   const long = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n" + "가".repeat(30000) }), on)) as Style).style!;
-  // 본문 길이는 어디서 나눌지가 사실 판단이라 사람에게 묻는다.
-  assert.ok(long.findings.some((f) => f.rule === "body_length" && f.ask_human === true), JSON.stringify(long.findings));
+  // 본문 길이는 고치는 법(fix)을 싣되, 읽기에선 서버가 이 지식을 나눌 수 있는지(공개범위·수명주기 등) 판정하지 않으므로 사람 확인으로 둔다.
+  assert.ok(long.findings.some((f) => f.rule === "body_length" && "fix" in f && f.ask_human === true), JSON.stringify(long.findings));
 });
 await ta("기준 날짜 조회 자체가 실패하면 읽기는 되고 시점 위반은 사람 확인(ask_human)으로 남는다 — 날짜를 지어내지 않게", async () => {
   const st = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n오늘 고쳤다." }), on, { anchorsOf: async () => { throw new Error("db down"); } })) as Style).style!;

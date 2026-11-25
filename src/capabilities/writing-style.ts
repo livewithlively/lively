@@ -47,6 +47,8 @@ export interface WritingCheckOpts {
   human?: boolean;
   /** 시점 표현 줄의 기준 날짜(writing-resolve timeAnchors). 위반 안내에 싣는다. */
   anchors?: TimeAnchor[];
+  /** 이 저장에서 서버가 본문 길이 초과를 나눌 수 있다(authoring 이 판정). 아니면 길이 위반은 사람 확인으로 남는다. */
+  canSplit?: boolean;
 }
 
 export interface WritingCheck {
@@ -79,13 +81,14 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legac
 };
 
 // 고치는 법(fix). 사실이 있어야 고칠 수 있는 규칙(needsHumanJudgment) 가운데 그 사실을 서버가 찾아 주거나(기준 날짜) 서버가
-//  직접 고치는(홈 경로) 것은 사람에게 묻지 않는다(serverResolves·resolveFindings). 시점 규칙은 그 줄의 기준 날짜를 얻었을
-//  때만 그렇다(처음 판을 못 찾은 줄도 마지막 저장일을 상한으로 한 no_later_than 날짜를 얻는다). 기준 날짜를 하나도 얻지
-//  못하면(조회 자체가 실패) ask_human 으로 남겨 사람에게 묻는다(날짜를 지어내지 않게).
+//  직접 고치는(홈 경로·길이 분리) 것은 사람에게 묻지 않는다(serverResolves·resolveFindings). 시점 규칙은 그 줄의 기준 날짜를
+//  얻었을 때만 그렇다(처음 판을 못 찾은 줄도 마지막 저장일을 상한으로 한 no_later_than 날짜를 얻는다). 기준 날짜를 하나도
+//  얻지 못하면(조회 자체가 실패) ask_human 으로 남겨 사람에게 묻는다(날짜를 지어내지 않게).
 export const RULE_FIX: Partial<Record<WritingFinding["rule"], string>> = {
   relative_time: "anchors 의 기준 날짜로 고친다. 상대시간은 그 날을 기준으로 절대 날짜로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
   undated_status: "anchors 의 기준 날짜를 같은 문장에 「(YYYY-MM-DD 기준)」으로 붙이거나, 상태 대신 규칙으로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
   local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
+  body_length: "에이전트가 저장하면 서버가 이력·로그 같은 절을 원문 그대로 하위 지식으로 옮기고 원래 자리를 링크로 바꿔 상한 안으로 나눈다. 요약·삭제로 줄이지 않는다. 서버가 나누지 않는 지식(공개범위가 좁거나 검색 제외·검토 대기·보관·자료에서 증류한 지식 등)은 옮긴 사본이 원래 지식과 다르게 노출될 수 있으니 직접 나누지 말고 사람에게 확인한다.",
 };
 
 export type ResolvedFinding = WritingFinding & {
@@ -95,11 +98,13 @@ export type ResolvedFinding = WritingFinding & {
   ask_human?: true;
 };
 
-// 사실이 필요한 규칙이지만 서버가 사실 없이 처리하는 것 — 경로 치환은 지식 저장 때 서버가 한다.
-//  경로 치환은 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정> 등)이 있으면 사람 확인이다.
-export interface ResolveContext { surface?: WritingSurface; text?: string }
+// 사실이 필요한 규칙이지만 서버가 사실 없이 처리하는 것 — 경로 치환·길이 분리는 지식 저장 때 서버가 한다.
+//  경로 치환·길이 분리는 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정> 등)이 있으면 사람 확인이다.
+//  길이는 그 저장에서 서버가 나눌 수 있는 지식일 때만(canSplit — 저장 경로가 판정한다) 뺀다. 읽기 신호는 판정하지 않으므로 사람 확인으로 둔다.
+export interface ResolveContext { surface?: WritingSurface; text?: string; canSplit?: boolean }
 function serverResolves(rule: WritingFinding["rule"], ctx: ResolveContext): boolean {
   if ((ctx.surface ?? "knowledge") !== "knowledge") return false;
+  if (rule === "body_length") return ctx.canSplit === true;
   if (rule === "local_path") return ctx.text != null && (normalizeHomePaths(ctx.text).match(LOCAL_PATH_RE) ?? []).length === 0;
   return false;
 }
@@ -147,15 +152,24 @@ export async function checkWriting(
     const existed = new Set(opts.before
       ? lintWriting({ title: opts.before.title, body_md: opts.before.body }, fmt, surface).map((f) => f.rule)
       : []);
-    const introducedFindings = findings.filter((f) => !existed.has(f.rule));
+    // 길이는 원래 넘어 있던 글이 더 길어지는 것도 새 위반으로 본다. 규칙 이름만 비교하면 한 번 상한을 넘은 지식은
+    //  append 로 끝없이 자라도 거부되지 않는다. 줄거나 그대로인 저장은 옛 위반으로 남겨 둔다 — 그래야 나누는 저장
+    //  (옮긴 절을 링크로 바꾸는 edit)과 길이를 늘리지 않는 형식 수정이 막히지 않는다. 상한을 넘은 지식에서 글자가
+    //  늘어나는 형식 수정(상대시간을 날짜로 바꾸기 등)은 먼저 나눠야 한다 — 의도한 순서다.
+    const afterLen = [...String(input.body ?? "")].length;
+    const beforeLen = [...String(opts.before?.body ?? "")].length;
+    const introducedOrGrown = (f: WritingFinding): boolean =>
+      !existed.has(f.rule) || (f.rule === "body_length" && afterLen > beforeLen);
+    const introducedFindings = findings.filter(introducedOrGrown);
     const introduced = [...new Set(introducedFindings.map((f) => f.rule))];
-    const legacy = [...new Set(findings.filter((f) => existed.has(f.rule)).map((f) => f.rule))];
-    const rejects = opts.human ? [] : introducedFindings.filter((f) => f.level === "reject");
+    const legacy = [...new Set(findings.filter((f) => !introducedOrGrown(f)).map((f) => f.rule))];
     const state = opts.proposed ? "수정 제안으로 접수됐습니다" : "저장은 됐습니다";
     const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
     // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
     const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
-    const marked = resolveFindings(findings, opts.anchors, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}` });
+    const marked = resolveFindings(findings, opts.anchors, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}`, canSplit: opts.canSplit });
+    //  거부 항목에도 ask_human 을 싣는다 — 거부 메시지가 사람 확인 항목엔 직접 고치는 절차를 싣지 않는다(writingRejectError).
+    const rejects = opts.human ? [] : marked.filter((f, i) => introducedOrGrown(findings[i]) && f.level === "reject");
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
@@ -307,16 +321,42 @@ export async function readStyleHint(
   }
 }
 
+// 길이 거부를 받은 에이전트가 가장 쉽게 고르는 길은 요약·생략으로 글자 수를 맞추는 것이고, 그렇게 빠진 내용은 어디에도
+//  남지 않는다. 다른 규칙처럼 «형식만 고쳐 같은 호출로 다시 저장»하라고 하면 그 길로 민다. 그래서 길이 위반이 끼면
+//  유실 없이 나누는 절차를 거부 메시지에 함께 싣는다. body_length 는 지식 표면에만 있는 규칙이라(writing-lint
+//  SURFACE_RULES) 지침이 지식 도구 이름을 쓴다 — 다른 표면에 길이 규칙을 넣으면 이 지침도 표면별로 나눠야 한다.
+export const BODY_LENGTH_REJECT_GUIDE = [
+  "본문 길이 거부 처리(body_length) — 내용을 줄여서 맞추지 마세요. 서버가 자동으로 나누지 못한 경우에만 이 절차를 직접 따릅니다.",
+  "- 요약·생략·문장 삭제·표 행 삭제로 글자 수를 맞추지 마세요. 그렇게 빠진 내용은 어디에도 남지 않고 사라집니다.",
+  "- 떼어 낼 절은 이 순서로 정합니다: 이력·로그·기록·경과처럼 따로 읽혀도 되는 절 먼저, 그다음 큰 절부터, 남는 본문이 상한의 4분의 3 아래로 내려갈 때까지. 첫 헤딩 전 결론은 남깁니다. 절 끝의 표에 행을 쌓아 가는 원장이면 표 머리(머리줄·구분줄)는 남기고 행만 옮깁니다.",
+  "- 그 절의 원문을 한 글자도 바꾸지 말고 새 지식으로 저장합니다(knowledge_save, parent_name 에 원래 지식 이름을 주면 그 아래에 붙습니다). 새 지식의 첫 줄에는 「이 지식은 [[원래 지식]] 의 「절 제목」 절을 옮긴 것이다.」처럼 쓰고 그 아래에 원문을 둡니다.",
+  "- 옮긴 절에 원래 있던 형식 위반 때문에 새 지식 저장이 거부되면, 표시된 곳의 형식만 고치고 내용은 그대로 둡니다. 이때 원래 지식은 아직 건드리지 않습니다.",
+  "- 새 지식이 저장된 것을 확인한 뒤에만, 원래 지식에서 옮긴 절을 mode='edit' 로 [[새 지식 이름]] 과 결론 한 줄로 바꿉니다. 본문이 줄어드는 저장은 길이 때문에 거부되지 않습니다. 이 저장은 형식 수정이 아니라 내용 이동이므로 style_fix 를 붙이지 말고, change_note 에 옮긴 곳을 적습니다.",
+  "- 덧붙이려던 내용은 원래 지식이 상한 아래로 내려온 뒤에 다시 보내거나, 그 내용을 새 지식으로 따로 저장하세요. 새로 만드는 지식이 처음부터 상한을 넘으면 주제별로 여러 지식으로 나눠 저장하고 서로 [[링크]] 로 잇습니다.",
+  "- 사람에게 나누는 기준을 묻지 않습니다. 위 순서가 기준입니다.",
+].join("\n");
+
 /** 거부 응답 — MCP 는 에러 메시지만 전달하므로 고칠 곳과 가이드를 메시지 본문에 담는다(REST 는 body 로도 준다). */
-export function writingRejectError(rejects: WritingFinding[], guide: string): HttpError {
+export function writingRejectError(rejects: Array<WritingFinding & { ask_human?: true }>, guide: string): HttpError {
   const lines = rejects.map((f) => `- ${f.rule}: ${f.message}${f.sample ? ` (예: ${f.sample})` : ""}`);
+  //  서버가 나누지 않는 지식(ask_human)의 길이 위반엔 직접 나누는 절차를 싣지 않는다 — 옮긴 사본이 원래 지식과 다르게
+  //  공개·검색될 수 있어서 서버가 거절한 분리를 에이전트에게 손으로 시키게 된다.
+  const lengthAsk = rejects.some((f) => f.rule === "body_length" && f.ask_human);
+  const lengthHit = !lengthAsk && rejects.some((f) => f.rule === "body_length");
   const msg = [
-    `이 조직의 서술 형식에 맞지 않아 저장하지 않았습니다(${rejects.length}건). 아래를 고쳐 같은 호출로 다시 저장하세요. 의미는 바꾸지 말고 형식만 고치세요.`,
+    lengthAsk
+      ? `이 조직의 서술 형식에 맞지 않아 저장하지 않았습니다(${rejects.length}건). 본문 길이는 서버가 나누지 않는 지식이라 줄이지도 직접 나누지도 말고, 나눌지와 방법을 사람에게 확인한 뒤 진행하세요. 길이 외의 항목은 의미를 바꾸지 말고 형식만 고칩니다.`
+      : lengthHit
+      ? `이 조직의 서술 형식에 맞지 않아 저장하지 않았습니다(${rejects.length}건). 본문 길이는 아래 「본문 길이 거부 처리」대로 나누고, 길이 외의 항목은 그렇게 나눈 저장에서 의미를 바꾸지 말고 형식만 고칩니다.`
+      : `이 조직의 서술 형식에 맞지 않아 저장하지 않았습니다(${rejects.length}건). 아래를 고쳐 같은 호출로 다시 저장하세요. 의미는 바꾸지 말고 형식만 고치세요.`,
     ...lines,
+    ...(lengthHit ? ["", BODY_LENGTH_REJECT_GUIDE] : []),
     "",
     guide,
   ].join("\n");
-  return new HttpError(422, msg, { body: { style: { findings: rejects, guide_md: guide } } });
+  return new HttpError(422, msg, {
+    body: { style: { findings: rejects, guide_md: guide, ...(lengthHit ? { length_guide: BODY_LENGTH_REJECT_GUIDE } : {}) } },
+  });
 }
 
 type AuditFn = typeof audit;

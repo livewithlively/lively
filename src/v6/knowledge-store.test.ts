@@ -238,6 +238,20 @@ t("#921: chunk 의 앞 개행·뒤 공백 제거(빈 줄 폭주 방지)", () => 
 t("#921: chunk 첫 줄의 들여쓰기는 보존 — 앞 '개행'만 지운다(들여쓴 코드블록이 깨지면 안 됨)", () => {
   assert.equal(appendBody("본문", "\n    code()"), "본문\n\n    code()");
 });
+t("표 끝에 표 행을 붙이면 빈 줄 없이 같은 표로 잇고, 표가 아닌 쪽이 하나라도 있으면 빈 줄로 잇는다", () => {
+  const table = "결론.\n\n| a | b |\n|---|---|\n| 1 | 2 |";
+  for (const [base, chunk, want] of [
+    [table, "| 3 | 4 |\n| 5 | 6 |", `${table}\n| 3 | 4 |\n| 5 | 6 |`],
+    [`${table}\n\n`, "\n| 3 | 4 |", `${table}\n| 3 | 4 |`],
+    ["| a | b |\n|---|---|", "| 1 | 2 |", "| a | b |\n|---|---|\n| 1 | 2 |"],
+    [table, "다음 문단이다.", `${table}\n\n다음 문단이다.`],
+    ["결론이다.", "| 1 | 2 |", "결론이다.\n\n| 1 | 2 |"],
+    [table, "|머리 없는 조각", `${table}\n\n|머리 없는 조각`],
+    [table, "| x | y |\n|---|---|\n| 7 | 8 |", `${table}\n\n| x | y |\n|---|---|\n| 7 | 8 |`],
+    [table, "| 3 | 4 |\n| --force | 5 |", `${table}\n| 3 | 4 |\n| --force | 5 |`],
+  ] as Array<[string, string, string]>) assert.equal(appendBody(base, chunk), want, JSON.stringify([base.slice(-20), chunk]));
+  assert.ok(isDuplicateAppend(appendBody(table, "| 3 | 4 |"), "| 3 | 4 |"), "재시도 감지는 이어 붙인 표에서도 된다");
+});
 // ── 핵심 불변식: base 는 끝 공백 말고 아무것도 안 바뀐다. append 의 존재 이유가 '원문유지'다. ──
 t("#921: base 원문 불변 — 내부 공백·빈 줄·마크다운이 그대로 남는다", () => {
   const base = "# 런북\n\n## 1단계\n\n    들여쓴 코드\n\n- a\n- b";

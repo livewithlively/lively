@@ -5,7 +5,7 @@
 //  회귀 대상 ③: 기존 문서에 원래 있던 위반으로 에이전트의 수정·이어쓰기가 거부되는 것 — 거부는 새로 생긴 위반에만 건다.
 //  회귀 대상 ④: 사람의 웹 편집이 거부되는 것, 반대로 토큰 스크립트가 사람으로 취급돼 거부를 비껴가는 것.
 import assert from "node:assert/strict";
-import { checkWriting, isHumanWriter, writingRejectError, rejectWriting } from "./writing-style.js";
+import { checkWriting, isHumanWriter, writingRejectError, rejectWriting, BODY_LENGTH_REJECT_GUIDE } from "./writing-style.js";
 import { resolveWritingFormat } from "../org/policies/writing-format.js";
 
 const fmt = (raw: Record<string, unknown>) => async () => resolveWritingFormat({ enabled: true, ...raw });
@@ -220,5 +220,73 @@ await ta("저장 안내 — 글에 없는 사실이 있어야 고칠 수 있는 
   const askOnly = (await checkWriting("knowledge", { title: "배포 노트 범위", body: "결론이다. 오늘 배포했다." }, {}, on)).info as Style;
   assert.match(askOnly.style!.note, /지어내지 말고 사람에게 확인/);
   assert.doesNotMatch(askOnly.style!.note, /mode='edit' 로 그 부분만/, "사람 확인 항목만 남았는데 지금 고치라고 했다");
+});
+const mk = (n: number) => ("결론은 이 문장이다. ".repeat(Math.ceil(n / 10) + 1).slice(0, n - 1)) + "다";
+const lenWarn = fmt({ rules: { body_length: "warn" }, limits: { body_max_chars: 500 } });
+const lenRej = fmt({ rules: { body_length: "reject" }, limits: { body_max_chars: 500 } });
+const T = "결론 제목";
+const hasLen = (r: { rejects: Array<{ rule: string }> }) => r.rejects.some((f) => f.rule === "body_length");
+
+await ta("길이: 신규 저장이 상한을 넘으면 거부한다", async () => {
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: null }, lenRej)));
+});
+await ta("길이: 이전 본문이 상한 이하인데 초과로 저장하면 거부한다", async () => {
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: { title: T, body: mk(400) } }, lenRej)));
+});
+await ta("길이: 이미 초과한 글을 더 길게 저장하면 거부한다(코드포인트 기준)", async () => {
+  const before = { title: T, body: mk(300) + "𠀀".repeat(300) };
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(650) }, { before }, lenRej)));
+  assert.ok(hasLen(await checkWriting("knowledge", { title: T, body: mk(601) }, { before }, lenRej)), "UTF-16 길이로는 더 짧아도 코드포인트로 길면 거부");
+});
+await ta("길이: 이미 초과한 글이 같거나 짧아지면 거부하지 않고 legacy 로 보고한다", async () => {
+  for (const len of [600, 550]) {
+    const r = await checkWriting("knowledge", { title: T, body: mk(len) }, { before: { title: T, body: mk(600) } }, lenRej);
+    assert.ok(!hasLen(r), `len ${len}`);
+    assert.ok((r.info as Style & { style: { legacy: string[] } }).style.legacy.includes("body_length"), `legacy ${len}`);
+  }
+});
+await ta("길이: 상한 이하면 거부도 보고도 없다", async () => {
+  for (const before of [null, { title: T, body: mk(750) }]) {
+    const r = await checkWriting("knowledge", { title: T, body: mk(500) }, { before }, lenRej);
+    assert.ok(!hasLen(r));
+    const st = (r.info as { style?: { findings: Array<{ rule: string }>; legacy: string[] } }).style;
+    assert.ok(!st?.findings.some((f) => f.rule === "body_length"));
+    assert.ok(!st?.legacy.includes("body_length"));
+  }
+});
+await ta("길이: 수준이 warn 이면 거부하지 않는다", async () => {
+  for (const before of [null, { title: T, body: mk(400) }, { title: T, body: mk(600) }]) {
+    assert.ok(!hasLen(await checkWriting("knowledge", { title: T, body: mk(750) }, { before }, lenWarn)));
+  }
+  assert.ok(!hasLen(await checkWriting("knowledge", { title: T, body: mk(750) }, {}, fmt({ limits: { body_max_chars: 500 } }))), "기본 수준");
+});
+
+const LEN_REJ = [{ rule: "body_length" as const, level: "reject" as const, message: "본문이 너무 길다" }];
+const OTHER_REJ = [{ rule: "title_leading_emoji" as const, level: "reject" as const, message: "제목 이모지" }];
+const restStyle = (e: ReturnType<typeof writingRejectError>) => (e.body as { style?: Record<string, unknown> } | undefined)?.style;
+await ta("길이 거부는 메시지와 REST body 에 분리 지침을 싣고, 그대로 다시 보내라는 문구는 쓰지 않는다", async () => {
+  const e = writingRejectError(LEN_REJ, "가이드");
+  assert.ok(e.message.includes(BODY_LENGTH_REJECT_GUIDE));
+  assert.doesNotMatch(e.message, /같은 호출로 다시 저장/);
+  assert.equal(restStyle(e)?.length_guide, BODY_LENGTH_REJECT_GUIDE);
+});
+await ta("길이 외 규칙만 거부되면 종전 재저장 문구를 쓰고 분리 지침은 싣지 않는다", async () => {
+  const e = writingRejectError(OTHER_REJ, "가이드");
+  assert.match(e.message, /같은 호출로 다시 저장/);
+  assert.ok(!e.message.includes(BODY_LENGTH_REJECT_GUIDE));
+  assert.equal(restStyle(e)?.length_guide, undefined);
+});
+await ta("길이 위반은 저장 경로가 나눌 수 있다고 판정한 저장(canSplit)에서만 사람 확인을 뺀다", async () => {
+  type F = { rule: string; ask_human?: true };
+  const len = (r: Awaited<ReturnType<typeof checkWriting>>) => r.rejects.find((f) => f.rule === "body_length") as F | undefined;
+  assert.equal(len(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: null }, lenRej))?.ask_human, true);
+  assert.equal(len(await checkWriting("knowledge", { title: T, body: mk(501) }, { before: null, canSplit: true }, lenRej))?.ask_human, undefined);
+});
+await ta("서버가 나누지 않는 지식(ask_human)의 길이 거부엔 직접 나누는 절차를 싣지 않고 사람에게 확인하게 한다", async () => {
+  const e = writingRejectError([{ ...LEN_REJ[0], ask_human: true as const }], "가이드");
+  assert.ok(!e.message.includes(BODY_LENGTH_REJECT_GUIDE));
+  assert.match(e.message, /직접 나누지도 말고/);
+  assert.match(e.message, /사람에게 확인/);
+  assert.equal(restStyle(e)?.length_guide, undefined);
 });
 console.log(`writing-style: ${pass} passed`);
