@@ -10,6 +10,7 @@ import { api, busy, cardHead, el, errorNote, profileAvatar, state, toast, uiText
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { PERMISSION_KEYS, PERMISSION_INFO, ROLE_KEYS, ROLE_INFO, abilityText, extraChoices, grantsFor, levelText, suggestRole } from './lib/permissions.js';   // #5799 역할 · 권한
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
 async function profilesEditor(detail) {
@@ -167,6 +168,31 @@ function openMemberModal(m, data, detail) {
   back = overlay(isNew ? '구성원 추가' : ('구성원 · ' + (m.display_name || m.id)), body);
 }
 
+// 역할이 여는 일(#5799) — 권한 10개를 «이름 · 수준 · 할 수 있는 일» 한 줄씩. onExtra 를 주면(편집 폼) 역할보다 높은 수준을 얹는 고르기가 붙는다.
+function permissionTable(role, extras, onExtra) {
+  const g = grantsFor(role, extras);
+  const rows = PERMISSION_KEYS.map((pk) => {
+    const info = PERMISSION_INFO[pk];
+    const lv = g[pk];
+    const cells = [
+      el('td', { class: 'perm-name', text: info.label, title: info.definition }),
+      el('td', { class: 'perm-level' + (lv ? '' : ' perm-none'), text: levelText(pk, lv) + (extras && extras[pk] && extras[pk] === lv ? ' (개별 추가)' : '') }),
+      el('td', { class: 'perm-can', text: lv ? abilityText(pk, lv) : '—' }),
+    ];
+    if (onExtra) {
+      const choices = extraChoices(role, pk);
+      const sel = el('select', { 'aria-label': info.label + ' 개별 권한', disabled: choices.length ? undefined : '' });
+      sel.append(el('option', { value: '', text: '역할대로' }));
+      for (const c of choices) sel.append(el('option', { value: c, text: levelText(pk, c) + ' 얹기' }));
+      sel.value = (extras && extras[pk]) || '';
+      sel.addEventListener('change', () => onExtra(pk, sel.value));
+      cells.push(el('td', { class: 'perm-extra' }, sel));
+    }
+    return el('tr', {}, ...cells);
+  });
+  return el('table', { class: 'perm-table' }, el('tbody', {}, ...rows));
+}
+
 // 구성원 권한(scope) 옵션 — 보기/편집 공유. 서버 SCOPES(capabilities/scopes.ts) 전체와 일치시킨다.
 const MEMBER_SCOPE_OPTS = [
   ['items', '아이템 조회'], ['context', '컨텍스트'], ['memory', '지식·메모리'],
@@ -234,7 +260,10 @@ function memberRead(root, m, data, detail, opts: any = {}) {
       roRow('종류', m.kind || 'human'),
       roRow('대표 이메일', m.email),
       roRow('상태', (m.state || 'active') === 'active' ? '활성' : '비활성'),
-      roRow('권한 (이 구성원 토큰의 scope)', scopeText),
+      //  #5799 — 역할을 받은 구성원은 역할과 그 역할이 여는 일을, 옛 방식 구성원은 고른 권한을 보여 준다.
+      m.role
+        ? field('권한', el('div', {}, el('div', { class: 'admin-ro', text: '역할: ' + (ROLE_INFO[m.role]?.label || m.role) }), permissionTable(m.role, m.grants || {}, null)))
+        : roRow('권한 (직접 고른 권한 · 옛 방식)', scopeText),
       field('외부 계정 연결 (신원 매칭 키)', idnSummary(m.identities || [])),
       field('개인 레이어', el('div', { class: 'admin-ro admin-ro-pre', text: (m.body_md && m.body_md.trim()) || '—' })));
   } else {
@@ -291,6 +320,35 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     scopeWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + label + ' (' + sk + ')'));
   }
 
+  // 역할(#5799) — 권한을 하나씩 체크하지 않고 역할 하나를 고른다. 역할을 고르면 위 체크박스(옛 방식)는 감추고,
+  //  그 역할이 여는 일을 권한마다 한 줄로 보여 준다. 개별 권한은 역할이 주는 것보다 높은 수준만 얹을 수 있다.
+  //  «직접 고르기» 는 옛 방식 그대로다 — 그 구성원은 종전 scope 로 판정받는다(서버: 역할이 없으면 아무것도 바뀌지 않는다).
+  const roleSel = el('select', { 'aria-label': '역할' });
+  roleSel.append(el('option', { value: '', text: '직접 고르기 (옛 방식)' }));
+  for (const rk of ROLE_KEYS) roleSel.append(el('option', { value: rk, text: ROLE_INFO[rk].label }));
+  roleSel.value = m.role || '';
+  const extras = { ...(m.role ? (m.grants || {}) : {}) };
+  const roleBox = el('div', { class: 'role-box' });
+  const checkedScopes = () => SCOPE_OPTS.map(([sk]) => sk).filter((sk) => scopeChks[sk].checked);
+  const renderRole = () => {
+    const rk = roleSel.value;
+    scopeWrap.hidden = !!rk;
+    if (!rk) {
+      const near = suggestRole(checkedScopes());
+      const move = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '«' + ROLE_INFO[near].label + '» 역할로 옮기기' });
+      move.addEventListener('click', () => { roleSel.value = near; renderRole(); });
+      roleBox.replaceChildren(el('p', { class: 'admin-hint' },
+        ...uiText('권한을 하나씩 고르는 옛 방식입니다. 역할로 옮기면 보기와 고치기를 따로 줄 수 있고, DB 는 소스마다 지정한 사람만 조회합니다. '), move));
+      return;
+    }
+    for (const pk of Object.keys(extras)) if (!extraChoices(rk, pk).includes(extras[pk])) delete extras[pk];   // 역할이 이미 주는 것은 얹을 것이 아니다
+    roleBox.replaceChildren(
+      el('p', { class: 'admin-hint', text: ROLE_INFO[rk].definition }),
+      permissionTable(rk, extras, (pk, lv) => { if (lv) extras[pk] = lv; else delete extras[pk]; renderRole(); }));
+  };
+  roleSel.addEventListener('change', renderRole);
+  renderRole();
+
   // 외부 계정 연결(identities) — **여기선 읽기 전용**(#837).
   //  예전엔 여기서 system·external_id 를 **손으로 타이핑**했다. 그런데 ClickUp 숫자 id 를 어디서 찾는지 알 길이
   //  없고, 시스템명 오타는 조용히 매칭 실패로 끝났다. 매핑의 편집 SoT 는 [외부 자료 수집 ▸ 멤버 매핑]이다 —
@@ -307,8 +365,15 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
       id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(), nickname: nickIn.value.trim(),
       // identities 는 **보내지 않는다** — 서버가 보존하고, 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만 한다(#837).
       email: emailIn.value.trim(), body_md: bodyTa.value, state: stateSel.value,
-      // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
-      scopes: [...knownScopes.filter((sk) => scopeChks[sk].checked), ...(m.scopes || []).filter((sk) => !knownScopes.includes(sk))],
+      //  #5799 — 역할을 골랐으면 역할과 개별 권한만 보낸다(scopes 는 서버가 그 사본으로 정한다 — 함께 보내면 거절된다).
+      //   «직접 고르기» 면 종전대로 scopes 를 보내고, 역할이 있던 구성원이면 역할을 걷는다(role: null).
+      ...(roleSel.value
+        ? { role: roleSel.value, grants: { ...extras } }
+        : {
+          ...(m.role ? { role: null } : {}),
+          // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
+          scopes: [...knownScopes.filter((sk) => scopeChks[sk].checked), ...(m.scopes || []).filter((sk) => !knownScopes.includes(sk))],
+        }),
     };
     // 사람(human) 구성원은 이메일이 로그인 아이디 → 신규 등록 시 필수(있어야 로그인 계정·초기 비번 발급). agent/system 은 불요.
     if (isNew && kindSel.value === 'human' && !payload.email) { toast('이메일을 입력하세요 — 로그인 아이디예요', true); return; }
@@ -357,7 +422,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
   root.replaceChildren(
     isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('닉네임 (활동 로그 등 표시 · 비우면 이름)', nickIn), field('종류', kindSel),
     field('대표 이메일', emailIn), field('상태', stateSel),
-    field('권한 (이 구성원 토큰의 scope)', scopeWrap),
+    field('권한 — 역할', el('div', {}, roleSel, roleBox, scopeWrap)),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap),
     field('개인 레이어', bodyTa),
     actions);

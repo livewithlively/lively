@@ -25,7 +25,7 @@ export function viewerOf(u: { userId?: string; scopes?: string[] } | undefined):
  *   워크스페이스 초대·내보내기는 owner 판정(delivery/workspace-registry.ts)이다. 그 둘은 이 술어로 열지 마라.
  */
 export function canManageWorkspace(u: GrantHolder | undefined): boolean {
-  //  #5799 — 워킹레벨 = «맥락 관리» 고치기(종전 memory). 관리자는 종전처럼 함께 통과한다. 옛 scope 만 가진 주체는 종전 판정 그대로.
+  //  #5799 — 워킹레벨 = «수집 · 증류» 고치기(종전 memory). 관리자는 종전처럼 함께 통과한다. 옛 scope 만 가진 주체는 종전 판정 그대로.
   return permits(u, "memory", { perm: "pipeline", level: "write" }) || isAdmin(u);
 }
 

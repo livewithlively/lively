@@ -11,15 +11,17 @@
 //   C2 새 주체 — 보기만 받으면 조회는 되고 변경은 막힌다 · scopes 사본에 memory · admin 이 남아 있어도 얻는 것이 없다
 //   C3 새 주체의 grants 가 빈 객체(권한 0개) — scope 있는 기능은 전부 막힌다(사본에 scope 가 다 있어도) · 로그인만인 기능은 된다
 //   C4 permits 경계 — 요구 없음 · scope 없음 → 통과 / 주체 없음 · scopes 가 배열이 아님 → 거절 / grants 가 null 이면 옛 주체로 본다
-//   C5 isAdmin · canManageWorkspace — 옛 주체 128가지에서 종전 식과 같다 · 새 주체는 관리 고치기 / 맥락 관리 고치기만(보기는 아님)
+//   C5 isAdmin · canManageWorkspace — 옛 주체 128가지에서 종전 식과 같다 · 새 주체는 관리 고치기 / 수집 · 증류 고치기만(보기는 아님)
 //   C6 외부 앱 도구의 요구 — items 도구는 조회 등급(L0)만 보기, 그 밖 · 모르는 등급은 고치기 · 다른 scope 로 조인 도구는 그 조임을 잇는다
 //   C7 외부 앱 도구 × 옛 주체 — 그 도구의 호출 scope 를 가졌는가 그대로(5 scope × 등급 4가지 × 128 부분집합)
 //   C8 requireNeed — 막히면 종전 꼴의 문구(옛 scope 이름)로 던지고, 통과하면 조용하다
 //   C9 배선 — MCP 어댑터에 등록된 핸들러를 실제로 부른다: 막힌 주체는 본체에 닿지 않고, 통과한 주체는 본체가 돈다
+//   C10 막힘 문구 — 옛 주체는 종전 꼴 그대로(옛 scope 이름) · 역할 구성원은 화면 이름과 수준(보기/고치기/조회/있다없다)으로
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registry, capMutates, capAllowed, capNeed, registerMcpCapabilities } from "./index.js";
+import { registry, capMutates, capAllowed, capNeed, capDenialText, registerMcpCapabilities } from "./index.js";
+import { needText } from "./cap-permission.js";
 import type { Capability } from "./types.js";
 import { isAdmin, canManageWorkspace } from "./principal.js";
 import { needForExternalTool } from "./permission-map.js";
@@ -202,7 +204,7 @@ test("C9 배선 — MCP 어댑터에 등록된 핸들러가 이 판정을 실제
     // 새 주체 — 맥락 보기만: 조회는 돌고 변경은 막힌다(사본에 memory 가 있어도)
     const viewer = user({ userId: "dave", scopes: ["memory"], grants: { content: "read" } });
     assert.equal(await call(READ, viewer), "ran");
-    assert.match(await call(WRITE, viewer), /^Forbidden: user 'dave' lacks scope 'memory'$/);
+    assert.equal(await call(WRITE, viewer), "Forbidden: «맥락» 고치기 권한이 필요합니다 — 관리자에게 요청하세요 (content:write)", "역할 구성원은 화면 이름으로 안내받는다");
     assert.deepEqual(ran, [READ, WRITE, READ]);
     // 새 주체 — 맥락 고치기: 사본에 scope 가 하나도 없어도 변경이 돈다
     assert.equal(await call(WRITE, user({ scopes: [], grants: { content: "write" } })), "ran");
@@ -212,4 +214,23 @@ test("C9 배선 — MCP 어댑터에 등록된 핸들러가 이 판정을 실제
     registry.delete(READ);
     registry.delete(WRITE);
   }
+});
+
+test("C10 막힘 문구", () => {
+  // 옛 주체 — 글자 하나 바뀌지 않는다(시험 · 클라이언트가 이 꼴에 기댄다)
+  assert.equal(capDenialText({ userId: "alice", scopes: ["memory"] }, cap("category_list"), "rest"), "forbidden: 'context' 권한이 필요합니다");
+  assert.equal(capDenialText({ userId: "alice", scopes: ["memory"] }, cap("category_list"), "mcp"), "Forbidden: user 'alice' lacks scope 'context'");
+  assert.equal(capDenialText({ userId: "alice", scopes: [], grants: null }, cap("org_member_upsert"), "rest"), "forbidden: 'admin' 권한이 필요합니다");
+  // 역할 구성원 — 화면 이름과 수준으로
+  const guest = { userId: "g", scopes: [], grants: ROLE_GRANTS.guest };
+  assert.equal(capDenialText(guest, cap("knowledge_save"), "rest"), "forbidden: «맥락» 고치기 권한이 필요합니다 — 관리자에게 요청하세요");
+  assert.equal(capDenialText(guest, cap("org_distiller_list"), "rest"), "forbidden: «수집 · 증류» 보기 권한이 필요합니다 — 관리자에게 요청하세요");
+  assert.equal(capDenialText(guest, cap("org_hook_upsert"), "mcp"), "Forbidden: «하네스 설정» 고치기 권한이 필요합니다 — 관리자에게 요청하세요 (harness:write)");
+  assert.equal(capDenialText(guest, cap("browser_navigate"), "rest"), "forbidden: «세션» 권한이 필요합니다 — 관리자에게 요청하세요", "있다/없다 권한은 수준을 말하지 않는다");
+  assert.equal(capDenialText(guest, cap("delegate_status"), "rest"), "forbidden: «원격 실행» 권한이 필요합니다 — 관리자에게 요청하세요");
+  assert.equal(needText({ perm: "db", level: "read" }), "«DB» 조회 권한이 필요합니다 — 관리자에게 요청하세요");
+  // 옛 scope 이름이 새 문구에 새지 않는다
+  assert.doesNotMatch(capDenialText(guest, cap("knowledge_save"), "rest"), /memory|scope/);
+  // MCP 어댑터가 실제로 이 문구를 던진다(배선)
+  assert.equal(needText({ perm: "admin", level: "read" }), "«관리» 보기 권한이 필요합니다 — 관리자에게 요청하세요");
 });

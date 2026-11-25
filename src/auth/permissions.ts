@@ -44,7 +44,8 @@ export type Grants = Readonly<Partial<Record<Permission, Level>>>;
  */
 export const PERMISSION_INFO: Readonly<Record<Permission, { label: string; definition: string; levels: "read-write" | "read-only" | "on-off" }>> = {
   content: { label: "맥락", definition: "팀이 쌓는 내용을 읽고 쓴다", levels: "read-write" },
-  pipeline: { label: "맥락 관리", definition: "맥락 저장소를 구축하고 관리한다", levels: "read-write" },
+  //  이름은 그 일을 하는 앱의 지금 이름과 같다(「수집 · 증류」 — 옛 이름 「맥락 관리」 는 화면 글에 쓰지 않는다 #4233 · scripts/ctx-rename.test).
+  pipeline: { label: "수집 · 증류", definition: "맥락 저장소를 구축하고 관리한다", levels: "read-write" },
   external: { label: "외부 앱", definition: "AI 가 외부 앱 도구를 부른다", levels: "read-write" },
   code: { label: "코드", definition: "등록된 레포의 코드를 본다", levels: "read-write" },
   session: { label: "세션", definition: "라이블리에서 AI 와 일한다", levels: "on-off" },

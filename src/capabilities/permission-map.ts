@@ -200,5 +200,5 @@ export const NARROWED: Readonly<Record<string, string>> = {
   team_update: "위와 같다",
   team_delete: "위와 같다",
   team_set_members: "위와 같다",
-  member_ai_connectors: "수집 설정 조회라 맥락 관리다 — context 만 있고 memory 가 없는 사람만 잃는다(기본 구성원은 둘 다 가진다)",
+  member_ai_connectors: "수집 설정 조회라 «수집 · 증류» 권한이다 — context 만 있고 memory 가 없는 사람만 잃는다(기본 구성원은 둘 다 가진다)",
 };

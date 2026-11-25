@@ -8,7 +8,7 @@
 //   G3 게스트의 웹 세션                            → grants={content:read} · 지식 조회는 열리고 저장은 닫힌다 · 세션(브라우저 도구)은 없다
 //   G4 구성원 역할 + 개별 권한(code write)         → scopes 사본에 다섯 개 · 레포 등록이 열린다 · 구성원 관리는 닫힌다
 //   G5 로그인 토큰(비위험 권한 추종)               → 구성원 역할을 따른다(하네스 설정 보기 포함) · 관리 권한은 실리지 않는다
-//   G6 관리자가 scope 를 골라 구운 토큰([memory])  → 구성원 ∩ 그 상한(맥락 · 맥락 관리 · 세션만) · 코드 조회는 닫힌다
+//   G6 관리자가 scope 를 골라 구운 토큰([memory])  → 구성원 ∩ 그 상한(맥락 · 수집 · 증류 · 세션만) · 코드 조회는 닫힌다
 //   G7 구성원을 게스트로 내리면                    → 이미 발급된 토큰이 즉시 따라 내려간다
 //   G8 역할을 걷으면(null)                         → role NULL · 주체에 grants 칸이 없다 · scopes 가 다시 판정한다
 //   G9 역할 구성원에게 scopes 를 다르게 저장        → 400 · 행은 그대로
@@ -78,7 +78,7 @@ try {
   chk("G2b 다시 읽어도 같다", m2?.role === "guest" && sameObj(m2.grants, {}) && sameSet(m2.scopes, []), J({ role: m2?.role, grants: m2?.grants, scopes: m2?.scopes }));
   const s3 = await session(g);
   chk("G3a 게스트의 웹 세션 — 맥락 보기만 실린다", !!s3 && sameObj(s3.grants, { content: "read" }) && sameSet(s3.scopes, []), J(s3));
-  chk("G3b 게스트 — 조회는 열리고(지식 · 분류체계) 변경 · 세션 · 코드 · 맥락 관리는 닫힌다",
+  chk("G3b 게스트 — 조회는 열리고(지식 · 분류체계) 변경 · 세션 · 코드 · 수집 · 증류는 닫힌다",
     can(s3, "knowledge_get") && can(s3, "category_list") && !can(s3, "knowledge_save") && !can(s3, "browser_status") && !can(s3, "repo_file") && !can(s3, "org_distiller_list"),
     J(["knowledge_get", "category_list", "knowledge_save", "browser_status", "repo_file", "org_distiller_list"].map((n) => [n, can(s3, n)])));
 
@@ -101,7 +101,7 @@ try {
   // ── G6 scope 를 골라 구운 토큰 ──
   const t6 = await store.mintToken({ userId: m, memberId: m, scopes: ["memory"] }, "pgt");
   const v6 = await verifyDbToken(t6.token);
-  chk("G6 [memory] 로 구운 토큰 — 구성원 ∩ 그 상한(맥락 · 맥락 관리 · 세션만)",
+  chk("G6 [memory] 로 구운 토큰 — 구성원 ∩ 그 상한(맥락 · 수집 · 증류 · 세션만)",
     !!v6 && sameObj(v6.grants, { content: "write", pipeline: "write", session: "write" }) && can(v6, "knowledge_save") && !can(v6, "repo_file") && !can(v6, "org_hooks"), J(v6?.grants));
 
   // ── G7 내리면 토큰이 즉시 따라 내려간다 ──

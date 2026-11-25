@@ -5,7 +5,7 @@
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser } from "../context.js";
-import { capMutates, capNeed, capAllowed } from "./cap-permission.js";
+import { capMutates, capNeed, capAllowed, capDenialText } from "./cap-permission.js";
 import { viewerOf } from "./principal.js";
 import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
@@ -244,7 +244,7 @@ export { viewerOf, isAdmin } from "./principal.js";
 
 // capMutates(이 기능이 컨텍스트를 바꾸는가) · capNeed · capAllowed 의 본체는 ./cap-permission.ts(등록부를 import 하지 않는 잎) —
 //  여기는 기존 import 스펙 호환 재수출. 등록부가 import 하는 capability 파일(app-tool-call 등)은 잎을 **직결** import 한다(순환 방지 #1313 R25).
-export { capMutates, capNeed, capAllowed };
+export { capMutates, capNeed, capAllowed, capDenialText };
 
 // 읽기전용에서 차단 **예외**(#1007 사용자 스코프) — 컨텍스트 스토어 콘텐츠 쓰기가 아니라 '코드실행/오프로드'라 기밀 세션에서도 유지한다.
 //  broker_run(브로커 도구 실행)·delegate_run/cancel(무거운 작업 위탁)은 읽기전용이어도 '일'(빌드·테스트)을 계속하게 둔다는 사용자 결정.
@@ -297,7 +297,7 @@ export function registerMcpCapabilities(
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         // 권한 판정(#5799 capAllowed — 새 권한이 실린 주체는 영역 × 수준, 옛 scope 만 가진 주체는 종전 그대로). 거절 문구는 종전 꼴.
-        if (!capAllowed(u, cap)) throw new Error(`Forbidden: user '${u.userId}' lacks scope '${cap.scope}'`);
+        if (!capAllowed(u, cap)) throw new Error(capDenialText(u, cap, "mcp"));
         requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
         await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
         await assertAppContextSafeTool(u, cap.name, "mcp");   // #5100: 맥락 범위를 선언한 앱이면 범위를 못 지키는 도구는 403(기록은 instrument)

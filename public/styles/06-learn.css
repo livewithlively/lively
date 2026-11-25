@@ -433,3 +433,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .builtin-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--ink-sub); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .builtin-row .admin-check { margin: 0; }
 
+
+/* 역할 · 권한 표(#5799) — 구성원 편집 폼과 읽기 뷰. 권한마다 «이름 · 수준 · 할 수 있는 일» 한 줄. */
+.role-box { margin-top: 8px; }
+.perm-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+.perm-table td { padding: 5px 8px; border-top: 1px solid var(--border, rgba(127, 127, 127, .25)); vertical-align: top; }
+.perm-table .perm-name { white-space: nowrap; font-weight: 600; }
+.perm-table .perm-level { white-space: nowrap; }
+.perm-table .perm-level.perm-none, .perm-table .perm-none + .perm-can { opacity: .5; }
+.perm-table .perm-extra { width: 124px; white-space: nowrap; }
+.perm-table .perm-extra select { font-size: 12px; width: 116px; min-width: 116px; padding: 3px 22px 3px 8px; }
+.perm-table .perm-extra select:disabled { opacity: .35; }
+@media (max-width: 640px) { .perm-table .perm-can { display: none; } }
