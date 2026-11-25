@@ -19,7 +19,6 @@ import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./
 import { knowledgeVisWhere, slugify, resolveKnowledgeName, auditKnowledge, K_ICON_EXPR, forgetClassifierSeen } from "./knowledge-common.js";
 import { listKnowledgeLinks, materializeWikiLinksBestEffort, type WikiLinkResult } from "./knowledge-links.js";
 import { withDerivedTx } from "./derived-visibility.js";
-import { HttpError } from "../http-error.js";
 
 // PUBLIC_VIEWER 는 Viewer 개념이라 visibility.ts 로 옮겼다(#1291) — 여기 두면 상수 하나 때문에
 //  터미널·커넥터 같은 hot 모듈이 지식 스토어 전체를 끌어온다. 기존 import 경로는 아래 재export 로 유지.
