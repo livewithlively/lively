@@ -174,6 +174,8 @@ export interface SessionReclaimPolicy {
    *  (살아 있는 셸 작업·도는 턴·질문은 집행 직전에 다시 재서 지킨다). 0 = 끔. 기본 1440(24시간).
    */
   node_stop_unknown_minutes: number;
+  /** #5623 — 원격 PC 에서 오래 남은 세션(백그라운드 보고가 굳음 · 대화 id 없음)을 다시 보는 간격(분). 0 = 끔(그 세션은 남는다). */
+  node_stop_stale_minutes: number;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -199,6 +201,7 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   node_stop_done_minutes: 30,      // #5043 — 원격 PC 완료+안 봄 30분
   node_stop_asking_minutes: 180,   // #5043 — 원격 PC 질의+안 봄 3시간
   node_stop_unknown_minutes: 1440, // #5043 — 원격 PC 상태 모름 안전망 24시간
+  node_stop_stale_minutes: 1440, // #5623 — 오래 남은 세션 확인 24시간
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -292,6 +295,7 @@ const policy = definePolicy<SessionReclaimPolicy>({
     node_stop_done_minutes: { env: "LIVELY_NODE_STOP_DONE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
     node_stop_asking_minutes: { env: "LIVELY_NODE_STOP_ASKING_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
     node_stop_unknown_minutes: { env: "LIVELY_NODE_STOP_UNKNOWN_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    node_stop_stale_minutes: { env: "LIVELY_NODE_STOP_STALE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
   },
 });
 

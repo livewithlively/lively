@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
-import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside, sessionOff, sessionOffNotice, isSessionId } from "./record-scope.mjs";
+import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, insideNotice, markStartedOutside, clearStartedOutside, sessionOff, sessionOffNotice, isSessionId, sessionReadonly, modeHint } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -48,14 +48,21 @@ if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
 //  주입 컨텍스트 맨 앞에 배너를 붙여 AI 가 '이 세션은 스토어에 안 쓴다'를 명확히 알게 한다(없는 writeback 툴을 찾는 혼란 방지).
-const READONLY = (process.env.LIVELY_MODE || "").trim().toLowerCase() === "readonly";
-const RO_BANNER = [
+//  세션 **안에서** 읽기전용으로 바꾼 세션(record-scope.mjs «세션 모드» — 표식)이 다시 시작할 때(이어 열기 · 압축 뒤)도 같은 배너를 붙인다.
+//   그 세션은 쓰는 도구가 목록에는 남고 부를 때 막히므로(러너 PreToolUse) 문구만 그에 맞춘다 — markReadonly() 가 둘을 함께 바꾼다.
+let READONLY = (process.env.LIVELY_MODE || "").trim().toLowerCase() === "readonly";
+const READONLY_OPENED = READONLY;   // 띄울 때 정한 읽기전용 — 세션 안에서 일반으로 못 푼다(켜짐 알림이 그렇게 말한다)
+const roBanner = (marked, hint = "/lively-mode") => [
   "## ⚠ 읽기전용 세션 (read-only, #1007)",
   "이 세션은 라이블리 컨텍스트 스토어에 **쓰지 않습니다**. 지식·프로젝트·작업·카테고리·자료·활동·도메인맵의 저장/수정 툴",
-  "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **비활성**입니다(tools/list 에 없음, REST 는 403).",
+  marked ? "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **막혀 있습니다**(부르면 거절됩니다)."
+    : "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **비활성**입니다(tools/list 에 없음, REST 는 403).",
   "그러니 세션 마무리의 컨텍스트 스토어 기록(writeback)을 **시도하지 마세요** — WIKI 인덱스·AGENTS.md 의 '기록하라' 규칙은 이 읽기전용 세션엔 적용되지 않습니다.",
-  "읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 기밀 작업이 끝난 뒤 남길 조직 기록은 읽기전용을 끈 일반 세션에서 하세요.",
+  marked ? `읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 사람이 이 세션 안에서 읽기전용으로 바꿔 둔 것이다 — 남길 조직 기록은 사람이 다시 켠 뒤(${hint} on)에 하세요.`
+    : "읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 기밀 작업이 끝난 뒤 남길 조직 기록은 읽기전용을 끈 일반 세션에서 하세요.",
 ].join("\n");
+let RO_BANNER = roBanner(false);
+function markReadonly() { READONLY = true; RO_BANNER = roBanner(true, modeHint(HARNESS)); }
 const withRo = (t) => READONLY ? (RO_BANNER + "\n\n" + (t || "")).trimEnd() : t;
 // ⚠ OFF 차단은 main() 안에서 한다(모듈 최상단 process.exit 금지) — main-guard(#959) 이후 이 파일은 test 가
 //  reconcileExtPullWiring 을 import 한다. 최상단에서 exit 하면 토큰/OFF 상태에 따라 import 가 프로세스를 죽여
@@ -741,6 +748,8 @@ async function scopeGate() {
   //  사람이 꺼 둔 세션(이 세션만 끄기)이 다시 시작했다(이어 열기 · 압축 뒤) — 꺼진 채로 두고 그 사실과 다시 켜는 법만 알린다.
   //   서버 왕복(설정 맞추기)보다 먼저 가른다 — 꺼 둔 세션은 게이트웨이를 건드리지 않는다(설정은 다음 켜진 세션이 맞춘다).
   if (sessionOff(sid, lively)) { emitSessionOff(sid, String(input.source || "") === "compact"); return true; }
+  //  세션 안에서 읽기전용으로 바꿔 둔 세션이 다시 시작했다 — 읽기전용 배너를 붙이고 켜짐 알림이 지금 모드를 말하게 한다.
+  if (!READONLY && sessionReadonly(sid, lively)) markReadonly();
   let kitVersion = null;
   if (TOKEN) {
     const r = await syncScopeSettings({ lively, gw: GW, token: TOKEN, send: fetch, timeoutMs: 1500 }).catch(() => ({ ok: false }));
@@ -751,7 +760,8 @@ async function scopeGate() {
     clearStartedOutside(sid);   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
     //  켜짐 알림(꺼짐 알림의 짝 — record-scope.mjs insideNotice 머리말). 토큰이 없는 컴퓨터는 연결된 것이 아니라 알리지 않는다.
     //  압축 뒤 다시 도는 시작 훅(source: compact)은 같은 대화의 한가운데다 — AI 안내만 다시 싣고 사람에게 한 줄은 되풀이하지 않는다.
-    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, sid, harness: hid, plugin: PLUGIN_INSTALL, lively }) : null;
+    //  지금 모드와 바꾸는 법도 같은 한 줄에 싣는다(상민님 2026-11-25) — 읽기전용으로 **연** 세션은 여기서 일반으로 못 바꾼다고 말한다.
+    const on = TOKEN ? insideNotice({ dir: d.dir, reason: d.reason, root: d.root, sid, mode: READONLY ? "readonly" : "normal", modeFixed: READONLY_OPENED, harness: hid, plugin: PLUGIN_INSTALL, lively }) : null;
     const again = String(input.source || "") === "compact";
     if (on) ON_NOTICE = { user: again ? "" : on.user, ai: on.ai + (!again && lineHidden() ? "\n" + on.say : "") };
     return false;
@@ -773,6 +783,7 @@ async function main() {
   mirrorPluginCreds();                                   // 플러그인 설치면 자격을 ~/.lively 에도 굳힌다(#1473). 키트 설치면 무동작.
   //  라이블리가 띄운 세션은 범위 판정을 건너뛰지만(언제나 켬) «이 세션만 끄기» 는 듣는다 — 입력을 안 읽는 자리라 클로드의 env 세션 id 로 본다.
   if (SPAWNED && sessionOff(envSessionId(), join(homedir(), ".lively"))) { emitSessionOff(envSessionId(), false); process.exit(0); }
+  if (SPAWNED && !READONLY && sessionReadonly(envSessionId(), join(homedir(), ".lively"))) markReadonly();   // 세션 안에서 읽기전용으로 바꾼 세션(이어 열기)
   if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) · 꺼 둔 세션 — 아래 전부 건너뜀
   // 레포 준비 실패 통지(#1155) — 로컬 마커만 읽으므로 토큰 유무와 무관하게 항상 계산한다(무토큰 세션도 코드는 필요하다).
   const repoNotice = repoStatusNotice();

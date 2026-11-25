@@ -19,6 +19,8 @@ import { readScopeFor, outsideReadScope } from "../../v6/read-scope.js";   // #5
 import { appContextDeniedError } from "../../apps/app-context.js";
 import type { LivelyUser } from "../../context.js";
 import type { CapabilityCtx } from "../types.js";
+import { isAdmin } from "../principal.js";
+import { anyInjectedDoc } from "../../org/store/sections.js";
 
 // 공개범위(#1291) — name 을 가진 행 배열에서 안 보이는 것을 걸러낸다. 목록 표면 공용.
 //  대부분의 조직에서 members 지식은 0건이라 첫 조회에서 바로 통과한다(문서마다 판정하지만 값싼 경로).
@@ -49,7 +51,39 @@ export async function assertKnowledgeVisible(name: unknown, viewer: Viewer): Pro
 //  «그 이름의 문서는 없다 → 통과» 인데 실제로는 정규화된 이름의 문서가 고쳐진다 — 대소문자만 바꾸거나 64자를
 //  넘긴 이름으로 안 보이는 문서를 고칠 수 있게 된다. 그래서 두 이름 중 하나라도 안 보이면 막는다.
 //  문구는 받은 이름으로 낸다(없는 문서와 같은 문구 — 존재 은닉). 정규화해도 같은 이름이면(대부분) 조회는 한 번이다.
-export async function assertKnowledgeWritable(name: unknown, viewer: Viewer): Promise<void> {
+//
+//  #5801 — **세션 주입 문구(injection='always' 행)는 관리자만 고친다.** 주입 문구의 실체는 지식 행이라 섹션 저장 op
+//   (org_update_section — admin)만 닫으면 지식 표면으로 돌아 들어온다: knowledge_save 에 주입 문구 이름을 주면 upsert 가
+//   injection 을 보존한 채 본문을 덮고(resolveUpsertFacets), 삭제 · 보관 · 이동(sort) · 수정 제안 승인도 같은 행을 바꾼다.
+//   그 글은 관리자 세션을 포함한 모든 구성원의 AI 세션에 지시문으로 들어가므로, 이 게이트(지식 쓰기 op 전부가 지난다)에서
+//   한 번에 막는다. user 를 **필수 인자**로 둔 까닭: 새 쓰기 op 이 이 판정을 빠뜨리면 타입 검사가 잡게.
+//   공개범위 판정 뒤에 둔다 — 안 보이는 문서는 종전처럼 «없음» 이 먼저다(존재 은닉).
+export async function assertKnowledgeWritable(name: unknown, viewer: Viewer, user: { scopes?: string[] } | undefined): Promise<void> {
+  await assertKnowledgeAnnotatable(name, viewer);
+  if (!name) return;
+  if (!isAdmin(user) && await anyInjectedDoc([String(name), slugify(String(name))])) throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
+}
+
+/**
+ * 쓰기 게이트를 통과하나 — assertKnowledgeWritable 과 같은 판정을 던지지 않고 답한다. 읽기 응답이 «이 글을 고쳐라» 를 실어도
+ *  되는지 가를 때 쓴다(knowledge_get 의 형식 신호). 판정이 터지면(조회 장애 포함) 고칠 수 없는 것으로 본다 — 안내를 닫는 쪽이다.
+ *  ⚠ 쓰기 op 의 게이트로 쓰지 마라 — 그쪽은 assertKnowledgeWritable 로 던져야 거절 문구(없음 · 관리자 전용)가 그대로 나간다.
+ */
+export async function knowledgeWritable(name: unknown, viewer: Viewer, user: { scopes?: string[] } | undefined): Promise<boolean> {
+  try {
+    await assertKnowledgeWritable(name, viewer, user);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 문서 **곁에 붙이는** 쓰기(댓글 · 다른 문서에서 이 문서로 거는 링크)의 게이트 — 공개범위 판정만 한다(종전 쓰기 게이트 그대로).
+ *  주입되는 글 · 주입 여부 · 순서를 바꾸지 않는 op 만 이쪽을 쓴다. 주입 문구에 댓글을 다는 것까지 관리자로 묶을 까닭이 없다.
+ *  ⚠ 문서 자신의 본문 · 제목 · 상태 · 위치 · 속성을 바꾸는 op 은 반드시 assertKnowledgeWritable 이다.
+ */
+export async function assertKnowledgeAnnotatable(name: unknown, viewer: Viewer): Promise<void> {
   await assertKnowledgeVisible(name, viewer);
   if (viewer === null || !name) return;
   const normalized = slugify(String(name));
@@ -57,6 +91,10 @@ export async function assertKnowledgeWritable(name: unknown, viewer: Viewer): Pr
     throw new HttpError(404, `지식 '${String(name)}' 없음`);
   }
 }
+
+/** 주입 문구를 관리자가 아닌 사람이 바꾸려 할 때의 거절 문구 — 지식 쓰기 · 휴지통 복원이 같은 말을 쓴다. */
+export const INJECTED_DOC_ADMIN_ONLY =
+  "세션 주입 문구는 관리자만 바꿀 수 있습니다. 이 글은 워크스페이스의 모든 AI 세션에 주입됩니다.";
 
 /**
  * 앱 맥락 범위(#5100) 밖 문서를 이름으로 열었나 — 공개범위로는 보이는데 이 앱이 선언한 범위 밖이면 거절(403)하고 기록한다.

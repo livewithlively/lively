@@ -10,7 +10,7 @@
 //  벽시계를 안 쓴다(engine.js) — 같은 소스는 언제 구워도 같은 영상이다.
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
-import { readFileSync, mkdirSync, renameSync, rmSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, existsSync, statSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,23 +20,31 @@ const root = path.resolve(here, '../..');
 const args = process.argv.slice(2);
 const opt = (name, dflt) => { const i = args.indexOf('--' + name); return i < 0 ? dflt : (args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : true); };
 const FPS = Number(opt('fps', 60));
+//  --speed 1.15 = 장면을 1.15배 빨리 돌려 굽는다(원본 시간표는 그대로, 영상 길이만 1/1.15). 온보딩 영상(기초)은 1.15 로 굽는다
+//  (원준 2026-11-20 «아주 약간 느려서 답답해»). 포스터 시각(--poster)은 구운 영상의 시각이다.
+const SPEED = Number(opt('speed', 1));
 const SCALE = Number(opt('scale', 2));          // 2 = 두 배로 그려 줄인다(움직이는 글자의 가장자리가 곱다)
 const WORKERS = Number(opt('workers', 6));
 const CRF = String(opt('crf', 20));
 const outDir = path.join(here, 'out');
 mkdirSync(outDir, { recursive: true });
 
-execFileSync('node', [path.join(here, 'gen-assets.mjs')], { stdio: 'inherit' });
+//  --page tour = 둘러보기 영상(밝은 바탕 · 제품 화면 그대로) · --page guide = 사용 가이드 «라이블리 동작원리». 기본은 film(소개 영상).
+const PAGE = String(opt('page', 'film'));
+const NAME = PAGE === 'film' ? 'welcome-film' : 'welcome-' + PAGE;
 
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+execFileSync('node', [path.join(here, PAGE === 'film' ? 'gen-assets.mjs' : 'gen-' + PAGE + '.mjs')], { stdio: 'inherit' });
+
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
 const server = createServer((req, res) => {
-  const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '') || 'film.html';
-  const full = path.resolve(here, rel);
-  if (!full.startsWith(here) || !existsSync(full) || !statSync(full).isFile()) { res.writeHead(404).end(); return; }
+  //  저장소 뿌리에서 준다 — 둘러보기 영상은 제품의 스타일시트(/public/styles) · 글꼴(/public/fonts)을 그대로 건다.
+  const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '');
+  const full = path.resolve(root, rel);
+  if (!full.startsWith(root + path.sep) || !existsSync(full) || !statSync(full).isFile()) { if (!/favicon/.test(rel)) console.error('[film] 404 ' + rel); res.writeHead(404).end(); return; }
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(full)] || 'application/octet-stream', 'Cache-Control': 'no-store' }).end(readFileSync(full));
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const url = `http://127.0.0.1:${server.address().port}/film.html?render`;
+const url = `http://127.0.0.1:${server.address().port}/scripts/welcome-film/${PAGE}.html?render`;
 
 //  작업자마다 브라우저를 따로 띄운다 — 한 브라우저의 여러 탭을 동시에 찍으면 뒤에 있는 탭이 프레임을 안 내어 캡처가 멈춘다.
 const browsers = [];
@@ -59,11 +67,14 @@ const shot = async (page, t, file) => {
 try {
   const first = await openPage();
   const duration = await first.evaluate(() => window.__film.duration);
+  //  자막 시간표 — narrate.mjs 가 이것으로 내레이션을 자막 자리에 맞춘다.
+  const caps = await first.evaluate(() => window.__caps || null);
+  if (caps) writeFileSync(path.join(outDir, NAME + '-caps.json'), JSON.stringify({ duration, caps }, null, 1));
   console.log(`[film] 길이 ${duration.toFixed(2)}s · ${FPS}fps · 배율 ${SCALE}`);
 
   if (opt('still')) {
     for (const s of String(opt('still')).split(',')) {
-      const t = Number(s), file = path.join(outDir, `still-${t.toFixed(2).padStart(6, '0')}.png`);
+      const t = Number(s), file = path.join(outDir, `${PAGE === 'film' ? 'still' : PAGE}-${t.toFixed(2).padStart(6, '0')}.png`);
       await shot(first, t, file); console.log('  ' + file);
     }
   } else if (opt('sheet')) {
@@ -71,16 +82,18 @@ try {
     const tmp = path.join(outDir, 'sheet-tmp'); rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp);
     let n = 0;
     for (let t = from; t <= to + 1e-6; t += step) await shot(first, Math.min(t, duration), path.join(tmp, `s_${String(n++).padStart(4, '0')}.png`));
-    const cols = Number(opt('cols', 3)), file = path.join(outDir, `sheet-${from}-${to}.jpg`);
+    const cols = Number(opt('cols', 3)), file = path.join(outDir, `${PAGE === 'film' ? 'sheet' : PAGE + '-sheet'}-${from}-${to}.jpg`);
     spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', '1', '-i', path.join(tmp, 's_%04d.png'), '-vf', `scale=960:-1,tile=${cols}x${Math.ceil(n / cols)}:padding=6:color=0x222a3a`, '-frames:v', '1', '-q:v', '3', file], { stdio: 'inherit' });
     rmSync(tmp, { recursive: true, force: true });
     console.log('  ' + file + ` (${n}장 · ${step}s 간격)`);
   } else {
     //  프레임을 디스크에 쌓지 않는다(두 배율 PNG 4천 장 = 수 GB) — 찍는 대로 차례를 맞춰 ffmpeg 에 흘려 넣는다.
-    const total = Math.round(duration * FPS);
+    const total = Math.round(duration / SPEED * FPS);
     const media = path.join(root, 'public/media'); mkdirSync(media, { recursive: true });
-    const final = path.join(media, 'welcome-film.mp4'), poster = path.join(media, 'welcome-film-poster.jpg');
-    const mp4 = path.join(outDir, 'welcome-film.partial.mp4');   // 다 구운 뒤에 옮긴다 — 굽는 동안 제품 자리의 파일이 반쪽이 되지 않게
+    //  --dest out 이면 제품 자리(public/media)가 아니라 out/ 에 둔다(보여 주고 고르기 전의 판).
+    const destDir = opt('dest') === 'out' ? outDir : media;
+    const final = path.join(destDir, NAME + '.mp4'), poster = path.join(destDir, NAME + '-poster.jpg');
+    const mp4 = path.join(outDir, NAME + '.partial.mp4');   // 다 구운 뒤에 옮긴다 — 굽는 동안 제품 자리의 파일이 반쪽이 되지 않게
     const vf = (SCALE !== 1 ? 'scale=1920:1080:flags=lanczos,' : '') + 'format=yuv420p';
     const ff = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'png', '-i', '-',
       '-vf', vf, '-c:v', 'libx264', '-preset', 'slow', '-crf', CRF, '-profile:v', 'high', '-level', '4.2',
@@ -97,15 +110,21 @@ try {
         if (++written % 120 === 0) console.log(`  ${written}/${total} 프레임 · ${((Date.now() - t0) / 1000).toFixed(0)}s`);
       }
     }));
+    //  실패하면 ffmpeg 도 걷는다 — 입력을 기다리는 ffmpeg 가 남으면 node 가 끝나지 않는다.
+    ffDone.catch(() => {});
     await Promise.all(pages.map(async (page) => {
       for (;;) {
         const f = next++; if (f >= total) return;
         while (f - written > 48) await new Promise((r) => setTimeout(r, 15));   // 앞 프레임이 밀리면 기다린다(메모리 상한)
-        await page.evaluate((x) => window.__film.seek(x), f / FPS);
-        pending.set(f, await page.screenshot({ type: 'png' }));
+        //  한 프레임이 멈추면(디스크가 꽉 찬 맥 · 얼어붙은 렌더러) 다른 워커들도 차례 게이트(48)에 걸려 영원히 기다린다 —
+        //  CPU 0% 로 진행 줄만 멈춘 채 몇십 분이 간다(2026-11-19 실측). 60초 안에 못 찍으면 실패로 끝낸다.
+        const frame = (async () => { await page.evaluate((x) => window.__film.seek(x), f / FPS * SPEED); return page.screenshot({ type: 'png', timeout: 60000 }); })();
+        let timer;
+        const stuck = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`프레임 ${f} 을 60초 안에 못 찍었다 — 디스크 여유(df -h)와 크롬을 보라`)), 60000); });
+        try { pending.set(f, await Promise.race([frame, stuck])); } finally { clearTimeout(timer); }
         flush();
       }
-    }));
+    })).catch((e) => { try { ff.kill('SIGKILL'); } catch (_) { /* 이미 끝남 */ } throw e; });
     await flush(); ff.stdin.end(); await ffDone;
     renameSync(mp4, final);
     //  포스터 = 첫 문장이 다 선 순간(재생 전에 보이는 그림).

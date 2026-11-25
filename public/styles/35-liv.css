@@ -430,3 +430,40 @@ button.liv-app:focus-visible { outline: 2px solid var(--mint-deep); outline-offs
 .liv-board-ask:not(:empty) { margin: 0; border-top: 0; padding: 0; max-height: none; }
 .liv-apps-sec { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line-net); border-radius: 12px;
   background: var(--bg-tint); padding: 12px; }
+
+/* ── #5713 세션 요청 — 세션의 AI 가 사람에게 화면으로 받는 것(값 입력 · 고르기 · 파일 올리기) ─────────────────────
+   종전엔 리브 전용 «물음 카드» 였다(위 .liv-ask · .liv-pick — 그 이름 그대로 쓴다. 접두어를 바꾸면 얻는 게 없다).
+   자리는 둘: 세션 화면 곁칸의 «요청» 칸(web/v2/session-ask-pane.ts) · 요청 화면 #/ask(web/v2/ask-page.ts). */
+.pn-sessask { padding: 12px 12px 16px; gap: 10px; overflow: auto; }
+.pn-sessask-head { display: flex; flex-direction: column; gap: 3px; }
+.pn-sessask-head b { font-size: 14px; }
+.pn-sessask-head p { margin: 0; line-height: 1.5; }
+/* 카드 여럿이 세로로 선다 — 대화창 위 자리(.liv-askdock)의 높이 제한 · 윗선은 여기선 풀린다(칸 자체가 스크롤한다). */
+.pn-sessask-list.liv-askdock:not(:empty), .ask-page-list.liv-askdock:not(:empty) {
+  display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; border-top: 0; max-height: none; overflow: visible; }
+.pn-sessask-empty { margin: 0; }
+.pn-sessask-empty[hidden], .ask-page-empty[hidden], .ask-page-note[hidden], .ask-page-told[hidden] { display: none; }
+/* 주소(#/ask/<id>)가 짚은 카드 — 잠깐 밝힌다(색만으로 가르지 않는다: 그 카드로 스크롤하고 첫 입력칸에 커서를 둔다). */
+.ask-card { transition: box-shadow .35s ease; }
+.ask-card.ask-flash { box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint-deep) 38%, transparent); }
+@media (prefers-reduced-motion: reduce) { .ask-card { transition: none; } }
+
+/* 요청 화면(단독) — 로컬 터미널의 AI 가 준 링크로 온 사람이 보는 자리 */
+.v2-askpage { height: 100%; overflow: auto; background: var(--bg); }
+.ask-page { max-width: 620px; margin: 0 auto; padding: 32px 20px 48px; display: flex; flex-direction: column; gap: 14px; }
+.ask-page-head h1 { margin: 0 0 6px; font-size: 20px; }
+.ask-page-sub { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink-sub); }
+.ask-page-note { font-size: 13px; line-height: 1.6; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink-sub); }
+.ask-page-told { font-size: 13px; line-height: 1.6; padding: 12px; border: 1px solid var(--mint-deep); border-radius: 10px; background: var(--bg-tint); }
+.ask-page-say { display: block; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line);
+  font-size: 12.5px; white-space: pre-wrap; word-break: break-word; user-select: all; }
+.ask-page-empty { margin: 0; }
+.ask-page-sess { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--muted); text-decoration: none; }
+.ask-page-sess:hover { color: var(--ink); text-decoration: underline; }
+/* 팝아웃 세션 창(?solo=1) — 곁칸이 없어 요청 카드가 창 오른쪽 위에 뜬다(web/v2/session-ask-pane.ts mountFloatingAsks). */
+.ask-float { position: fixed; top: 56px; right: 12px; z-index: 60; width: min(380px, calc(100vw - 24px)); max-height: calc(100vh - 80px); overflow: auto;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+  box-shadow: 0 8px 28px rgba(20, 33, 58, .18); }
+.ask-float[hidden] { display: none; }
+.ask-float-head { font-size: 13px; }
+.ask-float-list.liv-askdock:not(:empty) { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; border-top: 0; max-height: none; overflow: visible; }

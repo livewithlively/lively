@@ -32,7 +32,7 @@ export {
   getLocalModePreferences, setLocalModePreference,
   getLocalScopePreferences, getLocalScopePreference, updateLocalScopePreference, applyLocalScopeChange, localScopeView,
   DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN, isWorkRootForm,
-  getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivSession,
+  getLivProfile, appendLivProfile, appendLivAnswer, livAnswerStats, setLivSession,
   setLivWelcomeProgress, listLivSecondTurnCandidates,
   memberIdByEmail, upsertMember, removeMember,
 } from "./store/members.js";
@@ -61,6 +61,7 @@ export {
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
   getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource, getContextJobPolicySource,
   getOrgRecordScope, setOrgRecordScope,
+  getWritingFormat,
 } from "./store/runtime-config.js";
 export type { OrgRuntimeConfig, HookRuntime, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
 

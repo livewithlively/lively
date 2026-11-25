@@ -27,7 +27,8 @@ export interface LivelyError extends Error {
   status: number | null;
   /**
    * 서버가 준 짧은 코드 — 없으면 null. 본문: `busy`(입구가 붐빔) · `body_timeout`(보내는 데 너무 오래) · `body_too_large`(1MB 넘음) ·
-   *  `bad_body`(JSON 이 아님). 그 밖: `consent_required`(이 앱 사용 동의 없음) · `login_required`(앱 주소 로그인이 끝남) 등.
+   *  `bad_body`(JSON 이 아님). 그 밖: `consent_required`(이 앱 사용 동의가 없거나 예전 범위 — 앱이 동의 뒤에 새 도구 · scope 를 선언했다 · #1644) ·
+   *  `login_required`(앱 주소 로그인이 끝남) 등.
    */
   reason: string | null;
 }

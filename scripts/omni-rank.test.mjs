@@ -15,6 +15,7 @@
 //  | R9  | 맨 위 셋 — 번호 > 이름 같음 > 이름에 모두 > 서버 표시 대화 > key 일부 | 그 층 순서 · 최대 셋                                |
 //  | R10 | 이름에 모두 든 것끼리 — 낱말이 앞에 놓인 것, 그다음 짧은 것 | «회의록» 에서 «811회의록» > «0810회의록» > «우리 825 회의록이랑…» |
 //  | R11 | 군말 · 다른 표기(#4530 검색 품질)                          | 표가 서버와 같다 · 군말은 없어도 맞음 · 다른 표기로도 맞고 칠한다 |
+//  | R12 | 세션이 단 번호(맡은 태스크 번호, #5607)를 쳤다              | 번호의 주인(태스크) 다음 · 이름·서버 표시보다 앞 · 부분 번호·낱말 둘은 아님 |
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -122,6 +123,25 @@ eq(top2.map((x) => x.key), ["same", "names", "conv"], "R9 이름 같음 > 이름
 const top3 = M.pickTop([H("a", "우리 825 회의록이랑 그 바로 이전 회의록 참고해서"), H("b", "0810회의록"), H("c", "811회의록"), H("d", "회의록에서 세션 프로젝트 정리안 찾기")], T("회의록"), "회의록");
 eq(top3.map((x) => x.key), ["d", "c", "b"], "R10 이름에 모두 든 것끼리 — 낱말이 앞에 놓인 것 먼저, 그다음 짧은 것");
 eq(M.pickTop([H("a", "x"), H("b", "y")], T("z"), "z").length, 0, "R9 근거가 없으면 맨 위가 비어 있다");
+
+// ── R12 세션이 단 번호(#5607) — 세션 머리줄의 «#176» 을 보고 «176» 을 친 사람은 그 세션을 찾는다 ──
+//  상민님 2026-11-19: 고객사 CX 담당자가 «#176 이런 넘버링으로 검색 안 되나요» — 번호를 단 세션이 맨 위 셋에 없었다.
+const top4 = M.pickTop([
+  H("conv-other", "그 번호를 이야기만 한 세션", { kind: "sess", serverTop: true, at: 9 }),
+  H("sess", "번호를 단 세션", { kind: "sess", sno: "176", at: 1 }),
+  H("task", "그 태스크", { kind: "proj", ident: "176", at: 2 }),
+  H("name", "176 회의록"),
+], T("176"), "176");
+eq(top4.map((x) => x.key), ["task", "sess", "name"], "R12 번호의 주인(태스크) > 그 번호를 단 세션 > 이름에 든 것 — 서버 표시 대화보다 앞");
+const top5 = M.pickTop([
+  H("conv-other", "그 번호를 이야기만 한 세션", { kind: "sess", serverTop: true, at: 9 }),
+  H("sess", "번호를 단 세션", { kind: "sess", sno: "176", at: 1 }),
+  H("task", "그 태스크", { kind: "proj", ident: "176", at: 2 }),
+], T("#176"), "#176");
+eq(top5.map((x) => x.key), ["task", "sess", "conv-other"], "R12 «#176» 처럼 # 을 붙여 쳐도 같다");
+eq(M.pickTop([H("sess", "번호를 단 세션", { kind: "sess", sno: "1760" })], T("176"), "176").length, 0, "R12 번호는 정확일치만(176 이 1760 을 단 세션을 부르지 않는다)");
+eq(M.pickTop([H("sess", "번호를 단 세션", { kind: "sess", sno: "176" })], T("176 회의"), "176 회의").length, 0, "R12 낱말이 둘이면 번호 호명이 아니다");
+eq(M.topTier(H("sess", "x", { kind: "sess", sno: "176" }), T("176"), "176"), 0.5, "R12 층 — 번호의 주인(0) 바로 다음(0.5)");
 
 // ── R11 군말 · 다른 표기 ──
 eq([...M.FILLER_WORDS], [...S.FILLER_WORDS], "R11 군말 표가 서버와 같다");

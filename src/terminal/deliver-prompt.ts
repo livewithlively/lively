@@ -148,7 +148,105 @@ export async function deliverPromptForMember(sessionId: string, memberId: string
   } else if (!(await canAttach(sessionId, memberId))) {
     throw new HttpError(404, SESSION_NOT_FOUND);
   }
-  return deliverPrompt(sessionId, text, { owner: memberId, nodeId });
+  //  #5620 — 멈춘 세션에 보낸 말을 큐에 묻지 않는다(promptStop 머리말). 접근 판정 **뒤에** 본다 — 못 붙는 사람에게 생사를 알리지 않는다.
+  const deps = await promptStopDeps();
+  const gate = await promptStop(sessionId, memberId, nodeId, deps);
+  if (gate.verdict !== "deliver") throw promptStopError(gate);
+  try {
+    return await deliverPrompt(sessionId, text, { owner: memberId, nodeId });
+  } catch (e) {
+    //  스냅샷엔 있었는데 넣지 못했다 — 세션이 방금 멈췄고 그 컴퓨터의 다음 보고가 아직 안 온 틈일 수 있다. 그때만 그 컴퓨터에 직접 묻는다.
+    const after = nodeId ? await stoppedAfterNodeFailure(sessionId, memberId, nodeId, deps) : null;
+    if (after) throw promptStopError(after);
+    throw e;
+  }
+}
+
+/**
+ * 사람이 보낸 말을 **지금 넣을 수 있나** — 세션이 멈췄으면 «넣지 않고 되살리라» 고 답한다 (#5620).
+ *
+ * ── 왜 (실측 2026-11-19, 매니지드 · 멤버 PC 세션) ─────────────────────────────────────────
+ *  세션이 멈춘 뒤 **약 15초 동안** 세션 목록은 그 세션을 여전히 «살아 있다» 로 낸다(그 컴퓨터의 다음 스냅샷 전).
+ *  그 틈에 사람이 «아래에 말을 걸면 이어서 열려요» 를 보고 말을 치면 화면은 되살리기 대신 이 라우트로 보냈고,
+ *  종전엔 여기서 **조용히 큐에 넣었다**(`queued:true`) — 그런데 멈춘 세션의 큐는 아무도 되살리지 않아 24시간 재시도만
+ *  돌고(session-outbox stallAction), 멤버 PC 세션이면 게이트웨이 큐가 애초에 그 컴퓨터에 닿지 않는다(outbox-exec).
+ *  화면엔 «그 컴퓨터로 전달했어요» 가 떴다. 사람은 같은 말을 **한 번 더** 쳐야 했다(신고: «재시동 걸 때 치는 말을 무시해서 두 번 쳐야 해»).
+ *
+ * ★ 판정(행마다 근거가 다르다 — 시험 deliver-prompt-stop.test.ts 의 표):
+ *  · desired-state 행이 없다 → deliver(종전 그대로 — 되살릴 좌표가 없는 세션은 이 판정의 대상이 아니다).
+ *  · 이미 다른 세션으로 이어졌다(superseded_by) → stopped·moved — 복원 라우트가 이어진 id 를 돌려준다(#2231).
+ *  · 스냅샷 좌표가 있다(nodeId) → deliver — 평소 길에 왕복을 더하지 않는다. 넣다가 실패하면 그때 묻는다(stoppedAfterNodeFailure).
+ *  · 행의 좌표가 멤버 PC 인데 스냅샷에 없다 → 그 컴퓨터에 **직접** 묻는다: 끝남 확답이면 stopped, 아니면 unreachable
+ *    (게이트웨이 큐는 그 컴퓨터에 닿지 않는다 — 넣으면 조용히 사라진다. 차라리 못 넣었다고 말한다).
+ *  · 중앙 세션 → 끝난 사유(end_note.why)가 적힌 판만 tmux 에 묻고, 확답(sessionGoneVerdict)이 «없다» 면 stopped. «모른다»(null)·살아 있음은
+ *    deliver(#835 — 확답만 믿는다). ⚠ 사유가 없는 판은 묻지 않는다 — 매니지드의 tmux 한 번은 중계 왕복 0.5~1초다(#3537 실측). 사유는 끄는 자리가
+ *    **끄기 전에** 적고 판이 다시 설 때 지워지므로(session-state markSessionEnded) 살아 있는 판의 말은 왕복 없이 종전 길로 간다.
+ *  canRevive = 내 세션이고 되살릴 작업 폴더 좌표가 있다(복원 라우트의 판정과 같은 축 — 노드 직접생성 행은 못 되살린다 #2022).
+ */
+export type PromptStop =
+  | { verdict: "deliver" }
+  | { verdict: "stopped"; canRevive: boolean; moved: boolean }
+  | { verdict: "unreachable" };
+
+/** promptStop 의 재료 — 시험이 바꿔 끼운다(진짜 것은 promptStopDeps). */
+export interface PromptStopDeps {
+  state: (id: string) => Promise<{ owner: string; node_id?: string | null; superseded_by?: string | null; discovered?: boolean; root_key?: string | null; end_note?: { why?: string } | null } | undefined>;
+  /** 행의 node_id 가 **멤버 PC** 를 가리키면 그 노드 id(셀프 노드·세션 호스트는 중앙이다 — 빈 값) */
+  memberPcNode: (raw: string | null | undefined) => string;
+  /** 그 컴퓨터에 직접 묻는다 — true 끝남 · false 살아 있음 · null 모름(오프라인·무응답). 스냅샷을 믿지 않는다. */
+  nodeGone: (nodeId: string, id: string) => Promise<boolean | null>;
+  /** 이 게이트웨이 tmux 의 확답 — true 없음 · false 있음 · null 모름(sessionGoneVerdict) */
+  centralGone: (id: string) => Promise<boolean | null>;
+}
+
+const DELIVER: PromptStop = { verdict: "deliver" };
+
+type PromptStopped = Extract<PromptStop, { verdict: "stopped" }>;
+
+function stoppedOf(st: { owner: string; discovered?: boolean; root_key?: string | null }, memberId: string, moved: boolean): PromptStopped {
+  const mine = st.owner === memberId;
+  return { verdict: "stopped", canRevive: mine && (moved || !(st.discovered && !st.root_key)), moved };
+}
+
+export async function promptStop(sessionId: string, memberId: string, snapNodeId: string, deps: PromptStopDeps): Promise<PromptStop> {
+  const st = await deps.state(sessionId).catch(() => undefined);
+  if (!st) return DELIVER;
+  if (st.superseded_by) return stoppedOf(st, memberId, true);
+  if (snapNodeId) return DELIVER;
+  const pc = deps.memberPcNode(st.node_id);
+  if (pc) return (await deps.nodeGone(pc, sessionId).catch(() => null)) === true ? stoppedOf(st, memberId, false) : { verdict: "unreachable" };
+  if (!st.end_note?.why) return DELIVER;   // 끝난 사유가 없는 판 — 살아 있다(평소 길에 중계 왕복을 더하지 않는다)
+  return (await deps.centralGone(sessionId).catch(() => null)) === true ? stoppedOf(st, memberId, false) : DELIVER;
+}
+
+/** 스냅샷 좌표로 넣다가 실패했다 — 그 컴퓨터가 «끝났다» 고 확답할 때만 stopped(그 밖의 실패는 원래 오류 그대로). */
+export async function stoppedAfterNodeFailure(sessionId: string, memberId: string, nodeId: string, deps: PromptStopDeps): Promise<PromptStopped | null> {
+  if ((await deps.nodeGone(nodeId, sessionId).catch(() => null)) !== true) return null;
+  const st = await deps.state(sessionId).catch(() => undefined);
+  return st ? stoppedOf(st, memberId, !!st.superseded_by) : null;
+}
+
+/** 화면이 읽는 409 — `stopped`·`canRevive` 를 본문에 싣는다(문구를 파싱하지 않게 — HttpError body 머리말). */
+export function promptStopError(g: Exclude<PromptStop, { verdict: "deliver" }>): HttpError {
+  if (g.verdict === "unreachable") {
+    return new HttpError(409, "이 세션이 있는 컴퓨터가 세션 상태를 알려 주지 않아 말을 넣지 못했어요 — 잠시 후 다시 보내 주세요.", { body: { stopped: false } });
+  }
+  const msg = g.moved ? "이 세션은 이미 다른 세션으로 이어졌어요 — 이어진 세션에서 보내 주세요."
+    : g.canRevive ? "멈춘 세션이에요 — 다시 띄운 뒤 이 말을 넣어야 합니다."
+    : "멈춘 세션이에요 — 세션 주인만 다시 열 수 있어요.";
+  return new HttpError(409, msg, { body: { stopped: true, canRevive: g.canRevive, moved: g.moved } });
+}
+
+async function promptStopDeps(): Promise<PromptStopDeps> {
+  const reg = await import("../node/registry.js");
+  const { relayNodeId } = await import("../node/self-node.js");
+  const { sessionGoneVerdict } = await import("./tmux-exec.js");
+  return {
+    state: (id) => getSessionState(id),
+    memberPcNode: (raw) => { const n = relayNodeId(raw, reg.isSelfNode); return n && !reg.isSessionHostNode(n) ? n : ""; },
+    nodeGone: async (nodeId, id) => (reg.nodeOnline(nodeId) ? reg.nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null) : null),
+    centralGone: (id) => sessionGoneVerdict(id),
+  };
 }
 
 export async function deliverPrompt(sessionId: string, text: string, opts?: {
@@ -195,7 +293,12 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
       //  ⚠ opencode 는 **비동기 준비**가 필요한 유일한 하네스다(서버 기동 → 세션 생성 → SSE).
       //   그래서 문이 따로다 — 여기서 갈라야 그 세 단계가 실제로 돈다.
       let r: { convId: string };
-      if (harnessKey === "grok") {
+      if (harnessKey === "cursor") {
+        const { ensureCursorChat, sendCursorChat } = await import("./harness-io/claude-chat-runtime.js");
+        const e = await ensureCursorChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null, model: localState?.flags?.["--model"] });
+        if (!sendCursorChat(e, text)) throw new ClaudeChatUnavailable("cursor 에 말을 걸지 못했습니다");
+        r = { convId: e.convId };
+      } else if (harnessKey === "grok") {
         //  ACP — 핸드셰이크(initialize→session/new)가 먼저다. 세션 id 없이 보내면 -32602 가 돌아온다.
         const { ensureGrokChat, sendGrokChat } = await import("./harness-io/claude-chat-runtime.js");
         const e = await ensureGrokChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null });
@@ -204,7 +307,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
       } else if (harnessKey === "antigravity") {
         //  턴마다 프로세스 — 파이프가 계속 사는 게 아니라 이 호출이 한 턴을 돌린다.
         const { ensureAntigravityChat } = await import("./harness-io/claude-chat-runtime.js");
-        const e = ensureAntigravityChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null });
+        const e = await ensureAntigravityChat({ sessionId, harness: harnessKey, cwd: dir, osUser, convId: localState?.claude_session_id || null });
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("antigravity 턴을 시작하지 못했습니다");
         r = { convId: e.convId };
       } else if (harnessKey === "opencode") {

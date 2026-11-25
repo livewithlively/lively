@@ -29,7 +29,61 @@ import { projectNameFromHuman, shellNameFromPrompt } from "../v6/project-name.js
 
 /** 자동 생성 표식 — 정련 훅(project-bind-nudge)이 "아직 임시 껍데기"를 판별하는 유일한 근거(훅과 같은 문자열). */
 export const AUTO_CREATED_MARK = "<!-- lively:auto-created-from-first-prompt -->";
+// 첫 지시 원문을 싣는 헤딩 — 서술 형식 검사는 이 절(사람의 지시 인용)을 빼고 본다(withoutFirstPromptQuote).
+export const FIRST_PROMPT_HEADING = "## 첫 지시(원문)";
 const MAX_BODY = 3500;
+
+// 껍데기 본문에 서버가 쓰는 안내 문구 — 사람의 지시도 에이전트의 글도 아니다. 서술 형식 검사가 이 줄들을 걷어 낸다.
+//  ⚠ 첫 줄(자동 생성 안내)은 훅 project-auto-bind 의 본문과 같은 문자열이다(위 머리말의 «같은 계약»).
+const AUTO_SHELL_BANNER = "> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다.";
+const HUMAN_SHELL_BANNER = "> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다 — 이 세션의 작업 폴더가 이 프로젝트 폴더입니다.";
+const UNNAMED_SHELL_LINES = [
+  "> ⚙ 세션을 열 때 **자동 생성**된 프로젝트입니다 — 첫 지시가 없어 이름이 임시값입니다.",
+  "",
+  "이 세션의 작업 폴더가 이 프로젝트 폴더이고, 여기서 남기는 지식·작업기록·산출물이 이 프로젝트에 귀속됩니다.",
+  "무엇을 하는 일인지 정해지면 제목·본문·분류를 보강하세요(첫 쓰기 때 안내가 한 번 나갑니다).",
+];
+const SHELL_LINES: ReadonlySet<string> = new Set([AUTO_SHELL_BANNER, HUMAN_SHELL_BANNER, ...UNNAMED_SHELL_LINES.filter(Boolean), AUTO_CREATED_MARK]);
+// 인용 절을 끝내는 헤딩(# · ##) — ### 이하는 절 안의 소제목이다. 코드 펜스 안의 줄은 헤딩이 아니다.
+const SECTION_END_RE = /^#{1,2}\s/;
+const FENCE_RE = /^\s*(```|~~~)/;
+
+/** 첫 지시 인용 절의 마지막 줄 번호(head = 헤딩 줄). */
+function firstPromptQuoteEnd(ls: string[], head: number): number {
+  // ① 껍데기 본문을 통째로 옮긴 조각 — 자동 생성 표식까지가 지시다. 사람의 지시 안에 `## ` 헤딩이나 코드 펜스가 있어도 끊기지 않는다.
+  for (let j = head + 1; j < ls.length; j++) {
+    const t = ls[j].trim();
+    if (t === FIRST_PROMPT_HEADING) break;   // 다음 인용이 먼저 온다 — 이 인용엔 표식이 없다
+    if (t === AUTO_CREATED_MARK) return j;
+  }
+  // ② 표식이 없으면 마크다운의 절 끝 — 다음 #·## 헤딩 앞까지. 그것도 없으면 조각 끝까지.
+  let fenced = false;
+  for (let j = head + 1; j < ls.length; j++) {
+    if (FENCE_RE.test(ls[j])) { fenced = !fenced; continue; }
+    if (!fenced && SECTION_END_RE.test(ls[j])) return j - 1;
+  }
+  return ls.length - 1;
+}
+
+/**
+ * 순수 — 프로젝트 본문(이어쓰기 조각)에서 사람의 첫 지시 인용과 껍데기 안내 문구를 걷어 낸 나머지. 서술 형식 검사는 이 나머지만 본다.
+ *
+ *  왜: 프로젝트 이관(project-bind-nudge 안내)은 껍데기의 본문(첫 지시 원문)을 대상 프로젝트에 이어 붙인다. 그 글은 사람의 지시라
+ *   형식을 맞출 대상이 아니다(고치면 원문이 아니게 된다). 그렇다고 헤딩·표식이 있다는 이유로 조각 전체를 건너뛰면 헤딩 한 줄로
+ *   형식 검사를 비껴갈 수 있다(2026-10-14 리뷰 D) — 그래서 인용 절과 서버가 쓴 안내 줄만 뺀다.
+ *  걷는 것: `## 첫 지시(원문)` 헤딩부터 그 절 끝까지(firstPromptQuoteEnd) · 껍데기 안내 줄(SHELL_LINES — 줄 전체가 같을 때만) · 자동 생성 표식.
+ */
+export function withoutFirstPromptQuote(md: string): string {
+  const ls = String(md ?? "").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < ls.length; i++) {
+    const t = ls[i].trim();
+    if (t === FIRST_PROMPT_HEADING) { i = firstPromptQuoteEnd(ls, i); continue; }
+    if (SHELL_LINES.has(t)) continue;
+    out.push(ls[i]);
+  }
+  return out.join("\n");
+}
 
 /** 세션 생성 요청 중 이 판정에 필요한 것만(라우트의 CreateInput 을 그대로 받지 않는다 — 순수 유지). */
 export interface FirstPromptPlanInput {
@@ -105,10 +159,10 @@ export function humanShellProject(
   if (!name) return null;
   const prompt = String(promptRaw ?? "").trim();
   const description = [
-    "> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다 — 이 세션의 작업 폴더가 이 프로젝트 폴더입니다.",
+    HUMAN_SHELL_BANNER,
     ...(prompt ? [
       "",
-      "## 첫 지시(원문)",
+      FIRST_PROMPT_HEADING,
       "",
       prompt.length > MAX_BODY ? prompt.slice(0, MAX_BODY) + "\n\n…(이하 생략)" : prompt,
     ] : []),
@@ -122,10 +176,7 @@ export function unnamedShellProject(): ShellProjectSpec {
     nameSource: "rule",
     name: UNNAMED_PROJECT,
     description: [
-      "> ⚙ 세션을 열 때 **자동 생성**된 프로젝트입니다 — 첫 지시가 없어 이름이 임시값입니다.",
-      "",
-      "이 세션의 작업 폴더가 이 프로젝트 폴더이고, 여기서 남기는 지식·작업기록·산출물이 이 프로젝트에 귀속됩니다.",
-      "무엇을 하는 일인지 정해지면 제목·본문·분류를 보강하세요(첫 쓰기 때 안내가 한 번 나갑니다).",
+      ...UNNAMED_SHELL_LINES,
       "",
       AUTO_CREATED_MARK,
     ].join("\n"),
@@ -152,9 +203,9 @@ export function shellProjectFromPrompt(promptRaw: string | null | undefined): Sh
   const name = shellNameFromPrompt(prompt);
   if (!name) return null;
   const description = [
-    "> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다.",
+    AUTO_SHELL_BANNER,
     "",
-    "## 첫 지시(원문)",
+    FIRST_PROMPT_HEADING,
     "",
     prompt.length > MAX_BODY ? prompt.slice(0, MAX_BODY) + "\n\n…(이하 생략)" : prompt,
     "",

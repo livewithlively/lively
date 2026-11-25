@@ -10,8 +10,8 @@ import { importTerminalModule } from "./standalone-terminal-env.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = readFileSync(join(root, "web/standalone/terminal.ts"), "utf8");
-const { urlAtColumn, urlAtCell, urlSpansAt, spanToRange, cellRow, linkOpenTarget, ctxCopyPlan, shortLink } = await importTerminalModule();
-for (const f of [urlAtColumn, urlAtCell, urlSpansAt, spanToRange, cellRow, linkOpenTarget, ctxCopyPlan, shortLink]) assert.equal(typeof f, "function");
+const { urlAtColumn, urlAtCell, urlSpansAt, spanToRange, cellRow, linkOpenTarget, ctxCopyPlan, shortLink, oscLinkAtCell } = await importTerminalModule();
+for (const f of [urlAtColumn, urlAtCell, urlSpansAt, spanToRange, cellRow, linkOpenTarget, ctxCopyPlan, shortLink, oscLinkAtCell]) assert.equal(typeof f, "function");
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -55,7 +55,7 @@ t("U7 스킴 없는 형태의 오탐 경계 — 경로 없는 점-이름·파일
 });
 t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인창이 뜬다), down/up/click 캡처 셋이 한 판정을 공유", () => {
   assert.match(src, /pendingLink = wantsLink \? linkAtEvent\(ev\) : null/, "mousedown 에서 링크를 판정하지 않는다");
-  assert.match(src, /return w \? urlAtCell\(w\.rows, w\.soft, w\.at, col, term\.cols\) : null;/, "판정이 urlAtCell(여러 행 잇기)을 안 쓴다");
+  assert.match(src, /\(w \? urlAtCell\(w\.rows, w\.soft, w\.at, col, term\.cols\) : null\)/, "판정이 urlAtCell(여러 행 잇기)을 안 쓴다");
   assert.match(src, /rows\.push\(l \? cellRow\(l, term\.cols\) : ''\);\s*soft\.push\(!!\(l && l\.isWrapped\)\);/, "행을 칸 정렬로 펴지 않거나 감싸인 행(isWrapped)을 안 넘긴다");
   // 캡처(true) 3종 — 버블 단계면 xterm 이 먼저 먹는다
   for (const evName of ["mousedown", "mouseup", "click"]) {
@@ -88,10 +88,11 @@ t("A3 셸 밖(단독 터미널 창) = 새 창 — 바꿀 부모 해시가 없다
 t("A4 그리드 터미널(terminal-grid.html)도 같은 /ui/ 로 본다", () => {
   assert.equal(linkOpenTarget("https://gw.test/ui/#/projects/12", { ...D, href: "https://gw.test/ui/terminal-grid.html" }), "shell");
 });
-t("A5~A7 해시 없는 /ui/ · 같은 출처 다른 경로 · 다른 게이트웨이의 /ui/ = 새 창", () => {
+t("A5~A7 해시 없는 /ui/ · 같은 출처 다른 경로 = 새 창 · 다른 게이트웨이의 /ui/ 는 남의 사이트(브라우저 새 탭 · 앱 곁칸 — #5699)", () => {
   assert.equal(linkOpenTarget("https://gw.test/ui/", D), "tab");
   assert.equal(linkOpenTarget("https://gw.test/api/ui/me", D), "tab");
-  assert.equal(linkOpenTarget("https://other.test/ui/#/x", D), "tab");
+  assert.equal(linkOpenTarget("https://other.test/ui/#/x", B), "tab");
+  assert.equal(linkOpenTarget("https://other.test/ui/#/x", D), "pane");
 });
 t("A8 미리보기는 셸 안이면 곁칸 — 브라우저·앱 모두(원준 2026-08-21, 종전 유지)", () => {
   assert.equal(linkOpenTarget("https://gw.test/preview/p1/ui/#/k/x", B), "pane");
@@ -104,6 +105,52 @@ t("A10·A11 셸 밖 미리보기 · 아티팩트 아닌 claude.ai = 새 창", ()
   assert.equal(linkOpenTarget("https://gw.test/preview/p1/ui/", { ...B, framed: false }), "tab");
   assert.equal(linkOpenTarget("https://claude.ai/new", B), "tab");
 });
+// ── #5699 남의 사이트도 데스크톱 앱에선 곁칸 웹 칸(원준 2026-11-22 «url 누르면 우측 곁칸 웹 브라우저에서») ──
+t("A13 데스크톱 앱 · 셸 안 · 남의 사이트(http·https) = 곁칸", () => {
+  assert.equal(linkOpenTarget("https://github.com/a/b", D), "pane");
+  assert.equal(linkOpenTarget("http://127.0.0.1:3000/x", D), "pane");
+  assert.equal(linkOpenTarget("https://claude.ai/new", D), "pane");
+});
+t("A14 브라우저는 남의 사이트를 그대로 새 탭(iframe 을 상대가 막고, 셸이 대신 여는 창은 팝업 차단에 걸린다) · 셸 밖도 새 창", () => {
+  assert.equal(linkOpenTarget("https://github.com/a/b", B), "tab");
+  assert.equal(linkOpenTarget("https://github.com/a/b", { ...D, framed: false }), "tab");
+});
+t("A15 데스크톱이어도 같은 출처 다른 경로(api)와 http 아닌 스킴은 종전(새 창)", () => {
+  assert.equal(linkOpenTarget("https://gw.test/api/ui/me", D), "tab");
+  assert.equal(linkOpenTarget("mailto:a@b.c", D), "tab");
+});
+
+// ── #5699 OSC 8 칸의 주소(oscLinkAtCell) — Codex 는 [라벨](주소) 를 라벨만 그리고 주소는 OSC 8 로 심는다.
+//  글자 판정이 놓치면 클릭이 pty 로 새어 Codex 가 제 기계의 기본 브라우저로 연다(실측 0.171.0). xterm 5.5 내부 모양을 흉내 낸다.
+{
+  const mk = (cells, links) => ({
+    buffer: { active: { getLine: (y) => (y === 5 ? { getCell: (x) => cells[x] } : undefined) } },
+    _core: { _oscLinkService: { getLinkData: (id) => links[id] } },
+  });
+  const link = (id) => ({ hasExtendedAttrs: () => true, extended: { urlId: id } });
+  const plain = { hasExtendedAttrs: () => false, extended: { urlId: 0 } };
+  const T = mk([plain, link(1), link(2), link(3), link(4), link(5)], { 1: { uri: "https://example.com/docs" }, 2: { uri: "file:///Users/a/project/12/a.md" }, 3: { uri: "javascript:alert(1)" }, 5: { uri: "file:///etc/hosts" } });
+  t("O1 라벨 칸 → 심긴 주소(http·https·file)", () => {
+    assert.equal(oscLinkAtCell(T, 5, 1), "https://example.com/docs");
+    assert.equal(oscLinkAtCell(T, 5, 2), "file:///Users/a/project/12/a.md");
+  });
+  t("O2 링크 없는 칸 · 없는 줄 · 위험 스킴 · 데이터 없는 id → null", () => {
+    assert.equal(oscLinkAtCell(T, 5, 0), null);
+    assert.equal(oscLinkAtCell(T, 9, 1), null);
+    assert.equal(oscLinkAtCell(T, 5, 3), null);
+    assert.equal(oscLinkAtCell(T, 5, 4), null);
+    assert.equal(oscLinkAtCell(T, 5, 5), null, "곁칸이 못 여는 file:// 은 TUI 에 돌려준다");
+  });
+  t("O3 xterm 내부 모양이 바뀌어도 throw 없이 null(종전 판정만 남는다)", () => {
+    assert.equal(oscLinkAtCell({}, 5, 1), null);
+    assert.equal(oscLinkAtCell({ buffer: { active: { getLine: () => { throw new Error("x"); } } } }, 5, 1), null);
+    assert.equal(oscLinkAtCell({ ...T, _core: {} }, 5, 1), null);
+  });
+  t("O4 배선 — 클릭 판정(linkAtPoint)이 OSC 8 칸을 먼저 본다(트래킹 없는 클릭의 xterm OSC 8 제공자와 같은 주소)", () => {
+    assert.match(src, /return oscLinkAtCell\(term, absY, col\) \|\| \(w \? urlAtCell\(w\.rows, w\.soft, w\.at, col, term\.cols\) : null\);/);
+  });
+}
+
 t("A12 파싱 불가 주소 = throw 없이 새 창(종전 catch 폴백과 같은 결과)", () => {
   assert.equal(linkOpenTarget("http://[", B), "tab");
 });
@@ -326,7 +373,7 @@ t("W6 배선 — 호버 밑줄도 우리 판정(링크 제공자)이 긋고, 애
   assert.match(src, /range: spanToRange\(sp, w!\.from\), text: sp\.url,/, "범위를 spanToRange 로 안 만든다");
   assert.ok(src.indexOf("term.registerLinkProvider({") < src.indexOf("new WebLinksAddon.WebLinksAddon"), "애드온이 먼저 등록되면 그쪽 링크가 이긴다");
   assert.match(src, /const spans = w \? urlSpansAt\(w\.rows, w\.soft, w\.at, term\.cols\) : \[\];/, "제공자가 urlSpansAt 을 안 쓴다");
-  assert.match(src, /const w = readRows\(term\.buffer\.active\.viewportY \+ row\);/, "클릭 판정과 호버가 같은 창 읽기를 안 쓴다");
+  assert.match(src, /const absY = term\.buffer\.active\.viewportY \+ row;\n\s+const w = readRows\(absY\);/, "클릭 판정과 호버가 같은 창 읽기를 안 쓴다");
 });
 t("W5 여는 곳은 한 판정 — 열기(openLinkFromTerminal)가 linkOpenTarget 을 탄다 · 앱 판정은 부모 프레임의 다리까지 본다", () => {
   assert.match(src, /const where = linkTargetHere\(uri\);/);

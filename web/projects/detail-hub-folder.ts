@@ -107,7 +107,7 @@ function previewStage(pid: number, B: string, f: Picked): { node: HTMLElement; s
   return { node, start };
 }
 
-export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
+export const fillFolder: Fill = (ctx, f, body, foot, sub, acts) => {
   const { o, P, pid } = ctx;
   const w = f.w, h = f.h;
   const modal = !!f.modal;
@@ -354,6 +354,13 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     const cur = splitDirs(items as any[]);
     sub.textContent = rootItems.length ? '파일 ' + root.files.length + (root.dirs.length ? ' · 폴더 ' + root.dirs.length : '') : '';
     const up = upControl((picked) => { uploadFiles(picked, [], items); }, { label: '업로드' });
+    //  #5630 — 격자 위젯은 바닥 줄이 없다. 올리기 · 새 폴더는 머리의 아이콘 둘(어느 크기든 같은 자리). 끌어다 놓기는 카드 전체가 받는다.
+    if (!f.modal) {
+      const mk = mkdirBtn(); mk.className = 'pjh-hbtn'; mk.title = '새 폴더'; mk.setAttribute('aria-label', '새 폴더'); mk.replaceChildren(hubIcon('folderPlus', 15));
+      const upIc = el('button', { class: 'pjh-hbtn', type: 'button', title: '파일 올리기 — 카드에 끌어다 놓아도 돼요', 'aria-label': '파일 올리기', onclick: (e: Event) => { e.stopPropagation(); up.btn.click(); } }, hubIcon('up', 15));
+      acts.querySelectorAll('.pjh-hbtn').forEach((n) => n.remove());   // 폴더를 옮겨 다시 그릴 때 겹치지 않게
+      acts.prepend(mk, upIc);
+    }
     const rootLabel = '맨 위 · 파일 ' + root.files.length + ' · 폴더 ' + root.dirs.length;
     const here = nav.path ? nav.path.split('/').pop() : '맨 위';
     const card = (body.closest('.pjh-w') || body) as HTMLElement;
@@ -405,7 +412,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       const segs = nav.path ? nav.path.split('/') : [];
       const c = el('div', { class: 'pjh-crumb' }, el('button', { class: 'pjh-crumb-b' + (segs.length ? '' : ' on'), type: 'button', text: P.name || '프로젝트', title: '맨 위 폴더', onclick: () => goDir('') }));
       segs.forEach((sg, i) => c.append(hubIcon('chevr', 11), el('button', { class: 'pjh-crumb-b' + (i === segs.length - 1 ? ' on' : ''), type: 'button', text: sg, title: segs.slice(0, i + 1).join('/'), onclick: () => goDir(segs.slice(0, i + 1).join('/')) })));
-      c.append(el('span', { class: 'pjh-crumb-sp' }, mkdirBtn(), up.btn, up.fileIn, up.dirIn));
+      c.append(el('span', { class: 'pjh-crumb-sp' + (f.modal ? '' : ' quiet') }, f.modal ? mkdirBtn() : null, up.btn, up.fileIn, up.dirIn));
       return c;
     };
 
@@ -454,9 +461,12 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
     const firstFile = shown.find((it) => it.type !== 'dir');
     if (w >= 3 && (!nav.picked || !items.some((it) => relOf(it.name) === nav.picked)) && firstFile) nav.picked = relOf(firstFile.name);
     for (const it of shown) grid.append(fcard(it));
-    grid.append(dropCard());
-    const main = el('div', { class: 'pjh-fmain' }, crumb(), grid, progBox);
-    const parts: HTMLElement[] = [tree(), main];
+    if (f.modal) grid.append(dropCard());
+    //  #5630 — 하위 폴더가 없고 맨 위면 나무 열 · 경로 줄을 세우지 않는다(«프로젝트 이름» 이 세 번 서던 것). 경로 줄은 올리기 입력을 품으므로 감추기만 한다.
+    const flat = !f.modal && !nav.path && !(root.dirs as Entry[]).length;
+    const cr = crumb(); if (flat) cr.classList.add('flat');
+    const main = el('div', { class: 'pjh-fmain' }, cr, grid, progBox);
+    const parts: HTMLElement[] = flat ? [main] : [tree(), main];
     let picked: Entry | null = null;
     if (w >= 3) {
       picked = (nav.picked ? items.find((it) => relOf(it.name) === nav.picked) : null) || null;
@@ -466,7 +476,7 @@ export const fillFolder: Fill = (ctx, f, body, foot, sub) => {
       //  붙은 뒤에 채운다 — 미리보기는 상자가 화면에 있어야 폭을 재고 받는다.
       queueMicrotask(() => paintDetail(side, { cwd: nav.path, items: items.map(asPicked), selected: picked ? [asPicked(picked)] : [] }, goDir, refresh));
     }
-    body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:170px minmax(0,1fr)' + (w >= 3 ? ' 300px' : '') }, ...parts));
+    body.append(el('div', { class: 'pjh-two-f', style: 'grid-template-columns:' + (flat ? '' : '170px ') + 'minmax(0,1fr)' + (w >= 3 ? ' 300px' : '') }, ...parts));
     foot.append(footText(rootLabel + (picked ? ' · 고른 것: ' + picked.name : '')));
     foot.append(btn('폴더 열기', 'btn-ghost', open));
   });

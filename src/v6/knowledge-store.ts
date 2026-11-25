@@ -16,14 +16,14 @@ import { syncKnowledgeLexSoon } from "./knowledge-lex-store.js";
 import { parseGrep, grepWhere } from "./search-util.js";
 import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./visibility.js";
 // 공용 프리미티브(#1313 R21) — 검색·링크와 함께 쓰는 슬러그·감사·가시성 술어·아이콘 표현식.
-import { knowledgeVisWhere, slugify, auditKnowledge, K_ICON_EXPR, forgetClassifierSeen } from "./knowledge-common.js";
+import { knowledgeVisWhere, slugify, resolveKnowledgeName, auditKnowledge, K_ICON_EXPR, forgetClassifierSeen } from "./knowledge-common.js";
 import { listKnowledgeLinks, materializeWikiLinksBestEffort, type WikiLinkResult } from "./knowledge-links.js";
 
 // PUBLIC_VIEWER 는 Viewer 개념이라 visibility.ts 로 옮겼다(#1291) — 여기 두면 상수 하나 때문에
 //  터미널·커넥터 같은 hot 모듈이 지식 스토어 전체를 끌어온다. 기존 import 경로는 아래 재export 로 유지.
 export { PUBLIC_VIEWER } from "./visibility.js";
 // 같은 이유로 슬러그·가시성 술어는 knowledge-common.ts(#1313 R21) — 기존 import 경로는 이 재수출로 유지.
-export { slugify, knowledgeVisWhere } from "./knowledge-common.js";
+export { slugify, resolveKnowledgeName, pickKnowledgeName, knowledgeVisWhere } from "./knowledge-common.js";
 // 검색(#1313 R21) — 구현은 knowledge-search.ts · knowledge-similar.ts. 표면은 종전 그대로.
 export { countKnowledgeGrep, searchKnowledge, hybridSearchKnowledge } from "./knowledge-search.js";
 export { findSimilarKnowledge, findRecommendedKnowledge } from "./knowledge-similar.js";
@@ -423,10 +423,24 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
  *  · visibility: INSERT 때의 공개범위(수정엔 안 쓴다 — 공개범위는 이 함수가 바꾸지 않는다).
  *  · deferPost: 임베딩 표시·위키링크 엣지를 커밋 **뒤**로 미룬다(post 로 돌려준다). 위키링크는 제 연결로 knowledge_link 를
  *    쓰는데, 그 FK 가 아직 커밋 안 된 이 행을 기다려 트랜잭션이 스스로를 기다리게 된다.
+ *  · expectedVersion: 판 대조(CAS) — 지금 행의 version 이 이 값일 때만 고친다. 행이 없거나 판이 다르면 아무것도 쓰지 않고
+ *    KnowledgeVersionConflictError. 읽기(before)·대조·쓰기를 행을 잡은 한 트랜잭션에서 한다 — db 를 안 주면 여기서 트랜잭션을 열고,
+ *    주면 그 트랜잭션 안에서 잡는다(트랜잭션이 아닌 연결을 주지 마라 — 그땐 쓰기 문장의 조건만 남는다).
+ *  · nameResolved: input.name 이 이미 resolveKnowledgeName 을 거친 이름이다 — 다시 해석하지 않고 그 이름의 행을 쓴다.
+ *    knowledge_save 가 핸들러에서 해석한 이름을 넘긴다(공개범위 검사 · 게이트 · 쓰기가 한 이름을 보고, 저장마다 조회 하나가 준다).
  */
-export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean }
+export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean; expectedVersion?: number; nameResolved?: boolean }
 export class KnowledgeExistsError extends Error {
   constructor(public readonly knowledgeName: string) { super(`지식 '${knowledgeName}' 이(가) 이미 있습니다`); }
+}
+/** expectedVersion 대조가 어긋났다 — 아무것도 쓰지 않았다. currentVersion 은 지금 판(행이 없으면 null). */
+export class KnowledgeVersionConflictError extends Error {
+  constructor(
+    public readonly knowledgeName: string, public readonly expectedVersion: number, public readonly currentVersion: number | null,
+  ) {
+    // 문구에 '없음'·'허용' 같은 토큰을 넣지 않는다 — 호출부가 바꾸지 못하고 새면 rest-util 이 그 토큰으로 404·400 을 매긴다.
+    super(`지식 '${knowledgeName}' 의 판이 대조한 값과 달라 쓰지 않았습니다(기대 ${expectedVersion} · 지금 ${currentVersion ?? "-"})`);
+  }
 }
 
 export async function upsertKnowledge(
@@ -434,10 +448,20 @@ export async function upsertKnowledge(
   ctx?: WriteCtx,
   opts: UpsertKnowledgeOpts = {},
 ): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult; post?: () => Promise<WikiLinkResult | undefined> }> {
+  const cas = opts.expectedVersion ?? null;
+  // 판 대조는 읽기·대조·쓰기를 한 트랜잭션에서 한다 — 풀로 불렸으면 트랜잭션을 열어 그 안에서 다시 부르고,
+  //  임베딩·위키링크(post)는 커밋 뒤에 돌린다(deferPost 와 같은 까닭).
+  if (cas != null && !opts.db) {
+    const r = await withTx((client) => upsertKnowledge(input, ctx, { ...opts, db: client, deferPost: true }));
+    if (opts.deferPost) return r;
+    const { post, ...row } = r;
+    const wikilinks = await post?.();
+    return wikilinks ? { ...row, wikilinks } : row;
+  }
   const db: Db = opts.db ?? itemsPool;
   let name: string;
   if (input.name) {
-    name = slugify(input.name);
+    name = opts.nameResolved ? input.name : await resolveKnowledgeName(input.name);
   } else {
     const base = slugify(input.title || input.body_md.slice(0, 40));
     name = base;
@@ -446,8 +470,13 @@ export async function upsertKnowledge(
       name = `${base}-${i}`;
     }
   }
-  const before = await one(db, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  //  판 대조면 행을 잡고 읽는다 — 대조한 판 그대로 쓰게. FOR UPDATE 가 아니라 NO KEY 다: 이 행을 가리키는 FK 삽입(위키링크·
+  //   카테고리)의 KEY SHARE 와 부딪치지 않게(derived-visibility.ts 의 잠금 규칙). 아래 ON CONFLICT DO UPDATE 가 거는 잠금도 같은 세기다.
+  const before = await one(db, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1${cas != null ? " FOR NO KEY UPDATE" : ""}`, [name]);
   if (opts.insertOnly && before) throw new KnowledgeExistsError(name);
+  if (cas != null && Number(before?.version) !== cas) {
+    throw new KnowledgeVersionConflictError(name, cas, before ? Number(before.version) : null);
+  }
   // 단일 카테고리(#290): 단일 키 문자열 또는 배열(커넥터 호환) 정규화. 미존재 key 는 INSERT 전 차단(미분류·오타 방지).
   const catKeys = Array.isArray(input.category) ? input.category : (input.category != null ? [input.category] : []);
   const catIds: number[] = [];
@@ -506,13 +535,17 @@ export async function upsertKnowledge(
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
        summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
        is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name, searchable=EXCLUDED.searchable,
-       version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`}`,
+       version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by${cas != null ? `
+       WHERE knowledge.version = $19` : ""}`}`,
     [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
      // #638 $16 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
      input.lifecycle ?? "active",
      opts.visibility ?? "open",
-     searchable]);   // $18 #5169 검색 제외 — 미전송이면 기존 값(resolveUpsertFacets)
+     searchable,   // $18 #5169 검색 제외 — 미전송이면 기존 값(resolveUpsertFacets)
+     ...(cas != null ? [cas] : [])]);   // $19 판 대조 — 있을 때만
   if (opts.insertOnly && !ins.rowCount) throw new KnowledgeExistsError(name);
+  //  판 대조 — 잡은 행이라 보통 여기선 어긋나지 않는다. 0행이면 쓰지 않은 것이다(트랜잭션이 아닌 연결을 받았을 때의 마지막 대조).
+  if (cas != null && !ins.rowCount) throw new KnowledgeVersionConflictError(name, cas, await getKnowledgeVersion(name, db));
   const after = await one(db, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx, db);
   // #290 단일 카테고리: 첫 카테고리만 적용(linkKnowledgeCategory 가 replace). 2+ 전달은 정책상 경고하고 무시.
@@ -556,6 +589,12 @@ export async function existingKnowledgeNames(names: readonly string[]): Promise<
 export async function getKnowledgeGateFields(name: string): Promise<{ lifecycle?: string; provenance?: string; external_system?: string | null }> {
   const r = await one(itemsPool, `SELECT lifecycle, provenance, external_system FROM knowledge WHERE name=$1`, [name]);
   return (r as { lifecycle?: string; provenance?: string; external_system?: string | null } | undefined) ?? {};
+}
+
+/** 지금 판(행이 없으면 null) — 판 대조(expected_version)를 쓰기 자리에서 다시 볼 때. */
+export async function getKnowledgeVersion(name: string, db: Db = itemsPool): Promise<number | null> {
+  const r = await one(db, `SELECT version FROM knowledge WHERE name=$1`, [name]);
+  return r ? Number((r as { version: unknown }).version) : null;
 }
 
 export async function setKnowledgeLifecycle(name: string, lifecycle: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
@@ -613,9 +652,12 @@ export async function setKnowledgeSearchable(name: string, searchable: boolean, 
 export async function setKnowledgeTitle(name: string, title: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
   const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   if (!before) throw new Error(`지식 '${name}' 없음`);
+  //  confidence 도 upsertKnowledge 처럼 저장 출처로 덮는다(mcp→ai, 그 밖→human) — 제목도 내용이라 «마지막으로 어느 쪽이 고쳤나» 에 든다.
+  //   안 덮으면 에이전트 저장 뒤 같은 계정의 사람이 웹에서 제목을 고쳐도 'ai' 로 남아, 형식 정리 저장의 사람 편집 보호 창
+  //   (capabilities/knowledge/save-guard.ts)이 그 편집을 «본인 에이전트의 마지막 저장» 으로 보고 비켜선다.
   const after = await one(itemsPool,
-    `UPDATE knowledge SET title=$2, version=version+1, updated_at=now(), updated_by=$3
-      WHERE name=$1 RETURNING ${K_COLS}`, [name, title, ctx?.actor ?? null]);
+    `UPDATE knowledge SET title=$2, version=version+1, updated_at=now(), updated_by=$3, confidence=$4
+      WHERE name=$1 RETURNING ${K_COLS}`, [name, title, ctx?.actor ?? null, ctx?.source === "mcp" ? "ai" : "human"]);
   await auditKnowledge(name, "set_title", before, after, ctx);
   if ((before as { title?: string | null }).title !== title) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
   return after as KnowledgeRow;

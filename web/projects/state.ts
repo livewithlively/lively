@@ -149,6 +149,8 @@ function pjvScopeHash(key) {
   if (!key || key === '__all__') return '#/projects2';
   if (key === '__none__') return '#/projects2/none';
   if (key === '__drafts__') return '#/projects2/drafts';   // #5522 초안만 보는 스코프
+  if (key === '__invited__') return '#/projects2/invited';   // #5630 초대받은
+  if (key === '__mine__') return '#/projects2/mine';         // #5630 내가 만든
   if (key[0] === 'L') return '#/projects2/l/' + key.slice(1);
   if (key[0] === 'F') return '#/projects2/f/' + key.slice(1);
   return '#/projects2';

@@ -71,6 +71,13 @@
               },
               "default": []
             },
+            "optional_scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
             "tools": {
               "type": "array",
               "items": {
@@ -443,7 +450,8 @@
                     "type": "string",
                     "enum": [
                       "headless",
-                      "inject"
+                      "inject",
+                      "server"
                     ]
                   },
                   "prompt_asset": {
@@ -454,6 +462,15 @@
                   "prompt": {
                     "type": "string",
                     "maxLength": 20000
+                  },
+                  "route": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "body": {
+                    "type": "object",
+                    "additionalProperties": {}
                   }
                 },
                 "required": [
@@ -797,6 +814,16 @@
             },
             "folders": {
               "description": "다음 판 — 지금 적으면 저장을 거절한다"
+            },
+            "repos": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(?!\\.+$)[A-Za-z0-9._-]{1,100}$"
+              },
+              "maxItems": 100,
+              "default": [],
+              "description": "판 읽기 도구(repo_refs · repo_diff · repo_file · repo_grep)로 읽을 등록 레포 이름(repo_list 의 name). 적은 레포만 읽힌다 — 적지 않으면 하나도 못 읽는다. 도구 이름(permissions.tools)과 code scope 는 따로 적는다"
             }
           },
           "additionalProperties": false,

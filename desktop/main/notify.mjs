@@ -441,6 +441,43 @@ function showsUi(windowUrl, ui) {
 }
 
 /**
+ * #5701 배너의 «그곳»(사건 표시 via:"same" 가 가리키는 워크스페이스) = **그 배너를 받아 온 게이트웨이**(순수 · 표 H1~H7).
+ *  원준 2026-11-22: «내가 지금 접속해있는 다른 워크스페이스 작업 끝났다고 알림이 뜨는데 그거 눌러도 그 워크스페이스로 안가».
+ *  앱 안 워크스페이스 전환(bd0af759) 뒤로 알림 스트림·폴은 **지금 보는 워크스페이스**(selected)에 붙는다(main.mjs notifyConnection).
+ *  그런데 클릭 판정(clickTarget)엔 처음 로그인한 곳(bound = ~/.lively/gateway-url)을 매인으로 넘겨, 보는 워크스페이스의 «same» 배너를
+ *  누르면 처음 곳 `/ui/#/s/<그 세션>` 을 실었다 — 그 세션이 없는 워크스페이스다.
+ *  @param {object|null} event 배너의 사건 — 받을 때 main.mjs 가 받아 온 게이트웨이를 `gw` 로 붙인다
+ *  @param {{selected?:string|null, bound?:string|null, cloud?:string|null}} ctx
+ *   selected = 앱 화면의 워크스페이스(계정 서버 화면이면 cloud 와 같다) · bound = CLI·노드가 매인 곳 · cloud = 계정 서버
+ *  @returns {string|null} 게이트웨이 주소(끝 '/' 없이) — 모르면 null
+ */
+export function bannerHome(event, ctx = {}) {
+  const gwOf = (raw) => {
+    try {
+      const u = new URL(String(raw || ""));
+      if (!/^https?:$/.test(u.protocol) || u.username || u.password || u.search || u.hash) return null;
+      return (u.origin + u.pathname).replace(/\/+$/, "");
+    } catch { return null; }
+  };
+  const cloud = gwOf(ctx.cloud), selected = gwOf(ctx.selected);
+  return gwOf(event && event.gw)                                   // H1 받아 온 곳이 있으면 그곳
+    || (selected && selected !== cloud ? selected : null)          // H2 지금 보는 워크스페이스(계정 서버 화면은 워크스페이스가 아니다 — H3)
+    || gwOf(ctx.bound);                                           // H4 처음 로그인한 곳(종전)
+}
+
+/**
+ * #5701 배너의 그곳을 앱 창에 다시 실을 때 앱의 «보는 워크스페이스»(selectedGatewayUrl)도 그리로 옮겨 적을까(순수 · 표 F1~F5).
+ *  창만 그곳을 싣고 «보는 워크스페이스» 가 옛 곳에 남으면 알림 바인딩(notifyConnection)이 옛 곳에 붙은 채 어긋난다.
+ *  그렇다고 아무 데로나 옮기면 안 된다 — 그곳의 웹 세션 쿠키가 없으면 창은 로그인 화면이고 알림 연결은 끊긴다(리뷰 #3).
+ *  @param {string|null} gw 그곳(bannerHome) · @param {{selected?:string|null, hasSession?:boolean}} ctx
+ */
+export function shouldFollowGateway(gw, ctx = {}) {
+  if (!gw || !ctx.selected) return false;                                   // F1 토큰 판(selected 없음) — 그 판의 배너는 전부 매인 곳에서 온다
+  if (String(ctx.selected).replace(/\/+$/, "") === gw) return false;        // F2 이미 그곳
+  return ctx.hasSession === true;                                            // F3 그곳 세션이 있을 때만 · F4 없으면 창만 싣는다
+}
+
+/**
  * 배너를 눌렀을 때 할 일(순수) — 사양 표 K1~K12.
  * @param {object|null} event 배너의 사건(묶음이면 null)
  * @param {{gatewayUrl?:string|null, windowUrl?:string|null, windowWs?:string|null, cpOrigins?:string[]}} ctx

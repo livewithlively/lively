@@ -8,7 +8,7 @@
 //   · 세션을 보고 있다: «이 세션의 태스크» 1. 2. 3.(순서 = 이 세션이 할 차례 · 끌기/메뉴로 바꾸기 · 빈 칸에서 찾아 넣기)
 //                       + «외부 태스크»(이 세션에 없는 것 전부 · 세션 배지와 수행 상태 · [세션으로] / [이 세션에 넣기])
 //   · 새 세션 자리(?new=1): «이 프로젝트의 태스크» 전체 + [담기] — 담은 것은 가운데 글칸에 번호 배지로 선다(compose-tasks.ts).
-//   → 빠른 추가.
+//   → 새 태스크: 목록 머리 바로 밑의 흐린 줄 «+ 새 태스크». 누르면 그 자리에서 제목·본문 칸이 펴지고 바로 친다(#5581).
 //  규칙(원준 2026-09-27): **세션이 있으면(멈춤 포함) [세션으로], 없을 때만 [이 세션에 넣기]** · 같은 세션은 어느 줄에서나 같은 색 배지.
 //
 //  ⚠ 입력 중에는 다시 그리지 않는다 — 이 칸은 8초마다 서버를 다시 읽는다. 글칸에 손이 가 있는 동안은 그리기를 미루고(listDirty),
@@ -25,7 +25,7 @@ import type { Part, PartCtx } from './panes-parts.js';
 import { pjvPopover } from '../projects/popover.js';
 import { PJV_STATUS_ORDER, PJV_TASK_STATUS, pjvStatusIconStd } from '../projects/status.js';
 import {
-  doneOpenByDefault, externalTasks, groupTasks, isDoing, isDone, moveInOrder, sessionColor, sessionNumbers,
+  doneOpenByDefault, externalTasks, groupTasks, isDoing, isDone, moveInOrder, pinFirst, sessionColor, sessionNumbers,
   sessionTaskOrder, stripLeadNotice, type TaskSessRef,
 } from '../lib/task-pane.js';
 import { clearUnsaved, keepUnsaved, readUnsaved } from './unsaved-store.js';
@@ -133,15 +133,24 @@ export function tasksPart(ctx: PartCtx): Part {
   let fresh: any = null;                  // 이 부품이 직접 읽은 최신 상세(셸의 detail 은 마운트 때 한 번 읽고 만다)
   let loading = false, loadedAt = 0;
   let openTask = 0;                       // 본문을 펼쳐 둔 태스크(한 번에 하나)
-  let editTask = 0;                       // 그 본문을 고치는 중인가
+  let editTask = 0;                       // 그 태스크의 제목·본문을 고치는 중인가(#5581 — 종전엔 본문만)
+  let editFocusAt: 'title' | 'body' | '' = '';   // 고치기 칸이 처음 설 때만 초점을 준다(다시 그릴 때마다 초점을 빼앗지 않게)
   let opening = 0;                        // 지금 새 세션을 여는 중인 태스크(두 번 눌러 세션이 둘 생기지 않게)
   let localOrder: number[] | null = null; // 순서를 방금 바꿨다 — 서버가 다시 읽힐 때까지 이 순서로 그린다
   let slotOpen = false, slotQ = '', slotSel = 0;
   let dragFrom = -1;                      // «이 세션의 태스크» 안에서 끄는 줄의 자리
   let headSig = '', listSig = '', listDirty = false;
-  const drafts = new Map<number, string>();   // 저장 전 태스크 본문 — 다시 그려도 쓰던 글이 옛 글로 돌아가지 않게
-  let rowSaver: AutoSave | null = null;
+  const edits = new Map<number, { t: string; b: string }>();   // 저장 전 제목·본문 — 다시 그려도 쓰던 글이 옛 글로 돌아가지 않게
+  let editSaving: Promise<boolean> | null = null;   // 도는 저장 — 칸 밖 누름과 다른 줄 열기가 같은 저장을 두 번 보내지 않게
+  let justAdded: number[] = [];           // 이 곁칸에서 방금 더한 태스크(더한 순서) — 목록 맨 위, 새 태스크 칸 바로 밑에 세운다
+  let flashId = 0, flashed = false;       // 방금 더한 줄을 한 번 반짝인다
   let bodySaver: AutoSave | null = null;
+
+  const MOD = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
+  const keepFocus = (e: Event): void => e.preventDefault();   // 단추를 눌러도 글칸의 초점·한글 조합이 끊기지 않게
+  const imeEnter = (e: KeyboardEvent): boolean => e.isComposing || e.keyCode === 229;   // 한글 조합 중의 Enter 는 글자를 맺는 것이다
+  /** 본문 칸 높이를 글에 맞춘다 — 넘치면 CSS max-height 가 막고 제 안에서 스크롤. */
+  const fitTa = (ta: HTMLTextAreaElement): void => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 2 + 'px'; };
 
   const cur = (): any => fresh || ctx.detail() || {};
   const proj = (): any => cur().project || {};
@@ -173,8 +182,10 @@ export function tasksPart(ctx: PartCtx): Part {
   };
   const busyOf = (t: any): boolean => { const o = otherSessOf(t); return !!o && o.s.stateKey === 'busy'; };
 
+  let loadAgain = false;   // 읽는 도중에 «바뀌었다»가 왔다 — 그 읽기는 바뀌기 전 것일 수 있어 끝나면 한 번 더 읽는다
   async function load(force?: boolean): Promise<void> {
-    if (loading || ctx.dead()) return;
+    if (ctx.dead()) return;
+    if (loading) { if (force) loadAgain = true; return; }
     if (!force && Date.now() - loadedAt < 3000) return;
     loading = true;
     try {
@@ -182,6 +193,7 @@ export function tasksPart(ctx: PartCtx): Part {
       if (d && !ctx.dead()) { fresh = d; loadedAt = Date.now(); localOrder = null; paint(); }
     } catch (_) { /* 다음 틱에 다시 읽는다 */ }
     loading = false;
+    if (loadAgain) { loadAgain = false; void load(true); }
   }
   const changed = (): void => { void load(true); ctx.onChanged?.(); };
 
@@ -409,10 +421,14 @@ export function tasksPart(ctx: PartCtx): Part {
   });
 
   // ── 목록 ──
+  //  .pj-top = 다시 그리는 칸(topDyn) + 새 태스크 칸(addRow, 한 벌을 계속 쓴다). 새 태스크 칸은 다시 그리기가 건드리지 않으므로
+  //   거기서 치는 동안에도 목록은 따라 그린다 — 방금 더한 태스크가 치는 사이 바로 밑에 선다.
   const top = el('div', { class: 'pj-top' });
+  const topDyn = el('div', { class: 'pj-topdyn' });
+  top.append(topDyn);
   const list = el('div', { class: 'pn-tk-list pj-scroll' });
-  for (const host of [top, list]) host.addEventListener('focusout', () => {
-    window.setTimeout(() => { if (listDirty && !typingIn(list) && !typingIn(top)) paintList(); }, 0);
+  for (const host of [topDyn, list]) host.addEventListener('focusout', () => {
+    window.setTimeout(() => { if (listDirty && !typingIn(list) && !typingIn(topDyn)) paintList(); }, 0);
   });
 
   const goSession = (sid: string): void => requestOpenRoute('#/s/' + encodeURIComponent(sid));
@@ -529,40 +545,127 @@ export function tasksPart(ctx: PartCtx): Part {
   const copyTaskBody = (t: any): void => { void copyText(taskPromptText(t)).then((ok) => { if (ok) toast('태스크 이름과 본문을 복사했어요.'); }); };
   const boardRow: CtxRow = { label: '보드에서 보기', icon: 'board', run: () => requestOpenRoute('#/projects2/p/' + ctx.id) };
 
-  /** 줄의 속 — 본문(읽기 · 누르면 고치기) · 할 일. */
+  // ── 고치기 — 제목·본문을 한 칸에서(원준 2026-11-17 «이미 써서 엔터 쳐 둔 태스크도 제목·본문 둘 다 고칠 수 있어야») ──────────
+  //  새 태스크 칸과 같은 모양. Enter(제목)·⌘/Ctrl+Enter(본문)·[저장] = 저장 · Esc·[취소] = 버리기 · 칸 밖을 누르면 고친 것을 저장하고 닫는다.
+  const sessionedTask = (t: any): boolean => refsOf(t).length > 0;
+  function startEdit(t: any, at: 'title' | 'body'): void {
+    const tid = Number(t.id);
+    void flushEdit().then((ok) => { if (!ok) return; openTask = tid; editTask = tid; editFocusAt = at; paintList(true); });
+  }
+  let editCardEl: HTMLElement | null = null;
+  function closeEdit(tid: number, discard: boolean): void {
+    if (discard) edits.delete(tid);
+    if (editTask === tid) { editTask = 0; editFocusAt = ''; }
+    //  ⚠ 초점이 고치기 칸 안에 있으면 목록은 «치는 중»이라 다시 그리지 않는다 — 칸에서 초점을 먼저 뺀다.
+    //   (칸 밖을 눌러 저장한 경우엔 초점이 이미 사람이 누른 곳에 있다 — 그건 건드리지 않는다.)
+    if (editCardEl && editCardEl.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    paintList(true);
+  }
+  /** 고친 것을 저장한다 — 바뀐 게 없으면 그냥 닫는다. 실패하면 칸을 연 채 false(쓰던 글은 edits 에 남는다). */
+  function saveEdit(t: any): Promise<boolean> {
+    if (editSaving) return editSaving;
+    const tid = Number(t?.id || 0);
+    const c = edits.get(tid);
+    if (!c) { if (tid) closeEdit(tid, false); return Promise.resolve(true); }
+    const name = c.t.trim();
+    if (!name) { toast('제목을 적어 주세요.', true); return Promise.resolve(false); }
+    const description = c.b.replace(/\s+$/, '');
+    editSaving = (async () => {
+      try {
+        await api('/api/ui/v6/tasks/' + tid, { method: 'POST', body: JSON.stringify({ name, description: description || null }) });
+        t.name = name; t.description = description || null;
+        if (edits.get(tid) === c) edits.delete(tid);
+        toast('저장했어요.');
+        closeEdit(tid, false);
+        changed();
+        return true;
+      } catch (e: any) {
+        toast('저장하지 못했어요 — ' + (e?.message || e), true);
+        return false;
+      } finally { editSaving = null; }
+    })();
+    return editSaving;
+  }
+  /** 고치는 중인 것이 있으면 먼저 저장한다(다른 줄을 열기 전 · 세션을 옮기기 전). */
+  const flushEdit = (): Promise<boolean> => (editTask && edits.has(editTask) ? saveEdit(byId(editTask)) : (editSaving || Promise.resolve(true)));
+
+  function editCard(t: any): HTMLElement {
+    const tid = Number(t.id);
+    const orig = { t: String(t.name || ''), b: String(t.description || '') };
+    const start = edits.get(tid) || orig;
+    const ti = el('input', { class: 'pj-add-t', type: 'text', maxlength: '200', 'aria-label': '태스크 제목', placeholder: '제목' }) as HTMLInputElement;
+    const ta = el('textarea', { class: 'pj-add-b', rows: '2', 'aria-label': '태스크 본문', placeholder: '본문 (선택)' }) as HTMLTextAreaElement;
+    ti.value = start.t; ta.value = start.b;
+    const hint = el('span', { class: 'pj-add-hint' });
+    const ok = el('button', { class: 'pj-add-ok', type: 'button', text: '저장', onmousedown: keepFocus, onclick: () => void saveEdit(t) }) as HTMLButtonElement;
+    const no = el('button', { class: 'btn-text pj-add-x', type: 'button', text: '취소', title: '고친 것 버리기', onmousedown: keepFocus, onclick: () => closeEdit(tid, true) });
+    const sync = (): void => {
+      const c = { t: ti.value, b: ta.value };
+      const dirty = c.t !== orig.t || c.b !== orig.b;
+      if (dirty) { const prev = edits.get(tid); if (!prev || prev.t !== c.t || prev.b !== c.b) edits.set(tid, c); } else edits.delete(tid);
+      ok.disabled = !ti.value.trim() || !dirty;
+      hint.textContent = document.activeElement === ta ? `${MOD}+Enter 저장 · Esc 취소` : 'Enter 저장 · Esc 취소';
+    };
+    ti.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (imeEnter(e)) return;
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void saveEdit(t); }
+      else if ((e.key === 'Enter' && e.shiftKey) || e.key === 'ArrowDown') { e.preventDefault(); ta.focus(); sync(); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeEdit(tid, true); }
+    });
+    ta.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (imeEnter(e)) return;
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void saveEdit(t); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeEdit(tid, true); }
+    });
+    ti.addEventListener('input', sync);
+    ta.addEventListener('input', () => { sync(); fitTa(ta); });
+    const card = editCardEl = el('div', { class: 'pj-card pj-edit' },
+      el('div', { class: 'pj-add-l1' }, el('span', { class: 'pn-tk-st static ' + statusKey(t), 'aria-hidden': 'true' }), ti),
+      ta,
+      sessionedTask(t) ? el('div', { class: 'pj-edit-note', text: '이미 세션에 넣은 태스크예요. 고쳐도 그 세션엔 다시 보내지 않아요.' }) : null,
+      el('div', { class: 'pj-add-foot' }, hint, el('span', { class: 'grow' }), no, ok));
+    card.addEventListener('focusin', sync);
+    card.addEventListener('focusout', () => {
+      //  칸 밖으로 손이 나갔다 — 고친 게 있으면 저장하고 닫는다(클릭업처럼). 그대로면 그냥 닫는다.
+      window.setTimeout(() => {
+        if (!card.isConnected || card.contains(document.activeElement) || editTask !== tid) return;
+        if (edits.has(tid)) void saveEdit(t); else closeEdit(tid, false);
+      }, 0);
+    });
+    sync();
+    if (editFocusAt) {
+      const f = editFocusAt === 'title' ? ti : ta;
+      editFocusAt = '';
+      window.setTimeout(() => {
+        if (!f.isConnected) return;
+        fitTa(ta); f.focus();
+        try { f.setSelectionRange(f.value.length, f.value.length); } catch (_) { /* noop */ }
+        sync();
+      }, 0);
+    } else window.setTimeout(() => { if (ta.isConnected) fitTa(ta); }, 0);
+    return card;
+  }
+
+  /** 줄의 속 — 본문(읽기 · 누르면 제목·본문 고치기) · 할 일. */
   function detailOf(t: any, primary: HTMLElement | null): HTMLElement {
     const tid = Number(t.id);
-    const md = drafts.has(tid) ? String(drafts.get(tid)) : String(t.description || '');
     let inner: HTMLElement;
-    if (editTask === tid) {
-      const ta = el('textarea', { class: 'pn-tk-ta', rows: '5', 'aria-label': '태스크 본문', placeholder: '무엇을 하는 태스크인지, 어디까지 하면 끝인지 적어 두세요. 이 태스크를 맡은 세션이 읽습니다.' }) as HTMLTextAreaElement;
-      ta.value = md;
-      const chip = el('span', { class: 'pn-set-chip' });
-      ta.addEventListener('input', () => drafts.set(tid, ta.value));
-      rowSaver?.destroy();
-      rowSaver = autoSave(ta, chip, async (text) => {
-        await api('/api/ui/v6/tasks/' + tid, { method: 'POST', body: JSON.stringify({ description: text || null }) });
-        t.description = text;
-        if (drafts.get(tid) === text) drafts.delete(tid);
-        return text;
-      });
-      if (drafts.has(tid) && drafts.get(tid) !== String(t.description || '')) rowSaver.setSaved(String(t.description || ''));
-      inner = el('div', { class: 'pj-dedit' }, ta, el('div', { class: 'pn-tk-ta-foot' }, chip,
-        el('button', { class: 'btn-text pn-tk-link', type: 'button', text: '다 고쳤어요', onclick: () => void (rowSaver ? rowSaver.flush() : Promise.resolve()).then(() => { if (rowSaver?.dirty()) return; editTask = 0; paintList(true); }) })));
-      window.setTimeout(() => { if (ta.isConnected) ta.focus(); }, 0);
-    } else {
-      const shown = stripLeadNotice(md);
+    if (editTask === tid) inner = editCard(t);
+    else {
+      const shown = stripLeadNotice(String(t.description || ''));
       inner = el('div', {
-        class: 'pj-rd pj-drd md-rendered', role: 'button', tabindex: '0', title: '누르면 고칩니다',
-        onclick: (e: Event) => { if ((e.target as HTMLElement).closest('a,button') || window.getSelection()?.toString()) return; editTask = tid; paintList(true); },
-      }, shown.trim() ? renderMarkdown(shown.slice(0, 20_000)) : el('p', { class: 'pj-empty', text: '본문이 없어요 — 눌러서 적어 두면 이 태스크를 맡은 세션이 읽습니다.' }));
+        class: 'pj-rd pj-drd md-rendered', role: 'button', tabindex: '0', title: '눌러서 고치기',
+        onclick: (e: Event) => { if ((e.target as HTMLElement).closest('a,button') || window.getSelection()?.toString()) return; startEdit(t, 'body'); },
+        onkeydown: (e: KeyboardEvent) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); startEdit(t, 'body'); } },
+      }, shown.trim() ? renderMarkdown(shown.slice(0, 20_000)) : el('p', { class: 'pj-empty', text: '본문 없음 · 눌러서 쓰기' }));
     }
     const subs: any[] = Array.isArray(t.subtasks) ? t.subtasks : [];
     const subBox = subs.length ? el('div', { class: 'pn-tk-sec' },
       el('div', { class: 'pn-tk-sec-h' }, el('span', { text: '하위 할 일' }), el('span', { class: 'n', text: `${subs.filter(isDone).length}/${subs.length}` })),
       ...subs.map((s) => el('div', { class: 'pn-tk-row sub' + (isDone(s) ? ' done' : '') }, glyph(s), el('span', { class: 'pn-tk-sub-n ell', title: s.name, text: s.name || '이름 없는 할 일' })))) : null;
-    const acts = el('div', { class: 'pj-dacts' },
+    const acts = editTask === tid ? null : el('div', { class: 'pj-dacts' },
       primary,
+      el('button', { class: 'btn-text pj-dact', type: 'button', title: '제목·본문 고치기', onclick: () => startEdit(t, 'title') }, pnIcon('pencil', 'pn-i sm'), el('span', { text: '고치기' })),
       el('button', { class: 'btn-text pj-dact', type: 'button', onclick: () => copyTaskBody(t) }, pnIcon('copy', 'pn-i sm'), el('span', { text: '본문 복사' })),
       el('span', { class: 'grow' }),
       el('button', { class: 'btn-text pj-dact', type: 'button', title: '체크리스트·댓글·연결은 보드에서 봅니다', onclick: () => requestOpenRoute('#/projects2/p/' + ctx.id) }, pnIcon('board', 'pn-i sm'), el('span', { text: '보드' })));
@@ -572,7 +675,7 @@ export function tasksPart(ctx: PartCtx): Part {
   function toggleOpen(t: any): void {
     const tid = Number(t.id);
     const next = openTask === tid ? 0 : tid;
-    void (rowSaver ? rowSaver.flush() : Promise.resolve()).then(() => { if (rowSaver?.dirty()) return; openTask = next; editTask = 0; paintList(true); });
+    void flushEdit().then((ok) => { if (!ok) return; openTask = next; editTask = 0; editFocusAt = ''; paintList(true); });
   }
 
   const nameBtnOf = (t: any, open: boolean): HTMLElement => el('button', {
@@ -613,6 +716,7 @@ export function tasksPart(ctx: PartCtx): Part {
       { label: '1번으로', icon: 'up', off: i === 0, run: () => void putOrder(moveInOrder(ids, i, 0)) },
       { sep: true, label: '' },
       { label: '입력칸에 넣기', icon: 'insert', hint: '보내지 않음', run: () => putPrompt(t) },
+      { label: '고치기', icon: 'pencil', hint: '제목·본문', run: () => startEdit(t, 'title') },
       { label: '본문 복사', icon: 'copy', run: () => copyTaskBody(t) },
       boardRow,
       copyName(t),
@@ -683,15 +787,15 @@ export function tasksPart(ctx: PartCtx): Part {
       .sort((a, b) => Number(isDone(a)) - Number(isDone(b))).slice(0, 7);
     slotSel = Math.min(slotSel, Math.max(0, cands.length - 1));
     const pick = (t: any): void => { slotOpen = false; void putOrder([...myOrder(), Number(t.id)], '이 세션에 넣었어요.'); };
-    inp.addEventListener('input', () => { slotQ = inp.value; slotSel = 0; paintList(true); const n2 = ((top as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null); n2?.focus(); n2?.setSelectionRange(n2.value.length, n2.value.length); });
+    inp.addEventListener('input', () => { slotQ = inp.value; slotSel = 0; paintList(true); const n2 = ((topDyn as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null); n2?.focus(); n2?.setSelectionRange(n2.value.length, n2.value.length); });
     inp.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.isComposing) return;
-      if (e.key === 'ArrowDown') { slotSel = Math.min(slotSel + 1, cands.length - 1); e.preventDefault(); paintList(true); ((top as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
-      else if (e.key === 'ArrowUp') { slotSel = Math.max(slotSel - 1, 0); e.preventDefault(); paintList(true); ((top as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
+      if (e.key === 'ArrowDown') { slotSel = Math.min(slotSel + 1, cands.length - 1); e.preventDefault(); paintList(true); ((topDyn as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
+      else if (e.key === 'ArrowUp') { slotSel = Math.max(slotSel - 1, 0); e.preventDefault(); paintList(true); ((topDyn as HTMLElement).querySelector('.pj-slot-q') as HTMLInputElement | null)?.focus(); }
       else if (e.key === 'Enter') { e.preventDefault(); if (cands[slotSel]) pick(cands[slotSel]); }
       else if (e.key === 'Escape') { e.preventDefault(); slotOpen = false; paintList(true); }
     });
-    inp.addEventListener('blur', () => window.setTimeout(() => { if (slotOpen && !top.contains(document.activeElement)) { slotOpen = false; paintList(true); } }, 150));
+    inp.addEventListener('blur', () => window.setTimeout(() => { if (slotOpen && !topDyn.contains(document.activeElement)) { slotOpen = false; paintList(true); } }, 150));
     window.setTimeout(() => { if (inp.isConnected && document.activeElement !== inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); } }, 0);
     const dd = el('div', { class: 'pj-dd', role: 'listbox' },
       cands.length ? null : el('div', { class: 'pj-dd-h', text: '맞는 태스크가 없어요' }),
@@ -721,11 +825,14 @@ export function tasksPart(ctx: PartCtx): Part {
         : [{ label: '이 세션에 넣기', icon: 'insert', hint: '다음 번호로', run: () => void takeIntoThis(t) }]),
       { label: refsOf(t).length ? '새 세션으로 이어 하기' : '새 세션 열기', icon: 'plus', run: () => void openTaskSession(t) },
       { sep: true, label: '' },
+      { label: '고치기', icon: 'pencil', hint: '제목·본문', run: () => startEdit(t, 'title') },
       { label: '본문 복사', icon: 'copy', run: () => copyTaskBody(t) },
       boardRow,
       copyName(t),
     ];
-    const row = el('div', { class: 'pp-row' + (mode === 'new' ? ' pj-new' : ' pj-ext') + (isDone(t) ? ' done' : '') + (open ? ' open' : '') + (pickN ? ' pj-picked' : ''), draggable: 'true' },
+    const isFresh = flashId === tid;
+    if (isFresh) flashed = true;
+    const row = el('div', { class: 'pp-row' + (mode === 'new' ? ' pj-new' : ' pj-ext') + (isDone(t) ? ' done' : '') + (open ? ' open' : '') + (pickN ? ' pj-picked' : '') + (isFresh ? ' pj-fresh' : ''), draggable: 'true', 'data-tid': String(tid) },
       el('div', { class: 'pp-main' }, l1(t, open, moreBtn(rows, String(t.name || '태스크'))),
         el('div', { class: 'pp-meta' }, sessInfo(t), el('span', { class: 'pp-id', text: '#' + tid }), el('span', { class: 'grow' }), act)));
     row.addEventListener('dragstart', (e: DragEvent) => {
@@ -757,8 +864,9 @@ export function tasksPart(ctx: PartCtx): Part {
       all.map((t) => t.id + (t.status_category || '') + (t.name || '') + String(t.description || '').length + sessSig(t)
         + (Array.isArray(t.subtasks) ? t.subtasks.map((s: any) => s.id + (s.status_category || '')).join('.') : '')).join('|')].join('§');
     if (!force && sig === listSig) return;
-    if ((typingIn(list) || typingIn(top)) && !top.querySelector('.pj-slot-q:focus')) { listDirty = true; return; }
+    if ((typingIn(list) || typingIn(topDyn)) && !topDyn.querySelector('.pj-slot-q:focus')) { listDirty = true; return; }
     listSig = sig; listDirty = false;
+    flashed = false;   // 이번 그리기에서 방금 더한 줄을 세웠나 — extRow 가 켠다
     if (openTask && !all.some((t) => Number(t.id) === openTask)) { openTask = 0; editTask = 0; }
 
     //  위(머리·본문·이 세션의 태스크·목록 머리)는 서 있고, **스크롤은 아래 목록 안에서만**(원준 2026-09-27).
@@ -767,13 +875,13 @@ export function tasksPart(ctx: PartCtx): Part {
     if (!all.length) {
       tops.push(el('div', { class: 'pn-empty' }, pnIcon(projGlyph(26), 'pn-i big'),
         el('b', { text: '태스크가 아직 없어요.' }),
-        el('p', { class: 'pn-fine', text: '이 프로젝트에서 세션을 열면 그 세션의 태스크가 저절로 생깁니다. 아래에서 직접 더해도 돼요.' })));
+        el('p', { class: 'pn-fine', text: '이 프로젝트에서 세션을 열면 그 세션의 태스크가 저절로 생깁니다. 아래 «새 태스크»로 직접 추가해도 돼요.' })));
     } else if (newMode) {
       const ext = externalTasks(all, new Set(), busyOf);
       const tag = picks.length ? el('span', { class: 'pj-picked-n', text: `${picks.length}개 담음 · 순서는 글칸에서` }) : null;
       tops.push(groupHead('이 프로젝트의 태스크', ext.open.length + ext.done.length, tag));
       if (!picks.length) tops.push(el('p', { class: 'pj-hint', text: '[담기]로 새 세션이 맡을 태스크를 고르세요 — 가운데 글칸에 번호 배지로 들어가고, 그 순서대로 진행해요.' }));
-      kids.push(...ext.open.flatMap((t) => extRow(t, 'new', picks.indexOf(Number(t.id)) + 1)));
+      kids.push(...pinFirst(ext.open, justAdded).flatMap((t) => extRow(t, 'new', picks.indexOf(Number(t.id)) + 1)));
       if (ext.done.length) {
         kids.push(groupHead('완료', ext.done.length, null, { open: doneOpen, toggle: () => { lsSet(DONE_OPEN_KEY, doneOpen ? '0' : '1'); paintList(true); } }));
         if (doneOpen) kids.push(...ext.done.flatMap((t) => extRow(t, 'new', picks.indexOf(Number(t.id)) + 1)));
@@ -788,32 +896,125 @@ export function tasksPart(ctx: PartCtx): Part {
       tops.push(sec);
       const ext = externalTasks(all, new Set(order), busyOf);
       tops.push(groupHead('외부 태스크', ext.open.length));
-      kids.push(...ext.open.flatMap((t) => extRow(t, 'ext', 0)));
+      kids.push(...pinFirst(ext.open, justAdded).flatMap((t) => extRow(t, 'ext', 0)));
       if (ext.done.length) {
         kids.push(groupHead('완료', ext.done.length, null, { open: doneOpen, toggle: () => { lsSet(DONE_OPEN_KEY, doneOpen ? '0' : '1'); paintList(true); } }));
         if (doneOpen) kids.push(...ext.done.flatMap((t) => extRow(t, 'ext', 0)));
       }
     }
     const st = list.scrollTop, st2 = top.scrollTop;
-    replaceKids(top, ...tops);
+    replaceKids(topDyn, ...tops);
     replaceKids(list, ...kids);
     list.scrollTop = st; top.scrollTop = st2;
+    //  방금 더한 줄이 섰다 — 한 번만 반짝이고(다시 그릴 때마다 반짝이지 않게) 보이는 자리로.
+    if (flashed) { flashId = 0; (list.querySelector('.pj-fresh') as HTMLElement | null)?.scrollIntoView({ block: 'nearest' }); }
   }
 
-  // ── 빠른 추가 ──
-  const addIn = el('input', { class: 'pn-tk-add-in', type: 'text', 'aria-label': '태스크 추가', placeholder: '태스크 추가 — 이름을 적고 Enter', maxlength: '200' }) as HTMLInputElement;
-  let adding = false;
-  addIn.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key !== 'Enter' || e.isComposing || adding) return;
-    const name = addIn.value.trim();
-    if (!name) return;
-    adding = true;
-    void api('/api/ui/v6/projects/' + ctx.id + '/tasks', { method: 'POST', body: JSON.stringify({ name }) })
-      .then(() => { addIn.value = ''; changed(); toast('태스크를 더했어요.'); })
-      .catch((err: any) => toast('더하지 못했어요 — ' + (err?.message || err), true))
-      .finally(() => { adding = false; });
+  // ── 새 태스크 — 클릭업처럼 목록 머리 바로 밑의 흐린 줄(원준 2026-11-17, #5581) ─────────────────────────────────
+  //  «최하단에 가 있을 필요가 없다 · 누르면 하나가 생기고 바로 친다 · 제목은 무엇을 고치는지 요약, 본문은 자세히».
+  //  목록엔 제목만 보이고, [입력칸에 넣기]·[이 세션에 넣기]·세션 열기는 제목과 본문을 함께 넣는다(taskPromptText).
+  //  Enter = 더하기(본문까지) · Tab = 본문으로 · 본문에서 ⌘/Ctrl+Enter = 더하기 · Esc = 접기(쓰던 글은 남는다) · [취소] = 비우고 접기.
+  //  더한 뒤에도 칸은 열려 있다(이어서 다음 것을 친다). 방금 더한 것은 이 칸 바로 밑, 목록 맨 위에 선다(justAdded — 이 화면에서만).
+  //  ⚠ 쓰던 글은 기기에 보관한다(unsaved-store 'newtask') — 세션을 옮겨 곁칸이 다시 서도 이어 쓴다(#2037 «쓰던 글은 살아남는다»).
+  let addOpen = false, addBusy = false;
+  const addTitle = el('input', { class: 'pj-add-t', type: 'text', maxlength: '200', 'aria-label': '새 태스크 제목',
+    placeholder: '제목' }) as HTMLInputElement;
+  const addBody = el('textarea', { class: 'pj-add-b', rows: '2', 'aria-label': '새 태스크 본문',
+    placeholder: '본문 (선택)' }) as HTMLTextAreaElement;
+  const addHint = el('span', { class: 'pj-add-hint' });
+  const addOk = el('button', { class: 'pj-add-ok', type: 'button', text: '추가', onmousedown: keepFocus, onclick: () => void submitAdd() }) as HTMLButtonElement;
+  const addCancel = el('button', { class: 'btn-text pj-add-x', type: 'button', text: '취소', title: '쓰던 글 지우기', onmousedown: keepFocus, onclick: () => closeAdd(true) });
+  const ghostText = el('span', { class: 'pj-add-gl' });
+  const addGhost = el('button', { class: 'pj-add-ghost', type: 'button', title: '새 태스크 추가', onclick: () => openAdd() },
+    pnIcon('plus', 'pn-i sm'), ghostText);
+  const addRow = el('div', { class: 'pj-add' }, addGhost,
+    el('div', { class: 'pj-add-form pj-card' },
+      el('div', { class: 'pj-add-l1' }, el('span', { class: 'pn-tk-st static todo', 'aria-hidden': 'true' }), addTitle),
+      addBody,
+      el('div', { class: 'pj-add-foot' }, addHint, el('span', { class: 'grow' }), addCancel, addOk)));
+  top.append(addRow);
+
+  const draftEmpty = (): boolean => !addTitle.value.trim() && !addBody.value.trim();
+  function syncAdd(): void {
+    addRow.classList.toggle('on', addOpen);
+    addOk.disabled = addBusy || !addTitle.value.trim();
+    addOk.textContent = addBusy ? '더하는 중…' : '추가';
+    ghostText.textContent = draftEmpty() ? '새 태스크' : '새 태스크 · 쓰던 글 있음';
+    addHint.textContent = document.activeElement === addBody ? `${MOD}+Enter 추가 · Esc 닫기` : 'Enter 추가 · Tab 본문 · Esc 닫기';
+  }
+  const growBody = (): void => fitTa(addBody);
+  let draftTimer = 0;
+  function writeDraft(): void {
+    window.clearTimeout(draftTimer); draftTimer = 0;
+    if (draftEmpty()) clearUnsaved(ctx.id, 'newtask');
+    else keepUnsaved(ctx.id, 'newtask', JSON.stringify({ t: addTitle.value, b: addBody.value }));
+  }
+  const saveDraftSoon = (): void => { window.clearTimeout(draftTimer); draftTimer = window.setTimeout(writeDraft, 400); };
+  try {
+    const raw = readUnsaved(ctx.id, 'newtask');
+    if (raw) { const d = JSON.parse(raw); addTitle.value = String(d?.t || ''); addBody.value = String(d?.b || ''); }
+  } catch (_) { /* 깨진 보관본 — 빈 칸으로 시작 */ }
+
+  function openAdd(at: 'title' | 'body' = 'title'): void {
+    addOpen = true; syncAdd(); growBody();
+    const f = at === 'body' ? addBody : addTitle;
+    f.focus();
+    try { f.setSelectionRange(f.value.length, f.value.length); } catch (_) { /* noop */ }
+    syncAdd();
+  }
+  function closeAdd(clear: boolean): void {
+    if (clear) { addTitle.value = ''; addBody.value = ''; writeDraft(); growBody(); }
+    addOpen = false;
+    if (addRow.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    syncAdd();
+  }
+  async function submitAdd(): Promise<void> {
+    if (addBusy) return;
+    const name = addTitle.value.trim();
+    const description = addBody.value.trim();
+    if (!name) {
+      if (description) toast('제목을 적어 주세요.', true);
+      addTitle.focus(); syncAdd();
+      return;
+    }
+    addBusy = true; syncAdd();
+    try {
+      const r = await api('/api/ui/v6/projects/' + ctx.id + '/tasks', { method: 'POST', body: JSON.stringify(description ? { name, description } : { name }) });
+      const id = Number(r?.task?.id || 0);
+      if (id > 0) { justAdded = [...justAdded.filter((x) => x !== id), id]; flashId = id; }
+      //  보내는 사이 다음 것을 치기 시작했으면 그 글은 지우지 않는다 — 보낸 것과 같은 칸만 비운다.
+      if (addTitle.value.trim() === name) addTitle.value = '';
+      if (addBody.value.trim() === description) addBody.value = '';
+      writeDraft(); growBody();
+      //  다음 것을 바로 친다 — 본문에서 ⌘Enter 로 더했어도 커서는 제목 칸으로(클릭업과 같은 이어 치기).
+      if (addOpen && !addTitle.value && !addBody.value) { addTitle.focus(); syncAdd(); }
+      changed();
+    } catch (err: any) {
+      toast('더하지 못했어요 — ' + (err?.message || err), true);
+    } finally {
+      addBusy = false; syncAdd();
+      if (addOpen && !addRow.contains(document.activeElement)) addTitle.focus();
+    }
+  }
+  addTitle.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (imeEnter(e)) return;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submitAdd(); }
+    else if ((e.key === 'Enter' && e.shiftKey) || e.key === 'ArrowDown') { e.preventDefault(); addBody.focus(); syncAdd(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAdd(false); }
   });
-  const addBox = el('label', { class: 'pn-tk-add' }, pnIcon('plus', 'pn-i sm'), addIn);
+  addBody.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (imeEnter(e)) return;
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void submitAdd(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAdd(false); }
+    else if (e.key === 'Backspace' && !addBody.value && addBody.selectionStart === 0) { e.preventDefault(); addTitle.focus(); syncAdd(); }
+  });
+  for (const f of [addTitle, addBody]) f.addEventListener('input', () => { syncAdd(); saveDraftSoon(); if (f === addBody) growBody(); });
+  addRow.addEventListener('focusin', () => syncAdd());
+  addRow.addEventListener('focusout', () => {
+    //  칸 밖으로 손이 나갔다 — 빈 칸이면 흐린 줄로 접고, 쓰던 글이 있으면 펴 둔 채 둔다(누르다 글을 잃지 않게).
+    window.setTimeout(() => { if (addRow.contains(document.activeElement)) return; if (addOpen && draftEmpty() && !addBusy) closeAdd(false); else syncAdd(); }, 0);
+  });
+  syncAdd();
 
   function paint(): void {
     paintHead();
@@ -822,10 +1023,10 @@ export function tasksPart(ctx: PartCtx): Part {
     fitBody();
   }
 
-  root.append(head, top, list, addBox);
+  root.append(head, top, list);
   // 보는 세션이 바뀌었다 — «이 세션의 태스크»가 그 세션의 것으로 선다. 펴 둔 줄은 저장 먼저.
   const offSess = ctx.onSession(() => {
-    void (rowSaver ? rowSaver.flush() : Promise.resolve()).then(() => { openTask = 0; editTask = 0; slotOpen = false; localOrder = null; paintList(true); });
+    void flushEdit().then(() => { openTask = 0; editTask = 0; editFocusAt = ''; slotOpen = false; localOrder = null; paintList(true); });
   });
   // 새 세션 자리에서 담은 것이 바뀌었다(여기서든 글칸에서든) — [담기]/[담김 n] 을 다시 그린다.
   const offPicks = onTaskPicks(picksRoot(), () => { if (isNew()) paintList(true); });
@@ -842,7 +1043,9 @@ export function tasksPart(ctx: PartCtx): Part {
         const ta = bodyBox.querySelector('textarea') as HTMLTextAreaElement | null;
         if (ta && keepUnsaved(ctx.id, 'body', ta.value)) stashedByMe = true;
       }
-      const savers = [bodySaver, rowSaver].filter(Boolean) as AutoSave[];
+      if (draftTimer) writeDraft();   // 쓰던 새 태스크 — 보관을 미루던 중이면 지금 남긴다
+      if (editTask && edits.has(editTask)) void saveEdit(byId(editTask));   // 고치던 태스크 — 칸이 걷히기 전에 남긴다
+      const savers = [bodySaver].filter(Boolean) as AutoSave[];
       for (const sv of savers) void sv.flush().finally(() => sv.destroy());
     },
   };

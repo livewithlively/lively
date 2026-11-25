@@ -192,7 +192,8 @@ const PANES = readFileSync(process.env.PANES_SRC || path.join(root, "web/v2/pane
 const fn = (head) => { const i = PANES.indexOf(head); if (i < 0) return ""; const j = PANES.indexOf("\n  }\n", i); return PANES.slice(i, j + 4); };
 const tabElFn = fn("  function tabEl(zone: Zone, key: TabKey, on: boolean): HTMLElement {");
 check(tabElFn.length > 0, "S0 (배선) tabEl 을 찾았다 — 아래 단언이 무언가를 보고 있다");
-check(/const x = pinned \|\| \(detachX && !on\) \? null : el\('button', \{\s*class: 'pn-tab-x'/.test(tabElFn), "S1 × 는 고정 탭과 «안 켠 붙은 앱 탭» 만 빼고 모든 탭에 선다 — 켜졌는지와 무관하다");
+//  #5713 — «요청» 탭도 × 가 없다(닫는 탭이 아니라 요청을 다 하면 사라지는 탭).
+check(/const x = pinned \|\| tabBase\(key\) === SESSASK_TAB \|\| \(detachX && !on\) \? null : el\('button', \{\s*class: 'pn-tab-x'/.test(tabElFn), "S1 × 는 고정 탭 · «요청» 탭 · «안 켠 붙은 앱 탭» 만 빼고 모든 탭에 선다 — 켜졌는지와 무관하다");
 check(/el\('span', \{ class: 'pn-tab-lead'[^)]*\}, pnIcon\(glyphAt\(ic, 14\), 'pn-i sm'\)\), el\('span', \{ class: 'pn-tab-t'/.test(tabElFn), "S1b 탭 = 아이콘 칸(pn-tab-lead) + 이름(pn-tab-t) — 런타임 기하 시험이 재는 그 구조(그림은 14px 자리 크기에 맞춘 이름, #4233)");
 check(/addEventListener\('auxclick'[\s\S]*?e\.button !== 1[\s\S]*?if \(!pinned && !\(detachX && !on\)\) closeTab\(zone, key, \{ pointer: true \}\)/.test(tabElFn), "S2 휠 클릭(가운데 버튼) = 닫기 · 고정 탭과 안 켠 붙은 앱 탭은 제외");
 check(/beginTabDrag\(dragHost, zone, key, w, e\)/.test(tabElFn) && !/draggable/.test(tabElFn), "S3 끌기는 포인터 끌기(pane-tabdrag) — HTML5 draggable 이 아니다");

@@ -13,7 +13,8 @@ import { googleToolAuthHint } from "../org/credentials/google-oauth.js";
 import { microsoftToolAuthHint } from "../org/credentials/microsoft-oauth.js";
 import { resolveProxyBearer, resolveOAuthMemberSecret } from "../org/credentials/oauth-proxy-auth.js";
 import { channelSystemOf, channelPreCheck, channelPostFilter } from "../org/channels/channel-enforce.js";
-import { resolveUser, requireScope, type LivelyUser } from "../context.js";
+import { resolveUser, requireNeed, type LivelyUser } from "../context.js";
+import { needForExternalTool } from "../capabilities/permission-map.js";
 import { requireAppTool } from "../apps/principal.js";
 import { isScope } from "../auth/scopes.js";
 import { logger } from "../log.js";
@@ -295,7 +296,7 @@ export async function registerDynamicTools(server: McpServer): Promise<void> {
       },
       async (args: Record<string, unknown>, extra: unknown) => {
         const u: LivelyUser = resolveUser(extra);
-        requireScope(u, callScope);
+        requireNeed(u, needForExternalTool(callScope, tool.level), callScope);   // #5799 — 외부 앱 권한(조회 등급은 보기로 충분)
         await requireAppTool(u, tool.name); // #1780: 앱 세션이면 ext_tools allowlist 로 축소(일반 세션 통과)
         try {
           const r = await runHttpProxyTool(tool, args ?? {}, u.userId); // P1: 요청자 신원으로 vault 자격 해소

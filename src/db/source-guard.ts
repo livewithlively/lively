@@ -55,7 +55,8 @@ export async function isHostBlocked(host: string, allowedHosts: string[] = []): 
   return addrs.some((a) => isBlockedIp(a.address)); // 하나라도 사설/메타데이터면 차단
 }
 
-// 시크릿 참조(auth_ref=env 이름)가 운영자 화이트리스트에 있는지. deny-all 기본.
+// 시크릿 참조(auth_ref — env 이름 · gcp-sm: · aws-sm:, #1764)가 운영자 화이트리스트에 있는지. deny-all 기본.
+//  문자열 그대로 비교한다 — 같은 시크릿이라도 꼴이 다르면 다른 항목(운영자가 적은 그대로만 연다).
 export function isSecretRefAllowed(ref: string, allowed: string[]): boolean {
   return allowed.includes(ref);
 }
@@ -88,7 +89,7 @@ export function inspectMysqlUrl(url: string): MysqlUrlInspect {
   }
   if (u.protocol !== "mysql:") return { ok: false, error: "mysql:// 스킴이어야 합니다" };
   if (!u.hostname) return { ok: false, error: "host 가 없습니다" };
-  if (u.password) return { ok: false, error: "url 에 비밀번호를 넣지 마세요 — auth_ref(환경변수 이름)로 참조하세요", hasPassword: true };
+  if (u.password) return { ok: false, error: "url 에 비밀번호를 넣지 마세요 — auth_ref(환경변수 이름 또는 시크릿 저장소 참조)로 참조하세요", hasPassword: true };
   const database = decodeURIComponent(u.pathname.replace(/^\//, ""));
   if (!database || database.includes("/")) {
     return { ok: false, error: "database(스키마) 필수 — mysql://user@host:3306/dbname 형식" };

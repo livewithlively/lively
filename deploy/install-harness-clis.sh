@@ -24,7 +24,7 @@ set -euo pipefail
 #  버전 핀 없음 — 두 설치기 모두 버전 인자를 공개하지 않는다(Dockerfile 머리말). 받는 시점의 최신 안정판.
 #
 # 요구: root · runuser(util-linux) · nobody 계정 · curl · 실행 가능한 임시 자리(/tmp 가 noexec 면 TMPDIR=/var/tmp 로).
-# 사용: sudo bash deploy/install-harness-clis.sh [agy] [grok]     (인자 없으면 둘 다)
+# 사용: sudo bash deploy/install-harness-clis.sh [agy] [grok] [cursor]     (인자 없으면 agy·grok)
 #   LVLY_HARNESS_BIN_DIR — 설치 자리를 바꾼다(시험용 · 그때만 root 가 아니어도 된다 · 그때는 설치기를 지금 계정으로 돌린다). 기본 /usr/local/bin.
 # ─────────────────────────────────────────────────────────────────────────────
 BIN_DIR="${LVLY_HARNESS_BIN_DIR:-/usr/local/bin}"
@@ -46,11 +46,12 @@ WANT=("$@"); [ "${#WANT[@]}" -gt 0 ] || WANT=(agy grok)
 cd /
 
 # 끝날 때(실패·중단 포함) 다 치운다 — 임시 폴더 · 설치 자리에 쓰다 만 임시 이름. 중단이면 그 신호의 종료코드로 끝낸다(뒤 본문을 잇지 않게).
-TMPS=(); PARTS=()
+TMPS=(); PARTS=(); DIR_PARTS=()
 cleanup() {
   local d
   for d in ${TMPS[@]+"${TMPS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done
   for d in ${PARTS[@]+"${PARTS[@]}"}; do [ -n "$d" ] && rm -f "$d"; done
+  for d in ${DIR_PARTS[@]+"${DIR_PARTS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done
   return 0
 }
 trap cleanup EXIT
@@ -150,10 +151,61 @@ install_one() {
   echo "  ✓ $name → $BIN_DIR/$name — $(version_of "$name")"
 }
 
+# Cursor 는 실행 파일 하나가 아니라 같은 버전 디렉터리의 JS·네이티브 자산을 함께 쓴다.
+# 설치기는 권한 없는 HOME 에서 돌리고, 검증된 그 HOME 안의 패키지 전체만 박스 경로로 옮긴다.
+install_cursor() {
+  local pkg="$BIN_DIR/.cursor-agent-package" H Hr real src staged old rc=0 existing
+  if present cursor-agent && [ "$(readlink "$BIN_DIR/agent" 2>/dev/null || true)" = "$pkg/cursor-agent" ]; then
+    echo "  ✓ cursor 이미 있음 — $(version_of cursor-agent)"; return 0
+  fi
+  if [ -e "$BIN_DIR/agent" ] || [ -L "$BIN_DIR/agent" ]; then
+    existing="$(readlink "$BIN_DIR/agent" 2>/dev/null || true)"
+    case "$existing" in
+      "$pkg/cursor-agent"|*/.grok/bin/grok) ;;
+      *) echo "  ✗ $BIN_DIR/agent 가 다른 프로그램입니다 — 덮어쓰지 않습니다" >&2; return 1 ;;
+    esac
+  fi
+  H="$(plain_dir)" || return 1; TMPS+=("$H")
+  Hr="$(cd "$H" && pwd -P)" || return 1
+  curl -fsSL --max-time 120 -o "$H/install.sh" https://cursor.com/install || return 1
+  if [ "$IS_ROOT" = 1 ]; then chown -R nobody "$H" || return 1; fi
+  ( cd "$H" && as_plain env HOME="$H" PATH=/usr/bin:/bin TMPDIR="$H" bash "$H/install.sh" ) > "$H/.install.log" 2>&1 < /dev/null || rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "  ✗ cursor 설치기가 실패했습니다(종료 $rc)" >&2
+    tail -n 15 "$H/.install.log" | sed 's/^/      /' >&2
+    return 1
+  fi
+  real="$(readlink -f "$H/.local/bin/agent" 2>/dev/null || true)"
+  case "$real" in "$Hr"/*) ;; *) echo "  ✗ Cursor 실행 파일이 설치기 자리 밖입니다" >&2; return 1 ;; esac
+  [ -f "$real" ] && [ -x "$real" ] || { echo "  ✗ Cursor 실행 파일이 없습니다" >&2; return 1; }
+  src="$(dirname "$real")"
+  staged="$BIN_DIR/.cursor-agent-package.new.$$"
+  old="$BIN_DIR/.cursor-agent-package.old.$$"
+  mkdir "$staged" || return 1; DIR_PARTS+=("$staged" "$old")
+  cp -R "$src/." "$staged/" || return 1
+  if [ "$IS_ROOT" = 1 ]; then chown -R root:root "$staged" || return 1; fi
+  chmod -R a+rX "$staged" || return 1
+  as_plain env HOME="$PROBE_HOME" "$staged/cursor-agent" --version >/dev/null 2>&1 </dev/null || {
+    echo "  ✗ Cursor 패키지가 설치 자리에서 돌지 않습니다" >&2; return 1;
+  }
+  if [ -e "$pkg" ]; then mv "$pkg" "$old" || return 1; fi
+  mv "$staged" "$pkg" || { [ ! -e "$old" ] || mv "$old" "$pkg"; return 1; }
+  ln -s "$pkg/cursor-agent" "$BIN_DIR/.cursor-agent.new.$$" || return 1
+  PARTS+=("$BIN_DIR/.cursor-agent.new.$$")
+  mv -f "$BIN_DIR/.cursor-agent.new.$$" "$BIN_DIR/cursor-agent" || return 1
+  ln -s "$pkg/cursor-agent" "$BIN_DIR/.agent.cursor.new.$$" || return 1
+  PARTS+=("$BIN_DIR/.agent.cursor.new.$$")
+  mv -f "$BIN_DIR/.agent.cursor.new.$$" "$BIN_DIR/agent" || return 1
+  runs cursor-agent || { echo "  ✗ Cursor CLI 가 권한 없는 계정에서 돌지 않습니다" >&2; return 1; }
+  rm -rf "$old" || return 1
+  echo "  ✓ cursor → $BIN_DIR/agent — $(version_of cursor-agent)"
+}
+
 for h in "${WANT[@]}"; do
   case "$h" in
     agy|antigravity|gemini) install_one agy https://antigravity.google/cli/install.sh .local/bin/agy ;;
     grok) install_one grok https://x.ai/cli/install.sh .grok/bin/grok ;;
-    *) echo "  ? 모르는 하네스: $h (agy · grok)" >&2; exit 1 ;;
+    cursor) install_cursor ;;
+    *) echo "  ? 모르는 하네스: $h (agy · grok · cursor)" >&2; exit 1 ;;
   esac
 done

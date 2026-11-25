@@ -19,7 +19,9 @@
  */
 export function appReady(s) {
   const st = s || {};
-  if (st.accountLoggedIn) return true; // 계정 앱은 로컬 CLI·노드 설치와 독립적으로 웹 워크스페이스를 연다.
+  // ⚠ 계정 로그인(쿠키)만으로 '준비됨' 이라 하지 않는다(#5650) — 그러면 이 PC 에 CLI·키트·노드가 하나도 없어도
+  //  마법사가 영영 안 떠서 사람은 설치된 줄 안다(0.1.414~0.1.423 클라우드 신규 설치 전부). 앱 안 워크스페이스
+  //  전환(#5430)은 showApp 의 클라우드 화면 예외로 따로 열린다 — 여기 판정과 무관하다.
   return !!(st.cliFound && !st.cliOutdated && !st.cliBroken && st.loggedIn && st.kitInstalled && !st.tokenRejected);
 }
 

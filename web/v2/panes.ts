@@ -41,7 +41,8 @@ import { listSessionApps } from './app-session.js';
 import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
-import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { KN_OPEN_EVT, VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, knPending, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
+import { knNameOfHref } from '../lib/kn-links.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
 import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
@@ -53,6 +54,8 @@ import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배
 import { hasBrowserSurface } from './browser-surface.js';
 import { onTabEvent, slotOfKey, tabsOfSession } from './browser-tabs.js';   // #4993 AI 가 쓰는 탭 → 그 세션의 웹 칸
 import { onBrowserEvent } from './live-sync.js';
+import { ASK_FOCUS_EVT, SESSASK_TAB, pendingAskFocus, sessAskTabTitle } from './session-ask-pane.js';   // #5713 요청 = 곁칸의 파생 탭
+import { watchAsks } from '../asks/api.js';
 import { browserRevealSlot } from '../lib/browser-reveal.js';
 import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
@@ -61,6 +64,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
 import { isAbs, pathOpenPlans, pickTailHit, slash, type PathOpenPlan } from '../lib/path-open.js';
+import { PANE_LINK_EVENT, type UiPaneLink } from '../lib/ui-link.js';   // #5583 대화창의 자료 링크(#/f · #/k/)를 곁칸에서
 import { type Sess, type V2Data } from './views.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { openProjectSharePopover, projAccessTag, setAccessConfig } from '../projects/access-ui.js';   // #5598 문패의 «누가 보나» 꼬리표 · 프로젝트 [공유] 창
@@ -150,7 +154,7 @@ const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
  *  이미 그렇게 저장된 배치는 여기서 되돌린다 — 갇힌 사람은 새로고침 한 번으로 풀린다. */
 /** #4225 — **배치에 저장하지 않는 탭**. 붙은 앱 탭은 지금 보는 세션에서 나온다(session-app-pane.ts 머리말) —
  *  저장하면 앱이 안 붙은 세션을 열 때 빈 탭이 한 번 떴다 사라진다. 읽을 때도 쓸 때도 걷는다. */
-const DERIVED_TABS: ReadonlySet<string> = new Set([SESSAPP_TAB]);
+const DERIVED_TABS: ReadonlySet<string> = new Set([SESSAPP_TAB, SESSASK_TAB]);   // #5713 — 요청 탭도 지금 보는 세션에서 나온다(같은 까닭)
 function stripDerived(lay: Layout): Layout {
   const keep = (k: TabKey | null): boolean => !!k && !DERIVED_TABS.has(tabBase(k));
   const out: Layout = { ...lay, main: lay.main.filter(keep), side: lay.side.filter(keep), bottom: lay.bottom.filter(keep), act: { ...lay.act }, pin: (lay.pin || []).filter(keep) };
@@ -543,6 +547,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   세션이 바뀌는 길이 생기는 순간 TDZ 로 화면이 통째로 죽는다 — panes 선언 머리말과 같은 함정).
   let sessAppOff: (() => void) | null = null;
   let sessAppSid: string | null = null;
+  //  #5713 요청 탭의 구독(syncSessAsks) — 같은 까닭으로 여기 선언한다.
+  let sessAskOff: (() => void) | null = null;
+  let sessAskSid: string | null = null;
+  let sessAskIds: ReadonlySet<string> = new Set();   // 지금 세션의 열린 요청 id — 주소에서 짚으러 왔을 때 «내 세션 것인가» 를 가른다
   function curSession(): string | null {
     const sp = panes.get('main')?.parts.get('sessions');
     return sp && sp.currentSession ? sp.currentSession() : (opts.sessionId || null);
@@ -550,6 +558,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function announceSession(sid: string | null): void {
     for (const fn of [...sessSubs]) { try { fn(sid); } catch (_) { /* 한 칸이 넘어져도 나머지는 간다 */ } }
     syncSessApps();
+    syncSessAsks();
   }
 
   const ctx: PartCtx = {
@@ -1168,6 +1177,29 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  이미 있던 탭은 이 신호로 그 파일을 편다(같은 파일이라 다시 그리지 않는다 — viewerPart open 의 첫 줄).
     if (path) wrap.dispatchEvent(new CustomEvent(VIEWER_TO_EVT, { detail: { id, path, slot: key, sid: d?.sid || null, node: d?.node || null } }));
   }
+  //  #5650 지식은 **[지식] 칸**에서 편다(원준 2026-11-24 «웹칸에서 띄울게 아니라 지식 칸에서») — 답 글·터미널의 지식 이름과 #/k/ 링크.
+  //   [지식] 칸이 없는 화면(프로젝트 없는 곁칸 — 그 칸을 세우지 않는다)이면 false — 부르는 쪽이 종전대로 웹 칸에 싣는다.
+  function openKnowledgeAt(name: string): boolean {
+    if (!name || loose) return false;
+    const hit = findTab('knowledge');
+    const zone: Zone = hit ? showZone(hit.zone, { bottomOn: lay.bottomOn, narrow: narrow() }) : landZone('side');
+    knPending.set(wrap, name);
+    if (!hit) addPart(zone, 'knowledge');
+    revealZone(zone);
+    activate(zone, hit ? hit.key : findTab('knowledge')!.key);
+    paintAll();
+    wrap.dispatchEvent(new CustomEvent(KN_OPEN_EVT, { detail: { name } }));
+    return true;
+  }
+  /** 우리 화면의 지식 주소(`<같은 출처>/ui/#/k/<이름>` · `#/k/<이름>`)면 그 이름. */
+  function knNameOfUrl(url: string): string | null {
+    try {
+      const u = new URL(url, location.href);
+      const dir = location.pathname.replace(/[^/]*$/, '');
+      if (u.origin !== location.origin || (u.pathname !== dir && u.pathname !== dir + 'index.html')) return null;
+      return knNameOfHref(u.hash);
+    } catch (_) { return null; }
+  }
   const onOpenViewer = (e: Event): void => openViewerAt((e as CustomEvent).detail as ViewerOpen | undefined);
   wrap.addEventListener(VIEWER_EVT, onOpenViewer);
   // 터미널 iframe 이 미리보기 링크를 넘겨 온다 — 새 탭 대신 웹 칸에 싣는다(원준 2026-08-21).
@@ -1278,6 +1310,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     }
     if (!d || d.type !== 'lively:open-in-pane' || typeof d.url !== 'string') return;
     if (!ownsFrame(e.source)) return;           // 남의 탭 터미널이 보낸 것 — 그 탭의 곁칸이 받는다
+    //  #5650 지식 주소는 [지식] 칸으로(답을 먼저 — 칸 세우기는 미룬다).
+    const kn = knNameOfUrl(d.url);
+    if (kn && !loose) {
+      try { (e.source as Window | null)?.postMessage({ type: 'lively:open-in-pane:ok' }, e.origin); } catch (_) { /* 이미 닫힘 */ }
+      window.setTimeout(() => { if (!openKnowledgeAt(kn)) { openInWebPart(ctx, d.url); addTab('side', 'web'); } }, 0);
+      return;
+    }
     // 남의 사이트(claude.ai 아티팩트 등)는 **앱에서만** 칸에 들어간다 — 브라우저 iframe 은 상대가 막는다
     //  (CSP frame-ancestors). 막힐 걸 알면서 칸에 넣으면 빈 화면만 남으므로 그때는 새 탭으로 연다.
     let cross = false;
@@ -1288,6 +1327,41 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     try { (e.source as Window | null)?.postMessage({ type: 'lively:open-in-pane:ok' }, e.origin); } catch (_) { /* 이미 닫힘 */ }
   };
   window.addEventListener('message', onMsg);
+  //  #5583 대화창(같은 문서 — 터미널은 iframe 이라 위 postMessage)의 **자료 링크**(원준 2026-11-22 «경로로 주는 것 눌렀을 때처럼 곁칸에서»).
+  //   터미널의 두 알림과 같은 일을 한다 — 프로젝트 자료 파일은 [자료] + 뷰어 탭(planPathOpen), 이 곁칸이 못 여는 파일(남의 프로젝트)과
+  //   그 밖의 자료 보기·지식은 웹 칸에 그 화면을. 받으면 handled 를 켠다 — 대화창은 그걸 보고서야 링크의 기본 이동(셸 해시 → 셸 탭 하나 더)을
+  //   막는다. 곁칸이 없는 화면이면 아무도 안 켜서 종전대로 간다. 이 곁칸 안(wrap)에서 올라온 것만 받는다 — 남의 탭 대화창은 그 탭의 곁칸 몫.
+  const onPaneLink = (e: Event): void => {
+    const d = (e as CustomEvent).detail as { link?: UiPaneLink; handled?: boolean } | null;
+    const link = d && d.link;
+    if (!d || d.handled || !link) return;
+    //  #5650 답 글 속 파일 경로 — 터미널 경로와 같은 길(planPathOpen). 못 열면: 프로젝트 자료는 웹 칸에 자료 보기, 세션 폴더 경로는
+    //   받지 않는다(대화창이 안내한다).
+    if (link.kind === 'path') {
+      const run = planPathOpen({ path: link.path, target: link.target, sid: link.sid, cands: link.cands });
+      if (run) { d.handled = true; window.setTimeout(run, 0); return; }
+      if (!link.url) return;
+      d.handled = true;
+      openInWebPart(ctx, link.url); addTab('side', 'web');
+      return;
+    }
+    //  #5650 지식은 [지식] 칸에서.
+    const kn = link.kind === 'web' ? knNameOfUrl(link.url) : null;
+    if (kn && openKnowledgeAt(kn)) { d.handled = true; return; }
+    //  #5699 남의 사이트는 칸에 넣을 수 있을 때(데스크톱 앱의 webview)만 받는다 — 브라우저 iframe 은 상대가 막아 빈 칸만 남는다.
+    //   안 받으면 대화창이 기본 이동을 그대로 둔다(종전).
+    let cross = false;
+    try { cross = new URL(link.url, location.href).origin !== location.origin; } catch (_) { /* 파싱 실패 — 같은 곳으로 본다 */ }
+    if (cross && !hasBrowserSurface()) return;
+    d.handled = true;
+    if (link.kind === 'file') {
+      const m = /^project\/(\d+)\/(.+)$/.exec(link.path);
+      const run = m ? planPathOpen({ path: link.path, target: { kind: 'project', id: Number(m[1]), rel: m[2] } }) : null;
+      if (run) { window.setTimeout(run, 0); return; }
+    }
+    openInWebPart(ctx, link.url); addTab('side', 'web');
+  };
+  wrap.addEventListener(PANE_LINK_EVENT, onPaneLink);
 
   // ── 탭 닫기 · 옮기기 · 고정 · 되살리기 (#3870 «곁칸 탭 관리», 원준 2026-09-30) ──────────────────────
   //  "하나 닫고 하나씩 다 찾으러 다녀야 함 … 사파리나 크롬 탭들 닫거나 열거나 끌거나 드래그하는 거 최대한 참고해서."
@@ -1490,7 +1564,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  × 는 아이콘 자리에 겹쳐 선다(CSS: 마우스를 올리면 아이콘이 × 로 바뀐다). 고정 탭은 × 가 없다(크롬) — 메뉴로 닫는다.
     //  tabindex -1: 키보드는 탭 위에서 Delete 로 닫는다(× 마다 초점이 서면 탭 사이를 옮겨 다니기가 두 배로 길어진다).
     //  붙은 앱 탭은 **켜졌을 때만** × — 떼기는 그 앱 화면이 서 있어야 어느 앱인지 안다(removeTab 머리의 같은 사정).
-    const x = pinned || (detachX && !on) ? null : el('button', {
+    //  #5713 요청 탭은 × 가 없다 — 닫는 탭이 아니라 요청을 다 하면(또는 «나중에» 로 접으면) 사라지는 탭이다.
+    const x = pinned || tabBase(key) === SESSASK_TAB || (detachX && !on) ? null : el('button', {
       class: 'pn-tab-x', type: 'button', tabindex: '-1',
       title: detachX ? `${nm} 을(를) 이 세션에서 뗍니다 — 앱의 데이터는 그대로 남아요` : `${nm} 탭 닫기`,
       'aria-label': detachX ? `${nm} 떼기` : `${nm} 닫기`,
@@ -2059,6 +2134,44 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       } else paintTabs(z);
     });
   }
+  // ── 요청 탭(#5713) — 지금 보는 세션의 AI 가 나에게 걸어 둔 요청이 있으면 곁칸에 세우고, 다 끝나면 걷는다 ──────────────
+  //  붙은 앱 탭과 같은 결이되 **켜는 때가 다르다**: 요청은 AI 가 사람을 기다리며 멈춰 있는 것이라, 새로 걸렸을 때(added)뿐 아니라
+  //   이 세션을 막 열었는데 열린 요청이 있을 때(탭이 처음 선다)도 곁칸을 펴고 그 탭을 켠다 — 안 켜면 사람은 AI 가 왜 멈췄는지 모른다.
+  //   이미 서 있는 탭은 목록이 바뀌어도(하나를 답해 줄었다) 사람이 보던 탭을 뺏지 않는다.
+  function syncSessAsks(): void {
+    if (dead) return;
+    const sid = curSession();
+    if (sid === sessAskSid && sessAskOff) return;
+    sessAskOff?.(); sessAskOff = null; sessAskSid = sid; sessAskIds = new Set();
+    //  세션이 바뀌면 옛 세션의 탭부터 걷는다 — 새 세션에 열린 요청이 있으면 아래 구독이 다시 세운다.
+    { const z = zoneOf(SESSASK_TAB); if (z) dropTab(z, SESSASK_TAB); }
+    if (!sid) return;
+    sessAskOff = watchAsks(sid, (asks, added) => {
+      if (dead || sid !== sessAskSid) return;
+      sessAskIds = new Set(asks.map((a) => a.id));
+      const had = zoneOf(SESSASK_TAB);
+      if (!asks.length) { if (had) dropTab(had, SESSASK_TAB); return; }
+      if (!had) lay.side.unshift(SESSASK_TAB);   // 맨 앞 — 사람을 기다리는 것이 곁칸의 첫 탭이다
+      const z = zoneOf(SESSASK_TAB)!;
+      tabTitles.set(SESSASK_TAB, sessAskTabTitle(asks.length));
+      //  주소(#/ask/<id>)에서 그 요청을 짚으러 왔으면 탭이 이미 서 있어도 켠다.
+      const wanted = pendingAskFocus();
+      if (added.length || !had || (wanted && asks.some((a) => a.id === wanted))) { bringUp(z, SESSASK_TAB); return; }
+      paintTabs(z);
+    });
+  }
+
+  //  주소(#/ask/<id>)에서 짚으러 왔다 — 그 요청이 이 세션 것이고 탭이 이미 서 있으면 켠다. 목록이 그대로면 위 구독은 다시 불리지 않으므로
+  //   (바뀐 만큼만 알린다) 신호를 따로 듣는다. 다른 세션 탭의 셸은 제 목록에 그 id 가 없어 움직이지 않는다.
+  const onAskFocus = (ev: Event): void => {
+    if (dead) return;
+    const id = String((ev as CustomEvent).detail?.id || '');
+    if (!id || !sessAskIds.has(id)) return;
+    const z = zoneOf(SESSASK_TAB);
+    if (z) bringUp(z, SESSASK_TAB);
+  };
+  window.addEventListener(ASK_FOCUS_EVT, onAskFocus);
+
   //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다. 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다). 세션 머리줄 [붙은 앱](#4443)도 이 함수를 부른다.
   function openSessAppTab(): void {
     const z = zoneOf(SESSAPP_TAB);
@@ -2135,6 +2248,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
   syncSessApps();       // #4225 — 이 세션에 붙은 앱이 있으면 곁칸에 그 탭을 세운다(목록이 오면)
+  syncSessAsks();       // #5713 — 이 세션의 AI 가 걸어 둔 요청이 있으면 곁칸에 «요청» 탭을 세우고 켠다
   if (!loose && !detail) void refreshDetail();
 
   // [보관한 세션]에서 [탭에 꺼내기]를 누르면 이 줄을 그 자리에서 다시 그린다(8초 틱을 기다리지 않게).
@@ -2174,6 +2288,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
       sessAppOff?.(); sessAppOff = null;
+      sessAskOff?.(); sessAskOff = null;   // #5713
+      window.removeEventListener(ASK_FOCUS_EVT, onAskFocus);
       cancelTabDrag(); thawAll();   // #3870 — 끄는 중이던 탭 · 얼림 감시(window pointermove)를 걷는다
       dock?.destroy(); dock = null;   // #4443
       card?.destroy();
