@@ -81,12 +81,12 @@ await ta("새 위반과 옛 위반이 섞이면 둘을 나누고, 거부는 새 
   assert.deepEqual(r.rejects.map((x) => x.rule), ["title_leading_emoji"]);
   assert.match(st.note, /원래 있던 형식 위반 1건\(local_path\)/);
 });
-await ta("before 가 없는 신규 저장은 legacy 가 비고 note 는 종전 문구 그대로다", async () => {
+await ta("before 가 없는 신규 저장은 legacy 가 비고 note 는 종전 문구에 사람 확인 줄(BAD 의 «오늘»)만 붙는다", async () => {
   const r = await checkWriting("knowledge", BAD, {}, rejEmoji);
   const st = (r.info as Split).style!;
   assert.deepEqual(st.legacy, []);
   assert.doesNotMatch(st.note, /원래 있던/);
-  assert.equal(st.note, `이 조직의 서술 형식에 어긋난 곳이 ${(r.info as Style).style!.findings.length}건 있습니다(저장은 됐습니다). 본문은 mode='edit' 로 그 부분만, 제목은 knowledge_set_title 로 고치세요 — 전문을 다시 보낼 필요가 없습니다. 의미는 바꾸지 말고 형식만 고치세요.`);
+  assert.equal(st.note, `이 조직의 서술 형식에 어긋난 곳이 ${(r.info as Style).style!.findings.length}건 있습니다(저장은 됐습니다). 본문은 mode='edit' 로 그 부분만, 제목은 knowledge_set_title 로 고치세요 — 전문을 다시 보낼 필요가 없습니다. 의미는 바꾸지 말고 형식만 고치세요. 그중 relative_time 는 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있으니, 지어내지 말고 사람에게 확인한 뒤 고치세요.`);
 });
 await ta("새 위반만 있는 수정 저장도 note 는 종전 문구 그대로다", async () => {
   const r = await checkWriting("knowledge", BAD, { before: { title: "옛 제목", body: "옛 본문이다." } }, on);
@@ -183,5 +183,15 @@ await ta("감사 기록이 실패해도 거부 에러는 그대로 돌려준다"
   const e = await rejectWriting("activity", null, "t", REJ, "가이드", undefined, boom);
   assert.equal(e.status, 422);
   assert.match(e.message, /title_date/);
+});
+await ta("저장 안내 — 글에 없는 사실이 있어야 고칠 수 있는 위반(ask_human)은 지어내지 말고 사람에게 확인하라고 한다", async () => {
+  // 상대시간·로컬 경로는 날짜·경로를 알아야 고친다 — «한 번 더 저장해 고치세요» 만 말하면 에이전트가 그럴듯한 날짜를 지어낸다.
+  const mixed = (await checkWriting("knowledge", { title: "🔴 배포 노트", body: "결론이다. 오늘 배포했다." }, {}, on)).info as Style;
+  assert.match(mixed.style!.note, /relative_time/);
+  assert.match(mixed.style!.note, /지어내지 말고 사람에게 확인/);
+  assert.match(mixed.style!.note, /mode='edit'/, "직접 고칠 위반이 있으면 고치는 안내는 남는다");
+  const askOnly = (await checkWriting("knowledge", { title: "배포 노트 범위", body: "결론이다. 오늘 배포했다." }, {}, on)).info as Style;
+  assert.match(askOnly.style!.note, /지어내지 말고 사람에게 확인/);
+  assert.doesNotMatch(askOnly.style!.note, /mode='edit' 로 그 부분만/, "사람 확인 항목만 남았는데 지금 고치라고 했다");
 });
 console.log(`writing-style: ${pass} passed`);

@@ -110,6 +110,14 @@ export async function checkWriting(
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
+    // 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있는 위반(needsHumanJudgment)은 «고쳐서 다시 저장» 만 말하면
+    //  에이전트가 그럴듯한 값을 지어낸다 — 읽기 안내(readStyleNote)와 같이 따로 적고, 그것만 남았으면 고치라는 말은 하지 않는다.
+    const askRules = [...new Set(findings.filter((f) => needsHumanJudgment(f.rule)).map((f) => f.rule))];
+    const askOnly = askRules.length > 0 && findings.every((f) => needsHumanJudgment(f.rule));
+    const askLine = askRules.length
+      ? ` 그중 ${askRules.join(", ")} 는 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있으니, 지어내지 말고 사람에게 확인한 뒤 고치세요.`
+      : "";
+    const fixLine = askOnly ? "" : ` ${step} 의미는 바꾸지 말고 형식만 고치세요.`;
     return {
       rejects,
       guide: fmt.guide_md,
@@ -118,7 +126,7 @@ export async function checkWriting(
           findings,
           introduced,
           legacy,
-          note: `${head}${legacyLine} ${step} 의미는 바꾸지 말고 형식만 고치세요.`,
+          note: `${head}${legacyLine}${fixLine}${askLine}`,
           guide_md: fmt.guide_md,
         },
       },
