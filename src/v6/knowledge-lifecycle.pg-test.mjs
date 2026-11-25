@@ -23,6 +23,8 @@
 //       null 로 나간다. 저장된 값과 특권 조회는 그대로
 //   L16 REST 입력 — superseded_by 는 MCP 입력과 같은 길이 상한(64)
 //   L15 supersedes(후속 쪽 표시) — 본문만 다시 저장해도 유지 · null 로 비움 · 되돌리기로 이전 값
+//   L18 후속은 참조만 한다 — 후속에는 문서 자신을 바꾸는 쓰기 게이트가 아니라 곁가지 게이트(공개범위만)를 건다.
+//       세션 주입 문구(injection='always')도 관리자·비관리자 모두 후속으로 걸 수 있다(그 문서는 바뀌지 않는다)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -214,6 +216,20 @@ try {
   await kst.deleteKnowledge(US, { actor: ME, source: "web" });
   const un3 = await attempt(() => undo.handler({ skip: [] }, user(UA), web(UA)));
   chk("L12 그 사이 후속이 지워졌으면 400 · 그대로 archived", !un3.ok && un3.status === 400 && (await row(U1)).lifecycle === "archived", show({ un3, r: await row(U1) }));
+
+  // ── L18 후속은 참조만 — 주입 문구도 후속으로 걸 수 있다 ──
+  const INJ = k("inj"), IO = k("io"), IA = k("ia");
+  await mk(INJ); await mk(IO); await mk(IA);
+  await q(`UPDATE knowledge SET injection='always' WHERE name=$1`, [INJ]);
+  const admin = (id) => ({ ...user(id), scopes: ["admin"] });
+  const l18 = await lc(IO, "superseded", INJ, OTHER);
+  chk("L18 비관리자도 주입 문구를 후속으로 건다", l18.ok && (await row(IO)).superseded_by === INJ, show(l18.ok ? await row(IO) : l18));
+  const l18a = await attempt(() => setLc.handler({ name: IA, lifecycle: "superseded", superseded_by: INJ }, admin("pgt-lc-admin"), mcp("pgt-lc-admin")));
+  chk("L18 관리자도 주입 문구를 후속으로 건다", l18a.ok && (await row(IA)).superseded_by === INJ, show(l18a.ok ? await row(IA) : l18a));
+  const inj = (await q(`SELECT injection, lifecycle, version FROM knowledge WHERE name=$1`, [INJ]))[0];
+  chk("L18 후속(주입 문구)은 그대로", inj.injection === "always" && inj.lifecycle === "active" && Number(inj.version) === 1, show(inj));
+  const l18n = await lc(INJ, "archived", undefined, OTHER);
+  chk("L18 주입 문구 자신의 전환은 여전히 관리자만(403)", !l18n.ok && l18n.status === 403, show(l18n));
 
   // ── L13 · L14 공개범위 — 지식 축을 켜고 후속을 members(대상 없음)로 잠근다 ──
   const V1 = k("v1"), VH = k("vh"), VO = k("vo"), VL = k("vl");

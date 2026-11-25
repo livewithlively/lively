@@ -26,7 +26,7 @@ import { denyLifecycleChange } from "./lifecycle-guard.js";
 import { denyMirrorContentWrite } from "./mirror-guard.js";
 import { proposeRevision, pendingStagedRevisionId } from "../../v6/knowledge-revision-store.js";
 import {
-  assertKnowledgeWritable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo, withPointerMask,
+  assertKnowledgeWritable, assertKnowledgeAnnotatable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo, withPointerMask,
 } from "./shared.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
@@ -617,8 +617,10 @@ export const knowledgeSetLifecycle: Capability = {
       externalSystem: gate.external_system,
     });
     if (denied) throw new HttpError(403, denied);
-    //  후속도 쓰기 게이트를 탄다 — 안 보이는 지식을 후속으로 걸면 그 이름이 포인터로 새고, 존재 여부도 판정 문구로 샌다.
-    if (input.superseded_by) await assertKnowledgeWritable(input.superseded_by, ctx?.viewer ?? null);
+    //  후속은 가리키기만 하고 바꾸지 않는다 — 문서 자신을 바꾸는 쓰기 게이트(주입 문구는 관리자만)가 아니라 곁가지 게이트(공개범위)를
+    //   탄다(knowledge_link 의 to 끝과 같은 판정). 안 보이는 지식을 후속으로 걸면 그 이름이 포인터로 새고 존재 여부도 판정 문구로
+    //   새므로 없는 문서와 같은 404 로 막는다. 주입 문구를 후속으로 거는 것은 그 글을 바꾸지 않으니 비관리자도 된다.
+    if (input.superseded_by) await assertKnowledgeAnnotatable(input.superseded_by, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx, { supersededBy: input.superseded_by }) };
   },
