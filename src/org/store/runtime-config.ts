@@ -44,6 +44,8 @@ import {
 // 조직 서술 형식 — 지식 저장 시 형식 안내. 조직이 바꾼 칸만 DB 에 두고 기본값 위에 얹는다.
 import { type WritingFormat, type WritingFormatPatch, resolveWritingFormat, mergeWritingFormatRaw } from "../policies/writing-format.js";
 import { audit } from "./audit.js";
+// 워크스페이스별 TTL 캐시(#2055) — 서술 형식 읽기(getWritingFormat)가 쓴다. 정책 캐시들과 같은 통로.
+import { tenantTtlCache } from "../tenant-ttl-cache.js";
 // 조직 기록 범위(#5016 후속) — 규칙·모양은 record-scope.ts 한 곳(구성원 컴퓨터별 오버라이드와 같이 쓴다).
 import { parseOrgRecordScope, cleanRootList, type OrgRecordScope, type RecordScope } from "./record-scope.js";
 // 수집 실행 세션 크기(#4213 T11) — «한 칸 전용 입구»(아래 getCollectSessionPolicy · setCollectSessionPolicy). 큰 SELECT 에 섞지 않는다.
@@ -415,6 +417,7 @@ export async function updateRuntimeConfig(
   if (patch.session_memory_policy !== undefined) invalidateSessionMemoryPolicyCache(); // #1059 D — 저장 즉시 다음 세션 생성이 새 캡을 본다
   if (patch.session_reclaim_policy !== undefined) invalidateSessionReclaimPolicyCache(); // #1059 F — 저장 즉시 다음 reaper tick 이 새 TTL 을 본다
   if (patch.delegate_policy !== undefined) invalidateDelegatePolicyCache(); // #1101 — 저장 즉시 다음 스케줄러 tick 이 새 stall 상한을 본다
+  if (patch.writing_format !== undefined) invalidateWritingFormatCache(); // 저장 즉시 다음 저장 판정 · 증류 프롬프트가 새 형식을 본다(다른 프로세스는 TTL 안에)
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
   return after;
@@ -616,12 +619,34 @@ export async function setOrgRecordScope(
   return after;
 }
 
-/** 지식 저장 경로용 — 설정 전체를 읽지 않고 서술 형식만. 테이블·컬럼이 없으면(부트스트랩 전·구 DB) 기본값. */
+// ── 서술 형식 읽기 캐시 ──
+//  지식 저장마다(뒤따르는 PR 에선 지식 읽기마다) 형식을 읽는다 — 형식을 켜지 않은 조직(기본값)까지 저장마다 조회가 하나 늘던 자리다
+//  (2026-10-14 리뷰 H). 그래서 짧게 기억한다.
+//  ★ **워크스페이스별** 캐시다(org/tenant-ttl-cache.ts — 정책 캐시들이 쓰는 그 통로, 열쇠 = 요청의 워크스페이스 컨텍스트).
+//   매니지드 게이트웨이는 한 프로세스가 여러 워크스페이스를 돌리고 org_runtime_config 행은 워크스페이스마다 하나다(행 보안이 가른다).
+//   전역 한 칸이면 먼저 읽은 워크스페이스의 형식으로 남의 저장을 거부하거나 통과시킨다.
+//  원본(jsonb)을 기억하고 읽을 때마다 resolve 한다 — 받은 쪽이 형식 객체를 고쳐도 캐시가 오염되지 않는다.
+//  무효화: 이 프로세스의 저장은 updateRuntimeConfig 가 곧바로 비운다(invalidateWritingFormatCache). 다른 게이트웨이 프로세스는
+//   TTL(30초 — 다른 정책 캐시와 같은 값) 안에 따라온다. 못 읽으면 이 워크스페이스의 마지막 값 → 기본값(꺼짐 — 종전 fail-open 과 같은 방향).
+//  시계는 부를 때 읽는다(() => Date.now()) — 시험이 가짜 시계로 수명을 잰다.
+const WRITING_FORMAT_TTL_MS = 30_000;
+const writingFormatRaw = tenantTtlCache<unknown>(WRITING_FORMAT_TTL_MS, () => null, () => Date.now());
+
+/** 지식 저장 경로용 — 설정 전체를 읽지 않고 서술 형식만(워크스페이스별 30초 캐시). 테이블·컬럼이 없으면(부트스트랩 전·구 DB) 기본값. */
 export async function getWritingFormat(): Promise<WritingFormat> {
-  try {
+  const raw = await writingFormatRaw.get(async () => {
     const r = await itemsPool.query(`SELECT writing_format FROM org_runtime_config WHERE id=1`);
-    return resolveWritingFormat((r.rows[0] as { writing_format?: unknown } | undefined)?.writing_format);
-  } catch {
-    return resolveWritingFormat(null);
-  }
+    return (r.rows[0] as { writing_format?: unknown } | undefined)?.writing_format ?? null;
+  });
+  return resolveWritingFormat(raw);
+}
+
+/**
+ * 서술 형식 캐시를 비운다 — updateRuntimeConfig 가 writing_format 을 저장한 직후 부른다(DB 를 직접 고친 시험·도구도 부른다).
+ *  이 워크스페이스만이 아니라 **전부** 비운다: 등록부 모드(셀프호스트 다중 워크스페이스)에서 primary 는 컨텍스트 없는 요청과
+ *  primary 컨텍스트의 정비(증류 크론)라는 두 열쇠로 읽힌다 — 한 열쇠만 비우면 다른 쪽이 TTL 동안 옛 형식으로 증류한다.
+ *  형식 저장은 드문 관리 행위라, 다른 워크스페이스가 다음 조회 한 번 DB 를 다시 읽는 값은 무시할 만하다(남의 값을 섞지는 않는다).
+ */
+export function invalidateWritingFormatCache(): void {
+  writingFormatRaw.invalidateAll();
 }
