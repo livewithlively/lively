@@ -41,6 +41,10 @@ function dbSourceEditor(detail, data) {
   //  ③은 구 [DB 접근 감사] 화면에 꽂혀 있었지만 그건 **감사가 아니라 설정**이고, 서버도 /org/db-source/subject-key(s)
   //  로 이 소스의 하위 리소스로 본다 — #837 에서 제자리로 옮겼다. 감사 화면엔 '무슨 일이 있었나'만 남는다.
   if (editing && sel !== '__new__') {
+    //  ⓪ 조회 대상(#5799) — 누가 이 소스를 조회하는가. 다른 설정(어느 테이블을 어떻게)보다 먼저 정하는 것이라 맨 위에 둔다.
+    const apanel = el('div', { class: 'card', style: 'margin-top:12px' });
+    right.append(apanel);
+    void renderDbAccessPanel(apanel, sel, data);
     const panel = el('div', { class: 'card', style: 'margin-top:12px' });
     right.append(panel);
     void renderDbPolicyPanel(panel, sel);
@@ -214,6 +218,62 @@ async function setColumnMask(source, table, column, style) {
     await api('/api/ui/org/db-source/column-mask', { method: 'POST', body: JSON.stringify(style ? { source, table, column, style } : { source, table, column, remove: true }) });
     toast(style ? ('마스킹: ' + style) : '마스킹 해제');
   } catch (e) { toast(e.message, true); }
+}
+
+// 조회 대상(#5799 새 권한 체계의 «대상 지정») — 이 DB 소스를 조회할 수 있는 사람 · 팀. 서버: /api/ui/org/db-source/access.
+//  역할을 받은 구성원은 «DB» 조회 권한과 이 지정이 둘 다 있어야 조회한다(기본 불가 — 소스를 등록한 관리자도 지정돼야 본다).
+//  역할이 없는 옛 방식 구성원은 이 지정과 무관하게 DB 권한으로 전 소스를 조회한다 — 그 사실을 화면이 그대로 말한다.
+async function renderDbAccessPanel(panel, source, data) {
+  busy(panel, el('p', { class: 'admin-hint' }, ...uiText('조회 대상 불러오는 중…')));
+  let members: string[] = [];
+  let teamIds: number[] = [];
+  let teams: any[] = [];
+  try {
+    const r = await api('/api/ui/org/db-source/access?name=' + encodeURIComponent(source));
+    const a = ((r && r.access) || [])[0] || {};
+    members = [...(a.members || [])];
+    teamIds = [...(a.teams || [])];
+    teams = ((await api('/api/ui/teams').catch(() => null)) || {}).teams || [];
+  } catch (e: any) { panel.replaceChildren(errorNote(e, '조회 대상을 불러오지 못했습니다')); return; }
+  const nameOf = (id: string) => { const m = (data.members || []).find((x: any) => x.id === id); return m ? (m.display_name || m.id) : id; };
+  const chosen = new Set<string>(members);
+  const chips = el('div', { class: 'db-access-chips' });
+  const drawChips = () => {
+    chips.replaceChildren(...(chosen.size
+      ? [...chosen].map((id) => el('span', { class: 'pill' }, nameOf(id) + ' ',
+          el('button', { class: 'btn-link', type: 'button', 'aria-label': nameOf(id) + ' 빼기', text: '×', onclick: () => { chosen.delete(id); drawChips(); } })))
+      : [el('span', { class: 'admin-hint', text: '지정된 구성원이 없습니다.' })]));
+  };
+  drawChips();
+  const combo = memberCombo({ placeholder: '구성원 선택' });
+  const addBtn = el('button', { class: 'btn btn-sm', type: 'button', text: '추가', onclick: () => {
+    const id = combo.value();
+    if (!id) { toast('구성원을 고르세요', true); return; }
+    chosen.add(id); drawChips();
+  } });
+  const teamChks: Array<{ id: number; chk: HTMLInputElement }> = [];
+  const teamWrap = el('div', { class: 'scope-wrap' });
+  for (const t of teams) {
+    const chk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    chk.checked = teamIds.includes(t.id);
+    teamChks.push({ id: t.id, chk });
+    teamWrap.append(el('label', { class: 'admin-check scope-opt' }, chk, ' ' + (t.name || t.key) + (t.kind === 'group' ? ' (권한 그룹)' : ' (소속 팀)') + ' · ' + (t.member_count || 0) + '명'));
+  }
+  if (!teams.length) teamWrap.append(el('span', { class: 'admin-hint', text: '팀이 없습니다.' }));
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '조회 대상 저장', onclick: async () => {
+    saveBtn.disabled = true;
+    try {
+      await api('/api/ui/org/db-source/access', { method: 'POST', body: JSON.stringify({ name: source, members: [...chosen], teams: teamChks.filter((x) => x.chk.checked).map((x) => x.id) }) });
+      toast('저장됨 — 지정된 사람과 팀만 조회합니다');
+      renderDbAccessPanel(panel, source, data);
+    } catch (e: any) { toast(e.message, true); saveBtn.disabled = false; }
+  } });
+  panel.replaceChildren(
+    sectionTitle('조회할 수 있는 사람 · 팀 — ' + source, '역할을 받은 구성원은 여기 지정된 사람과 팀만 이 DB 를 조회합니다. 아무도 지정하지 않으면 아무도 조회하지 못합니다(소스를 등록한 관리자도 지정해야 봅니다). 팀으로 지정하면 팀 구성원을 바꾸는 일이 관리자 전용이 됩니다.'),
+    el('p', { class: 'admin-hint' }, ...uiText('역할이 없는 옛 방식 구성원은 이 지정과 무관하게, DB 권한이 있으면 모든 소스를 조회합니다. 구성원을 역할로 옮기면 이 지정이 적용됩니다.')),
+    field('구성원', el('div', {}, chips, el('div', { class: 'row-gap', style: 'display:flex;gap:8px;margin-top:6px;align-items:center' }, combo.el, addBtn))),
+    field('팀', teamWrap),
+    el('div', { class: 'admin-actions' }, saveBtn));
 }
 
 async function renderSubjectKeyPanel(panel, source, data) {

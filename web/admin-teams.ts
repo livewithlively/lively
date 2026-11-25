@@ -71,6 +71,7 @@ function teamView(root, team, data, detail) {
     el('div', { class: 'member-read-head' }, el('h3', { text: team.name || team.key }),
       team.state === 'archived' ? el('span', { class: 'pill', text: '보관됨' }) : null),
     roRow('키(슬러그)', team.key),
+    roRow('종류', team.kind === 'group' ? '권한 그룹 (접근을 묶으려고 만든 것 · 프로필의 소속에 보이지 않습니다)' : '소속 팀'),
     roRow('설명', team.description),
     roRow('리드', team.lead_member_id ? memberName(team.lead_member_id) : ''),
     field('팀원', el('div', { class: 'admin-ro admin-ro-pre', text:
@@ -89,6 +90,11 @@ function teamForm(root, team, data, detail, isNew) {
   const descIn = el('input', { type: 'text', value: team.description || '', placeholder: '한 줄 설명(선택)' });
   const bodyTa = el('textarea', { rows: '4', placeholder: '팀 charter — 이 팀 AI 세션 첫머리에 주입될 팀 규칙/컨벤션(선택)' });
   bodyTa.value = team.body_md || '';
+  // 종류(#5799) — 소속 팀(조직도 · 프로필에 보인다) / 권한 그룹(접근을 묶으려고 만든 것). 접근 판정은 둘이 같고 보이는 자리만 다르다.
+  const kindSel = el('select', { 'aria-label': '종류' },
+    el('option', { value: 'team', text: '소속 팀' }),
+    el('option', { value: 'group', text: '권한 그룹 (DB 조회 대상처럼 접근을 묶을 때)' })) as HTMLSelectElement;
+  kindSel.value = team.kind === 'group' ? 'group' : 'team';
   // 팀원 — 멤버별 체크 + 역할 select(역할에 '리드' 포함 → 별도 리드 필드 불필요, 역할에서 파생). 기존 멤버는 체크/역할 프리필.
   const existing: any = {}; (team.members || []).forEach((m) => { existing[m.member_id] = m.role || 'member'; });
   const memberRows: any[] = [];
@@ -113,7 +119,7 @@ function teamForm(root, team, data, detail, isNew) {
       const members = memberRows.filter((r) => r.chk.checked).map((r) => ({ member_id: r.id, role: r.roleSel.value }));
       // 리드 = 역할이 '리드'인 팀원에서 파생(별도 필드 없음). 여럿이면 첫 번째.
       const leadM = members.find((m) => m.role === 'lead');
-      const payload = { key, name: nameIn.value.trim(), description: descIn.value.trim(), body_md: bodyTa.value, lead_member_id: leadM ? leadM.member_id : null };
+      const payload = { key, name: nameIn.value.trim(), description: descIn.value.trim(), body_md: bodyTa.value, lead_member_id: leadM ? leadM.member_id : null, kind: kindSel.value };
       if (isNew) { const r = await api('/api/ui/teams', { method: 'POST', body: JSON.stringify(payload) }); teamId = r && r.team && r.team.id; }
       else await api('/api/ui/teams/' + team.id, { method: 'POST', body: JSON.stringify(payload) });
       if (teamId) await api('/api/ui/teams/' + teamId + '/members', { method: 'POST', body: JSON.stringify({ members }) });
@@ -133,7 +139,7 @@ function teamForm(root, team, data, detail, isNew) {
     } }));
 
   root.replaceChildren(
-    field('키 (슬러그 · 영문)', keyIn), field('팀 이름', nameIn), field('설명', descIn),
+    field('키 (슬러그 · 영문)', keyIn), field('팀 이름', nameIn), field('종류', kindSel), field('설명', descIn),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '팀원 (체크 + 역할 · 리드는 역할에서 지정)' }), membersWrap),
     field('팀 charter (AI 세션 주입 · 선택)', bodyTa),
     actions);
