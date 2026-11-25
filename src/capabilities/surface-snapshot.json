@@ -367,7 +367,7 @@
  },
  {
   "name": "org_update_section",
-  "scope": "memory",
+  "scope": "admin",
   "mcp": true,
   "mutates": true,
   "rest": [
@@ -377,7 +377,7 @@
  },
  {
   "name": "org_delete_section",
-  "scope": "memory",
+  "scope": "admin",
   "mcp": true,
   "mutates": true,
   "rest": [
@@ -387,7 +387,7 @@
  },
  {
   "name": "org_reorder_sections",
-  "scope": "memory",
+  "scope": "admin",
   "mcp": true,
   "mutates": true,
   "rest": [
@@ -833,7 +833,7 @@
   "rest": [
    "POST /api/ui/org/injection-config"
   ],
-  "input_hash": "4442a5a6f6164db4"
+  "input_hash": "2601c3ba92f48ae4"
  },
  {
   "name": "org_record_scope_get",
