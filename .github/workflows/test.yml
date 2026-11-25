@@ -112,6 +112,14 @@ jobs:
           import('./dist/boot/schemas.js').then(m => m.initAllSchemas())
             .then(() => { console.log('schema ready'); process.exit(0); })
             .catch(e => { console.error(e); process.exit(1); });"
+      # 분류 런북(runbooks/knowledge-types.md)은 시드(kind_registry·data_source)와 knowledge_save 의 type 선언에서 생성된다.
+      #  시드만 고치고 재생성을 잊으면 런북이 조용히 낡는다 — 방금 시드된 빈 DB 로 --check 한다. 한 번이면 되므로 첫 조각에서만.
+      #  PG 통합 테스트보다 앞에 둔다(그 테스트들이 같은 DB 를 쓴다).
+      - name: 분류 런북이 시드와 일치하나 (build-classify-runbook --check)
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' && matrix.shard == 1 }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node scripts/build-classify-runbook.mjs --check
       - name: PG 통합 테스트 (run-tests --pg · 조각 ${{ matrix.shard }}/${{ strategy.job-total }})
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:
