@@ -46,6 +46,8 @@ export interface Invariants {
   wikilinks: string[];
   refs: string[];
   tableRows: string[];
+  templateVars: string[];
+  linkPairs: string[];
 }
 
 export interface RewriteViolation {
@@ -98,7 +100,7 @@ const NUMBER_RE = /(?:(?<![\p{L}\p{N}])-)?\d+(?:,\d{3}(?!\d))*(?:\.\d+)*(?:-\d+)
 // 전각 숫자는 반각으로 맞춘 뒤 센다 — «５»→«5» 는 같은 값이고 «５»→«３» 은 다른 값이다.
 const toHalfWidth = (s: string): string => s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 // «2026년 9월 17일»·«2026년 9월» 은 «2026-09-17»·«2026-09» 와 같은 날이다 — 표기만 바꾼 재작성을 숫자 변경으로 떨어뜨리지 않는다.
-const normalizeKoDates = (s: string): string => s
+export const normalizeKoDates = (s: string): string => s
   .replace(/(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/g, (_, y, m, d) => `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`)
   .replace(/(\d{4})년\s*(\d{1,2})월(?!\s*\d)/g, (_, y, m) => `${y}-${m.padStart(2, "0")}`);
 const URL_RE = /https?:\/\/[^\s<>()[\]{}"'`]+/g;
@@ -109,6 +111,13 @@ const REF_MRPR_RE = /\b(MR|PR)\s*[!#]?\s*(\d+)\b/gi;
 const REF_BANG_RE = /(?<![\w!])!(\d+)\b/g;
 const REF_HASH_RE = /(?<![\w&#])#(\d{3,})\b/g;
 const TABLE_SEP_RE = /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
+// 항상 주입 섹션의 자리표(${team}·${categories}·${wiki} …) — 주입 때 코드 안팎을 가리지 않고 블록으로 치환되므로 원문 전체에서 본다.
+//  자리표 한 줄이 빠지면 매 세션 실리던 블록이 통째로 사라진다.
+const TEMPLATE_VAR_RE = /\$\{[a-z_]+\}/g;
+// 마크다운 링크의 (라벨 → 대상) 쌍 — 대상 집합(urls)만 보면 두 링크의 대상을 맞바꿔도 같아 보인다.
+//  라벨의 볼드·그림 문자는 형식이라 걷고 비교한다(헤딩 기호 정리가 라벨 속 이모지를 지울 수 있다).
+const MD_LINK_PAIR_RE = /\[([^[\]\n]*)\]\(([^)\s]+)\)/g;
+const linkLabel = (s: string): string => s.replace(/\*\*/g, "").replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\uFE0F\u200D]/gu, "").replace(/\s+/g, " ").trim();
 
 const sortedMulti = (xs: string[]): string[] => [...xs].sort();
 const sortedSet = (xs: string[]): string[] => [...new Set(xs)].sort();
@@ -119,11 +128,18 @@ function trimUrl(u: string): string {
 
 // 표는 행 단위로 본다 — 셀 다중집합이면 «A|3, B|5» 를 «A|5, B|3» 으로 바꿔도 같게 보인다. 행 순서는 형식이지만
 //  한 행 안의 값 배정은 사실이다. 빈 셀도 자리로 남겨 열이 밀리는 것을 잡는다.
+//  앞 파이프 없는 GFM 표(«A | 3»)도 표다 — 파이프 든 구분선 바로 위 머리 줄부터 파이프가 끊기는 줄 전까지를 행으로 본다.
+//  구분선 없는 파이프 줄(서술 속 «a | b»)은 표가 아니다.
 function tableRowsOf(prose: string): string[] {
   const out: string[] = [];
-  for (const raw of prose.split("\n")) {
-    const l = raw.trim();
-    if (!l.startsWith("|") || TABLE_SEP_RE.test(l)) continue;
+  const ls = prose.split("\n").map((raw) => raw.trim());
+  const gfm = new Set<number>();
+  for (let i = 1; i < ls.length; i++) {
+    if (!ls[i].includes("|") || !TABLE_SEP_RE.test(ls[i]) || !ls[i - 1].includes("|")) continue;
+    for (let j = i - 1; j < ls.length && ls[j].includes("|"); j++) gfm.add(j);
+  }
+  for (const [i, l] of ls.entries()) {
+    if ((!l.startsWith("|") && !gfm.has(i)) || TABLE_SEP_RE.test(l)) continue;
     const inner = l.replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
     const cells = inner.split(/(?<!\\)\|/).map((cell) => cell.replace(/\*\*/g, "").trim());
     if (cells.some((c) => c)) out.push(cells.join(" | "));
@@ -159,6 +175,8 @@ export function extractInvariants(doc: RewriteDoc): Invariants {
     wikilinks: sortedSet(wikilinks),
     refs: sortedSet(refs),
     tableRows: sortedMulti(tableRowsOf(prose)),
+    templateVars: sortedSet(`${String(doc.title ?? "")}\n${String(doc.body_md ?? "")}`.match(TEMPLATE_VAR_RE) ?? []),
+    linkPairs: sortedSet([...prose.matchAll(MD_LINK_PAIR_RE)].map((m) => `${linkLabel(m[1])} → ${trimUrl(m[2])}`)),
   };
 }
 
@@ -205,7 +223,7 @@ const forceEnabled = (fmt: WritingFormat): WritingFormat => (fmt.enabled ? fmt :
 //  허용은 개수 차이뿐이다 — 원문에 없던 값이 생기거나 있던 값이 통째로 사라지면 여전히 위반이다.
 const MULTISET_FIELDS = ["codeBlocks", "tableRows"] as const;
 const COUNTED_FIELDS = ["numbers", "inlineCode"] as const;
-const SET_FIELDS = ["urls", "wikilinks", "refs"] as const;
+const SET_FIELDS = ["urls", "wikilinks", "refs", "templateVars", "linkPairs"] as const;
 
 function firstLines(body: string, withNextAfterHeading: boolean): string {
   const ls = String(body ?? "").split("\n").map((l) => l.trim()).filter((l) => l);
@@ -310,9 +328,11 @@ export interface EligibilityInput {
   body_md: string | null | undefined;
   title: string | null | undefined;
   updated_at: string | null | undefined;
+  /** 주입 방식 — "always" 는 매 세션 전문이 실리는 조직 규칙·페르소나 섹션이다. */
+  injection?: string | null;
 }
 
-export type IneligibleReason = "provenance" | "lifecycle" | "folder" | "recently_edited" | "nothing_to_fix";
+export type IneligibleReason = "provenance" | "lifecycle" | "folder" | "always_injected" | "recently_edited" | "nothing_to_fix";
 
 export type RewriteMode = "whole" | "sections";
 
@@ -378,6 +398,9 @@ export function isEligible(k: EligibilityInput, fmt: WritingFormat, now: Date | 
   if (k.provenance !== "authored") return no("provenance");
   if (k.lifecycle !== "active") return no("lifecycle");
   if (k.is_folder) return no("folder");
+  // 항상 주입 섹션은 «형식 정리» 배치가 고쳐 쓸 글이 아니다 — 매 세션 전문이 실리는 조직 규칙이라 한 줄 손실도 모든 세션에 번진다.
+  //  넣을 수 있게(opt-in) 할지는 메인테이너가 정할 일이라, 그 전까지는 대상에서 뺀다.
+  if (k.injection === "always") return no("always_injected");
   const body = String(k.body_md ?? "");
   // 방금 사람이 고친 글은 그 사람이 아직 손보는 중일 수 있다 — 자동 재작성이 편집을 덮으면 안 된다.
   //  배치 자신의 반영은 보호할 사람 편집이 아니다 —

@@ -53,11 +53,24 @@ export const PICTO_RE = /\p{Extended_Pictographic}/u;
 export const DATE_RE = /\b20\d{2}-\d{2}(?:-\d{2})?\b/;
 export const MR_REF_RE = /\bMR\s*!?\d+|(?:^|[\s(·,])!\d{2,}\b/;
 // '방금'은 기술 서술(«방금 만든 파일»)에서 시점이 아니라 순서를 말할 때가 많아 넣지 않는다(실데이터 보정).
-const RELATIVE_TIME_RE = /오늘|어제|(?<!안)내일|그저께|엊그제|지난주|이번 ?주|다음 ?주|이번 세션|지난 세션|이 세션/g;
-const LOCAL_PATH_RE = /\/Users\/[A-Za-z0-9._-]+|\/home\/[a-z][A-Za-z0-9._-]*|(?:^|[\s`(])~\/[A-Za-z0-9._-]|[A-Za-z]:\\Users\\/g;
+// '주' 는 날짜 쪽 쓰임(뒤가 끝·한글 아님·조사·주말·주초·주중)만 본다 — «다음 주소·주석·주요», «이번 주기», «다음 주의사항» 은 다른 낱말이다.
+//  «주로»(대개)·«주가»(주식 값)와 겹칠 수 있지만, «다음 주로 미룬다»·«이번 주가 마감» 을 놓치는 쪽이 더 잦아 넣는다.
+//  «오늘날»·«어제오늘» 은 '요즘' 이고, «이 세션» 은 제품 용어(세션 = 태스크)라 넣지 않는다.
+const RELATIVE_TIME_RE = /(?<!어제)오늘(?!날)|어제(?!오늘)|(?<!안)내일|그저께|엊그제|(?:지난|이번|다음) ?주(?=$|[^가-힣]|[에의는도로가를와엔부까말초중])(?!의(?:사항|점))|이번 세션|지난 세션/g;
+// 개인 경로만 잡는다 — 서버·공용 계정의 홈(/home/ubuntu·deploy …, /Users/Shared, C:\Users\Public)은 누구 자리에서든 같은 관례 위치다.
+//  계정 이름 뒤는 '/' 가 아니라 «이름 글자가 아님»으로 끊는다 — 끝 슬래시 없이 쓴 `/home/ubuntu` 도 빼야 한다.
+//  '~/' 는 넣지 않는다 — 읽는 사람 자신의 홈을 가리키는 관례 표기다(`~/.lively/…`·`~/.ssh/config`).
+const LOCAL_PATH_RE = /\/Users\/(?!Shared(?![\w-]))[A-Za-z0-9._-]+|\/home\/(?!(?:ubuntu|ec2-user|deploy|admin|git|runner|app|node|www-data)(?![\w-]))[a-z][A-Za-z0-9._-]*|[A-Za-z]:\\Users\\(?!Public(?![\w-]))/g;
 const UNDATED_STATUS_RE = /아직|진행 ?중|대기 ?중|배포 ?대기|머지 ?대기|미배포|미머지|예정(?:이다|입니다|임)/;
 // '갱신'은 넣지 않는다 — «토큰 갱신 절차» 같은 헤딩이 배너로 잡힌다.
-const REVISION_BANNER_RE = /\bUPDATE\b|정정|폐기|방향 ?전환|더 이상 유효하지|\bv\d+\s*→\s*v\d+/i;
+//  대소문자를 가린다 — `i` 를 붙이면 «## How to update» 같은 보통 낱말까지 잡는다.
+const BANNER_WORD = String.raw`\bUPDATE\b|정정|폐기|방향 ?전환|더 이상 유효하지|\bv\d+\s*→\s*v\d+`;
+const REVISION_BANNER_RE = new RegExp(BANNER_WORD);
+// 헤딩은 배너 낱말로 «시작»할 때만 배너다 — «## 키 폐기 절차» 같은 절차 헤딩은 그 낱말을 주제로 말할 뿐이다.
+//  맨 앞의 강조·괄호·경고 기호·날짜는 건너뛴다(«## ⚠ 폐기 안내», «## [정정] …», «## 2026-10-01 정정»).
+const BANNER_HEADING_RE = new RegExp(String.raw`^\s*#{1,6}\s+(?:(?:[*_\[(]|⚠️?|🔴|${DATE_RE.source})\s*)*(?:${BANNER_WORD})`);
+// 가이드가 권하는 문서 끝 「변경 이력」 헤딩 — 그 아래 줄은 배너가 아니라 이력이다.
+const HISTORY_HEADING_RE = /^\s*#{1,6}\s.*변경 ?이력/;
 const NESTED_PAREN_RE = /[(（][^()（）\n]*[(（][^()（）\n]*[)）][^()（）\n]*[)）]/;
 const POLITE_END_RE = /(?:습니다|ㅂ니다|니다|세요|십시오|어요|에요|해요)[.!?]?$/;
 const PLAIN_END_RE = /[가-힣]다[.!?]?$/;
@@ -184,7 +197,13 @@ export function lintWriting(input: WritingLintInput, fmt: WritingFormat, surface
   if (undated.length) add("undated_status", "날짜 없는 상태 서술이 있다('아직'·'대기'·'예정' 등). 같은 문장에 기준 날짜를 적거나 규칙으로 바꿔라.", { count: undated.length, sample: sample(undated[0]) });
   const allLines = lines(body);
   const topN = Math.max(15, Math.ceil(allLines.length * 0.2));
-  const banners = allLines.slice(0, topN).filter((l) => REVISION_BANNER_RE.test(l) && (/^\s*(>|#|\*\*|⚠|🔴)/.test(l) || DATE_RE.test(l)));
+  const top = allLines.slice(0, topN);
+  // 짧은 문서에선 끝의 「변경 이력」 도 앞부분 안에 든다 — 그 헤딩에서 멈춘다.
+  const historyAt = top.findIndex((l) => HISTORY_HEADING_RE.test(l));
+  const isBanner = (l: string): boolean => HEADING_LINE_RE.test(l)
+    ? BANNER_HEADING_RE.test(l)
+    : REVISION_BANNER_RE.test(l) && (/^\s*(>|#|\*\*|⚠|🔴)/.test(l) || DATE_RE.test(l));
+  const banners = (historyAt >= 0 ? top.slice(0, historyAt) : top).filter(isBanner);
   if (banners.length) add("revision_banner", "본문 앞부분에 개정 배너('정정'·'폐기' 등)가 있다. 본문을 현행 사실로 다시 쓰고, 이력은 끝에 짧게 남겨라.", { count: banners.length, sample: sample(banners[0]) });
 
   // ── 금지어 ──

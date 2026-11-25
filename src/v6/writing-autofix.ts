@@ -11,7 +11,7 @@ import { type WritingFormat, type WritingRuleId, ruleLevel } from "../org/polici
 import {
   DATE_RE, FENCED_CODE_RES, HEADING_LINE_RE, INLINE_CODE_RE, MR_REF_RE, PICTO_RE, PROSE_LINE_MAX, SIGNAL_SYMBOL_RE, lintWriting,
 } from "./writing-lint.js";
-import type { RewriteViolation } from "./writing-rewrite-gate.js";
+import { normalizeKoDates, type RewriteViolation } from "./writing-rewrite-gate.js";
 
 export const AUTOFIX_RULE_IDS = [
   "title_leading_emoji", "title_status_mark", "title_date", "title_mr_ref", "heading_symbol",
@@ -20,7 +20,7 @@ export type AutofixRuleId = (typeof AUTOFIX_RULE_IDS)[number];
 const AUTOFIX = new Set<string>(AUTOFIX_RULE_IDS);
 
 export interface AutofixInput { title: string | null | undefined; body_md: string | null | undefined }
-export interface AutofixHeld { rule: AutofixRuleId; reason: "title_too_short" | "unsafe_fragment" | "residual" }
+export interface AutofixHeld { rule: AutofixRuleId; reason: "title_too_short" | "unsafe_fragment" | "residual" | "meaningful_symbol" }
 export interface AutofixResult {
   title: string;
   body_md: string;
@@ -38,6 +38,12 @@ const PICTO_CLUSTER_RE = new RegExp(
   `${PICTO_RE.source}(?:\\uFE0F|[\\u{1F3FB}-\\u{1F3FF}])*(?:\\u200D${PICTO_RE.source}(?:\\uFE0F|[\\u{1F3FB}-\\u{1F3FF}])*)*`, "gu",
 );
 const LEADING_PICTO_RE = new RegExp(`^(?:${PICTO_CLUSTER_RE.source}\\s*)+`, "u");
+
+// 뜻을 싣는 기호 — 위험 등급(🔴🟠🟡🟢 …)·완료/실패(✅⭕❌)·금지(⛔🚫🛑)·경고(⚠🚨‼❗)·불확실(❓⁉)·좋음/나쁨(👍👎)·잠금(🔒🔓).
+//  재작성 프롬프트는 이 기호를 «지우지 말고 같은 등급의 글로 옮겨라», 판정 프롬프트는 «글로 옮기지 않고 지우면 사실 변화» 로
+//  다룬다. 의미 판정을 거치지 않는 결정적 정리가 지우면 그 판정을 건너뛴다(리뷰 반례: 🚫 제목, ✅/❌ 헤딩 쌍, ⛔·🔴 가 그대로 반영).
+//  그래서 이런 기호가 든 제목·헤딩은 보류하고 LLM 재작성 몫으로 넘긴다. 여기서 지우는 건 장식(🧭🔧🎉⭐🔥💡📌 …)뿐이다.
+const MEANINGFUL_SYMBOL_RE = /🔴|🟠|🟡|🟢|🔵|🟥|🟧|🟨|🟩|✅|☑|✔|⭕|❌|✖|❎|⛔|🚫|🛑|🙅|🙆|👍|👎|⚠|🚨|‼|⁉|❗|❓|🔒|🔓/u;
 
 // 날짜 조각 — lint 의 DATE_RE 에 붙은 요일·시각·범위 꼬리(«(화)», «09:56», «~15», «~2026-09-30», 열린 «~»)까지 한 조각으로 본다.
 //  꼬리를 남기면 제목에 «~15»·«09:56» 같은 뜻 없는 찌꺼기가 남는다. 요일은 날짜에서 계산되는 값이라 옮기지 않고 지운다 —
@@ -72,11 +78,18 @@ function tidyTitle(t: string): string {
   return s;
 }
 
+// 값 뒤에 띄어 쓴 조사·관계어(«2026-09 이후 정책», «— 2026-09-07 부터», «!123 에서 도입한») — 값을 빼면 «이후 정책» 처럼
+//  고아로 남고, 첫 줄엔 값만 옮겨져 «이후» 라는 관계가 사라진다. 두 글자 이상 관계어는 뒤에 조사가 더 붙어도(«이후에»·«부터는»)
+//  같은 자리라 낱말 머리로만 보고, 한 글자짜리는 홀로 쓰였거나 조사 하나가 더 붙은 때(«전에»)만 본다(«전망» 은 아니다).
+//  지운 괄호 자리(GAP, \uE002)를 사이에 둔 꼴도 같다.
+const BOUND_AFTER_RE = /^[\s\uE002]+(?:이후|이전|부터|까지|에서|에게|기준|당시|현재|무렵|이래|동안|만에|(?:에|의|은|는|이|가|을|를|와|과|로|으로|전|후|중|간|경|쯤)(?:에|의|은|는|도|만|로|으로|부터|까지)?(?![\p{L}\p{N}]))/u;
+
 /** 괄호 밖 조각을 지워도 제목 문장이 안 깨지는 자리인가 — 한쪽이 제목 끝·구분자·괄호여야 하고, 낱말에 딱 붙어 있으면 안 된다. */
 function safeTokenSpot(title: string, start: number, end: number): boolean {
   const before = title.slice(0, start), after = title.slice(end);
   // 조사·단위가 바로 붙은 자리(«2026-09-07에», «!6593의»)와 설명 괄호가 바로 붙은 자리(«!6445(유니크 키)») — 지우면 문장이 깨진다.
   if (/^[\p{L}\p{N}([（【]/u.test(after) || /[\p{L}\p{N}]$/u.test(before)) return false;
+  if (BOUND_AFTER_RE.test(after)) return false;
   const l = before.trimEnd(), r = after.trimStart();
   const leftEdge = !l || SEP_CHAR_RE.test(l.slice(-1)) || /[\])）】」』(\[（【]$/.test(l);
   const rightEdge = !r || SEP_CHAR_RE.test(r[0]) || /^[)\]）】]/.test(r);
@@ -106,8 +119,9 @@ function extractFragments(title: string): Extraction {
     let changed = false;
     s = s.replace(GROUP_RE, (all, inner: string, at: number, whole: string) => {
       if (!hasDate(inner) && !hasMr(inner)) return all;
-      // 괄호 뒤에 조사가 바로 붙은 자리(«첫 달(2025-05)부터») — 괄호째 빼면 문장이 깨진다.
-      if (/^[\p{L}\p{N}]/u.test(whole.slice(at + all.length))) { unsafe = true; return all; }
+      // 괄호 뒤에 조사가 바로 붙은 자리(«첫 달(2025-05)부터»)와 띄어 쓴 관계어가 오는 자리(«[2026-09-07] 이후 변경») — 괄호째 빼면 문장이 깨진다.
+      const rest = whole.slice(at + all.length);
+      if (/^[\p{L}\p{N}]/u.test(rest) || BOUND_AFTER_RE.test(rest)) { unsafe = true; return all; }
       changed = true;
       pieces.push(inner.trim());
       return GAP;
@@ -154,10 +168,11 @@ const includesValue = (ctx: string, v: string): boolean => {
 /**
  * 이 조각이 이미 첫 줄에 있나 — 그 글이 통째로 있으면 있다. MR 번호만인 조각은 번호가 있으면 있다(«MR !4986» ↔ «!4986»).
  *  날짜는 표기가 같아야 같은 값이라 통째 비교만 한다. 말이 붙은 조각(«2026-09-18 규명»)도 통째로 있어야 한다 — 값만 보고
- *  건너뛰면 «규명» 이 사라진다.
+ *  건너뛰면 «규명» 이 사라진다. 다만 «2026년 9월 7일» 은 «2026-09-07» 과 같은 표기로 본다 — 재작성 게이트의 숫자 대조와
+ *  같은 정규화라, 같은 날을 괄호로 한 번 더 붙이지 않는다.
  */
 function covered(piece: string, ctx: string): boolean {
-  if (includesValue(ctx, piece)) return true;
+  if (includesValue(normalizeKoDates(ctx), normalizeKoDates(piece))) return true;
   const bareMr = piece.replace(MR_TOKEN_RE, "").replace(new RegExp(`[\\s${SEP}]`, "g"), "") === "";
   if (!bareMr) return false;
   const nums = [...piece.matchAll(/!(\d+)|MR\s*!?(\d+)/g)].map((m) => m[1] ?? m[2]);
@@ -225,26 +240,30 @@ const ARROW_RE = /[\u2190-\u21FF\u27A1\u2934\u2935\u2B05-\u2B07]/u;
 function decorativeOnly(line: string): boolean {
   const prose = line.replace(new RegExp(INLINE_CODE_RE.source, "g"), " ");
   for (const m of prose.matchAll(PICTO_CLUSTER_RE)) {
-    if (ARROW_RE.test(m[0])) return false;
+    // 뜻 기호(✅/❌ 쌍·⛔·🔴)도 장식이 아니다 — 지우면 해도 되는 것과 하지 말 것, 위험 등급의 구분이 사라진다.
+    if (ARROW_RE.test(m[0]) || MEANINGFUL_SYMBOL_RE.test(m[0])) return false;
     const l = prose[m.index! - 1] ?? " ", r = prose[m.index! + m[0].length] ?? " ";
     if (/[\p{L}\p{N}]/u.test(l) && /[\p{L}\p{N}]/u.test(r)) return false;
   }
   return true;
 }
 
-function fixHeadings(body: string): { body: string; changed: boolean } {
+/** meaningful — 뜻 기호가 든 헤딩이 있었다(그 헤딩은 decorativeOnly 가 막아 남긴다). */
+function fixHeadings(body: string): { body: string; changed: boolean; meaningful: boolean } {
   const masked = maskFences(body).split("\n");
   const lines = body.split("\n");
   let changed = false;
+  let meaningful = false;
   for (let i = 0; i < lines.length; i++) {
     const prose = masked[i].replace(new RegExp(INLINE_CODE_RE.source, "g"), "");
     if (prose.length > PROSE_LINE_MAX || !HEADING_LINE_RE.test(prose) || !PICTO_RE.test(prose)) continue;
+    if (MEANINGFUL_SYMBOL_RE.test(prose)) meaningful = true;
     // 펜스와 같은 줄에 걸친 헤딩(희귀)은 가린 자리를 지키기 어렵다 — 건너뛴다. 남으면 lint 재검사가 heading_symbol 을 남긴다.
     if (masked[i] !== lines[i] || !decorativeOnly(lines[i])) continue;
     const next = stripHeadingPictos(lines[i]);
     if (next !== lines[i]) { lines[i] = next; changed = true; }
   }
-  return { body: lines.join("\n"), changed };
+  return { body: lines.join("\n"), changed, meaningful };
 }
 
 const forceEnabled = (fmt: WritingFormat): WritingFormat => (fmt.enabled ? fmt : { ...fmt, enabled: true });
@@ -264,17 +283,26 @@ export function autofixWriting(input: AutofixInput, fmt: WritingFormat): Autofix
   const held: AutofixHeld[] = [];
   let title = origTitle.trim();
   let body = origBody;
+  // 제목 어디든 뜻 기호가 있으면 제목의 기호는 손대지 않는다(1·2 모두 보류). 맨 앞 장식만 지우는 것도 안 된다 — lint 는
+  //  맨 앞이 이모지면 상태 기호를 세지 않아서, 장식만 지우면 남긴 ✅ 가 title_status_mark 새 위반으로 드러나 게이트가 문서째 막는다.
+  const meaningfulTitle = MEANINGFUL_SYMBOL_RE.test(title);
 
   // 1) 맨 앞 이모지 — 지우고 나면 뒤에 가려 있던 상태 기호가 title_status_mark 로 드러날 수 있어 2) 보다 먼저 한다.
   if (before.has("title_leading_emoji")) {
-    title = title.replace(LEADING_PICTO_RE, "").trim();
-    fixed.push("title_leading_emoji");
+    if (meaningfulTitle) held.push({ rule: "title_leading_emoji", reason: "meaningful_symbol" });
+    else {
+      title = title.replace(LEADING_PICTO_RE, "").trim();
+      fixed.push("title_leading_emoji");
+    }
   }
   // 2) 상태·경고 기호 — 맨 앞 이모지를 지운 뒤 드러난 것도 함께 지운다.
   //  lint 는 맨 앞이 이모지면 상태 기호를 따로 세지 않는다 — 여기서 안 지우면 정리 결과에 «새 위반» 으로 나타난다.
+  //  지우는 것은 장식(⭐🔥💡📌)뿐이다. 뜻 기호가 있으면 두고, lint 가 실제로 건 때만 보류로 적는다.
   if (on("title_status_mark") && title.match(SIGNAL_SYMBOL_RE)) {
-    title = tidyTitle(title.replace(SIGNAL_SYMBOL_RE, " "));
-    fixed.push("title_status_mark");
+    if (!meaningfulTitle) {
+      title = tidyTitle(title.replace(SIGNAL_SYMBOL_RE, " "));
+      fixed.push("title_status_mark");
+    } else if (before.has("title_status_mark")) held.push({ rule: "title_status_mark", reason: "meaningful_symbol" });
   }
   // 3) 날짜·MR 번호 — 본문 첫 줄로 옮긴다.
   const wantDate = before.has("title_date"), wantMr = before.has("title_mr_ref");
@@ -302,10 +330,13 @@ export function autofixWriting(input: AutofixInput, fmt: WritingFormat): Autofix
   if ([...title].length < TITLE_MIN_CHARS) {
     return unchanged(targets.map((r) => ({ rule: r, reason: "title_too_short" as const })));
   }
-  // 4) 헤딩 기호.
+  // 4) 헤딩 기호 — 장식 헤딩만 고친다. 뜻 기호 헤딩을 남겼으면 이 규칙은 고쳤다고 하지 않고 보류로 적는다
+  //  (장식만 지운 헤딩은 다른 규칙을 고친 결과에 함께 실린다 — 지운 건 장식뿐이다).
   if (before.has("heading_symbol")) {
     const h = fixHeadings(body);
-    if (h.changed) { body = h.body; fixed.push("heading_symbol"); } else held.push({ rule: "heading_symbol", reason: "residual" });
+    if (h.changed) body = h.body;
+    if (h.changed && !h.meaningful) fixed.push("heading_symbol");
+    else held.push({ rule: "heading_symbol", reason: h.meaningful ? "meaningful_symbol" : "residual" });
   }
 
   // 고친 척하지 않는다 — 다시 재서 남은 규칙은 fixed 에서 빼고 held 로 돌린다. 남았다는 건 탐지와 수정이 어긋났다는 뜻이다.

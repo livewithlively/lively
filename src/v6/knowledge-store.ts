@@ -422,8 +422,10 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
  *  · visibility: INSERT 때의 공개범위(수정엔 안 쓴다 — 공개범위는 이 함수가 바꾸지 않는다).
  *  · deferPost: 임베딩 표시·위키링크 엣지를 커밋 **뒤**로 미룬다(post 로 돌려준다). 위키링크는 제 연결로 knowledge_link 를
  *    쓰는데, 그 FK 가 아직 커밋 안 된 이 행을 기다려 트랜잭션이 스스로를 기다리게 된다.
+ *  · nameResolved: input.name 이 이미 resolveKnowledgeName 을 거친 이름이다 — 다시 해석하지 않고 그 이름의 행을 쓴다.
+ *    knowledge_save 가 핸들러에서 해석한 이름을 넘긴다(공개범위 검사 · 게이트 · 쓰기가 한 이름을 보고, 저장마다 조회 하나가 준다).
  */
-export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean }
+export interface UpsertKnowledgeOpts { db?: Db; insertOnly?: boolean; visibility?: "open" | "members"; deferPost?: boolean; nameResolved?: boolean }
 export class KnowledgeExistsError extends Error {
   constructor(public readonly knowledgeName: string) { super(`지식 '${knowledgeName}' 이(가) 이미 있습니다`); }
 }
@@ -436,7 +438,7 @@ export async function upsertKnowledge(
   const db: Db = opts.db ?? itemsPool;
   let name: string;
   if (input.name) {
-    name = await resolveKnowledgeName(input.name);
+    name = opts.nameResolved ? input.name : await resolveKnowledgeName(input.name);
   } else {
     const base = slugify(input.title || input.body_md.slice(0, 40));
     name = base;
