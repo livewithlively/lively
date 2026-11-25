@@ -232,7 +232,9 @@ async function applyActionIn(client: PoolClient, action: unknown, actor: string)
   const cur = (await client.query(
     `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1 FOR UPDATE`,
     [name])).rows[0] as { category_id: number; state: string; mapped_by: string } | undefined;
-  const target = (await client.query(`SELECT state FROM category WHERE id=$1 FOR SHARE`, [to])).rows[0] as { state: string } | undefined;
+  //  비활성 분류로는 옮기지 않는다(#1760) — FOR KEY SHARE 는 비활성 전환의 FOR UPDATE 와 부딪쳐, 전환이 진행 중이면 기다렸다가
+  //   바뀐 state 를 본다. 분류 저장의 다른 경로(linkKnowledgeCategory · 제안 · 수집기)와 같은 잠금이다.
+  const target = (await client.query(`SELECT state FROM category WHERE id=$1 FOR KEY SHARE`, [to])).rows[0] as { state: string } | undefined;
   if ((from && Number(cur?.category_id) !== from) || cur?.state === "rejected" || target?.state !== "active") {
     logger.info({ name, from, to, current: cur?.category_id ?? null, target: target?.state ?? null }, "관리기 분류 보정 건너뜀 — 발견 이후 분류가 바뀌었다");
     return "stale";
@@ -247,6 +249,27 @@ async function applyActionIn(client: PoolClient, action: unknown, actor: string)
     cur ? { category_id: Number(cur.category_id), state: cur.state, mapped_by: cur.mapped_by } : null,
     { category_id: to, state: "confirmed", mapped_by: "rule" }, { actor }, client);
   return "applied";
+}
+
+/**
+ * 발견 없이 조치 하나만 적용한다 — 자기 트랜잭션. 옮겼으면 true, 낡았거나(stale) 기계가 적용할 조치가 아니거나 실패하면 false.
+ *  발견을 닫는 적용은 applyFinding 이 한다. 이 함수는 종전 표면(applyAction)을 쓰는 시험·통합 시험을 위해 남긴다
+ *  (category-classification-tx.pg-test · manager-finding.itest). 판정은 applyActionIn 하나다.
+ */
+export async function applyAction(action: unknown, actor: string): Promise<boolean> {
+  if (!isApplicableAction(action)) return false;
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await applyActionIn(client, action, actor);
+    if (r !== "applied") { await client.query("ROLLBACK"); return false; }
+    await client.query("COMMIT");
+    return true;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    logger.warn({ err: (e as Error)?.message }, "관리기 조치 적용 실패");
+    return false;
+  } finally { client.release(); }
 }
 
 /**

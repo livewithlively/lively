@@ -57,6 +57,27 @@ export function drawerKey(name: string): string {
   return `d-${crypto.createHash("sha1").update(name.trim()).digest("hex").slice(0, 10)}`;
 }
 
+/** 어디에도 안 맞는 자료의 묶음 이름 — 집계(tallySources)의 나머지 칸이다. */
+const OTHER_DRAWER = "그 밖의 자료";
+
+/** 종류 이름이 곧 내용의 갈래인 kind — 회의 기록은 «어디서 왔나» 가 아니라 «무엇인가» 라 서랍 이름이 될 수 있다(분석 프롬프트의 예도 회의록이다). */
+const CONTENT_KINDS = new Set(["transcript", "minutes"]);
+
+/**
+ * 출처·형식만 말하는 갈래인가(순수) — 집계(tallySources)가 붙이는 이름 중 회의 기록(CONTENT_KINDS)을 뺀 전부
+ *  (자료 출처 · 확장자 묶음 · 나머지 칸)다.
+ *
+ *  이런 갈래는 카테고리로 만들지 않는다. 카테고리는 «무엇에 대한 지식인가» 의 축인데, 슬랙·메일·이미지·그 밖의 자료는
+ *   «어디서 왔나 · 어떤 형식인가» 다. 출처는 자료 연결(knowledge_source → source.kind)에 이미 남는다. 카테고리로 만들면
+ *   그 갈래의 증류 레인이 목적지를 그 카테고리로 고정해, 내용이 무엇이든 출처 칸에 쌓인다(분류가 내용을 보지 않는다).
+ *   그 자료는 목적지를 비운 레인(안전망 등 — 증류가 category_list 를 보고 내용에 맞는 분류를 고른다)의 몫이다.
+ */
+export function isSourceDrawer(name: string): boolean {
+  const n = String(name ?? "").trim();
+  return n === OTHER_DRAWER || Object.values(EXT_BUCKET).includes(n)
+    || Object.entries(KIND_LABEL).some(([kind, label]) => label === n && !CONTENT_KINDS.has(kind));
+}
+
 /** 하다 만 자리를 저장할 때의 크기 상한(#2207). 화면 상태는 답 몇 줄이라 이 값을 넘을 이유가 없다.
  *  ⚠ 넘으면 **거절한다**(조용히 자르지 않는다) — 잘린 JSON 은 다음에 이어 열 때 그냥 깨진 상태다. */
 export const PROGRESS_MAX_BYTES = 32 * 1024;
@@ -155,7 +176,7 @@ export function tallySources(entries: Array<{ kind?: string | null; title?: stri
     let bucket = KIND_LABEL[kind];
     if (!bucket) {
       const ext = (String(e.title || "").match(/\.([A-Za-z0-9]{1,8})$/)?.[1] || "").toLowerCase();
-      bucket = EXT_BUCKET[ext] ?? "그 밖의 자료";
+      bucket = EXT_BUCKET[ext] ?? OTHER_DRAWER;
     }
     byKind.set(bucket, (byKind.get(bucket) ?? 0) + 1);
   }
@@ -234,10 +255,11 @@ export function analyzePrompt(files: Array<string | AnalyzeFile>, job: string | 
     "- **파일 이름이 아니라 내용으로 가릅니다.** 아래 「내용」 줄이 있으면 그것이 판단의 주된 근거입니다.",
     "  이름이 'image-1.png' 처럼 아무 뜻이 없어도 내용이 회의 기록이면 그 서랍으로 넣습니다.",
     "- 확장자·형식은 서랍이 아닙니다. '이미지'·'PDF'·'문서' 같은 이름을 쓰지 마세요 — 그건 무엇에 대한 것인지 말해 주지 않습니다.",
+    "- 출처도 서랍이 아닙니다. '슬랙'·'메일' 같은 이름을 쓰지 마세요 — 어디서 왔는지는 자료마다 이미 기록됩니다.",
     "- 위에 적힌 **하는 일**에 맞춰 가릅니다. 같은 자료도 마케터와 개발자에게는 다른 서랍이 맞습니다.",
     "- 이름은 한국어 명사구로 짧게(예: 회의록, 월간 보고, 계약·견적).",
     "- 실제로 보이는 것만 근거로 삼습니다. 없는 종류를 지어내지 마세요.",
-    "- 어디에도 안 들어가는 것을 담을 서랍 하나(예: 그 밖의 자료)를 마지막에 둡니다.",
+    `- 어디에도 안 들어가는 것을 담을 서랍(예: ${OTHER_DRAWER})은 만들지 않습니다 — 그런 자료는 따로 받아 내용에 맞는 분류로 보냅니다.`,
     "",
     "답은 **JSON 배열 하나만** 코드펜스에 담아 주세요. 설명은 펜스 밖에 적으세요.",
     "why 에는 **무엇을 보고 그렇게 판단했는지**를 한 줄로 적습니다(파일 이름이 아니라 내용의 근거).",
@@ -479,6 +501,7 @@ export const welcomeCapabilities: Capability[] = [
       //  (#4970) 처음 설정은 이제 서랍을 묻지 않는다(인사 → 이름 → 외부 앱 연결) — 화면이 보내는 drawers 가 비어 있어 사실상 묶음 시드만 남는다.
       const created: string[] = [];
       const skipped: string[] = [];
+      const excluded: string[] = [];   // 출처·형식 갈래 — 카테고리도 레인도 만들지 않는다(isSourceDrawer)
       if (admin) {
         // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
         const wanted = Array.isArray(input.drawers) ? input.drawers.slice(0, MAX_DRAWERS) : [];
@@ -486,6 +509,7 @@ export const welcomeCapabilities: Capability[] = [
         for (const d of wanted) {
           const name = s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60);
           if (!name) continue;
+          if (isSourceDrawer(name)) { excluded.push(name); continue; }
           const key = drawerKey(name);
           if (existing.has(key)) { skipped.push(name); continue; }
           try {
@@ -517,7 +541,7 @@ export const welcomeCapabilities: Capability[] = [
         //  이 초안을 채운다 — 서버는 답만으로 정해지는 뼈대를 즉시 만들어 AI 없이도 "정리 자리"가 보이게 한다. 멱등·비치명.
         const skeletonDrawers = wanted
           .map((d) => s(typeof d === "string" ? d : (d as Record<string, unknown>)?.name, 60))
-          .filter((n): n is string => !!n)
+          .filter((n): n is string => !!n && !isSourceDrawer(n))
           .map((n) => ({ key: drawerKey(n), name: n }));
         if (skeletonDrawers.length) {
           try {
@@ -618,13 +642,13 @@ export const welcomeCapabilities: Capability[] = [
       //  (#4970) 리브 킥오프는 없다 — 처음 설정이 끝나며 리브 세션을 저절로 열던 길(#1631 → #4213 T13)을 걷었다.
       //   외부 앱 연결은 사람이 [연결할게요]를 눌렀을 때 me_liv_open 이 리브 세션에 맡긴다(없으면 로그인한 AI 로 연다 — #4970 «리브 = 세션 하나»).
       //  flow(#5060) — 정리 지시(리브 2턴)가 어느 갈래로 오는가. 화면은 이 값으로만 «리브가 정리해 둘게요» 를 말한다(약속을 지어내지 않게).
-      return { ok: true, created, skipped, welcome: profile.welcome ?? null, flow: profile.welcome?.flow ?? null };
+      return { ok: true, created, skipped, excluded, welcome: profile.welcome ?? null, flow: profile.welcome?.flow ?? null };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
       stage: z.string().optional().describe("company|solo|study (옛 academy|student 도 받는다)"),
       job: z.string().optional().describe("맡은 일"),
       drawers: z.array(z.union([z.string(), z.object({ name: z.string(), why: z.string().optional() })])).optional()
-        .describe("승인한 자료함 갈래 — 실제 카테고리로 만든다"),
+        .describe("승인한 자료함 갈래 — 실제 카테고리로 만든다. 출처·형식 이름(슬랙·메일·이미지·그 밖의 자료 …)은 만들지 않고 excluded 로 돌려준다"),
       cadence: z.string().optional().describe("month|week|no — 정기 문서 주기"),
       share: z.string().optional().describe("me|team|dept|ext — 자료를 보는 범위"),
       nowline: z.string().optional().describe("시간을 가장 많이 쓰는 일"),
