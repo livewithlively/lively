@@ -25,6 +25,18 @@ await ta("위반이 있으면 findings·note·guide 를 싣는다", async () => 
   assert.ok(st.guide_md.length > 0);
   assert.deepEqual(rejects, [], "warn 만 있으면 거부 없음");
 });
+await ta("서버 처리 판정 — 홈 경로는 지식 저장에서 치환으로 다 풀릴 때만 사람 확인을 뺀다(다른 표면·남는 경로는 사람 확인)", async () => {
+  type F = { rule: string; ask_human?: true };
+  const lp = (fs: F[]) => fs.find((f) => f.rule === "local_path");
+  const mac = { title: "배포 노트 범위", body: "결론이다. 설정은 /Users/bob/app.conf 에 둔다." };
+  const home = { title: "배포 노트 범위", body: "결론이다. 설정은 /home/alice/app.conf 에 둔다." };
+  const st = (r: Awaited<ReturnType<typeof checkWriting>>) => (r.info as { style: { findings: F[] } }).style.findings;
+  assert.ok(lp(st(await checkWriting("knowledge", mac, {}, on))) && !lp(st(await checkWriting("knowledge", mac, {}, on)))!.ask_human);
+  assert.ok(lp(st(await checkWriting("knowledge", home, {}, on)))?.ask_human, "치환되지 않는 /home/<개인 계정> 을 서버가 처리한다고 했다");
+  const act = await checkWriting("activity", { title: "배포 노트", body: mac.body }, {}, on);
+  const actLp = lp(((act.info as { style?: { findings: F[] } }).style?.findings) ?? []);
+  if (actLp) assert.ok(actLp.ask_human, "작업기록 표면엔 경로 치환이 없는데 서버가 처리한다고 했다");
+});
 await ta("형식이 꺼져 있거나 위반이 없으면 아무것도 싣지 않는다", async () => {
   assert.deepEqual(await checkWriting("knowledge", BAD, {}, async () => resolveWritingFormat({})), { info: {}, rejects: [], guide: "" });
   assert.deepEqual(await checkWriting("knowledge", CLEAN, {}, on), { info: {}, rejects: [], guide: "" });

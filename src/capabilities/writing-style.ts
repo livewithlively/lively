@@ -7,8 +7,9 @@ import { HttpError } from "../http-error.js";
 import { audit } from "../org/store/audit.js";
 import { getWritingFormat } from "../org/store/runtime-config.js";
 import type { WritingFormat, WritingSurface } from "../org/policies/writing-format.js";
-import { lintWriting, type WritingFinding } from "../v6/writing-lint.js";
+import { lintWriting, LOCAL_PATH_RE, type WritingFinding } from "../v6/writing-lint.js";
 import { needsHumanJudgment } from "../v6/writing-rewrite-gate.js";
+import { normalizeHomePaths } from "../v6/writing-resolve.js";
 
 /** 웹 화면의 표식 — web/lib/net.ts 의 api() 가 모든 요청에 `x-lively-client` 헤더로 싣고 REST 어댑터(web.ts)가 ctx.client 로 넘긴다.
  *  웹 모듈은 서버 모듈을 import 하지 않는 leaf 라 같은 글자를 그쪽에 따로 적는다 — 바꾸면 둘을 함께 바꾼다. */
@@ -75,6 +76,36 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legac
   },
 };
 
+// 고치는 법(fix). 사실이 있어야 고칠 수 있는 규칙(needsHumanJudgment) 가운데 서버가 직접 고치는 것(홈 경로 치환)은
+//  사람에게 묻지 않는다(serverResolves·resolveFindings).
+export const RULE_FIX: Partial<Record<WritingFinding["rule"], string>> = {
+  local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
+};
+
+export type ResolvedFinding = WritingFinding & {
+  fix?: string;
+  /** 사람 확인이 필요하다 — 고치는 데 글에 없는 사실이 필요하고, 서버도 그 사실 없이 처리하지 못한다. */
+  ask_human?: true;
+};
+
+// 사실이 필요한 규칙이지만 서버가 사실 없이 처리하는 것 — 경로 치환은 지식 저장 때 서버가 한다.
+//  경로 치환은 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정> 등)이 있으면 사람 확인이다.
+export interface ResolveContext { surface?: WritingSurface; text?: string }
+function serverResolves(rule: WritingFinding["rule"], ctx: ResolveContext): boolean {
+  if ((ctx.surface ?? "knowledge") !== "knowledge") return false;
+  if (rule === "local_path") return ctx.text != null && (normalizeHomePaths(ctx.text).match(LOCAL_PATH_RE) ?? []).length === 0;
+  return false;
+}
+
+/** 위반마다 고치는 법을 달고, 사람 확인이 필요한 것에 ask_human 을 단다. 저장 응답과 읽기 신호가 같이 쓴다. */
+export function resolveFindings(findings: WritingFinding[], ctx: ResolveContext = {}): ResolvedFinding[] {
+  return findings.map((f) => {
+    const fix = RULE_FIX[f.rule];
+    const ask = needsHumanJudgment(f.rule) && !serverResolves(f.rule, ctx) ? { ask_human: true as const } : {};
+    return { ...f, ...(fix ? { fix } : {}), ...ask };
+  });
+}
+
 /** 판정하지 않는 글 — 저장 판정과 읽기 신호가 같은 면제를 쓴다. */
 function isWritingExempt(o: { observed?: boolean; folder?: boolean }): boolean {
   return !!(o.observed || o.folder);
@@ -107,26 +138,31 @@ export async function checkWriting(
     const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
     // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
     const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
+    const marked = resolveFindings(findings, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}` });
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
     // 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있는 위반(needsHumanJudgment)은 «고쳐서 다시 저장» 만 말하면
     //  에이전트가 그럴듯한 값을 지어낸다 — 읽기 안내(readStyleNote)와 같이 따로 적고, 그것만 남았으면 고치라는 말은 하지 않는다.
-    const askRules = [...new Set(findings.filter((f) => needsHumanJudgment(f.rule)).map((f) => f.rule))];
-    const askOnly = askRules.length > 0 && findings.every((f) => needsHumanJudgment(f.rule));
+    //  서버가 직접 처리하는 위반은 사람 확인 항목에서 뺀다(resolveFindings 의 ask_human).
+    const askRules = [...new Set(marked.filter((f) => f.ask_human).map((f) => f.rule))];
+    const askOnly = askRules.length > 0 && marked.every((f) => f.ask_human);
     const askLine = askRules.length
       ? ` 그중 ${askRules.join(", ")} 는 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있으니, 지어내지 말고 사람에게 확인한 뒤 고치세요.`
       : "";
-    const fixLine = askOnly ? "" : ` ${step} 의미는 바꾸지 말고 형식만 고치세요.`;
+    const stepLine = askOnly ? "" : ` ${step} 의미는 바꾸지 말고 형식만 고치세요.`;
+    const fixLine = !opts.human && !askOnly && marked.some((f) => f.fix && !f.ask_human)
+      ? " 위반마다 fix 에 고치는 법이 있습니다."
+      : "";
     return {
       rejects,
       guide: fmt.guide_md,
       info: {
         style: {
-          findings,
+          findings: marked,
           introduced,
           legacy,
-          note: `${head}${legacyLine}${fixLine}${askLine}`,
+          note: `${head}${legacyLine}${stepLine}${fixLine}${askLine}`,
           guide_md: fmt.guide_md,
         },
       },
@@ -146,9 +182,9 @@ export type ReadStyleEditBlock = "no_write" | "injected" | "recently_edited";
 export interface ReadStyleHint {
   /** 위반 전체 건수 — findings 는 앞부분만 싣는다. */
   count: number;
-  /** ask_human — 자동 정리에서 뺀 규칙이다(writing-rewrite-gate AUTO_FIX_RULES 밖). 고치는 데 «그날이 언제였나» 같은
-   *  사실 판단이 필요해, 에이전트가 혼자 고치면 그럴듯한 값을 지어낸다. */
-  findings: Array<WritingFinding & { ask_human?: true }>;
+  /** fix — 고치는 법, ask_human — 글에 없는 사실이 필요하고 서버도 그 사실 없이 처리하지 못하는 항목(자동 정리 규칙 밖).
+   *  에이전트가 혼자 고치면 그럴듯한 값을 지어낸다. */
+  findings: ResolvedFinding[];
   /** 있으면 지금 고치지 않는다 — note 도 고치라고 하지 않는다. */
   edit_blocked?: ReadStyleEditBlock;
   note: string;
@@ -174,12 +210,11 @@ const ASK_HUMAN_WHY = "날짜·현행 여부·경로·나눌 자리처럼 글에
  * 읽기 신호의 다음 행동. 직접 고칠 항목(자동 정리 규칙)과 사람 확인이 필요한 항목(ask_human)을 나눠 적고, 반복은 직접 고칠
  *  항목에만 건다 — «위반 0건까지 반복» 이면 ask_human 이 남은 글에서 안내를 따르는 에이전트가 같은 저장을 되풀이하거나 날짜·경로를
  *  지어낸다. 같은 규칙은 한 번 더까지만 고친다(고쳐지지 않는 규칙에서 돌지 않게). 묶음은 잘라 싣기 전 전체 위반으로 센다 — 저장
- *  응답에 남은 규칙이 어느 묶음인지 알아보려면 전부 있어야 한다. 저장 응답의 안내(checkWriting)는 ask_human 을 가르지 않으므로
- *  «그래도 멈춘다» 를 여기서 말해 둔다.
+ *  응답에 남은 규칙이 어느 묶음인지 알아보려면 전부 있어야 한다.
  */
-function readStyleNote(findings: WritingFinding[], blocked: ReadStyleEditBlock | null, partial: boolean): string {
-  const self = findings.filter((f) => !needsHumanJudgment(f.rule));
-  const ask = findings.filter((f) => needsHumanJudgment(f.rule));
+function readStyleNote(findings: ResolvedFinding[], blocked: ReadStyleEditBlock | null, partial: boolean): string {
+  const self = findings.filter((f) => !f.ask_human);
+  const ask = findings.filter((f) => f.ask_human);
   const rules = (fs: WritingFinding[]): string => fs.map((f) => f.rule).join(", ");
   const groups = [
     self.length ? `직접 고칠 항목 ${self.length}건(${rules(self)})` : "",
@@ -196,10 +231,11 @@ function readStyleNote(findings: WritingFinding[], blocked: ReadStyleEditBlock |
   //  보낸 본문 저장이 409 가 된다. 본문을 먼저 고치고 그 응답의 판으로 제목을 고치는 순서가 왕복이 적다.
   //  (knowledge_set_title 도 저장 채널을 confidence 에 남기므로 — #1740 — 제목 변경 뒤에도 «내 마지막 저장» 판정은 유지된다.)
   const title = self.some((f) => f.rule.startsWith("title_")) ? " 제목은 본문을 고친 뒤 마지막에 knowledge_set_title 로 고친다." : "";
+  const fix = self.some((f) => f.fix) ? " 위반마다 fix 에 고치는 법이 있다." : "";
   const askLine = ask.length
     ? ` 사람 확인이 필요한 항목(findings 의 ask_human)은 ${ASK_HUMAN_WHY} — 지어내지 말고 사람에게 묻고, 답을 받은 뒤에만 고친다. 저장 응답의 안내가 한 번 더 고치라고 해도 사람 확인이 필요한 항목만 남으면 멈추고 사람에게 묻는다.`
     : "";
-  return `${head} 이 지식을 작업 근거로 쓰고 있다면 직접 고칠 항목을 지금 고친다.${readFull} 본문은 knowledge_save mode='edit' 로 그 부분만 고치고, style_fix:true 와 이 응답의 knowledge.version 을 expected_version 으로 함께 보낸다(서버가 사실·수치·링크가 그대로인지와 그 사이 다른 저장이 없었는지 본다).${title} 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고친다. 저장 응답의 style 에 직접 고칠 항목이 남아 있으면 한 번 더 고치고, 같은 규칙이 그래도 남으면 더 고치지 않고 멈춘다.${askLine}`;
+  return `${head} 이 지식을 작업 근거로 쓰고 있다면 직접 고칠 항목을 지금 고친다.${readFull} 본문은 knowledge_save mode='edit' 로 그 부분만 고치고, style_fix:true 와 이 응답의 knowledge.version 을 expected_version 으로 함께 보낸다(서버가 사실·수치·링크가 그대로인지와 그 사이 다른 저장이 없었는지 본다).${title}${fix} 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고친다. 저장 응답의 style 에 직접 고칠 항목이 남아 있으면 한 번 더 고치고, 같은 규칙이 그래도 남으면 더 고치지 않고 멈춘다.${askLine}`;
 }
 
 /**
@@ -233,12 +269,13 @@ export async function readStyleHint(
         blocked = "no_write";
       }
     }
+    const marked = resolveFindings(findings, { surface: "knowledge", text: `${k.title ?? ""}\n${k.body_md ?? ""}` });
     return {
       style: {
         count: findings.length,
-        findings: findings.slice(0, READ_FINDINGS_MAX).map((f) => (needsHumanJudgment(f.rule) ? { ...f, ask_human: true as const } : f)),
+        findings: marked.slice(0, READ_FINDINGS_MAX),
         ...(blocked ? { edit_blocked: blocked } : {}),
-        note: readStyleNote(findings, blocked, opts.partial === true),
+        note: readStyleNote(marked, blocked, opts.partial === true),
       },
     };
   } catch {

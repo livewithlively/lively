@@ -60,7 +60,10 @@ const RELATIVE_TIME_RE = /(?<!어제)오늘(?!날)|어제(?!오늘)|(?<!안)내�
 // 개인 경로만 잡는다 — 서버·공용 계정의 홈(/home/ubuntu·deploy …, /Users/Shared, C:\Users\Public)은 누구 자리에서든 같은 관례 위치다.
 //  계정 이름 뒤는 '/' 가 아니라 «이름 글자가 아님»으로 끊는다 — 끝 슬래시 없이 쓴 `/home/ubuntu` 도 빼야 한다.
 //  '~/' 는 넣지 않는다 — 읽는 사람 자신의 홈을 가리키는 관례 표기다(`~/.lively/…`·`~/.ssh/config`).
-const LOCAL_PATH_RE = /\/Users\/(?!Shared(?![\w-]))[A-Za-z0-9._-]+|\/home\/(?!(?:ubuntu|ec2-user|deploy|admin|git|runner|app|node|www-data)(?![\w-]))[a-z][A-Za-z0-9._-]*|[A-Za-z]:\\Users\\(?!Public(?![\w-]))/g;
+//  경로 앞에 글자·경로 문자가 붙어 있으면 홈 경로가 아니다 — «/scim/v2/Users/<id>»·URL·«s3://b/Users/x» 는 API·저장소 경로다.
+//  /Users/<계정> 은 뒤에 하위 경로가 있을 때만 본다(«/Users/me»·문장 끝은 API 경로의 id 와 구별할 수 없다).
+//  Windows 는 계정 이름(공백 포함)까지 잡는다 — 자동 정리(writing-resolve)가 그 자리를 바꾼다.
+export const LOCAL_PATH_RE = /(?<![\w.~\/:$%-])\/Users\/(?!Shared(?![\w-]))[A-Za-z0-9._-]+(?=\/)|(?<![\w.~\/:$%-])\/home\/(?!(?:ubuntu|ec2-user|deploy|admin|git|runner|app|node|www-data)(?![\w-]))[a-z][A-Za-z0-9._-]*|(?<![A-Za-z])[A-Za-z]:\\Users\\(?!(?:Public|Default|All Users)\\)[^\\\r\n<>:"|?*]+(?=\\)/g;
 const UNDATED_STATUS_RE = /아직|진행 ?중|대기 ?중|배포 ?대기|머지 ?대기|미배포|미머지|예정(?:이다|입니다|임)/;
 // '갱신'은 넣지 않는다 — «토큰 갱신 절차» 같은 헤딩이 배너로 잡힌다.
 //  대소문자를 가린다 — `i` 를 붙이면 «## How to update» 같은 보통 낱말까지 잡는다.

@@ -34,6 +34,9 @@ import { assertNoContentSecrets, assertNoSecretKeys } from "../content-secrets.j
 import { checkWriting, isHumanWriter, rejectWriting } from "../writing-style.js";
 import { assertExpectedVersion, assertStyleFixSafe, rethrowVersionConflict, versionConflictError } from "./save-guard.js";
 import { getKnowledgeVersion } from "../../v6/knowledge-store.js";   // 판 대조 — 수정 제안 접수 직전에 다시 본다
+import { countHomePaths, normalizeHomePaths } from "../../v6/writing-resolve.js";
+import { ruleLevel } from "../../org/policies/writing-format.js";
+import { getWritingFormat } from "../../org/store/runtime-config.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -142,7 +145,7 @@ export const knowledgeSave: Capability = {
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
     "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라. " +
     "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라. " +
-    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. ask_human 이 붙은 위반은 사람에게 확인한 뒤 고친다.",
+    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. 위반마다 style.findings 의 fix 에 고치는 법이 있다. ask_human 이 붙은 위반(글에 없는 사실이 필요한 것)만 사람에게 확인한 뒤 고치고, 나머지는 묻지 않고 고친다. 에이전트가 보낸 글의 개인 홈 경로는 서버가 $HOME 으로 바꾼다(응답 home_paths).",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -288,6 +291,24 @@ export const knowledgeSave: Capability = {
     const isAppend = input.mode === "append";
     const isEdit = input.mode === "edit";
     let appendBase: string | null = null;
+    //  human 은 형식 정리 저장(style_fix)의 본인 판정 몫이고(assertStyleFixSafe — 웹 로그인 세션만), humanWriter 는 웹 화면 요청까지
+    //   사람으로 본다(isHumanWriter(user, ctx)) — 형식 판정·홈 경로 치환은 사람이 웹 화면에서 쓴 글에 걸지 않는다.
+    const human = isHumanWriter(user);
+    const humanWriter = isHumanWriter(user, ctx);
+    //  외부 관찰 기록인지는 저장된 행으로만 본다 — 입력 provenance 로 판정을 비껴가지 않게(checkWriting observed 와 같은 근거).
+    const observedSave = gate.before?.provenance === "observed";
+    // 개인 홈 경로(local_path)는 에이전트 저장에서 서버가 $HOME 으로 바꾼다 — 가리키는 곳은 같고 계정 이름만 빠진다.
+    //  조직이 그 규칙을 켰을 때만, 이번 저장이 보낸 글(replace 전문·append 조각·edit 의 new)에만 건다. 손대지 않은 기존
+    //  본문까지 바꾸는 것은 형식 정리 저장(style_fix)뿐이다. 사람의 웹 편집은 쓴 그대로 둔다.
+    const writingFmt = await getWritingFormat();
+    const homeFix = !humanWriter && !observedSave && writingFmt.enabled && writingFmt.apply_to.includes("knowledge")
+      && ruleLevel(writingFmt, "local_path") !== "off";
+    let homePaths = 0;
+    const fixHome = (text: string): string => {
+      if (!homeFix) return text;
+      homePaths += countHomePaths(text);
+      return normalizeHomePaths(text);
+    };
     // body_md 는 스키마상 optional(edit 가 안 보내므로)이라 하류(전문 string 필수)로 넘기기 전에 확정한다.
     //  edit/append 분기가 아래에서 각자 계산한 전문으로 덮는다.
     let saveInput: KnowledgeSaveInput & { body_md: string } = { ...input, body_md: String(input.body_md ?? "") };
@@ -307,7 +328,8 @@ export const knowledgeSave: Capability = {
       appendBase = gate.before.body_md ?? "";
       let edited: string;
       try {
-        edited = applyKnowledgeEdits(appendBase, (input as { edits?: KnowledgeEdit[] }).edits ?? []);
+        edited = applyKnowledgeEdits(appendBase, ((input as { edits?: KnowledgeEdit[] }).edits ?? []).map((e) => ({ ...e, new: fixHome(e.new) })));
+        if (input.style_fix) edited = fixHome(edited);
       } catch (e) {
         // 앵커 불일치·모호는 **호출자 실수**다(400) — 조용히 넘기면 "저장은 됐는데 안 바뀐" 최악의 실패가 된다.
         throw new HttpError(400, (e as Error).message);
@@ -338,38 +360,41 @@ export const knowledgeSave: Capability = {
       appendBase = gate.before.body_md ?? "";
       // 중복 append(재시도) — replace 와 달리 append 는 멱등이 아니다. 응답을 잃은 호출자가 재시도하면 같은 단락이
       //  두 번 붙는데, 본문을 읽지 않는 호출자는 그걸 알 수 없다 → 이미 끝에 그대로 있으면 붙이지 않고 사실을 알린다.
-      if (isDuplicateAppend(appendBase, String(input.body_md ?? ""))) {
+      const chunk = fixHome(String(input.body_md ?? ""));
+      if (isDuplicateAppend(appendBase, chunk)) {
         throw new HttpError(409, "이 조각은 이미 본문 끝에 그대로 있습니다 — 앞선 append 가 이미 반영된 것으로 보입니다(응답을 못 받아 재시도한 경우라면 그 저장은 성공한 것입니다). 같은 내용을 한 번 더 붙이려는 게 정말 맞다면 mode 없이(replace) 전문으로 저장하세요.");
       }
-      const merged = appendBody(appendBase, String(input.body_md ?? ""));
+      const merged = appendBody(appendBase, chunk);
       if (merged.length > BODY_MD_MAX) {
         throw new HttpError(400, `append 결과가 본문 상한(${BODY_MD_MAX.toLocaleString()}자)을 넘습니다(현재 ${appendBase.length.toLocaleString()}자 + 조각 ${String(input.body_md ?? "").length.toLocaleString()}자) — 넘기면 그 문서는 전문 저장(replace·웹 편집기)이 영영 불가해집니다. 문서를 나누세요.`);
       }
       saveInput = { ...input, body_md: merged };
     }
+    if (!isEdit && !isAppend) saveInput = { ...saveInput, body_md: fixHome(saveInput.body_md) };
 
     assertStyleFixSafe({
-      styleFix: input.style_fix, human: isHumanWriter(user), actor: writeCtx.actor, before: gate.before,
+      styleFix: input.style_fix, human, actor: writeCtx.actor, before: gate.before,
       after: { title: input.title ?? gate.before?.title, body_md: saveInput.body_md }, now: Date.now(),
     });
 
     // 서술 형식 — 최종 제목·본문을 조직 형식에 비춰 본다. reject 규칙에 **이번 저장이 새로 만든** 위반이 있으면 받지 않는다.
     //  판정이 서버에 있으므로 클라이언트(훅·키트) 버전과 무관하게 걸린다. 기존 문서에 원래 있던 위반은 거부 사유가 아니다 —
     //  그걸 막으면 깨끗한 조각을 붙이는 append 까지 전부 422 가 되고, 조각으로는 본문 위반을 고칠 수 없다.
-    const { info: style, rejects, guide } = await checkWriting("knowledge",
+    const { info, rejects, guide } = await checkWriting("knowledge",
       { title: input.title ?? gate.before?.title, body: saveInput.body_md },
       {
         // 외부 관찰 기록(observed)인지는 **저장된 행**으로 본다 — 입력 provenance:"observed" 하나로 판정을 건너뛰면 신규든 기존
         //  authored 문서든 reject 를 비껴간다. 신규는 저장된 행이 없으니 판정한다(좌표가 있는 미러는 위 mirror-guard 가 400 으로
         //  막아 여기 오지 않는다).
-        observed: gate.before?.provenance === "observed",
+        observed: observedSave,
         // 폴더는 본문이 빌 때만 건너뛴다 — is_folder:true 를 실었다는 것만으로 본문까지 판정을 비껴가지 않게.
         //  기존 폴더를 고칠 땐 input.is_folder 가 없을 수 있다 — 그때는 판정하고, 빈 본문엔 본문 규칙이 안 걸려 제목만 본다.
         folder: input.is_folder === true && !String(saveInput.body_md ?? "").trim(),
         proposed: !gate.isCreate && gate.update === "stage",
         before: gate.before ? { title: gate.before.title, body: gate.before.body_md } : null,
-        human: isHumanWriter(user, ctx),
+        human: humanWriter,
       });
+    const style = homePaths ? { ...info, home_paths: { replaced: homePaths, note: "개인 홈 경로를 $HOME(Windows 는 %USERPROFILE%)으로 바꿔 저장했습니다." } } : info;
     if (rejects.length) throw await rejectWriting("knowledge", gate.name ?? input.name ?? null, input.title ?? gate.before?.title, rejects, guide, ctx);
 
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로

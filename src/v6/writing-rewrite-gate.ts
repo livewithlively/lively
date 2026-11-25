@@ -7,6 +7,7 @@
 // 순수 함수다(DB·네트워크 없음). 배치 스크립트와 테스트가 같은 판정을 쓴다.
 import type { WritingFormat, WritingRuleId } from "../org/policies/writing-format.js";
 import { lintWriting, type WritingFinding } from "./writing-lint.js";
+import { normalizeHomePaths } from "./writing-resolve.js";
 
 // 자동으로 고쳐도 되는 규칙 — 글의 모양만 보고 고칠 수 있는 것들.
 //  relative_time·undated_status·revision_banner·local_path·body_length 는 뺀다: 고치려면 «그날이 언제였나»·
@@ -18,7 +19,8 @@ export const AUTO_FIX_RULES: readonly WritingRuleId[] = [
 ];
 const AUTO_FIX = new Set<WritingRuleId>(AUTO_FIX_RULES);
 
-/** 자동 정리에서 뺀 규칙인가 — 고치려면 사실 판단이 필요해, 에이전트가 직접 고치면 지어낸다. 사람에게 물어 고친다. */
+/** 자동 정리에서 뺀 규칙인가 — 고치려면 사실 판단이 필요해, 에이전트가 직접 고치면 지어낸다. 사람에게 물어 고친다
+ *  (그 사실을 서버가 찾아 주거나 직접 처리하는 경우는 writing-style resolveFindings 가 사람 확인에서 뺀다). */
 export function needsHumanJudgment(rule: WritingRuleId): boolean {
   return !AUTO_FIX.has(rule);
 }
@@ -150,8 +152,9 @@ function tableRowsOf(prose: string): string[] {
   return out;
 }
 
+// 홈 경로 접두를 $HOME 으로 바꾸는 것은 가리키는 곳이 같아 사실 변경이 아니다(local_path 정리) — 양쪽을 같은 꼴로 맞춘 뒤 센다.
 function proseParts(doc: RewriteDoc): { blocks: string[]; codes: string[]; prose: string } {
-  const text = `${String(doc.title ?? "")}\n${String(doc.body_md ?? "")}`;
+  const text = normalizeHomePaths(`${String(doc.title ?? "")}\n${String(doc.body_md ?? "")}`);
   const f = splitFences(text);
   const inl = splitInline(f.rest);
   return { blocks: f.blocks, codes: inl.codes, prose: inl.rest };

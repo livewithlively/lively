@@ -229,15 +229,22 @@ await ta("부분읽기도 잘라낸 줄이 아니라 본문 전체를 판정하�
   const lim = await knowledgeGetResult(row({ body_md: body }), { limit: 5 }, {}, { staged: false }, on) as Style;
   assert.match(lim.style!.note, /본문 전체 기준/);
 });
-await ta("자동 정리에서 뺀 규칙(사실 판단이 필요한 규칙)은 ask_human 으로 표시하고, 모양만 보고 고칠 규칙엔 붙이지 않는다", async () => {
+await ta("사실이 필요한 규칙은 ask_human 으로 표시하되, 서버가 직접 처리하는 홈 경로는 사람 확인으로 두지 않고 고치는 법(fix)을 싣는다", async () => {
   const body = ["## ⚠ 정정", "", "오늘 배포했다 → 확인 → 끝.", "/Users/someone/a.md 에 있다.", "아직 대기 중이다."].join("\n");
   const st = ((await readStyleHint(row({ title: "🔴 배포 규칙", body_md: body }), on)) as Style).style!;
-  const ask = new Set<string>(st.findings.filter((f) => f.ask_human === true).map((f) => f.rule));
-  const self = new Set<string>(st.findings.filter((f) => f.ask_human !== true).map((f) => f.rule));
-  for (const r of ["relative_time", "local_path", "undated_status", "revision_banner"]) assert.ok(ask.has(r), `${r} 는 사람에게 묻는다: ${JSON.stringify(st.findings)}`);
-  for (const r of ["title_leading_emoji", "heading_symbol", "lead_missing"]) assert.ok(self.has(r), `${r} 는 직접 고친다: ${JSON.stringify(st.findings)}`);
+  const byRule = new Map<string, any>(st.findings.map((f) => [f.rule as string, f as typeof f & { fix?: string }]));
+  for (const r of ["local_path"]) {
+    assert.ok(byRule.get(r)?.fix, `${r} 에 고치는 법이 있다: ${JSON.stringify(st.findings)}`);
+    assert.ok(!("ask_human" in (byRule.get(r) ?? {})), `${r} 에 ask_human 이 없다`);
+  }
+  for (const r of ["relative_time", "undated_status", "revision_banner"]) assert.equal(byRule.get(r)?.ask_human, true, `${r} 는 사람에게 묻는다: ${JSON.stringify(st.findings)}`);
+  for (const r of ["title_leading_emoji", "heading_symbol", "lead_missing"]) assert.ok(byRule.has(r) && !byRule.get(r).ask_human, `${r} 는 직접 고친다: ${JSON.stringify(st.findings)}`);
   assert.match(st.note, /ask_human/);
-  // 본문 길이도 사실 판단(어디서 나눌까)이라 사람에게 묻는다.
+  assert.match(st.note, /fix 에 고치는 법/);
+  // 치환해도 남는 경로(/home/<개인 계정>)는 서버가 처리하지 못하니 사람에게 묻는다.
+  const home = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n설정은 /home/alice/app.conf 에 둔다." }), on)) as Style).style!;
+  assert.equal((home.findings.find((f) => f.rule === "local_path") as { ask_human?: true } | undefined)?.ask_human, true, JSON.stringify(home.findings));
+  // 본문 길이는 어디서 나눌지가 사실 판단이라 사람에게 묻는다.
   const long = ((await readStyleHint(row({ body_md: "노트는 커밋을 싣는다.\n" + "가".repeat(30000) }), on)) as Style).style!;
   assert.ok(long.findings.some((f) => f.rule === "body_length" && f.ask_human === true), JSON.stringify(long.findings));
 });
