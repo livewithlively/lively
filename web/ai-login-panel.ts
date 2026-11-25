@@ -94,7 +94,7 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
     if (term) { send(loginTerminalPopoutUrl(term), '같은 로그인 창을 새 탭에서 열었어요.'); return; }
     void (async () => {
       try {
-        const viaShell = a.key === 'codex' || a.key === 'grok';   // 셸에서 로그인 명령을 돌린다(catalog.harnessLoginArgv)
+        const viaShell = a.key === 'codex' || a.key === 'grok' || a.key === 'cursor';   // 셸에서 로그인 명령을 돌린다(catalog.harnessLoginArgv)
         const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
           label: '내 계정 로그인 (' + a.label + ')', rootKey: 'personal', subpath: '',
           harness: viaShell ? 'shell' : a.key, loginFor: viaShell ? a.key : undefined,

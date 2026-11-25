@@ -44,6 +44,9 @@ interface World {
   runEfforts: Map<number, string | null>; jobEfforts: Map<number, Effort | null>; effortCol42703?: boolean;
   /** 작업 행의 도구 호출 단계(가짜 — COLS 밖 칸 · agent-jobs/store.STEPS_COL) · 그 읽기가 던지나. */
   jobSteps: Map<number, unknown[]>; jobStepsThrows?: boolean;
+  /** #1644 그 사람의 동의가 앱의 지금 선언을 덮지 못한 것(가짜 — null 이면 덮는다) · 물은 것(앱 · 사람 · 주소의 판). */
+  consentGap: { missing: { scopes: string[]; tools: string[] }; consent_url: string | null } | null;
+  consentAsks: Array<{ appId: string; member: string; address: string | null }>;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -57,7 +60,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
     llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), runShared: new Map(),
     ownTokensToday: 0, unattended: false, unattendedAsks: 0,
-    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), jobSteps: new Map(), ...o,
+    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), jobSteps: new Map(), consentGap: null, consentAsks: [], ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const countedResumes = (root: number): number => [...w.resumeLinks.entries()].filter(([id, l]) => {
@@ -150,6 +153,8 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     //  작업 행의 생각 깊이(필수 의존성) — 접수 때 그 작업 행에 실린 값 그대로(live 의 agent-jobs/store.agentJobEffort 와 같은 뜻 · 종전 작업은 null).
     jobEffort: async (id) => w.jobEfforts.get(id) ?? null,
     jobSteps: async (id) => { if (w.jobStepsThrows) throw new Error("단계를 못 읽었다(가짜)"); return w.jobSteps.get(id) ?? null; },
+    //  #1644 동의가 앱의 지금 선언을 덮나(필수 의존성) — 기본은 덮는다(null). 필요한 시험이 w.consentGap 으로 덮어 쓴다 · 물은 것을 적는다.
+    consentGap: async (user, appId, member) => { w.consentAsks.push({ appId, member, address: user.appAddress ?? null }); return w.consentGap; },
   };
   return { w, d };
 }
@@ -504,6 +509,50 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, roll.d), 503, /잠시 뒤 다시/);
   assert.equal(roll.w.submitted.length, 0, "작업을 보내지 않는다");
   ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 높은 권한/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets · 시트 계정은 남의 실행을 못 봄");
+}
+
+// ── S26b #1782 · 앱 v2 #121 자동화(슬랙 다리 run_as · 앱 정기 작업) — 개인 구독은 거절 · 공용 시트는 받는다(상민 2026-11-22) · API 키는 돈다 ──
+//  엣지 표 A(spec-1782 · 11-22 갱신): a 공용 시트 + 자동화 작업 신원 → 받는다(공용 시트 자리) / b 같은 자리 · 자동화 아님 → 받는다(종전) / c 본인 구독 + 자동화 → 403
+//   / d API 키 + 자동화 → 받는다 / e 표시를 못 읽으면 자동화로 본다(닫힘) → 개인 구독 403 / f 사람(앱 화면)은 표시를 묻지 않는다
+//   / g targets 도 같은 판정(개인 구독은 쓸 수 없음 + 까닭 · 공용 시트는 쓸 수 있음)
+{
+  const NOW = "2026-11-20T00:00:00.000Z";
+  const seatOn = { default: { kind: "subscription" as const, member: "seat" }, service_seats: { seat: { admin: { by: "root", at: NOW }, member: { at: NOW } } } };
+  const jobSrv = (id: string): LivelyUser => member(id, { appId: "crm", appServer: true, appJobId: 7 });
+  const withAuto = (o: Parameters<typeof world>[0], auto: boolean | "throws") => {
+    const x = world(o);
+    let asks = 0;
+    x.d.appServerAutomation = async () => { asks++; if (auto === "throws") throw new Error("표시를 못 읽었다(가짜)"); return auto; };
+    return { ...x, asks: () => asks };
+  };
+  const a = withAuto({ settings: seatOn, key: null }, true);
+  const ra = await submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, a.d);
+  assert.deepEqual(ra.account, { kind: "subscription", member: "seat" }, "a 자동화도 공용 시트는 받는다(11-22)");
+  assert.equal(a.w.submitted.length, 1, "a 작업을 보낸다");
+  const b = withAuto({ settings: seatOn, key: null }, false);
+  const rb = await submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, b.d);
+  assert.deepEqual(rb.account, { kind: "subscription", member: "seat" }, "b 자동화가 아니면 종전대로 공용 시트");
+  const own = { default: { kind: "subscription" as const, member: "alice" } };
+  const c = withAuto({ settings: own, key: null }, true);
+  await fails(submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, c.d), 403, /자동화/, "account_unavailable");
+  assert.equal(c.w.submitted.length, 0, "c 작업을 보내지 않는다");
+  assert.ok(c.asks() >= 1, "c 배선 — 표시를 실제로 물었다");
+  const d0 = withAuto({}, true);
+  const rd = await submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, d0.d);
+  assert.deepEqual(rd.account, { kind: "api_key" }, "d API 키는 자동화도 돈다");
+  const e = withAuto({ settings: own, key: null }, "throws");
+  await fails(submitRun({ prompt: "x" }, jobSrv("alice"), { source: "web" }, e.d), 403, /자동화/, "account_unavailable");
+  const f = withAuto({ settings: seatOn, key: null }, true);
+  await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, f.d);
+  assert.equal(f.asks(), 0, "f 사람(앱 화면) 요청은 자동화 표시를 묻지 않는다");
+  const g = withAuto({ settings: own, key: null }, true);
+  const tg = await targetsFor(jobSrv("alice"), {}, g.d, {});
+  assert.equal((tg.account as { available: boolean }).available, false, "g targets — 개인 구독은 쓸 수 없음");
+  assert.match(String((tg.account as { reason: string }).reason), /자동화/);
+  const g2 = withAuto({ settings: seatOn, key: null }, true);
+  const tg2 = await targetsFor(jobSrv("alice"), {}, g2.d, {});
+  assert.equal((tg2.account as { available: boolean }).available, true, "g targets — 공용 시트는 쓸 수 있음");
+  ok("S26b 자동화(슬랙 다리 run_as · 앱 정기 작업) — 공용 시트 받음 · 본인 구독 거절 · API 키 받음 · 못 읽으면 닫힘 · 사람 요청은 묻지 않음 · targets 같은 판정");
 }
 
 // ── S27 앱 서버가 보낸 본인 요청(#1639 · 엣지 표 a~q) — 물은 사람이 구독 주인 본인이면 그 구독으로 · 공용 시트와 같은 울타리 · 남 · 사람이 보지 않는 자리는 거절 ──
@@ -2132,6 +2181,52 @@ async function resumedEffort(prev: Effort | null, given?: Effort): Promise<{ w: 
   // @ts-expect-error 실행을 돌려주는 자리는 effort 를 빠뜨릴 수 없다
   void publicRun(row, { own: true });
   ok("effort E10 작업 행의 깊이 읽기 · 접수 입력의 effort 칸 · 공개 모양의 effort 는 필수(빠지면 타입 검사)");
+}
+
+// ── #1644 예전 범위 동의 — 작업 컨테이너 실행은 띄우기 전에 «다시 동의» 로 거절한다(사양 표 A1~A6) ──
+//  이게 틀리면: 앱이 동의 뒤에 얻은 권한(scope db · 도구 db_query)이 작업 AI 의 토큰(그 사람 ∩ 그 사람의 동의)에 없어 새 기능만 조용히 빠진 답이
+//  나가고, 그 까닭은 작업 AI 에게만 보인다(사람 · 앱은 다시 동의해야 하는 줄 모른다). 단발 + API 키(프록시)는 라이블리 도구를 안 써 막지 않는다.
+{
+  const GAP = { missing: { scopes: ["db"], tools: ["db_query"] }, consent_url: "https://gw.example/ui/#/app-grant/crm?v=pub&from=mcp" };
+  const caught = async (p: Promise<unknown>): Promise<HttpError> => { try { await p; } catch (e) { return e as HttpError; } throw new Error("거절을 기대"); };
+
+  const a = world({ consentGap: GAP });
+  const e1 = await caught(submitRun({ prompt: "고쳐", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, a.d));
+  assert.ok(e1 instanceof HttpError && e1.status === 403, String(e1));
+  assert.match(e1.message, /동의/, "웹 호스트는 글의 «동의» 로 동의 창을 띄운다");
+  assert.deepEqual(e1.body, { code: "consent_required", missing: GAP.missing, consent_url: GAP.consent_url });
+  assert.ok(e1.message.includes(GAP.consent_url) && e1.message.includes("db_query"), "글만 전하는 앱도 주소 · 덮지 못한 것을 사람에게 전한다");
+  assert.equal(a.w.submitted.length, 0, "작업을 띄우지 않는다"); assert.equal(a.w.runs.size, 0, "실행 행도 넣지 않는다");
+  assert.deepEqual(a.w.consentAsks, [{ appId: "crm", member: "alice", address: null }]);
+  ok("A1 에이전트 작업 + 예전 범위 동의 → 403 consent_required · 덮지 못한 것 · 동의할 곳 · 작업 0 · 실행 행 0");
+
+  const b = world({ ...SUB(), consentGap: GAP });
+  await fails(submitRun({ prompt: "요약", schema }, appUser("alice", "crm"), { source: "app-front" }, b.d), 403, /동의/, "consent_required");
+  assert.equal(b.w.submitted.length, 0);
+  ok("A2 단발 + 구독(작업 컨테이너 bare)도 같은 거절");
+
+  const c = world({ consentGap: GAP });
+  const r3 = await submitRun({ prompt: "요약해" }, appUser("alice", "crm"), { source: "app-ui" }, c.d);
+  assert.equal(r3.executor, "proxy"); assert.equal(c.w.consentAsks.length, 0, "프록시 실행은 묻지 않는다");
+  ok("A3 단발 + API 키(프록시)는 라이블리 도구를 안 써 묻지 않고 그대로 돈다");
+
+  const dd = world();
+  const r4 = await submitRun({ prompt: "고쳐", agent: true }, member("alice", { appId: "crm", appServer: true, appAddress: "draft" }), {}, dd.d);
+  assert.equal(r4.executor, "job"); assert.equal(dd.w.submitted.length, 1);
+  assert.deepEqual(dd.w.consentAsks, [{ appId: "crm", member: "alice", address: "draft" }], "그 사람 · 부른 주소의 판으로 묻는다");
+  ok("A4 덮으면 종전 그대로 접수 — 묻는 것은 작업 토큰의 주인 · 부른 주소의 판");
+
+  const e5w = world({ consentGap: { missing: { scopes: [], tools: ["app_ai_run"] }, consent_url: null } });
+  const e5 = await caught(submitRun({ prompt: "고쳐", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, e5w.d));
+  assert.ok(!/https?:\/\//.test(e5.message) && !("consent_url" in (e5.body ?? {})) && (e5.body as { code?: string }).code === "consent_required", JSON.stringify({ m: e5.message, b: e5.body }));
+  assert.equal(e5w.w.submitted.length, 0);
+  ok("A5 동의할 곳을 모르면(공개 주소 없음) 글 · 본문에 주소를 싣지 않는다 — 표지 · 거절은 그대로");
+
+  const needsDeps = (_: AiRunDeps): void => undefined;
+  needsDeps(dd.d);
+  // @ts-expect-error 동의 덮음 판정(consentGap)은 필수 의존성 — 빠진 배선이 조용히 예전 범위 동의로 작업을 돌리지 않게
+  needsDeps({ ...dd.d, consentGap: undefined });
+  ok("A6 consentGap 은 필수 의존성(빠지면 타입 검사)");
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);

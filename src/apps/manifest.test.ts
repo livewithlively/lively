@@ -382,7 +382,7 @@ test("#5100 M1 context 없음 — 칸 없음(범위 없음 · 종전)", () => {
 });
 
 test("#5100 M2 context {} — 두 목록 모두 빈 것(선언했지만 비었다 = 닫힘)", () => {
-  assert.deepEqual(parseAppManifest(withContext({})).context, { knowledge_categories: [], source_kinds: [] });
+  assert.deepEqual(parseAppManifest(withContext({})).context, { knowledge_categories: [], source_kinds: [], repos: [] });
 });
 
 test("#5100 M3 카테고리 key 64자 통과 · 65자 400", () => {
@@ -541,4 +541,59 @@ test("T4 ai.tools 가 없거나 그 작업 이름이 키에 없으면 좁히지 
   assert.equal(toolsOf(none, "answer"), null);
   assert.equal(toolsOf(parseAppManifest(base()), "answer"), null, "ai 칸 자체가 없는 앱");
   assert.equal(toolsOf(parseAppManifest(withTools({ lookup: ["knowledge_get"] })), "answer"), null, "다른 작업만 목록이 있다");
+});
+
+
+// ── 앱 v2 #124 context.repos — 판 읽기 도구로 읽을 등록 레포 이름(저장 관문) ─────────────────
+//  R1 레포 이름 꼴 통과(점 · 밑줄 · 하이픈) · R2 슬래시 · 점만 · 빈 글 · 101자는 400 · R3 101개는 400
+test("앱 v2 #124 R1 context.repos — 레포 이름 꼴은 통과", () => {
+  assert.deepEqual(parseAppManifest(withContext({ repos: ["card-api-server", "acme.web", "a_b"] })).context?.repos, ["card-api-server", "acme.web", "a_b"]);
+});
+test("앱 v2 #124 R2 context.repos — 슬래시 · 점만 · 빈 글 · 101자는 400", () => {
+  for (const bad of ["team/repo", "..", ".", "", "a".repeat(101)]) rejects400(withContext({ repos: [bad] }), /context\.repos/);
+});
+test("앱 v2 #124 R3 context.repos — 100개 통과 · 101개 400", () => {
+  const names = (n: number) => Array.from({ length: n }, (_, i) => `r${i}`);
+  assert.equal(parseAppManifest(withContext({ repos: names(100) })).context?.repos.length, 100);
+  rejects400(withContext({ repos: names(101) }), /context\.repos/);
+});
+
+// ── 앱 v2 #121 server 정기 작업(jobs[].run.kind "server") — 저장 관문 ─────────────────
+//  J1 route + 앱 서버 선언 → 통과(route · body 그대로) · J2 route 없음 400 · J3 prompt 와 같이 400 · J4 앱 서버 선언 없음 400
+//  J5 틀린 cron 식 400(schedule) · J6 body 8KiB 넘음 400 · J7 에이전트 잡에 route 400 · J8 /_lively 라우트 400 · J9 server: true 도 서버 선언
+const serverApp = (job: Record<string, unknown>, web: unknown = { server: { start: "node index.mjs" } }): Record<string, unknown> =>
+  ({ ...base(), web, jobs: [{ key: "code-sync", schedule: "15 * * * *", ...job }] });
+test("앱 v2 #121 J1 server 잡 — route · body 를 그대로 받는다", () => {
+  const m = parseAppManifest(serverApp({ run: { kind: "server", route: "/api/jobs/code-sync", body: { trigger: "schedule" } } }));
+  assert.equal(m.jobs[0].run.kind, "server");
+  assert.equal(m.jobs[0].run.route, "/api/jobs/code-sync");
+  assert.deepEqual(m.jobs[0].run.body, { trigger: "schedule" });
+});
+test("앱 v2 #121 J2 server 잡에 route 가 없으면 400", () => {
+  rejects400(serverApp({ run: { kind: "server" } }), /jobs\.code-sync\.run/);
+});
+test("앱 v2 #121 J3 server 잡에 prompt · prompt_asset 을 함께 적으면 400", () => {
+  rejects400(serverApp({ run: { kind: "server", route: "/api/jobs/x", prompt: "y" } }), /jobs\.code-sync\.run/);
+  rejects400(serverApp({ run: { kind: "server", route: "/api/jobs/x", prompt_asset: "a.md" } }), /jobs\.code-sync\.run/);
+});
+test("앱 v2 #121 J4 앱 서버(web.server)를 선언하지 않은 앱의 server 잡은 400", () => {
+  //  web 칸이 아예 없는 앱 — serverApp 의 기본 인자(앱 서버 선언)가 끼지 않게 따로 짓는다.
+  rejects400({ ...base(), jobs: [{ key: "code-sync", schedule: "15 * * * *", run: { kind: "server", route: "/api/jobs/x" } }] }, /web\.server/);
+  for (const web of [{}, { server: false }]) rejects400(serverApp({ run: { kind: "server", route: "/api/jobs/x" } }, web), /web\.server/);
+});
+test("앱 v2 #121 J5 server 잡의 틀린 cron 식은 400(schedule)", () => {
+  rejects400({ ...serverApp({ run: { kind: "server", route: "/api/jobs/x" } }), jobs: [{ key: "code-sync", schedule: "매시 15분", run: { kind: "server", route: "/api/jobs/x" } }] }, /jobs\.code-sync\.schedule/);
+});
+test("앱 v2 #121 J6 server 잡 body 가 8KiB 를 넘으면 400", () => {
+  rejects400(serverApp({ run: { kind: "server", route: "/api/jobs/x", body: { pad: "x".repeat(9000) } } }), /body/);
+});
+test("앱 v2 #121 J7 에이전트 잡(headless)에 route · body 를 적으면 400", () => {
+  rejects400({ ...base(), jobs: [{ key: "j", schedule: "0 * * * *", run: { kind: "headless", prompt: "x", route: "/api/jobs/x" } }] }, /jobs\.j\.run/);
+  rejects400({ ...base(), jobs: [{ key: "j", schedule: "0 * * * *", run: { kind: "headless", prompt: "x", body: {} } }] }, /jobs\.j\.run/);
+});
+test("앱 v2 #121 J8 server 잡의 route 규칙은 app_job_start 와 같다(/_lively · / 없음 · 한글 400)", () => {
+  for (const route of ["/_lively/x", "api/jobs/x", "/api/일"]) rejects400(serverApp({ run: { kind: "server", route } }), /jobs\.code-sync\.run/);
+});
+test("앱 v2 #121 J9 web.server 가 true 여도 서버 선언", () => {
+  assert.doesNotThrow(() => parseAppManifest(serverApp({ run: { kind: "server", route: "/api/jobs/x" } }, { server: true })));
 });

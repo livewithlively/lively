@@ -7,7 +7,7 @@ import type { Capability, CapabilityCtx } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeGateFields, setKnowledgeWiki, deleteKnowledge,
-  findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
+  findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, resolveKnowledgeName,
   applyKnowledgeEdits, type KnowledgeEdit,
   setKnowledgeTitle, sessionStampListId, KnowledgeExistsError, patchKnowledgeFields, setKnowledgeSearchable,
 } from "../../v6/knowledge-store.js";
@@ -31,6 +31,9 @@ import {
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
 import { assertNoContentSecrets, assertNoSecretKeys } from "../content-secrets.js";
+import { checkWriting, isHumanWriter, rejectWriting } from "../writing-style.js";
+import { assertExpectedVersion, assertStyleFixSafe, rethrowVersionConflict, versionConflictError } from "./save-guard.js";
+import { getKnowledgeVersion } from "../../v6/knowledge-store.js";   // 판 대조 — 수정 제안 접수 직전에 다시 본다
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -106,6 +109,11 @@ const knowledgeSaveInput = {
     .describe("이 지식이 나온 자료(source) id 목록 — **자료를 지식으로 증류할 땐 반드시 싣는다**. 저장과 원본 연결(derived_from)과 공개범위를 서버가 한 번에 한다(source_link_knowledge 를 따로 부를 필요 없다). "
       + "잠긴 자료(볼 수 있는 사람만)가 섞이면 이 지식도 그 사람들만 보게 된다. 그래서 **잠긴 자료를 이미 더 넓게 보이는 기존 지식에 합치는 저장은 거절된다(409)** — 그땐 새 이름으로 따로 저장하라. "
       + "볼 수 있는 사람이 서로 안 겹치는 잠긴 자료를 한 지식에 모으는 것도 거절된다(아무도 못 보게 되므로 — 자료별로 나눠라). 증류 배치 세션에서는 이 칸 없는 저장이 거절된다."),
+  style_fix: z.boolean().optional()
+    .describe("서술 형식만 고치는 저장이면 true — 서버가 원문과 대조해 코드·수치·링크·표 값·분량이 그대로인지 보고, 바뀌었으면 422 로 받지 않는다. 다른 사람이 24시간 안에 고친 지식이면 409 로 받지 않는다. 내용을 바꾸는 저장엔 보내지 않는다."),
+  expected_version: z.number().int().positive().optional()
+    .describe("읽었을 때의 version(knowledge_get 의 knowledge.version). 보내면 지금 판과 다를 때 저장하지 않고 409(current_version 포함)로 알린다 — 그 사이 남이 고친 내용을 덮지 않게 한다. "
+      + "없는 지식(새로 만드는 저장)에 보내도 409(current_version=null)다 — 새로 만들 땐 보내지 않는다."),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
 export const knowledgeSave: Capability = {
@@ -132,7 +140,9 @@ export const knowledgeSave: Capability = {
     "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다. " +
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
-    "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라.",
+    "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라. " +
+    "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라. " +
+    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. ask_human 이 붙은 위반은 사람에게 확인한 뒤 고친다.",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -167,6 +177,16 @@ export const knowledgeSave: Capability = {
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
         const lifecycle = b.lifecycle ? String(b.lifecycle) : undefined;   // #638 자동 인입 pending 저장(사람 web 저작은 미전송=active)
         if (lifecycle && !["active", "pending"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending (신규 저장)");
+        // style_fix 도 같은 이유로 boolean 만 받는다 — "true" 같은 값을 버리면 형식 정리 저장이 대조 없이 통과한다.
+        if (b.style_fix !== undefined && typeof b.style_fix !== "boolean") throw new HttpError(400, "style_fix 는 boolean");
+        // REST 는 zod 를 안 타므로 여기서 거른다 — 숫자가 아닌 값을 조용히 버리면 CAS 를 요청한 호출이 대조 없이 덮어쓴다.
+        //  Number() 로 바꾸지 않는다: true→1 · "0x10"→16 · [5]→5 · "1e1"→10 처럼 다른 판으로 대조하게 된다(knowledge_set_fields 와 같은 규칙).
+        let expected_version: number | undefined;
+        const ev = b.expected_version;
+        if (ev != null && ev !== "") {
+          expected_version = typeof ev === "number" ? ev : typeof ev === "string" && /^\d+$/.test(ev) ? Number(ev) : NaN;
+          if (!Number.isSafeInteger(expected_version) || expected_version < 1) throw new HttpError(400, "expected_version 은 1 이상의 정수");
+        }
         const category = b.category != null
           ? String(Array.isArray(b.category) ? (b.category[0] ?? "") : b.category) : undefined;  // 단일(#290), 배열 오면 첫 1개
         // #5169 검색 제외 — 불리언만 받는다. 문자열 "false" 를 조용히 버리면 «검색에서 빼라» 를 실은 저장이 검색에 그대로 남는다.
@@ -187,6 +207,8 @@ export const knowledgeSave: Capability = {
           //  상한 지점이라야 REST 호출자도 '잘렸다'는 사실을 응답 capped 로 받는다(여기서 자르면 조용히 사라진다).
           change_note: b.change_note ? String(b.change_note) : undefined,
           derived_from: parseDerivedFrom(b.derived_from),                  // #4824 저장 + 원본 연결 한 번에
+          style_fix: b.style_fix as boolean | undefined,
+          expected_version,
         };
       } }],
   },
@@ -197,13 +219,18 @@ export const knowledgeSave: Capability = {
     //  조정된 값을 보게 하려면 여기여야 한다. capped(조정 보고)는 성공 return 마다 실어 호출자가 반드시 본다.
     //  MCP·REST 어느 경로로 와도 같은 판정을 받는다(REST 는 zod 를 안 타므로 이 자리가 유일한 상한 지점).
     const capped = applySoftCaps("knowledge_save", input, CAPS);
+    // append 는 원문 끝에 조각을 붙이는 저장이라 «형식만 고침»일 수 없다 — 불변식이 늘어난 수치·링크를 전부 위반으로 센다.
+    if (input.style_fix && input.mode === "append") {
+      throw new HttpError(400, "style_fix 는 replace·edit 에서만 쓸 수 있습니다 — append 는 내용을 덧붙이는 저장이라 형식 정리가 아닙니다.");
+    }
     // #1442 name 정규화 — 소프트캡 **다음에**(위에서 보낸 길이를 먼저 보고해야 하므로). store 가 upsert 직전
     //  slugify 로 정규화·절단하므로, 정규화를 store 에만 맡기면 아래 인입 게이트·공개범위 검사는 **원본 이름**을
     //  보고 store 는 **잘린 이름**을 쓰는 불일치가 생긴다: 65자 이름이면 게이트는 그 이름의 문서가 없으니 '신규'로
     //  판정하는데 store 는 잘린 이름의 기존 문서를 덮어쓴다(= create 정책으로 update 를 통과시키는 우회).
     //  zod .max(64) 가 그 입력을 튕겨 왔기에 지금까지 닿지 않던 경로다 — 상한을 소프트캡으로 바꾼 이 커밋이
-    //  경로를 열므로 같은 커밋에서 닫는다. slugify 는 멱등이라 store 가 한 번 더 불러도 결과가 같다.
-    if (input.name) input.name = slugify(input.name);
+    //  경로를 열므로 같은 커밋에서 닫는다. 해석한 이름은 게이트·store 에 그대로 넘긴다(nameResolved) — 다시 해석하지 않아
+    //  셋이 한 이름을 보고, 저장 1건의 이름 해석 조회도 많아야 한 번이다.
+    if (input.name) input.name = await resolveKnowledgeName(input.name);
     // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
     //  #1531 edit 는 예외 — 본문을 서버가 edits 로 만들므로 호출자는 body_md 를 보내지 않는다(보낼 수 있다면
     //  전문을 아는 것이고, 그럼 이 모드를 쓸 이유가 없다).
@@ -213,7 +240,7 @@ export const knowledgeSave: Capability = {
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 공개범위(#1291) — 이름을 명시해 **기존 문서를 고치는** 경우만 막는다(신규 생성은 그대로).
     //  안 그러면 이름만 알면 안 보이는 문서를 upsert 로 통째로 덮어쓸 수 있다.
-    if (input.name) await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    if (input.name) await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
 
     // ── #4824 증류 저장 — derived_from 정리 · 증류 배치 가드(사양 R7) · 볼 수 있는 자료인가. 전부 쓰기 **전에**. ──
     //  빈 배열은 «없음» 과 같다. 안 보이는 자료는 없는 자료와 같은 문구(존재 은닉 — source_link_knowledge 와 같은 규율).
@@ -244,11 +271,14 @@ export const knowledgeSave: Capability = {
     };
 
     // ── #783 인입 허용선 게이트 — 정책 규칙 0개면 create=auto·update=auto(현행과 100% 동일). ──
-    const gate = await resolveKnowledgeGate(input, ctx);
+    const gate = await resolveKnowledgeGate(input, ctx, { nameResolved: true });
     //  외부 미러는 어떤 저장 모드든(replace 포함) 다음 재싱크가 덮는다 — 쓰기 전에 거절(mirror-guard.ts).
     //   edit·append 의 provenance 가드보다 앞이라, 좌표가 있는 미러는 이 문구로 거절된다.
     const mirrorDenied = denyMirrorContentWrite(gate.before, "save");
     if (mirrorDenied) throw new HttpError(400, mirrorDenied);
+    // CAS — edit·append 를 기존 본문 위에 계산하기 전에 본다(어긋난 판 위에 계산한 결과는 저장할 이유가 없다).
+    //  여기는 빠른 길이다. 이 뒤에 다른 저장이 끼는 것은 쓰는 자리에서 다시 막는다(upsertKnowledge expectedVersion · 수정 제안 직전 대조).
+    assertExpectedVersion(gate.before, input.expected_version);
 
     // ── #921 append — body_md('조각')를 기존 본문 끝에 붙인 **전문**으로 바꿔 아래 경로 전체가 종전처럼 전문만 다루게 한다. ──
     //  이 자리에서 한 번만 병합하는 게 핵심이다: 리비전 제안(next.body_md)에 조각이 들어가면 승인 시
@@ -318,6 +348,30 @@ export const knowledgeSave: Capability = {
       saveInput = { ...input, body_md: merged };
     }
 
+    assertStyleFixSafe({
+      styleFix: input.style_fix, human: isHumanWriter(user), actor: writeCtx.actor, before: gate.before,
+      after: { title: input.title ?? gate.before?.title, body_md: saveInput.body_md }, now: Date.now(),
+    });
+
+    // 서술 형식 — 최종 제목·본문을 조직 형식에 비춰 본다. reject 규칙에 **이번 저장이 새로 만든** 위반이 있으면 받지 않는다.
+    //  판정이 서버에 있으므로 클라이언트(훅·키트) 버전과 무관하게 걸린다. 기존 문서에 원래 있던 위반은 거부 사유가 아니다 —
+    //  그걸 막으면 깨끗한 조각을 붙이는 append 까지 전부 422 가 되고, 조각으로는 본문 위반을 고칠 수 없다.
+    const { info: style, rejects, guide } = await checkWriting("knowledge",
+      { title: input.title ?? gate.before?.title, body: saveInput.body_md },
+      {
+        // 외부 관찰 기록(observed)인지는 **저장된 행**으로 본다 — 입력 provenance:"observed" 하나로 판정을 건너뛰면 신규든 기존
+        //  authored 문서든 reject 를 비껴간다. 신규는 저장된 행이 없으니 판정한다(좌표가 있는 미러는 위 mirror-guard 가 400 으로
+        //  막아 여기 오지 않는다).
+        observed: gate.before?.provenance === "observed",
+        // 폴더는 본문이 빌 때만 건너뛴다 — is_folder:true 를 실었다는 것만으로 본문까지 판정을 비껴가지 않게.
+        //  기존 폴더를 고칠 땐 input.is_folder 가 없을 수 있다 — 그때는 판정하고, 빈 본문엔 본문 규칙이 안 걸려 제목만 본다.
+        folder: input.is_folder === true && !String(saveInput.body_md ?? "").trim(),
+        proposed: !gate.isCreate && gate.update === "stage",
+        before: gate.before ? { title: gate.before.title, body: gate.before.body_md } : null,
+        human: isHumanWriter(user, ctx),
+      });
+    if (rejects.length) throw await rejectWriting("knowledge", gate.name ?? input.name ?? null, input.title ?? gate.before?.title, rejects, guide, ctx);
+
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로
     //  stringify 해 에이전트에 돌려주므로, 전문을 에코하면 '전문을 컨텍스트에 안 싣는다'는 이 모드의 목적이 무효가 된다.
     //  (replace 는 종전대로 전문 포함 — 기존 응답 계약 불변.)
@@ -359,7 +413,7 @@ export const knowledgeSave: Capability = {
           created = await withDerivedTx(async (client) => {
             const planned = await planNewDerivedKnowledge(client, derivedIds, stampList, enforced);
             const row = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx,
-              { db: client, insertOnly: true, deferPost: true, visibility: planned.plan.next.open ? "open" : "members" });
+              { db: client, insertOnly: true, deferPost: true, visibility: planned.plan.next.open ? "open" : "members", nameResolved: true });
             await writeNewDerivedKnowledge(client, row.name, planned, writeCtx);
             return { row, planned };
           });
@@ -382,7 +436,7 @@ export const knowledgeSave: Capability = {
           } : {}),
         };
       } else {
-        const r = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx);
+        const r = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx, { nameResolved: true });
         ({ wikilinks, ...knowledge } = r);
         // ── 세션 산출물 스탬핑(#1291 v2) — **신규 생성에만** 건다. ──
         //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
@@ -406,10 +460,10 @@ export const knowledgeSave: Capability = {
         // 중복경고도 뷰어 기준 — 안 보이는 문서를 "비슷한 게 있다"고 알려주면 그 제목·발췌가 그대로 나간다.
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY }, ctx?.viewer ?? null);
         if (similar.length) {
-          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 기존을 knowledge_set_lifecycle(superseded, superseded_by=새 지식 name)로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...style, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 기존을 knowledge_set_lifecycle(superseded, superseded_by=새 지식 name)로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
+      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...style, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
@@ -430,11 +484,14 @@ export const knowledgeSave: Capability = {
         const link = await linkDerivedSources(c, before.name, derivedIds, writeCtx, { mode: "save", enforced });
         const cur = await c.query(`SELECT version FROM knowledge WHERE name=$1`, [before.name]);
         if (Number(cur.rows[0]?.version) !== Number(before.version)) {
+          //  expected_version 을 보낸 호출엔 미리 한 대조와 같은 409(conflict·current_version)로 답한다.
+          if (input.expected_version != null) throw versionConflictError(input.expected_version, cur.rows[0] ? Number(cur.rows[0].version) : null);
           throw new HttpError(409, `지식 '${before.name}' 이(가) 그 사이 다른 저장으로 바뀌었습니다(판 ${before.version} → ${cur.rows[0]?.version}) — 아무것도 저장하지 않았습니다. knowledge_get 으로 지금 본문을 보고 다시 저장하세요.`);
         }
-        const row = gate.update === "stage" ? null : await upsertKnowledge(saveInput, writeCtx, { db: c, deferPost: true });
+        const row = gate.update === "stage" ? null
+          : await upsertKnowledge(saveInput, writeCtx, { db: c, deferPost: true, nameResolved: true, expectedVersion: input.expected_version });
         return { link, row };
-      });
+      }).catch(rethrowVersionConflict);
       derivedLink = res.link;
       written = res.row;
     }
@@ -445,6 +502,13 @@ export const knowledgeSave: Capability = {
         }
       : {};
     if (gate.update === "stage") {
+      // 판 대조 — 제안은 라이브를 안 바꾸지만 낡은 판 위에 만든 제안은 받지 않는다(미리 한 대조 뒤에 다른 저장이 끼었으면 여기서 409).
+      //  이 대조와 제안 쓰기(proposeRevision) 사이에 끼는 저장은 못 막지만 라이브를 덮지도 않는다 — 제안은 라이브를 바꾸지 않고,
+      //  승인은 사람이 하며, 검토 큐는 제안의 base_version 이 라이브 판과 다르면 충돌(conflict)로 표시한다(listRevisions).
+      if (input.expected_version != null) {
+        const current = await getKnowledgeVersion(before.name);
+        if (current !== input.expected_version) throw versionConflictError(input.expected_version, current);
+      }
       //  #5169 검색 제외는 내용이 아니라 소환 설정이다(knowledge_set_searchable 과 같은 급 — 인입 허용선을 타지 않는다). 리비전엔 실을
       //   자리도 없어(제목·본문만) 제안과 따로 바로 반영한다 — 안 하면 «검색에서 빼라» 를 실은 저장이 조용히 무시된다.
       const searchableOut = input.searchable === undefined ? {} : {
@@ -465,7 +529,7 @@ export const knowledgeSave: Capability = {
       return {
         knowledge: null,
         ...seedSyncWarning(before.name),
-        ...capped,
+        ...capped, ...style,
         ...derivedOut,
         ...searchableOut,
         gate: {
@@ -483,7 +547,9 @@ export const knowledgeSave: Capability = {
       knowledge = row as typeof knowledge;
       wikilinks = await post?.();
     } else {
-      ({ wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx));
+      //  판 대조 — 미리 한 대조 뒤에 다른 저장이 끼었으면 쓰는 순간 409(행을 잡고 대조한다). expected_version 이 없으면 종전과 같다.
+      ({ wikilinks, ...knowledge } = await upsertKnowledge(saveInput, writeCtx, { nameResolved: true, expectedVersion: input.expected_version })
+        .catch(rethrowVersionConflict));
     }
     const wl = wikiLinkInfo(wikilinks);
     if (gate.update === "review") {
@@ -498,7 +564,7 @@ export const knowledgeSave: Capability = {
       return {
         ...withBody(knowledge),
         ...seedSyncWarning(knowledge.name),
-        ...capped,
+        ...capped, ...style,
         ...wl,
         ...derivedOut,
         gate: {
@@ -507,7 +573,7 @@ export const knowledgeSave: Capability = {
         },
       };
     }
-    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
+    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...style, ...wl, ...derivedOut, ...(await classificationInfo(knowledge.name)) };
   },
 };
 
@@ -542,7 +608,7 @@ export const knowledgeSetLifecycle: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetLifecycleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     // 🔒 전환 가드(#783 자가승인 차단 · #638 미러 복원 금지) — 판정은 denyLifecycleChange 한 곳에.
     //  여기서 막아야 MCP·웹 REST·다른 클라이언트가 같은 규칙을 쓴다. UI 버튼 숨김은 안내일 뿐 규칙이 아니다.
     const gate = await getKnowledgeGateFields(input.name);
@@ -580,7 +646,8 @@ export const knowledgeSetTitle: Capability = {
     "이 툴은 name+title 만 받으므로 본문을 컨텍스트에 실을 필요가 없다 — **knowledge_save 응답에 capped(제목이 잘렸다)가 왔을 때 쓰라고 만든 경로다**(#1442). " +
     "제목은 검색·주입에 나가는 내용이라 version 이 올라가고 임베딩도 다시 계산된다(뷰 설정 토글과 다른 클래스). " +
     "조직이 '에이전트 지식 검토'를 켜 두면 이 변경도 게이트를 탄다 — 응답 gate 가 결과를 알려준다(pending 제안 접수 / 반영 후 사후검토). " +
-    "제목을 아예 비우거나 본문·분류를 함께 고치려면 knowledge_save 를 쓰라. 외부 미러 지식(외부 좌표가 있는 지식)의 제목은 원본이 정하므로 거절된다.",
+    "제목을 아예 비우거나 본문·분류를 함께 고치려면 knowledge_save 를 쓰라. 외부 미러 지식(외부 좌표가 있는 지식)의 제목은 원본이 정하므로 거절된다. " +
+    "조직이 서술 형식을 켜 두면 새 제목도 knowledge_save 와 같이 판정한다 — 어긋난 곳은 응답 style 로 알려 주고, 저장 거부로 정한 규칙에 새로 걸리면 저장하지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다.",
   scope: "memory",
   input: knowledgeSetTitleInput,
   expose: {
@@ -599,12 +666,13 @@ export const knowledgeSetTitle: Capability = {
   handler: async (input: KnowledgeSetTitleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     assertNoContentSecrets(input);   // #4501
     const capped = applySoftCaps("knowledge_set_title", input, KSET_CAPS);
-    // name 정규화는 공개범위 검사 **앞에서** — 아래 resolveKnowledgeGate 가 slugify 한 이름의 행을 고치므로 검사도
-    //  같은 이름을 봐야 한다(knowledge_save 의 #1442 정규화와 같은 이유). slugify 는 멱등이다.
-    input.name = slugify(input.name);
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
-    // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다).
-    const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
+    // name 정규화는 공개범위 검사 **앞에서** — 아래 resolveKnowledgeGate 가 정규화한 이름의 행을 고치므로 검사도
+    //  같은 이름을 봐야 한다(knowledge_save 의 #1442 정규화와 같은 이유·같은 함수). resolveKnowledgeName 은 멱등이다.
+    //  slugify 를 바로 쓰면 대소문자만 다른 실재 이름이 소문자 쪽 행으로 간다(knowledge-common.ts pickKnowledgeName).
+    input.name = await resolveKnowledgeName(input.name);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
+    // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다). 이름은 위에서 해석했다.
+    const gate = await resolveKnowledgeGate({ name: input.name }, ctx, { nameResolved: true });
     if (gate.isCreate || !gate.before) {
       throw new HttpError(404, `지식 '${input.name}' 없음 — 제목 갱신은 기존 지식에만 됩니다(신규는 knowledge_save).`);
     }
@@ -619,6 +687,18 @@ export const knowledgeSetTitle: Capability = {
     if (staged) {
       throw new HttpError(409, `이 지식엔 검토 대기 중인 수정 제안(#${staged})이 있어 제목 갱신이 허용되지 않습니다 — 사람이 승인/반려한 뒤 다시 시도하세요(지금 바꾸면 검토 결과에 덮여 사라집니다).`);
     }
+    // 서술 형식 — knowledge_save 와 같은 판정. 이 툴이 빠지면 knowledge_save 로는 422 인 제목이 여기로는 저장된다(응답 안내가
+    //  제목 수정에 이 툴을 쓰라고 하므로 자주 지나는 길이다). 본문은 그대로라 저장된 본문으로 보고, 거부는 이번 변경이 새로 만든
+    //  위반에만 건다. 다른 거절(없음 · 미러 · drop · 제안 대기)보다 뒤 — 어차피 실패할 요청에 형식 안내를 먼저 주지 않는다.
+    const { info: style, rejects, guide } = await checkWriting("knowledge",
+      { title: input.title, body: gate.before.body_md },
+      {
+        observed: gate.before.provenance === "observed",
+        proposed: gate.update === "stage",
+        before: { title: gate.before.title, body: gate.before.body_md },
+        human: isHumanWriter(user, ctx),
+      });
+    if (rejects.length) throw await rejectWriting("knowledge", gate.before.name, input.title, rejects, guide, ctx);
     const before = gate.before;
     const revisionInput = {
       name: before.name,
@@ -632,7 +712,7 @@ export const knowledgeSetTitle: Capability = {
     if (gate.update === "stage") {
       const revision = await proposeRevision({ ...revisionInput, mode: "staged" });
       return {
-        knowledge: null, ...capped,
+        knowledge: null, ...capped, ...style,
         gate: { action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
           note: "제목 변경이 수정 제안으로 접수됐습니다 — 라이브 제목은 아직 그대로입니다(사람이 승인해야 반영)." },
       };
@@ -642,12 +722,12 @@ export const knowledgeSetTitle: Capability = {
     if (gate.update === "review") {
       const revision = await proposeRevision({ ...revisionInput, mode: "applied" });
       return {
-        knowledge, ...capped,
+        knowledge, ...capped, ...style,
         gate: { action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
           note: "제목이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다." },
       };
     }
-    return { knowledge, ...capped };
+    return { knowledge, ...capped, ...style };
   },
 };
 
@@ -778,9 +858,9 @@ export const knowledgeSetFields: Capability = {
     assertNoContentSecrets(input);   // #4501 — patch 안쪽 문자열까지 본다
     const capped = applySoftCaps("knowledge_set_fields", input, KFIELDS_CAPS);
     // 이름 정규화 → 공개범위 검사 순서는 set_title 과 같다(정규화한 이름의 행을 고치므로 검사도 그 이름을 본다).
-    input.name = slugify(input.name);
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
-    const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
+    input.name = await resolveKnowledgeName(input.name);   // 저장·set_title 과 같은 정규화(대소문자만 다른 실재 이름을 그 행으로)
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
+    const gate = await resolveKnowledgeGate({ name: input.name }, ctx, { nameResolved: true });
     if (gate.isCreate || !gate.before) {
       throw new HttpError(404, `지식 '${input.name}' 없음 — fields 갱신은 기존 지식에만 됩니다.`);
     }
@@ -838,7 +918,7 @@ export const knowledgeSetWiki: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetWikiInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await setKnowledgeWiki(input.name, input.is_wiki, writeCtx) };
   },
@@ -875,7 +955,7 @@ export const knowledgeSetSearchable: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSetSearchableInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     try {
       return await setKnowledgeSearchable(input.name, input.searchable, writeCtx);
@@ -905,7 +985,7 @@ export const knowledgeDelete: Capability = {
       parse: (req) => ({ name: String(req.params?.name ?? "") }) }],
   },
   handler: async (input: KnowledgeDeleteInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     if (ctx?.source === "mcp") {
       throw new HttpError(403, "지식 삭제는 사람(웹)만 가능합니다 — 에이전트는 거부됩니다(비가역). 정정은 같은 이름으로 덮어쓰기(저장)하세요");
     }
@@ -948,7 +1028,7 @@ export const knowledgeMove: Capability = {
       } }],
   },
   handler: async (input: KnowledgeMoveInput, user: LivelyUser, ctx?: CapabilityCtx) => {
-    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null, user);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await moveKnowledge(input.name, input.parent_name ?? null, input.sort, writeCtx) };
   },

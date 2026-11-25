@@ -22,6 +22,7 @@
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { logger } from "../../log.js";
+import { sessionExecConfigured } from "../session-exec.js";
 import { ask } from "./runtime-bus.js";
 import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 
@@ -75,6 +76,20 @@ export function bindAskBodyToToken(token: string, body: unknown): Record<string,
   if (!claimed) return null;
   const b = (body && typeof body === "object" && !Array.isArray(body)) ? body as Record<string, unknown> : {};
   return { ...b, session: claimed };
+}
+
+/** 세션이 끝나면 그 세션에 발급했던 승인 자격도 끝낸다. */
+export function revokeAskSession(sessionId: string): void {
+  const token = tokenOfSession.get(sessionId);
+  if (!token) return;
+  tokenOfSession.delete(sessionId);
+  sessionOfToken.delete(token);
+}
+
+/** 세션 컨테이너의 localhost:8080 포워더가 호출하는 게이트웨이 입구. */
+export async function handleAuthedAsk(token: string, body: unknown): Promise<Awaited<ReturnType<typeof handleAskRequest>>> {
+  const bound = bindAskBodyToToken(token, body);
+  return bound ? handleAskRequest(bound) : { status: 403, body: { ok: false, ...DENY } };
 }
 
 /** 이 문의 뒤에서 실제로 묻는 함수 — 테스트가 갈아 끼운다(HTTP 는 얇은 껍데기라는 뜻). */
@@ -182,15 +197,32 @@ function ensureServer(): void {
 //   **종전 동작(중립 ask)** 으로 접힌다 — 나빠지지는 않지만 축이 안 열린다.
 //   ★ 그때도 토큰을 argv 로 옮기지 마라 — `ps` 에 남는다. 중계에 env 통과를 더하는 쪽이 옳다.
 export function askBridgeEnv(sessionId: string): Record<string, string> {
-  ensureServer();
-  if (!port) return {};   // 아직 안 붙었다 — 이번 턴은 종전 동작(다음 턴부터 붙는다)
   const sid = String(sessionId || "").trim();
   if (!sid) return {};    // 세션을 모르면 묶을 자리가 없다 — 토큰을 주지 않는다(종전 동작으로 접힌다)
+  // 세션 컨테이너의 loopback 은 게이트웨이 :8080 으로 이미 이어진다. 임의 포트는 컨테이너에서 닿지 않는다.
+  if (sessionExecConfigured()) return {
+    LIVELY_ASK_URL: "http://127.0.0.1:8080/api/agent/ask",
+    LIVELY_ASK_TOKEN: askTokenForSession(sid),
+    LIVELY_ASK_SESSION: sid,
+  };
+  ensureServer();
+  if (!port) return {};   // 로컬 listen 이 완료되기 전에는 연결 주소가 없다
   return {
     LIVELY_ASK_URL: `http://127.0.0.1:${port}/ask`,
     LIVELY_ASK_TOKEN: askTokenForSession(sid),
     LIVELY_ASK_SESSION: sid,
   };
+}
+
+/** 로컬 첫 턴도 listen 완료 뒤 시작한다. 실패하면 종전 승인 경로로 접는다. */
+export async function readyAskBridgeEnv(sessionId: string): Promise<Record<string, string>> {
+  const env = askBridgeEnv(sessionId);
+  if (sessionExecConfigured() || Object.keys(env).length || !server) return env;
+  await new Promise<void>((resolve) => {
+    server?.once("listening", resolve);
+    server?.once("error", resolve);
+  });
+  return askBridgeEnv(sessionId);
 }
 
 /** 테스트용 — 문을 닫고 상태를 비운다(발급한 토큰도 함께 버린다). */

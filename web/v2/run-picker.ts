@@ -32,6 +32,7 @@ import { api, el, toast } from '../core.js';
 import { isAiHarness, nodeOptions, nodeWhere, resolveNodeChoice, resolveNodeDefault, runPrefs, saveRunPrefs, sessionDefaults, type RunNode } from './run-prefs.js';
 import { defaultsSummary, openSessionDefaults } from './session-defaults.js';
 import type { MentionMember } from './mention-text.js';
+import { refitAfterFonts, type FontSetLike } from '../lib/font-refit.js';   // #5616 글꼴 뒤 다시 재기 — 마이크로태스크로 돌지 않게
 // 잎 모듈로 옮긴 것들의 재수출 — 종전 import 경로(run-picker)를 그대로 쓰는 소비자를 깨지 않는다.
 export { defaultNodeId, nodeCanRunAi, runPrefs, saveRunPrefs, type RunNode, type RunPrefs } from './run-prefs.js';
 
@@ -61,7 +62,7 @@ export function prettyModel(m: string): string {
 // 서버 카탈로그가 provider 를 안 주는 경우(옛 게이트웨이 + 새 번들이 캐시로 남은 조합)의 폴백.
 //  없는 하네스는 '그 밖의 제공자' 로 접는다 — 이름을 지어내지 않는다.
 const PROVIDER_FALLBACK: Record<string, string> = {
-  claude: 'Anthropic', codex: 'OpenAI', antigravity: 'Google Gemini', grok: 'xAI', opencode: '그 밖의 제공자', shell: 'AI 없음',
+  claude: 'Anthropic', codex: 'OpenAI', antigravity: 'Google Gemini', cursor: 'Cursor', grok: 'xAI', opencode: '그 밖의 제공자', shell: 'AI 없음',
 };
 export const providerLabel = (h: RunHarness | null | undefined): string =>
   (h && h.provider && h.provider.label) || (h ? (PROVIDER_FALLBACK[h.key] || '그 밖의 제공자') : '');
@@ -217,7 +218,7 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
   //  화면은 고른 대로 됐다고 믿게 된다. 대신 기억(savedFlags)에는 남겨 둬서 그 하네스로 돌아오면 되살아난다.
   const visVal = (name: string): string => (boxOf(name).hidden ? '' : boxOf(name).value);
 
-  let refitArmed = false;
+  const refitState = { armed: false };
   /** 칸 폭 = 고른 option 의 글자 폭(머리말 참조). 카드에 붙기 전엔 잴 수 없어 ResizeObserver 가 붙는 순간 다시 잰다. */
   function fit(): void {
     for (const s of [nodeSel, provSel, modelSel, effortSel]) {
@@ -233,8 +234,8 @@ export function createRunPicker(opts?: { onChange?: (p: RunPick) => void; rememb
     // 웹폰트(Pretendard)가 그 굵기를 아직 받는 중이면 방금 잰 폭은 **대체 글꼴의 폭**이다 — 다 받은 뒤 한 번 더 잰다.
     //  칸 폭을 style.width 로 박아 두므로 글꼴이 바뀌어도 ResizeObserver 는 안 울린다. 그래서 글꼴이 늦게 온 첫 화면에서
     //  «Anthropic · Claude C…» 처럼 잘린 채 남았다(2026-09-19 헤드리스 실측: 글자는 133px 인데 대체 글꼴로 121px 을 재 박았다).
-    const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
-    if (fonts && fonts.status === 'loading' && !refitArmed) { refitArmed = true; void fonts.ready.then(() => { refitArmed = false; fit(); }); }
+    //  ⚠ ready 프로미스로 기다리면 iPadOS 17 에서 무한 마이크로태스크가 되어 화면 전체가 멈췄다(#5616, lib/font-refit.ts 머리말).
+    refitAfterFonts((document as Document & { fonts?: FontSetLike }).fonts, refitState, fit);
   }
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => fit()).observe(root);
 

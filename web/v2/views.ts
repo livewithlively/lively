@@ -463,8 +463,6 @@ export interface SessionViewOpts {
   onResumed?: (newId: string) => void;
   /** 대화 보기가 본자리인 화면 — session-chat.ts chatHome 주석(#4940 부터 리브 세션은 일반 세션 보기라 쓰지 않는다). */
   chatHome?: boolean;
-  /** 리브 세션이다(#4970) — 리브의 물음을 입력칸 바로 위(터미널을 볼 땐 머리줄 아래)에 띄운다(session-chat.ts livAsks 주석). */
-  livAsks?: boolean;
   /** 못 읽는 기록(403 · 404)에 촘촘히 되묻지 않는다 — session-chat.ts slowOnMissing 주석(앱빌더 시험 세션). */
   slowOnMissing?: boolean;
   /** #5319 머리줄 [복제] · [옮기기] — 프로젝트 문패에서 내려온 세션 단추(session-chat.ts onFork · onMove 주석). 칸 셸이 준다. */
@@ -522,7 +520,6 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     isVisible: vopts.isVisible,
     onResumed: vopts.onResumed,
     chatHome: vopts.chatHome,
-    livAsks: vopts.livAsks,
     slowOnMissing: vopts.slowOnMissing,
     //  #5319 [복제] · [옮기기] — 술어는 문패 · 우클릭과 같은 한 벌(canForkSess · canMoveSess)을 지금의 행으로 다시 잰다.
     onFork: vopts.onFork,

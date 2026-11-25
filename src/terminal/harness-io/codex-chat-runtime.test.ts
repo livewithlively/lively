@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   answerApproval, askApproval, CodexChatUnavailable, codexChatStatus, dropAllCodexChats, dropSession,
-  ensureCodexChat, interruptCodexChat, onChatEvent, pendingApprovals, releaseCodexChat, sendCodexChat,
+  ensureCodexChat, interruptCodexChat, managedAppServerEnv, onChatEvent, pendingApprovals, releaseCodexChat, sendCodexChat,
+  sessionEnv,
 } from "./codex-chat-runtime.js";
 import type { AppServerTransport } from "./codex-app-server.js";
 
@@ -327,6 +328,16 @@ await t("★ rolloutPath 는 stdout 을 받는 통로를 쓴다 — memberSh 는
   const fn = src.slice(src.indexOf("export async function rolloutPath"));
   assert.ok(fn.includes("memberShOut(osUser"), "memberShOut 으로 읽는다");
   assert.ok(!/\bmemberSh\(/.test(fn), "memberSh( 를 쓰지 않는다(출력을 버리는 통로다)");
+});
+
+await t("#5648 매니지드 app-server 는 세션 컨테이너 안 SQLite 자리를 받는다 — tmux -e 는 이 exec 에 안 닿는다", () => {
+  const env = managedAppServerEnv("box-x-1");
+  assert.equal(env.CODEX_SQLITE_HOME, "/tmp/lively-codex-sqlite", "공유 홈(9p) 밖 — 컨테이너마다 따로인 자리");
+  assert.equal(env.LIVELY_SESSION_ID, "box-x-1", "세션 신원은 그대로 싣는다");
+  assert.equal(sessionEnv("box-x-1").CODEX_SQLITE_HOME, undefined, "공유 sessionEnv(격리·로컬 분기)는 무변경");
+  const src = SRC();
+  const managed = src.slice(src.indexOf("if (sessionExecConfigured()) {"), src.indexOf("if (o.osUser) {"));
+  assert.ok(managed.includes("managedAppServerEnv(o.sessionId)"), "매니지드 분기가 그 env 로 app-server 를 띄운다");
 });
 
 dropAllCodexChats();

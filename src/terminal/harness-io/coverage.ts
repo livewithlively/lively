@@ -85,6 +85,18 @@ export const COVERAGE: readonly HarnessCoverage[] = [
     },
   },
   {
+    harness: "cursor",
+    axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "terminal", interrupt: "ok", model: "terminal" },
+    notes: {
+      read: "Cursor 기록 파서는 번들 규약·fixture로 확인했다. 로그인 계정의 실제 대화 파일 끝단은 미검증이다.",
+      send: "공식 ACP 규약과 가짜 전송 테스트로 확인했다. 로그인 계정으로 실제 응답을 주고받는 끝단은 미검증이다.",
+      ask: "공식 cursor/ask_question 응답 규약과 왕복 테스트 근거다. 실계정 끝단은 미검증이다.",
+      approve: "공식 ACP 승인 응답 규약과 왕복 테스트 근거다. 실계정 끝단은 미검증이다.",
+      usage: "Cursor ACP는 사용량 통지를 제공한다는 근거가 없어 웹 사용량을 표시할 수 없다. CLI·계정 화면에서 확인한다.",
+      model: "Cursor ACP의 실행 중 모델 변경은 공식 안정 계약이 확인되지 않았다. 터미널에서 새 세션을 모델과 함께 연다.",
+    },
+  },
+  {
     harness: "grok",
     axes: { read: "ok", send: "ok", tasks: "ok", ask: "ok", approve: "ok", slash: "ok", usage: "ok", interrupt: "ok", model: "ok" },
     notes: {

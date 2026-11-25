@@ -29,7 +29,7 @@ import type { PermissionAnswer, PermissionAsk } from "./session-event.js";
 import { grokPromptLine } from "./grok-stream.js";
 import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
 import { ask, clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
-import { askBridgeEnv } from "./ask-bridge.js";   // #2439 — 훅이 사람에게 되물어 오는 문
+import { readyAskBridgeEnv, revokeAskSession } from "./ask-bridge.js";   // #2439 — 훅이 사람에게 되물어 오는 문
 import { CLAUDE_AI_CONNECTORS_OFF_ENV } from "../claude-ai-connectors-off.js";   // #4427 — 판(pane)의 claude 와 한 벌
 import type { SessionEvent } from "./session-event.js";
 
@@ -226,9 +226,11 @@ export async function ensureOpencodeChat(o: ClaudeChatOpts): Promise<Entry> {
  * antigravity 를 연다 (#2439) — **턴마다 프로세스**가 나고 죽는다(perTurnTransport 머리말).
  *  다른 하네스는 파이프 하나가 계속 사는데 여기는 `--conversation=<id>` 로 잇는다.
  */
-export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
+export async function ensureAntigravityChat(o: ClaudeChatOpts): Promise<Entry> {
   const found = live.get(o.sessionId);
   if (found) return found;
+
+  const askEnv = await readyAskBridgeEnv(o.sessionId);
 
   const e: Entry = {
     conn: null as unknown as ChatTransportConn, harness: "antigravity",
@@ -238,7 +240,7 @@ export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
     cwd: o.cwd,
     //  ★ 훅이 사람에게 되물어 올 주소(#2439). 이 env 가 있는 자식만 대화창에 승인·선택지를 띄운다 —
     //   터미널에서 사람이 직접 띄운 agy 에는 없으니 종전 동작 그대로다(전역 훅 파일을 안 건드리는 이유).
-    env: askBridgeEnv(o.sessionId),
+    env: askEnv,
     //  ⚠ 실행 경계는 **다른 하네스와 같은 사다리**를 탄다 — 여기만 빠뜨리면 게이트웨이 권한으로 돈다.
     argvFor: (text, convId) => {
       const inner = ["agy", `--print=${text}`, "--output-format=stream-json"];
@@ -296,19 +298,21 @@ export function ensureAntigravityChat(o: ClaudeChatOpts): Entry {
  *  ⚠ 세션 id 를 못 받으면 **열지 않는다** — 그 상태로 말을 걸면 `-32602 unknown session id` 가
  *   돌아오고 사람은 답을 영영 기다린다(실측으로 확인한 바로 그 오류다).
  */
-export async function ensureGrokChat(o: ClaudeChatOpts): Promise<Entry> {
+async function ensureAcpChat(o: ClaudeChatOpts, harness: "grok" | "cursor"): Promise<Entry> {
   const found = live.get(o.sessionId);
   if (found) return found;
 
-  const inner = ["grok", "agent", "stdio"];
+  const inner = harness === "cursor"
+    ? ["agent", ...(o.model ? ["--model", o.model] : []), "acp"]
+    : ["grok", "agent", "stdio"];
   const bySession = sessionSpawnArgv(o.sessionId, inner);
   const argv = bySession.length ? bySession : (o.osUser ? memberSpawnArgv(o.osUser, inner) : inner);
 
   const conn = stdioTransport(argv, o.cwd, {
     spawnFn: o.spawnFn,
-    onStderr: (text) => logger.warn({ sessionId: o.sessionId, stderr: text.slice(0, 500) }, "grok stderr"),
+    onStderr: (text) => logger.warn({ sessionId: o.sessionId, harness, stderr: text.slice(0, 500) }, "ACP stderr"),
   });
-  const e: Entry = { conn, harness: "grok", sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false };
+  const e: Entry = { conn, harness, sessionId: o.sessionId, convId: String(o.convId || ""), startedAt: Date.now(), closing: false };
 
   //  ★ ACP 응답은 **id 로 짝짓는다**(알림과 응답이 같은 스트림에 섞인다).
   const waitFor = (id: number, ms: number): Promise<Record<string, unknown> | null> => new Promise((resolve) => {
@@ -328,31 +332,47 @@ export async function ensureGrokChat(o: ClaudeChatOpts): Promise<Entry> {
   });
 
   conn.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
-    params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } } } }));
+    params: { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      ...(harness === "cursor" ? { clientInfo: { name: "lively", version: "0.1.0" } } : {}) } }));
   const init = await waitFor(1, 15_000);
-  if (!init) { conn.close(); throw new ClaudeChatUnavailable("grok 핸드셰이크가 응답하지 않습니다"); }
+  if (!init || init.error) { conn.close(); throw new ClaudeChatUnavailable(`${harness} 핸드셰이크 실패${init?.error ? ` — ${String((init.error as { message?: unknown }).message || "오류")}` : "(응답 없음)"}`); }
+
+  if (harness === "cursor") {
+    // Cursor 공식 ACP 경로: initialize → authenticate(cursor_login) → session/new|load.
+    conn.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "authenticate", params: { methodId: "cursor_login" } }));
+    const auth = await waitFor(2, 30_000);
+    if (!auth || auth.error) {
+      conn.close();
+      throw new ClaudeChatUnavailable(`cursor 로그인이 필요합니다${auth?.error ? ` — ${String((auth.error as { message?: unknown }).message || "오류")}` : ""}`);
+    }
+  }
 
   //  대화를 이어 열 수 있으면 그렇게(session/load), 아니면 새로.
-  conn.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new",
-    params: { cwd: o.cwd, mcpServers: [] } }));
-  const created = await waitFor(2, 30_000);
+  const sessionRpc = harness === "cursor" ? 3 : 2;
+  conn.send(JSON.stringify({ jsonrpc: "2.0", id: sessionRpc, method: harness === "cursor" && e.convId ? "session/load" : "session/new",
+    params: { cwd: o.cwd, mcpServers: [], ...(harness === "cursor" && e.convId ? { sessionId: e.convId } : {}) } }));
+  const created = await waitFor(sessionRpc, 30_000);
   const sid = (created?.result as { sessionId?: unknown } | undefined)?.sessionId;
-  if (typeof sid !== "string" || !sid) {
+  if ((typeof sid !== "string" || !sid) && !(harness === "cursor" && e.convId && created?.result && !created.error)) {
     conn.close();
     //  인증 전이면 `-32000 Authentication required` 가 온다 — 그 사실을 그대로 말한다(빈 화면 금지).
     const err = (created?.error as { message?: unknown } | undefined)?.message;
-    throw new ClaudeChatUnavailable(`grok 세션을 열지 못했습니다${err ? ` — ${String(err)}` : ""}`);
+    throw new ClaudeChatUnavailable(`${harness} 세션을 열지 못했습니다${err ? ` — ${String(err)}` : ""}`);
   }
-  e.convId = sid;
+  e.convId = typeof sid === "string" && sid ? sid : e.convId;
   live.set(o.sessionId, e);
-  logger.info({ sessionId: o.sessionId, convId: sid }, "grok 대화 런타임 시작(ACP)");
+  logger.info({ sessionId: o.sessionId, convId: e.convId, harness }, "ACP 대화 런타임 시작");
   return e;
 }
+
+export const ensureGrokChat = (o: ClaudeChatOpts): Promise<Entry> => ensureAcpChat(o, "grok");
+export const ensureCursorChat = (o: ClaudeChatOpts): Promise<Entry> => ensureAcpChat(o, "cursor");
 
 /** grok 에 말을 건다 — ACP `session/prompt`(봉투는 grok-stream 이 만든다). */
 export function sendGrokChat(e: Entry, text: string, id = Date.now() % 100000): boolean {
   return e.conn.send(grokPromptLine(e.convId, text, id).trimEnd());
 }
+export const sendCursorChat = sendGrokChat;
 
 /** 이 세션의 런타임이 지금 떠 있나. */
 export function isClaudeChatLive(sessionId: string): boolean {
@@ -365,6 +385,7 @@ export function isClaudeChatLive(sessionId: string): boolean {
  */
 export function stopClaudeChat(sessionId: string, reason: string): boolean {
   const e = live.get(sessionId);
+  revokeAskSession(sessionId);
   if (!e) { settleAll(sessionId, reason); return false; }
   e.closing = true;
   live.delete(sessionId);

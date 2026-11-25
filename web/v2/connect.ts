@@ -716,6 +716,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     }).catch((e) => outbound.replaceChildren(errorNote(e, '내보내기 설정을 불러오지 못했습니다')));
   }
 
+  // ── 슬랙에서 앱 부르기(#1782 슬랙 다리) — 관리자에게만. 다리마다 연결 상태 한 줄(만들고 고치는 것은 도구 org_slack_bridge_set). ──
+  const bridgeBox = isAdmin && svc.key === 'slack' ? el('div', {}) : null;
+  if (bridgeBox) void paintSlackBridges(bridgeBox);
+
   // ── 연결 지우기 — 잃는 것만 말한다(#1582) ──
   const gone = st === 'on' ? el('div', { class: 'cn-gone' }, icon('x'),
     el('span', { class: 'm', text: '연결을 지우면 직접 사용도 자료 가져오기도 함께 멈추고, 이미 가져온 자료는 자료함에 남습니다.' }),
@@ -757,6 +761,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     el('section', { class: 'cn-sect', id: 'cn-who' },
       sectHead(outbound ? '4' : '3', '보는 사람', '직접 사용은 나만, 가져온 자료는 워크스페이스가 함께'),
       whos),
+    ...(bridgeBox ? [el('section', { class: 'cn-sect', id: 'cn-bridge' },
+      sectHead(outbound ? '5' : '4', '슬랙에서 앱 부르기', '슬랙 다리 — 슬랙의 글 · 태그 · 버튼을 앱 작업으로 넘깁니다'),
+      bridgeBox)] : []),
     ...(gone ? [gone] : [])));
 }
 
@@ -816,6 +823,35 @@ function githubReposCard(): HTMLElement {
   };
   void paint();
   return box;
+}
+
+/**
+ * #1782 슬랙 다리 상태 — 다리마다 «무엇을 어디로 넘기나 · 지금 붙어 있나 · 받고 넘기고 거른 수 · 마지막 오류» 한 줄.
+ *  만들고 고치는 칸은 두지 않는다(금고 칸 참조 · 채널 id 를 고르는 일이라 AI 에게 맡긴다 — 도구 org_slack_bridge_set · 순서는 org_slack_bridges 의 setup).
+ */
+async function paintSlackBridges(box: HTMLElement): Promise<void> {
+  box.replaceChildren(skeleton('슬랙 다리를 불러오는 중'));
+  let r: any;
+  try { r = await api('/api/ui/org/slack/bridges'); }
+  catch (e) { box.replaceChildren(errorNote(e, '슬랙 다리를 불러오지 못했습니다')); return; }
+  const list: any[] = Array.isArray(r?.bridges) ? r.bridges : [];
+  if (!list.length) {
+    box.replaceChildren(el('span', { class: 'cn-act-note',
+      text: '아직 다리가 없어요. 다리를 만들면 고른 채널의 글 · 봇 태그 · 버튼이 앱의 작업으로 넘어가고, 앱이 같은 스레드에 답합니다. AI 에게 «슬랙 다리 만들어 줘»라고 하면 순서대로 안내합니다.' }));
+    return;
+  }
+  box.replaceChildren(...list.map((b) => {
+    const st = b.status || {};
+    const now = !b.enabled ? '꺼져 있어요' : st.connected ? '슬랙에 붙어 있어요' : st.state === 'error' ? '붙지 못했어요' : st.state === 'waiting' ? '끊겨서 다시 붙는 중이에요' : '붙는 중이에요';
+    const last = st.last_event_at ? ` 마지막 이벤트는 ${relTime(st.last_event_at)}에 받았어요.` : '';
+    const counts = `받은 것 ${st.received ?? 0} · 넘긴 것 ${st.forwarded ?? 0} · 거른 것 ${st.filtered ?? 0}${st.failed ? ` · 넘기지 못한 것 ${st.failed}` : ''}`;
+    const where = Array.isArray(b.channels) && b.channels.length ? `채널 ${b.channels.length}곳` : '봇이 들어간 모든 채널';
+    return el('div', { class: 'cn-act-row' },
+      el('span', { class: 'cn-act-note', style: 'flex:1 1 100%',
+        text: `${b.id} — ${where}의 ${(b.events || []).join(' · ')} 를 앱 ${b.app_id}(${b.route})로 넘깁니다. 지금 ${now}.${last}` }),
+      el('span', { class: 'cn-act-note', style: 'flex:1 1 100%; opacity:.8', text: counts }),
+      ...(st.last_error ? [el('span', { class: 'cn-act-note', style: 'flex:1 1 100%', text: `마지막 오류: ${st.last_error}` })] : []));
+  }));
 }
 
 function slackTeamCollectCard(onState: CollectState): CollectFace {

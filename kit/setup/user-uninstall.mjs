@@ -388,7 +388,7 @@ const claudeDirForRemove = () => {
 //  skill=true — 스킬 꼴(<dir>/<id>/SKILL.md, 코덱스). 표식이 있는 SKILL.md 만 지우고, 그래서 빈 폴더가 되면 폴더도 걷는다(사용자 파일이 있으면 남는다).
 export function removeConnectCommands(dir, label, { skill = false } = {}) {
   let removed = 0;
-  for (const id of ["lively-connect", "lively-disconnect"]) {
+  for (const id of ["lively-connect", "lively-disconnect", "lively-mode"]) {
     const f = skill ? join(dir, id, "SKILL.md") : join(dir, `${id}.md`);
     let cur = "";
     try { cur = readFileSync(f, "utf8"); } catch { continue; }

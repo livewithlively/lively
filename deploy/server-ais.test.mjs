@@ -82,8 +82,8 @@ const T = (s = 600) => `timeout ${s} bash`;
 const CLAUDE = (u, d = here, s) => `${T(s)} ${join(d, "install-claude-user.sh")} ${u}`;
 const CODEX = (u, d = here, s) => `${T(s)} ${join(d, "install-codex-user.sh")} ${u}`;
 const CLI = (h, d = here, s) => `${T(s)} ${join(d, "install-harness-clis.sh")} ${h}`;
-const ALL = (u, d, s) => [CLAUDE(u, d, s), CODEX(u, d, s), CLI("agy", d, s), CLI("grok", d, s)];
-const ROOTISH = (d, s) => [CLAUDE("root", d, s), CLI("agy", d, s), CLI("grok", d, s)];
+const ALL = (u, d, s) => [CLAUDE(u, d, s), CODEX(u, d, s), CLI("agy", d, s), CLI("grok", d, s), CLI("cursor", d, s)];
+const ROOTISH = (d, s) => [CLAUDE("root", d, s), CLI("agy", d, s), CLI("grok", d, s), CLI("cursor", d, s)];
 const noRealSudo = (r) => assert.doesNotMatch(r.err, /real-sudo-path-reached/, "PATH 의 sudo 에 닿았다 — 진짜 sudo 를 부를 수 있는 모양이다");
 
 let pass = 0;

@@ -13,10 +13,12 @@
 //  ── 부르기(목록은 표시일 뿐 — 판정은 부를 때 처음부터 다시) ───────────────────────────────────
 //   ① 토큰(앱 토큰 아님 · scope memory) ② 앱이 지금도 켜져 있고 이 사람의 목록에 서는가 ③ 그 사람의 판에 이 도구가 있고 약속 지문이 목록 때와 같은가
 //   (sessioned 모드에서만 걸린다 — apps/app-mcp-decl.ts «약속 지문») ④ 읽기 전용 연결이면 L0 만 ⑤ 동의 — 없으면 동의 주소와 함께 거절(★3)
-//   ⑥ 구성원 ⑦ 그 판의 입력 스키마로 인자 검사 ⑧ 실행기. 오류는 전부 도구 오류(isError)로 돌려주고 호출 기록(mcp_call_log)엔 그 앱으로 남는다.
+//   ⑥ 구성원 ⑤b 동의가 그 판의 지금 선언 전체를 덮나 — 못 덮으면(앱이 동의 뒤에 권한을 넓혔다) 덮지 못한 것 · 동의 주소와 함께 거절(#1644)
+//   ⑦ 그 판의 입력 스키마로 인자 검사 ⑧ 실행기. 오류는 전부 도구 오류(isError)로 돌려주고 호출 기록(mcp_call_log)엔 그 앱으로 남는다.
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveUser, requireScope, type LivelyUser } from "../context.js";
+import { resolveUser, type LivelyUser } from "../context.js";
+import { permits } from "../auth/permissions.js";
 import { getApp, getActiveGrant, listActiveGrants } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
@@ -29,6 +31,8 @@ import { appMcpToolsOf, appMcpToolContract, consentPresentation, appConsentUrl, 
 import { appMcpExecutor, appMcpExecutorKinds } from "../apps/app-mcp-executors.js";
 import { listMcpToolApps, type McpToolAppRow } from "../apps/app-mcp-store.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
+import { describeGrantGap, grantableOf, grantGap, grantGapEmpty } from "../apps/grant.js";
+import { isScope } from "../auth/scopes.js";
 import { jsonSchemaToZodShape } from "./json-schema.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { HttpError } from "../http-error.js";
@@ -36,6 +40,8 @@ import { logger } from "../log.js";
 
 /** 앱 도구를 부르는 데 토큰이 가져야 하는 scope — 조직 콘텐츠(지식 · 과업 · 자료)와 같은 축(docs/architecture.ko.md · 명세 §6). */
 export const APP_MCP_CALL_SCOPE = "memory";
+/** 같은 것의 새 요구(#5799) — «맥락» 고치기. 새 권한이 실린 주체는 이것으로, 옛 scope 만 가진 주체는 위 이름으로 잰다(permits). */
+export const APP_MCP_CALL_NEED = { perm: "content", level: "write" } as const;
 
 interface ToolText { type: "text"; text: string }
 interface ToolResult { content: ToolText[]; isError?: boolean; _meta?: Record<string, unknown>; [k: string]: unknown }
@@ -98,7 +104,7 @@ export function listedAppsFor(rows: readonly McpToolAppRow[], who: Viewer, readO
  *  실행기가 하나도 없으면 DB 를 보기 전에 0 — 그 코어에선 어떤 선언도 목록에 못 선다.
  */
 export async function registerAppDeclaredTools(server: McpServer, user: LivelyUser | undefined, opts: { readOnly: boolean }): Promise<number> {
-  if (!user?.userId || user.appId || user.appServer || !(user.scopes ?? []).includes(APP_MCP_CALL_SCOPE)) return 0;
+  if (!user?.userId || user.appId || user.appServer || !permits(user, APP_MCP_CALL_SCOPE, APP_MCP_CALL_NEED)) return 0;
   if (!appMcpExecutorKinds().length) return 0;
   const rows = await listMcpToolApps();
   if (!rows.length) return 0;
@@ -138,8 +144,7 @@ interface CallRef { appId: string; name: string; contract: string; readOnly: boo
 export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra: unknown): Promise<ToolResult> {
   const user = resolveUser(extra);
   if (user.appId || user.appServer) return toolError("앱 토큰으로는 앱이 선언한 도구를 부를 수 없습니다", "app_token");
-  try { requireScope(user, APP_MCP_CALL_SCOPE); }
-  catch { return toolError(`이 연결(토큰)에는 앱 도구를 부를 권한(scope '${APP_MCP_CALL_SCOPE}')이 없습니다`, "scope"); }
+  if (!permits(user, APP_MCP_CALL_SCOPE, APP_MCP_CALL_NEED)) return toolError(`이 연결(토큰)에는 앱 도구를 부를 권한(scope '${APP_MCP_CALL_SCOPE}')이 없습니다`, "scope");
   const who = viewerOf(user);
   const gone = (): ToolResult => toolError(`앱 '${ref.appId}' 의 도구 '${ref.name}' 을(를) 지금은 쓸 수 없습니다 — 도구 목록을 다시 받아 주세요`, "tool_unavailable");
 
@@ -166,6 +171,19 @@ export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra:
   }
   const member = await getMember(user.userId);
   if (!member || member.state !== "active") return toolError("이 워크스페이스의 활성 구성원만 앱 도구를 부를 수 있습니다", "member");
+  //  ⑤b #1644 — 동의가 앱의 지금 선언 전체를 덮나. 앱이 동의한 뒤에 권한을 넓혔으면(예 permissions.ai_runs · scopes 에 db) 앱 서버 · 작업 AI 는
+  //   그 사람의 예전 동의로 돌아 새로 얻은 권한에서 막히거나(«권한 밖») 새 기능만 조용히 빠진다(작업 AI 의 토큰 = 그 사람 ∩ 그 사람의 동의).
+  //   앱 서버가 무엇을 부를지 미리 알 수 없으니 선언 전체로 보고, 덮지 못하면 실행기를 부르지 않고 동의할 곳과 함께 거절한다(작업 · 실행을 헛돌리지 않는다).
+  //   구성원에게 없는 scope 는 다시 동의해도 못 얻으므로 세지 않는다. 동의 창은 선언 전체로 동의하므로 한 번 다시 동의하면 풀린다.
+  const declared = grantableOf(seen.app.manifest);
+  const gap = declared ? grantGap(grant, declared, (member.scopes ?? []).filter(isScope)) : null;
+  if (gap && !grantGapEmpty(gap)) {
+    const url = appConsentUrl(await gatewayUrl().catch(() => null), ref.appId, variant);
+    return toolError(
+      `앱 「${appLabel(seen.app.title)}」 의 사용 동의가 예전 범위라(동의에 없는 것: ${describeGrantGap(gap)}) 이 도구를 부르지 않았습니다 — 다시 동의한 뒤 다시 부르세요.`
+        + (url ? ` 동의할 곳: ${url}` : " (라이블리에서 이 앱을 열면 동의 창이 뜹니다)"),
+      CONSENT_REQUIRED, { ...(url ? { "lively/consent_url": url } : {}), "lively/missing": gap });
+  }
 
   const parsed = z.object(jsonSchemaToZodShape(decl.input)).safeParse(rawArgs ?? {});
   if (!parsed.success) {

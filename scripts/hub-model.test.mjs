@@ -183,3 +183,40 @@ test("#16 검색 미리보기 다듬기 — 줄 번호(L12:) · 제목 기호 ·
   assert.equal(M.searchSnippet("가나다라마바사", 4), "가나다라…");
   assert.equal(M.searchSnippet(null, 10), "");
 });
+
+test("#5630 세션 목록 순서 — 도는 것(순위 → 최근) 먼저, 지난 세션(꺼진 박스 · 기록만 남은 것)은 그 뒤에 최근 순", () => {
+  const rank = (s) => s.rank;
+  const ss = [
+    { id: "past-old", restorable: true, lastActive: 100, rank: 6 },
+    { id: "idle", lastActive: 500, rank: 4 },
+    { id: "log", _logOnly: true, restorable: true, lastActive: 300, rank: 6 },
+    { id: "wait", lastActive: 200, rank: 1 },
+    { id: "idle-new", lastActive: 900, rank: 4 },
+  ];
+  const { live, past } = M.orderHubSessions(ss, rank);
+  assert.deepEqual(live.map((s) => s.id), ["wait", "idle-new", "idle"]);
+  assert.deepEqual(past.map((s) => s.id), ["log", "past-old"]);
+  assert.equal(M.sessionIsPast({ restorable: true }), true);
+  assert.equal(M.sessionIsPast({ _logOnly: true }), true);
+  assert.equal(M.sessionIsPast({ agentState: "offline" }), false, "오프라인은 박스가 살아 있다 — 지난 세션이 아니다");
+  assert.equal(M.sessionIsPast(null), false);
+});
+
+// ── #5630 3판 — «지금» 띠의 셈 ──
+test('#5630 지금 띠 — 내 차례 = 내가 답할 세션이 먼저, 그다음 내가 맡은 열린 태스크(진행 중 먼저)', async () => {
+  const { myTurnItems } = await import('../public/app/projects/detail-hub-model.js');
+  const sessions = [
+    { s: { id: 'a', label: '남의 확인 필요' }, key: 'waiting', mine: false },
+    { s: { id: 'b', label: '내 확인 필요' }, key: 'waiting', mine: true },
+    { s: { id: 'c', label: '내 작업 중' }, key: 'busy', mine: true },
+  ];
+  const tasks = [
+    { id: 1, name: '할 일', status: 'todo', assignees: ['me'] },
+    { id: 2, name: '진행', status: 'in_progress', assignee: 'me' },
+    { id: 3, name: '끝', status: 'done', assignees: ['me'] },
+    { id: 4, name: '남의 것', status: 'in_progress', assignees: ['you'] },
+  ];
+  const items = myTurnItems(sessions, tasks, 'me');
+  assert.deepEqual(items.map((x) => x.kind + ':' + x.label), ['session:내 확인 필요', 'task:진행', 'task:할 일']);
+  assert.deepEqual(myTurnItems(sessions, tasks, '').map((x) => x.label), ['내 확인 필요'], '내가 누군지 모르면 태스크는 세지 않는다');
+});

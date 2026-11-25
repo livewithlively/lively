@@ -307,9 +307,13 @@ t("[D6] 모르는 kind 는 kind 그대로 — 원형 속성 이름(constructor)�
 
 // ── 핸들러 — 거절은 DB 에 닿기 전에 난다(그래서 DB 없이 잰다) ─────────────────
 {
-  const { livCapabilities } = await import("../../capabilities/delivery/liv.js");
+  //  #5713 — 자격 입력칸은 리브 전용 도구(me_liv_ask_secret)에서 세션 요청(session_ask_secret)으로 옮겼다. 옛 이름은 같은 핸들러의 별칭이다.
+  const { sessionAskCapabilities } = await import("../../capabilities/session-ask.js");
   const { memberSecretCapabilities } = await import("../../capabilities/member-secret.js");
-  const ask = livCapabilities.find((c) => c.name === "me_liv_ask_secret")!;
+  const ask = sessionAskCapabilities.find((c) => c.name === "session_ask_secret")!;
+  const legacyAsk = sessionAskCapabilities.find((c) => c.name === "me_liv_ask_secret")!;
+  assert.ok(ask && legacyAsk, "자격 입력칸 도구(새 이름 · 옛 이름)가 둘 다 있다");
+  assert.equal(legacyAsk.handler, ask.handler, "옛 이름은 같은 핸들러다(판정이 두 벌로 갈리지 않는다)");
   const meSet = memberSecretCapabilities.find((c) => c.name === "me_credential_set")!;
   const user = { userId: "u1", email: "u1@example.invalid", scopes: [], projects: ["*"] } as never;
   const rejects = (cap: typeof ask, input: Record<string, unknown>, status: number, label: string) =>
@@ -336,7 +340,8 @@ t("[D6] 모르는 kind 는 kind 그대로 — 원형 속성 이름(constructor)�
 
 // ── 배선 — 요청·넣기를 가짜 의존으로 돌려 «무엇이 어떤 인자로 불렸나» 를 잰다(DB 없이) ─────────
 {
-  const { livVaultAsk, livSecretPut } = await import("../../capabilities/delivery/liv.js");
+  //  #5713 — 두 함수는 세션 요청의 자격 종류(asks/kinds/secret.ts)로 옮겼다. 판정 · 의존 모양은 그대로다(이름만 바뀌었다).
+  const { vaultSecretAsk: livVaultAsk, secretAskPut: livSecretPut } = await import("../../asks/kinds/secret.js");
   type AskDeps = Parameters<typeof livVaultAsk>[2];
   type PutDeps = Parameters<typeof livSecretPut>[2];
   const status = (e: unknown): number | undefined => (e as { status?: number })?.status;

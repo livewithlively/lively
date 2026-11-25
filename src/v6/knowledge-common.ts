@@ -80,6 +80,34 @@ export function slugify(s: string): string {
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
 }
 
+// 저장 경로의 이름 해석 — 링크 해석(resolveWikiLinkTargets)과 같은 **exact 우선 → slugify 폴백**.
+//  slugify 를 바로 태우면 실재 이름 두 부류가 엉뚱한 행으로 간다: 64자 절단으로 '-' 로 끝나는 이름은 꼬리가 떨어져
+//  '신규'로 오판되고(신규는 category 필수라 400), 대소문자만 다른 쌍둥이는 소문자 쪽을 덮어쓴다.
+//  폴백 결과가 실재하지 않으면 꼬리 '-' 까지 뗀다 — slugify 는 strip→slice 순서라 절단 결과가 '-' 로 끝날 수 있고,
+//  그 이름을 다시 해석하면 한 글자 짧은 이름이 나온다. 그러면 핸들러(공개범위 검사)와 게이트·store 가 서로 다른
+//  행을 보게 되어 검사를 우회한다. slugify 자체는 고치지 않는다: 링크 폴백이 긴 제목 → '-' 로 끝나는 실재 이름을
+//  찾는 데 기대고 있다(knowledge-links.ts resolveWikiLinkTargets).
+//  멱등: pick(pick(x)) === pick(x) — knowledge-store.test.ts '저장 이름: 다시 해석해도 같다' 가 검증한다.
+export function pickKnowledgeName(raw: string, exists: (name: string) => boolean): string {
+  if (exists(raw)) return raw;
+  const slug = slugify(raw);
+  if (exists(slug)) return slug;
+  return slug.replace(/-+$/, "");
+}
+
+export async function resolveKnowledgeName(raw: string): Promise<string> {
+  const slug = slugify(raw);
+  //  이미 정규형이면 조회하지 않는다 — pickKnowledgeName 이 어느 DB 상태에서도 raw 를 돌려준다(knowledge-store.test.ts
+  //   '정규형이면 … 그대로다'). 기존 지식을 그 이름 그대로 고치는 저장이 대부분이라, 저장마다 붙던 조회 한 번이 빠진다.
+  if (slug === raw) return raw;
+  //  NUL 이 든 원문은 후보에서 뺀다 — PG text 는 NUL 을 못 담아 `= ANY($1)` 가 «invalid byte sequence … 0x00» 으로 실패한다.
+  //   그런 이름의 행은 있을 수 없으니 slug(NUL 을 걸러 낸 이름)만 보면 결과가 같다.
+  const cands = raw.includes("\u0000") ? [slug] : [raw, slug];
+  const r = await itemsPool.query<{ name: string }>(`SELECT name FROM knowledge WHERE name = ANY($1::text[])`, [cands]);
+  const found = new Set(r.rows.map((x) => x.name));
+  return pickKnowledgeName(raw, (n) => found.has(n));
+}
+
 // icon(#657) = props_ui->>'icon' — 페이지 아이콘(노션형). 목록·검색·트리 행이 문서 글리프 대신 표시.
 export const K_ICON_EXPR = `k.props_ui->>'icon' AS icon`;
 

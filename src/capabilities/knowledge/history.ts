@@ -13,7 +13,7 @@ import { HttpError, clampPage } from "../rest-util.js";
 import type { Capability, CapabilityCtx } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
-import { assertKnowledgeWritable, assertKnowledgeHistoryInAppContext } from "./shared.js";
+import { assertKnowledgeWritable, assertKnowledgeHistoryInAppContext, INJECTED_DOC_ADMIN_ONLY } from "./shared.js";
 import {
   listKnowledgeHistory, getKnowledgeHistoryEntry, getKnowledgeSnapshot,
 } from "../../v6/knowledge-history-store.js";
@@ -147,7 +147,7 @@ export const knowledgeRevert: Capability = {
     //  #5100 — 되돌리기는 이력의 옛 본문을 다시 쓴다(지운 문서면 되살린다). 이력 읽기와 같은 앱 맥락 범위 판정을 먼저 지난다.
     await assertKnowledgeHistoryInAppContext(name, ctx?.viewer ?? null, user, ctx, "knowledge_revert");
     // 쓰기 게이트 = 읽기 게이트와 같은 판정(shared.ts) — 안 보이는 문서는 되돌릴 수도 없다.
-    await assertKnowledgeWritable(name, ctx?.viewer ?? null);
+    await assertKnowledgeWritable(name, ctx?.viewer ?? null, user);
     if (!(await canSeeKnowledge(name, ctx?.viewer ?? null))) throw new HttpError(404, `지식 '${name}' 없음`);
     const id = Number(input.audit_id);
     if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "audit_id 는 양의 정수");
@@ -175,6 +175,12 @@ export const knowledgeRevert: Capability = {
       throw new HttpError(400, dir === "before"
         ? "이 변경 이전엔 문서가 없었습니다(최초 생성) — 되돌릴 이전 버전이 없습니다."
         : "이 변경은 삭제였습니다 — 되돌릴 이후 버전이 없습니다.");
+    }
+    // #5801 — **되돌릴 판**이 주입 문구였으면 관리자만. 위 검사는 «지금 행» 만 본다 — 지운 주입 문구와 같은 이름으로 일반 지식을
+    //  만든 뒤 옛 이력으로 되돌리면, 스냅샷의 injection='always'(지식 축) 또는 섹션 경로(섹션 축 — updateSection 이 always 로 쓴다)를
+    //  타고 그 행이 다시 모든 AI 세션에 주입된다(격리 리뷰 B1).
+    if (!isAdmin(user) && (entity === "org_section" || snapshot.injection === "always")) {
+      throw new HttpError(403, INJECTED_DOC_ADMIN_ONLY);
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
 

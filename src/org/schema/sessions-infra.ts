@@ -31,6 +31,7 @@ export const CRON_ACTION_ALLOWLIST = [
   "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
   "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
   "project_gc",            // 자동 생성 프로젝트 정리(방치·장기 미활동)
+  "app_server_job",        // 앱 v2 #121 — 앱 매니페스트 정기 작업의 server 갈래(행은 앱 설치만 만든다 — 부팅이 시드하지 않는다: 아래 #1289 롤백 메모)
 ] as const;
 
 /**

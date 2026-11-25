@@ -11,10 +11,14 @@
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
-import { requireScope, type LivelyUser } from "../context.js";
+import type { LivelyUser } from "../context.js";
+import { capAllowed } from "./cap-permission.js";
 import { viewerOf } from "./principal.js";
 import { requireAppTool } from "../apps/principal.js";
-import { needsRegrant } from "../apps/grant.js";
+import {
+  grantableOf, grantGap, needsRegrant, regrantMessage, regrantScopePhrase, regrantToolPhrase, scopeNeedsRegrant,
+  optionalScopeMissing, optionalScopeMessage, OPTIONAL_SCOPE_REQUIRED, type DeclaredGrant,
+} from "../apps/grant.js";
 import { getActiveGrant } from "../org/store/apps.js";
 import { getApp } from "../org/store/apps.js";
 import { canSeeApp } from "../apps/visibility.js";
@@ -23,6 +27,7 @@ import { logToolCall } from "../org/policies/tool-log.js";
 import { logger } from "../log.js";
 import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
+import { isScope } from "../auth/scopes.js";
 import { runWithAppReadScope, assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 앱 맥락 범위
 
 /** 세션 id 꼴(box-<slug>-<8hex> 등) — 형식만. 권한은 소비처(ai-runs 구독 tie)가 본다. */
@@ -99,12 +104,22 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
   // #4225 — 동의가 **옛 범위**다: 앱이 갱신돼 새로 선언한 도구인데 예전 동의엔 없다(빌트인 「안녕 앱」 0.2 가 store_* 를 얻은 경우).
   //  종전엔 아래 requireAppTool 의 «앱 권한 밖» 403 으로 끝나 화면이 막다른 길이었다. «동의» 로 말하면 호스트가 그 자리에서
   //  동의 창을 띄우고(web/v2/app-ui.ts — /동의|grant/) 새 범위로 다시 동의한 뒤 한 번 재시도한다. 선언 밖 도구는 종전 그대로 막힌다.
-  const declared = (() => {
-    const p = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown } } | null)?.permissions;
-    return [...(Array.isArray(p?.tools) ? p.tools : []), ...(Array.isArray(p?.ext_tools) ? p.ext_tools : [])].map(String);
-  })();
-  if (needsRegrant(grant.tools, declared, name)) {
-    throw new HttpError(403, `앱 '${appId}' 의 사용 동의가 예전 범위라 '${name}' 을 쓸 수 없습니다 — 다시 동의(grant)하면 됩니다`, { body: { code: CONSENT_REQUIRED } });
+  //  선언은 동의 창이 주는 것과 같은 정규화(grant.ts grantableOf — 함의 도구 포함). 이 코어가 못 읽는 매니페스트면 도구는 원문 칸으로(종전과 같다) ·
+  //   scope 는 비운다 — 다시 동의(me_app_grant)도 같은 파서로 막혀, scope 로 «다시 동의» 를 내면 풀리지 않는 안내가 된다(#1644 격리 리뷰).
+  const rawPerms = (app.manifest as { permissions?: { tools?: unknown; ext_tools?: unknown } } | null)?.permissions;
+  const declared: DeclaredGrant = grantableOf(app.manifest) ?? {
+    scopes: [],
+    tools: [...(Array.isArray(rawPerms?.tools) ? rawPerms.tools : []), ...(Array.isArray(rawPerms?.ext_tools) ? rawPerms.ext_tools : [])].map(String),
+  };
+  const memberScopes = (member.scopes ?? []).filter(isScope);
+  //  앱 v2 #124 — 그 도구가 그 사람이 주지 않은 선택 권한에 기대면 «다시 동의» 가 아니다(동의 창은 선택 권한을 주지 않아 풀리지 않는다).
+  //   도구가 동의 목록에 있어도 scope 없이는 못 부르니 먼저 본다.
+  const optionalByTool = optionalScopeMissing(grant.scopes, declared, memberScopes, { tool: name });
+  if (optionalByTool) {
+    throw new HttpError(403, optionalScopeMessage(appId, optionalByTool, name), { body: { code: OPTIONAL_SCOPE_REQUIRED, scope: optionalByTool } });
+  }
+  if (needsRegrant(grant.tools, declared.tools, name)) {
+    throw new HttpError(403, regrantMessage(appId, regrantToolPhrase(name)), { body: { code: CONSENT_REQUIRED, missing: grantGap(grant, declared, memberScopes) } });
   }
 
   // 앱-principal 유저 — 스코프는 멤버 ∩ grant 로 축소, appId 를 실어 requireAppTool 이 grant 도구로 판정하게 한다.
@@ -121,8 +136,21 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
   if (!cap) throw new HttpError(404, `도구 없음: ${name}`);
   if (cap.expose.mcp === false) throw new HttpError(403, `호출할 수 없는 도구입니다: ${name}`); // REST 전용 내부 능력은 브리지 대상 아님
 
+  // #1644 — scope 도 같은 판정: 앱이 새로 선언한 scope(예 db)를 예전 동의가 덮지 못해 막힌 것이면 «다시 동의»(위 도구 판정과 같은 글 · 표지).
+  //  종전엔 아래 requireScope 의 «Forbidden» 으로 끝나 앱이 scope 만 새로 얻으면 화면이 동의 창을 띄우지 못했다. 그 사람(호출자)에게 없는 scope 는
+  //  다시 동의해도 못 얻으므로 종전 그대로 막힌다(grant.ts scopeNeedsRegrant).
+  //  #5799 — «막혔나» 는 capAllowed 가 정한다(옛 scope 만 가진 주체에겐 종전의 `!appUser.scopes.includes(cap.scope)` 와 같은 값).
+  //   아래 두 안내(선택 scope · 다시 동의)는 막힌 까닭을 옛 scope 말로 풀어 주는 것이라 막혔을 때만 본다.
+  const blocked = !capAllowed(appUser, cap);
+  const optionalByScope = cap.scope && blocked ? optionalScopeMissing(grant.scopes, declared, memberScopes, { scope: cap.scope }) : null;
+  if (optionalByScope) {
+    throw new HttpError(403, optionalScopeMessage(appId, optionalByScope, name), { body: { code: OPTIONAL_SCOPE_REQUIRED, scope: optionalByScope } });
+  }
+  if (cap.scope && blocked && scopeNeedsRegrant(grant.scopes, declared.scopes, cap.scope, memberScopes)) {
+    throw new HttpError(403, regrantMessage(appId, regrantScopePhrase(cap.scope)), { body: { code: CONSENT_REQUIRED, missing: grantGap(grant, declared, memberScopes) } });
+  }
   // 집행 — 앱 세션 MCP 경로와 동일: 스코프 → 앱 도구 allowlist.
-  if (cap.scope) requireScope(appUser, cap.scope);
+  if (blocked) throw new Error(`Forbidden: user '${appUser.userId}' lacks scope '${cap.scope}'`);
   await requireAppTool(appUser, name);
 
   // 입력 검증(MCP 표면과 동일 zod 셰이프). 실패 = 400.
