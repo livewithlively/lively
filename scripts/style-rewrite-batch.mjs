@@ -338,6 +338,7 @@ function rewritePrompt(k, findings, guide, feedback = null, part = null) {
 const FIELD_WORD = {
   codeBlocks: "코드블록", inlineCode: "인라인 코드(백틱)", numbers: "숫자·날짜", urls: "링크 대상",
   wikilinks: "위키링크", refs: "MR·PR 참조", tableRows: "표 행",
+  templateVars: "자리표(${…})", linkPairs: "링크(라벨 → 대상) 짝",
 };
 
 /** 기계 검사 탈락을 재작성 모델이 고칠 수 있는 말로 바꾼다 — 어떤 값이 사라졌고 어떤 값이 생겼는지를 그대로 준다. */
