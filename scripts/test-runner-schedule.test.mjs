@@ -2,16 +2,18 @@
 // 시험 러너의 차례(#5029) — 혼자 도는 시험의 규칙(표식 · 머리 창 · 맨 뒤 · 띄우기)과, **실제 러너가 그 규칙대로 도는지**를 잰다.
 //  규칙만 재면 러너가 그 규칙을 안 써도 초록이다 — 격리 리뷰가 펌프 조건을 옛 `live.size < jobs` 로 되돌려 봤더니 표·목록 단언은
 //  전부 초록인 채 혼자 돌아야 할 두 파일이 6ms 차로 함께 떴다. 그래서 S5 가 진짜 러너를 버리는 트리에서 돌려 겹침을 직접 본다.
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HEAD_BYTES, isSoloTest, mayStart, parseShard, readHead, shardFiles, soloLast } from "./test-runner-schedule.mjs";
+import { BROWSER_DIR, HEAD_BYTES, isSoloTest, mayStart, parseShard, readHead, shardFiles, soloLast, usesBrowser } from "./test-runner-schedule.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..");
 const MARK = "// @lively-" + "test exclusive";   // 쪼개 둔다 — 이 파일 자신이 표식 줄로 읽히면 S4 린트가 이 파일을 잡는다
+//  버리는 트리에 옮기는 러너와 그 모듈 — 러너가 가져오는 파일이 늘면 여기도 는다(빠지면 트리의 러너가 모듈을 못 찾고 죽는다).
+const RUNNER_FILES = ["run-tests.mjs", "test-runner-env.mjs", "test-runner-schedule.mjs", "testguard-real-home.mjs", "headless-chrome.mjs"];
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
@@ -74,7 +76,7 @@ try {
     const root = join(box, "tree");
     mkdirSync(join(root, "scripts"), { recursive: true });
     mkdirSync(join(root, "kit", "testlib"), { recursive: true });
-    for (const f of ["run-tests.mjs", "test-runner-env.mjs", "test-runner-schedule.mjs", "testguard-real-home.mjs"]) copyFileSync(join(HERE, f), join(root, "scripts", f));
+    for (const f of RUNNER_FILES) copyFileSync(join(HERE, f), join(root, "scripts", f));
     writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
     writeFileSync(join(root, "kit", "testlib", "test-isolation-lint.test.mjs"), "process.exit(0);\n");   // preflight 자리 — 이 트리에선 할 일이 없다
     const log = join(box, "intervals.log");
@@ -179,7 +181,7 @@ try {
     const root = join(box, "tree2");
     mkdirSync(join(root, "scripts"), { recursive: true });
     mkdirSync(join(root, "kit", "testlib"), { recursive: true });
-    for (const f of ["run-tests.mjs", "test-runner-env.mjs", "test-runner-schedule.mjs", "testguard-real-home.mjs"]) copyFileSync(join(HERE, f), join(root, "scripts", f));
+    for (const f of RUNNER_FILES) copyFileSync(join(HERE, f), join(root, "scripts", f));
     writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
     writeFileSync(join(root, "kit", "testlib", "test-isolation-lint.test.mjs"), "process.exit(0);\n");
     writeFileSync(join(root, "kit", "slow.test.mjs"), "await new Promise((r) => setTimeout(r, 2200));\n");
@@ -200,6 +202,120 @@ try {
     //  그 표로 나누면 느린 파일이 든 조각에는 다른 파일이 안 얹힌다(가벼운 둘은 다른 조각으로).
     const parts = [1, 2].map((i) => String(run("--list", `--shard=${i}/2`).stdout).split("\n").filter(Boolean).map((p) => p.split(/[\\/]/).pop()));
     eq("S9 러너가 그 표를 읽어 나눈다 — 무거운 파일 혼자 한 조각", parts.map((p) => p.sort()), [["slow.test.mjs"], ["fast.test.mjs", "test-isolation-lint.test.mjs"]]);
+  }
+
+  // ── S10 브라우저 시험 판정 — 러너는 이것으로 «크롬 예열이 끝날 때까지 기다릴 파일» 을 고른다(근거: headless-chrome.mjs warmChrome) ──
+  for (const [label, text, want] of [
+    ["dumpDom 가져오기", `import { dumpDom, findChrome } from "./headless-chrome.mjs";`, true],
+    ["홑따옴표 · readOut 만", `import { readOut } from './headless-chrome.mjs'`, true],
+    ["다른 자리에서 상대 경로로", `import { dumpDom } from "../scripts/headless-chrome.mjs";`, true],
+    ["직접 띄우는 시험 — findChrome 호출", "const chrome = findChrome();", true],
+    ["CDP 시험 — 디버깅 포트", `const args = ["--headless=new", "--remote-debugging-port=0"];`, true],
+    ["이름만 비슷한 다른 모듈", `import x from "./headless-chrome-extra.mjs";`, false],
+    ["크롬과 무관", `import { spawn } from "node:child_process";\n// 헤드리스 크롬은 안 쓴다\n`, false],
+    ["빈 글", "", false],
+  ]) eq(`S10 usesBrowser ${label}`, usesBrowser(text), want);
+  eq("S10 usesBrowser undefined", usesBrowser(undefined), false);
+  //  린트 — 러너는 BROWSER_DIR 아래 파일만 판정한다(파일 전체를 읽으니 후보를 좁힌다). 밖에 브라우저 시험이 생기면 예열을 안 기다리고
+  //   첫 크롬 기동의 막힘을 그대로 맞는다 — 그래서 여기서 잡는다. 판정이 조용히 깨지면(0개) 그것도 잡는다.
+  {
+    const tests = [["src", /\.test\.ts$/], ["kit", /\.test\.mjs$/], ["scripts", /\.test\.mjs$/], ["deploy", /\.test\.mjs$/], ["desktop", /\.test\.mjs$/]].flatMap(([d, re]) => {
+      try { return readdirSync(join(REPO, d), { recursive: true }).filter((p) => re.test(p) && !p.includes("node_modules")).map((p) => `${d}/${p.split("\\").join("/")}`); }
+      catch { return []; }
+    });
+    const browser = tests.filter((f) => usesBrowser(readFileSync(join(REPO, f), "utf8")));
+    const outside = browser.filter((f) => !f.startsWith(BROWSER_DIR));
+    browser.length >= 50 && outside.length === 0
+      ? ok(`S10 브라우저 시험 ${browser.length}개가 전부 ${BROWSER_DIR} 아래(시험 ${tests.length}개 훑음)`)
+      : bad("S10 브라우저 시험 자리", outside.length ? `밖: ${outside.join(", ")}` : `브라우저 시험이 ${browser.length}개뿐 — 판정이 깨졌다(관측 장치)`);
+  }
+
+  // ── S11 실제 러너 — 크롬 예열: 브라우저 시험은 예열이 끝난 뒤에 뜨고, 그 앞 차례의 시험은 기다리지 않는다 · 예열이 실패해도 시험은 돈다 ·
+  //    직렬도 같다 · --fail-fast 로 멈추면 예열을 거두고 곧바로 끝난다 ──
+  //  가짜 크롬(CHROME_BIN)이 2.5초 뒤(FAKE_WARM=slow 면 30초 뒤) 예열 표지를 내며 시작·끝 시각을 적는다. 보통 시험 둘이 차례의 앞, 브라우저 시험 둘이 뒤다.
+  if (process.platform === "win32") console.log("skip  S11 — 가짜 크롬은 셔뱅 실행이라 POSIX 전용");
+  else {
+    const root = join(box, "tree3");
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    mkdirSync(join(root, "kit", "testlib"), { recursive: true });
+    for (const f of RUNNER_FILES) copyFileSync(join(HERE, f), join(root, "scripts", f));
+    writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
+    writeFileSync(join(root, "kit", "testlib", "test-isolation-lint.test.mjs"), "process.exit(0);\n");
+    const log = join(box, "warm.log");
+    const fakeChrome = join(box, "fake-chrome.cjs");
+    writeFileSync(fakeChrome, [
+      "#!/usr/bin/env node",
+      `const fs = require("fs"); const log = ${JSON.stringify(log)};`,
+      `fs.appendFileSync(log, "s warm " + Date.now() + "\\n");`,
+      `if (process.env.FAKE_WARM === "fail") { fs.appendFileSync(log, "e warm " + Date.now() + "\\n"); process.exit(0); }`,
+      "setTimeout(() => {",
+      `  fs.appendFileSync(log, "e warm " + Date.now() + "\\n");`,
+      `  process.stdout.write('<pre id="out">LV-CHROME-WARM-OK</pre>\\n');`,
+      "  setTimeout(() => {}, 20000);   // 진짜 크롬처럼 다 뱉고도 매달린다 — 러너가 끊는다",
+      `}, process.env.FAKE_WARM === "slow" ? 30000 : 2500);`,
+    ].join("\n") + "\n");
+    chmodSync(fakeChrome, 0o755);
+    const fake = (name, browser, ms) => writeFileSync(join(root, "scripts", `${name}.test.mjs`), [
+      browser ? `import { findChrome } from "./headless-chrome.mjs";   // 브라우저 시험의 표지 — 띄우지는 않는다` : "// 보통",
+      `import { appendFileSync } from "node:fs";`,
+      `appendFileSync(${JSON.stringify(log)}, "s ${name} " + Date.now() + "\\n");`,
+      `await new Promise((r) => setTimeout(r, ${ms}));`,
+      `appendFileSync(${JSON.stringify(log)}, "e ${name} " + Date.now() + "\\n");`,
+      browser ? "" : `if (process.env.FAKE_PLAIN_FAIL === "1" && ${JSON.stringify(name)} === "a-plain1") process.exit(1);`,
+    ].join("\n") + "\n");
+    fake("a-plain1", false, 800); fake("a-plain2", false, 800);
+    fake("b-browser1", true, 200); fake("b-browser2", true, 200);
+    const run = (env, ...args) => {
+      writeFileSync(log, "");
+      const t0 = Date.now();
+      const r = spawnSync(process.execPath, [join(root, "scripts", "run-tests.mjs"), "--scope=scripts", "-j", "4", ...args],
+        { encoding: "utf8", timeout: 120_000, env: { ...process.env, CHROME_BIN: fakeChrome, LIVELY_TEST_CHROME_WARM: "", FAKE_WARM: "", FAKE_PLAIN_FAIL: "", ...env } });
+      const ms = Date.now() - t0;
+      const iv = {};
+      for (const l of readFileSync(log, "utf8").trim().split("\n").filter(Boolean)) { const [k, n, t] = l.split(" "); (iv[n] ||= { s: [], e: [] })[k].push(Number(t)); }
+      return { r, iv, ms, why: `exit=${r.status} ${ms}ms · ${String(r.stdout || "").trim().split("\n").slice(-4).join(" | ")} ${String(r.stderr || "").slice(-300)}` };
+    };
+    const ranAll = (iv) => ["a-plain1", "a-plain2", "b-browser1", "b-browser2"].every((n) => iv[n]?.s.length === 1 && iv[n]?.e.length === 1);
+    {
+      const { r, iv, why } = run({});
+      eq("S11 러너가 네 파일을 다 돌렸다(관측 장치)", [r.status, ranAll(iv)], [0, true]);
+      eq("S11 예열은 한 번만 띄운다", [iv.warm?.s.length, iv.warm?.e.length], [1, 1]);
+      const warmEnd = iv.warm?.e[0] ?? Infinity;
+      ["b-browser1", "b-browser2"].every((n) => (iv[n]?.s[0] ?? -Infinity) >= warmEnd)
+        ? ok("S11 브라우저 시험은 예열이 끝난 뒤에 뜬다") : bad("S11 브라우저 시험이 예열 전에 떴다", why);
+      ["a-plain1", "a-plain2"].every((n) => (iv[n]?.s[0] ?? Infinity) < warmEnd)
+        ? ok("S11 다른 시험은 예열을 안 기다린다") : bad("S11 보통 시험이 예열을 기다렸다", why);
+      /크롬 예열 [\d.]+s/.test(r.stdout) && /기다렸다/.test(r.stdout) ? ok("S11 예열 시간과 기다린 시간을 로그에 남긴다") : bad("S11 예열 로그", why);
+    }
+    {
+      const { r, iv, why } = run({ FAKE_WARM: "fail" });
+      eq("S11 예열이 실패해도 브라우저 시험은 돈다(실패를 시험이 판정한다)", [r.status, ranAll(iv)], [0, true]);
+      /예열 실패/.test(r.stdout) ? ok("S11 예열 실패를 로그에 남긴다") : bad("S11 예열 실패 로그", why);
+    }
+    {
+      const { r, iv, why } = run({ LIVELY_TEST_CHROME_WARM: "0" });
+      eq("S11 LIVELY_TEST_CHROME_WARM=0 — 예열을 안 띄운다", [r.status, ranAll(iv), iv.warm?.s.length ?? 0, /크롬 예열/.test(r.stdout)], [0, true, 0, false]);
+      void why;
+    }
+    {
+      const { r, iv } = run({}, "a-plain");
+      eq("S11 브라우저 시험이 없는 실행은 예열을 안 띄운다", [r.status, iv.warm?.s.length ?? 0], [0, 0]);
+    }
+    {
+      //  직렬(-j 1) — spawnSync 경로도 브라우저 시험 앞에서 예열을 기다린다(뒤의 -j 가 앞의 -j 4 를 덮는다).
+      const { r, iv, why } = run({}, "-j", "1");
+      const warmEnd = iv.warm?.e[0] ?? Infinity;
+      eq("S11 직렬 — 네 파일 · 예열 한 번", [r.status, ranAll(iv), iv.warm?.s.length], [0, true, 1]);
+      ["b-browser1", "b-browser2"].every((n) => (iv[n]?.s[0] ?? -Infinity) >= warmEnd)
+        ? ok("S11 직렬 — 브라우저 시험은 예열이 끝난 뒤에 뜬다") : bad("S11 직렬 순서", why);
+    }
+    {
+      //  --fail-fast 로 브라우저 시험 차례 전에 멈추면 예열(30초짜리)을 거두고 곧바로 끝난다 — 남은 예열을 기다리며 매달리지 않는다.
+      const { r, iv, ms, why } = run({ FAKE_WARM: "slow", FAKE_PLAIN_FAIL: "1" }, "--fail-fast");
+      eq("S11 --fail-fast — 실패로 끝나고 브라우저 시험은 안 돈다 · 예열은 끝나기 전에 거둬졌다",
+        [r.status !== 0, iv["b-browser1"]?.s.length ?? 0, iv.warm?.s.length, iv.warm?.e.length ?? 0], [true, 0, 1, 0]);
+      ms < 15_000 && !/크롬 예열/.test(r.stdout) ? ok(`S11 --fail-fast — 예열을 기다리지 않고 끝난다(${ms}ms)`) : bad("S11 --fail-fast 매달림", why);
+    }
   }
 } finally {
   rmSync(box, { recursive: true, force: true, maxRetries: 3 });
