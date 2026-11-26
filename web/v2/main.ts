@@ -76,6 +76,8 @@ import { canForkSess } from './ctx-shell.js';   // #4135 — 세션 복제 가�
 import { openForkPopover } from './session-fork.js';
 import { openMeModal, type MeModalOpts } from './me-modal.js';   // #1898 — 클래식에서 올라온 부팅이 [화면] 자리를 되연다
 import { bindOmniKey, omniOpen, setOmniHooks } from './omni.js';
+import { omniKeyHint } from '../lib/omni-chord.js';   // #5807 맨 윗줄 맨 왼쪽 단추가 검색일 때의 단축키 이름 — 검색칸 · 레일 [검색] 칸과 같은 이름
+import { isMacPlatform } from '../lib/finder-keys.js';
 import { createSideTruth } from '../lib/side-boot.js';   // #3870 — 목록의 정본을 다 받았을 때만 loadedAt 을 찍는다
 import { createWriteHolds } from '../lib/write-hold.js'; // #3870 — 방금 치운 · 버린 줄을 떠 있던 읽기가 되세우지 않게
 import { markTrashed, stampTrashedRows, trashedTabKeys, unmarkTrashed } from './trash-hold.js';   // #3870 — 휴지통 표식을 목록 재료에 비추기(순수)
@@ -609,6 +611,7 @@ export async function bootV2(): Promise<void> {
     //   레일 여닫기는 ⌘⇧S 와 구역 드롭다운의 「레일 펼치기」가 맡는다. 우측 사이드바는 문패 맨 오른쪽 단추(⌘⌥B), 둘 다는 ⌘\.
     mobile.menuBtn.addEventListener('click', () => {
       if (window.matchMedia(MOBILE_MQ).matches) return;   // 좁은 폭 = 서랍(mobile.ts 담당)
+      if (menuIsSearch()) { omniOpen(); return; }   // #5807 사이드바 없는 앱 화면 — 이 자리의 단추는 검색이다
       toggleSideBar();
     });
     //  ⌘⇧S — 슬랙의 '워크스페이스 스위처 표시'와 같은 자리(레일 펼치기). ⌘B · ⌘⌥B · ⌘\ — 사이드바 접기 · 펴기(#5319).
@@ -1518,12 +1521,13 @@ function applyTabChrome(tab: ShellTab): void {
   root!.classList.toggle('no-aside', tab.noAside && !shown);
   //  ★ 사이드바가 없는 앱(#4632, 원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야 … 없을 때에는 사이드바 영역만큼도 다 그 앱이 쓰는게 디폴트») —
   //   그 앱에 있는 동안 사이드바 열을 0 으로 접는다. 레일은 남는다(구역 · 다른 앱으로 가는 길).
-  //   맨 윗줄은 서지 않는다(#5568 상민님 2026-11-16 «상단 한줄 아예 안보이게» — 종전엔 [‹][›][검색] 줄이 창 전폭으로 섰다). 검색은 레일 맨 위 칸이 맡는다(47-v2-rail.css).
+  //   맨 윗줄은 서지 않는다(#5568 상민님 2026-11-16 «상단 한줄 아예 안보이게» — 종전엔 [‹][›][검색] 줄이 창 전폭으로 섰다). 검색은 ☰ 가 서던 자리의 단추가 맡는다(#5807 — 47-v2-rail.css · menuIsSearch).
   //   누가 사이드바를 갖나는 lib/side-owner 의 표 한 자리가 정한다 — 맥락 관리(#3830) · 사용 가이드 · 앱 화면(#/i · #732) · 설정(제 왼쪽 목록이 그 앱의 사이드바) ·
   //   리브 · 확인할 것 · 외부 앱 연결 · 대시보드처럼 표에 없는 앱은 다 «없음» 이다.
   //   ⚠ 접기는 **열 폭 0** 이다(47-v2-rail.css rail-hidden 과 같은 규율) — display:none 으로 빼면 그리드 열이 한 칸씩 밀려 본문이 0px 열에 앉는다.
   const hasSide = sideOwnerOfRoute(tab.route) !== 'none';
   root!.classList.toggle('app-ctx', !hasSide);
+  syncRailBtn();   // #5807 맨 윗줄 맨 왼쪽 단추의 이름 — 사이드바 없는 앱에선 검색, 그 밖엔 사이드바 접기 · 펴기
   //  좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 서랍이다. 사이드바가 없는 앱이면 그 ☰ 를 걷는다(원준 2026-10-19 «아니 각자 앱 사이드바로»):
   //   ☰ 는 그 앱의 사이드바만 연다. 종전엔 구역 목록(대개 홈)이 대신 열렸다.
   mobile?.setSide(hasSide);
@@ -3042,9 +3046,26 @@ function showSessAll(opts?: { keepDrawer?: boolean }): void {
 /** ☰ 의 뜻 — #5319 부터 넓은 폭에선 **왼쪽 사이드바 접기 · 펴기**(⌘B). 툴팁·aria 도 그 뜻으로 맞춘다. */
 function syncRailBtn(): void {
   if (!mobile) return;
+  const b = mobile.menuBtn;
+  //  #5807 — 사이드바가 없는 앱 화면에선 같은 단추가 검색이다. 이름 · 말풍선도 그 일을 말한다(그림은 CSS 가 같은 조건으로 바꾼다).
+  if (menuIsSearch()) {
+    b.setAttribute('aria-label', '통합검색 열기');
+    b.setAttribute('aria-expanded', 'false'); b.setAttribute('aria-haspopup', 'dialog'); b.removeAttribute('aria-controls');
+    b.title = '통합검색 — ' + omniKeyHint(isMacPlatform());
+    return;
+  }
   const closed = sideIsClosed();
-  mobile.menuBtn.setAttribute('aria-expanded', String(!closed));
-  mobile.menuBtn.title = (closed ? '사이드바 펴기' : '사이드바 접기') + ' — ⌘B';
+  b.setAttribute('aria-label', '탐색 열기'); b.setAttribute('aria-controls', 'v2-side'); b.removeAttribute('aria-haspopup');
+  b.setAttribute('aria-expanded', String(!closed));
+  b.title = (closed ? '사이드바 펴기' : '사이드바 접기') + ' — ⌘B';
+}
+/** #5807 창 맨 윗줄 맨 왼쪽 단추(☰)가 지금 검색인가 — 브라우저의 넓은 폭에서 사이드바가 없는 앱 화면이고, 레일이 보이고, 사이드바를 접어 둔 기기가 아닐 때.
+ *  ⚠ 그림을 바꾸는 CSS(47-v2-rail.css `.topbar-web.app-ctx:not(.rail-hidden):not(.side-closed)` · min-width 901)와 **같은 조건**이어야 한다(side-clean-5568 D3 가 지킨다).
+ *  데스크톱 앱은 창 맨 윗줄(타이틀바)에 검색칸이 그대로 서 있어 해당 없다. 사이드바를 접어 둔 기기는 레일 [검색] 칸이 서 있어 이 단추를 비운다. */
+function menuIsSearch(): boolean {
+  if (!root || window.matchMedia(MOBILE_MQ).matches) return false;
+  const c = root.classList;
+  return c.contains('topbar-web') && c.contains('app-ctx') && !c.contains('rail-hidden') && !c.contains('side-closed');
 }
 
 // ── 사이드바 닫힘(#4533) — 폭 손잡이를 하한 밑으로 끌면 닫히고, ☰ 가 되찾는다 ──────────────────────
@@ -3078,7 +3099,7 @@ function toggleDock(): void {
 function hasSideToFold(): boolean { return !(root?.classList.contains('app-ctx') && !window.matchMedia(MOBILE_MQ).matches); }
 function toggleSideBar(): void {
   //  #5568 — 사이드바가 없는 앱(app-ctx)에는 접고 펼 사이드바가 없다. 종전엔 여기서도 «닫힘» 기억을 뒤집어, 화면은 맨 윗줄만 바뀌고
-  //   홈으로 돌아가면 사이드바가 닫혀 있었다. 이제 그 화면에선 ☰ 가 서지 않고(47-v2-rail.css — 브라우저 · 데스크톱 앱 둘 다) 단축키(⌘B)도 같은 답을 한다.
+  //   홈으로 돌아가면 사이드바가 닫혀 있었다. 이제 그 화면에선 ☰ 가 사이드바 단추로 서지 않고(47-v2-rail.css — 브라우저에선 그 자리가 검색 단추다 #5807 · 데스크톱 앱에선 감춘다) 단축키(⌘B)도 같은 답을 한다.
   //   레일까지 숨겨 둔 사람에겐 ☰ 가 남는다(다른 데로 가는 길이 그것뿐이다) — 그 ☰ 는 레일을 되살린다.
   if (!hasSideToFold()) { if (railIsHidden()) { toggleRail(); syncRailBtn(); } return; }
   setSideClosed(!sideIsClosed());

@@ -93,7 +93,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   const menuBtn = el('button', { class: 'v2-mbar-btn v2-mbar-menu', type: 'button', 'aria-label': '탐색 열기', 'aria-expanded': 'false', 'aria-controls': 'v2-side' },
     //  좁은 폭 = ☰(서랍) · 넓은 폭 = 패널 아이콘(레일 여닫기 — 슬랙 창 맨 윗줄 맨 왼쪽의 그것, #2016). 둘 중 하나만 보인다(CSS).
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic v2-mbar-ic--m', 'aria-hidden': 'true' }, sv('path', { d: 'M4 7h16M4 12h16M4 17h16' })),
-    sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic v2-mbar-ic--w', 'aria-hidden': 'true' }, sv('path', { d: ICONS.panel }))) as HTMLButtonElement;
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic v2-mbar-ic--w', 'aria-hidden': 'true' }, sv('path', { d: ICONS.panel })),
+    //  #5807 — 사이드바가 없는 앱 화면(넓은 폭 · 브라우저)에선 이 단추가 검색이 된다(접고 펼 사이드바가 없으니 그 자리를 검색이 쓴다). 그림은 CSS 가 고른다(47-v2-rail.css).
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-mbar-ic v2-mbar-ic--s', 'aria-hidden': 'true' }, sv('path', { d: ICONS.search }))) as HTMLButtonElement;
   //  제목은 두지 않는다(#1954 3차 상민님) — 창 맨 윗줄은 폭이 넓든 좁든 **같은 것**이어야 한다.
   //  지금 무엇을 보고 있는지는 좌측 목록의 활성 행이 이미 말하고, 화면 제목은 본문 문패가 든다.
   const slot = el('div', { class: 'v2-mbar-slot' });
