@@ -167,9 +167,9 @@ export function migrationSummary(counts: Record<string, number> | null | undefin
   return parts.filter(([, n]) => n > 0).map(([k, n]) => k + ' ' + n + '명').join(' · ');
 }
 
-/** 옛 방식(역할 없음)인 구성원 수 — 명부 위 안내에 쓴다. */
-export function legacyCount(members: Array<{ role?: string | null }> | null | undefined): number {
-  return (members || []).filter((m) => !m.role).length;
+/** 역할로 옮길 옛 방식 구성원 수 — 명부 위 안내에 쓴다. 권한이 하나도 없는 구성원(시스템 계정 등)은 세지 않는다(옮기지 않는다). */
+export function legacyCount(members: Array<{ role?: string | null; scopes?: string[] | null }> | null | undefined): number {
+  return (members || []).filter((m) => !m.role && (m.scopes || []).length > 0).length;
 }
 
 //  ── 팀이 주는 권한 · «이 권한이 어디서 왔나» ──

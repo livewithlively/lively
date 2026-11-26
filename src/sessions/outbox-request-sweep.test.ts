@@ -236,8 +236,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //   쓰는 자리의 풀기가 놓친 것 · 이 기능 이전에 쌓인 초안을 줍는 길이 요청에 얹는 것뿐이다. DB 행의 표시 하나만 바꾼다(파괴적 동작 없음).
   //  #1782 — 슬랙 다리 맞추기(slack-bridge)가 테넌트 정비로 하나 늘었다. 다리 · 한 번만 넘기기 기록이 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만
   //   맞출 수 있고, 매니지드에서 게이트웨이가 다시 뜬 뒤 연결을 다시 붙이는 길이 요청에 얹는 것뿐이다. 연결을 열고 닫기만 한다(DB 행 · 사람 세션은 지우지 않는다).
-  assert.equal(perTenant.length, 28, "테넌트 정비 스물여덟(슬랙 다리 #1782 + 초안 풀기 #5522 + 옮기기 배치 정리 #5458 + background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 앱 서버 동기 부르기 기록 + 지식 낱말 색인)");
-  assert.equal(SWEEP_JOBS.length, 29, "전역 하나(task-dispatch)가 더 있다");
+  //  #5799 — 옛 방식 구성원 자동 이관(member-role-migration)이 테넌트 정비로 하나 늘었다. 구성원 · DB 소스 지정이 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만
+  //   옮길 수 있고, 매니지드에서 워크스페이스마다 도는 길이 요청에 얹는 것뿐이다. 구성원 행의 역할 칸을 채우고 DB 지정을 더할 뿐이다(지우는 것 없음 · 잃는 권한 없음).
+  assert.equal(perTenant.length, 29, "테넌트 정비 스물아홉(옛 방식 구성원 자동 이관 #5799 + 슬랙 다리 #1782 + 초안 풀기 #5522 + 옮기기 배치 정리 #5458 + background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 앱 서버 동기 부르기 기록 + 지식 낱말 색인)");
+  assert.equal(SWEEP_JOBS.length, 30, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -274,6 +276,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "app-call-sweep": TEN_MIN_MS,                    // #5053 — 새 정비. 끝맺지 못한 부르기를 닫는 기록 정리(신원 수명은 판정이 따로 막는다)라 10분이면 넉넉하다
     "transfer-housekeeping": TEN_MIN_MS,             // #5458 — 새 정비. 옮기기 배치 정리(하루 지난 미리보기 파일 비우기 · 30분 멈춘 적용 수습)라 10분이면 넉넉하다
     "slack-bridge": STOP_RULE_SWEEP_MS,              // #1782 — 새 정비. 슬랙 다리 맞추기 — 게이트웨이가 다시 뜬 뒤 30초 안에 소켓 모드로 다시 붙는다(작업 감시와 같은 박자)
+    "member-role-migration": TEN_MIN_MS,             // #5799 — 새 정비. 옛 방식 구성원을 역할로 옮긴다 — 옮길 사람이 없으면 조회 한 번이라 10분이면 넉넉하다
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -439,7 +442,7 @@ t("[I5] 테넌트가 둘이면 **각각** 시드된다 — 전역 디바운스�
 //  이 표는 셀프호스트 · registry 에서 무동작이다(maybeSweep) — 박스 위 작업(LIVELY_AGENT_JOBS=host)의 감시 · 보존 · 앱 AI 실행 정비가
 //   거기서 돌 길은 하우스키핑뿐이다(격리 리뷰 · 막을 것). 표시(housekeeping)와 하우스키핑의 배선을 함께 본다.
 t("[H1] 하우스키핑에도 거는 정비는 아홉 — 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비 · 앱 도구 부르기 정비(#5053) · 지식 낱말 색인(#5201) · 지식 조각 임베딩(#5203) · 옮기기 배치 정리(#5458) · 초안 풀기(#5522) · 슬랙 다리 맞추기(#1782 — 사내 IP 로 막힌 셀프호스트가 주 사용처)", () => {
-  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "app-call-sweep", "draft-release", "job-record-prune", "knowledge-chunk-embed", "knowledge-lex", "slack-bridge", "transfer-housekeeping"]);
+  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "app-call-sweep", "draft-release", "job-record-prune", "knowledge-chunk-embed", "knowledge-lex", "member-role-migration", "slack-bridge", "transfer-housekeeping"]);
   for (const j of SWEEP_JOBS.filter((x) => x.housekeeping)) assert.equal(j.scope ?? "tenant", "tenant", `${j.key} 은 워크스페이스마다 돈다`);
 });
 

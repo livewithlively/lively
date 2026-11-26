@@ -63,6 +63,12 @@ export const CAPABILITY_PERMISSIONS: Readonly<Record<Permission, readonly string
     "task_field_value_set_v6", "task_field_catalog_v6", "deleted_list", "trash_counts", "content_restore", "content_snapshot", "content_purge",
     "project_access_get", "content_undo", "list_unmapped", "map_code_unit", "session_task", "recall_route", "knowledge_recall", "nas_find",
     "nas_list", "nas_manage",
+    //  팀 편집 넷 — 종전 scope(context) 그대로 «맥락» 이다. 팀이 권한을 받는 단위가 된 조직(팀 대상 공개범위 · DB 지정 · 팀이 주는 권한이 하나라도 있음)에서는
+    //   핸들러(teams.ts requireTeamWrite)가 관리자만 받는다 — 종전과 같은 조건부 규칙이다. 표에서 «관리» 로 올리면 그런 것이 없는 조직의 구성원이 팀 편집을 잃는다
+    //   (결정 2026-11-26: 역할로 옮겨도 잃는 것이 없어야 한다).
+    "team_create", "team_update", "team_delete", "team_set_members",
+    //  수집 설정 조회 — 종전 scope(context)만 가진 사람도 보던 것이라 «맥락» 보기로 둔다(«수집 · 증류» 로 올리면 그 사람이 잃는다).
+    "member_ai_connectors",
   ],
   // 수집 · 증류 · 분류 · 관리기 · 예약 · 경보 · 임베딩 · AI 전달 · 외부 도구 서버 · 앱 켜기
   pipeline: [
@@ -81,7 +87,7 @@ export const CAPABILITY_PERMISSIONS: Readonly<Record<Permission, readonly string
     "org_manager_finding_report", "org_manager_remove", "org_pipeline_overview", "org_connector_members", "feed_target_list", "feed_target_create",
     "feed_target_drain", "feed_target_update", "feed_target_delete", "feed_target_set_categories", "cron_list", "cron_set", "cron_delete",
     "cron_run_now", "cron_run_plan", "collect_claude_run", "collect_claude_run_get", "collect_units", "collect_unit_find", "collect_unit_listing",
-    "collect_units_sync", "collect_unit_update", "collect_unit_split", "member_ai_connectors", "member_ai_connectors_refresh", "org_slack_collect",
+    "collect_units_sync", "collect_unit_update", "collect_unit_split", "member_ai_connectors_refresh", "org_slack_collect",
     "org_slack_collect_set", "org_slack_app_manifest", "org_notion_collect", "org_notion_collect_set", "org_notion_collect_connect",
     "org_notion_workspace_disconnect", "org_github_app_register", "org_app_tools", "org_app_tools_set_write", "org_figma_collect",
     "org_figma_collect_set", "org_clickup_collect", "org_clickup_collect_set", "org_github_collect", "org_github_collect_set", "org_gitlab_collect",
@@ -120,8 +126,8 @@ export const CAPABILITY_PERMISSIONS: Readonly<Record<Permission, readonly string
     "org_member_upsert", "org_member_reset_password", "org_member_remove", "org_runtime_update", "org_context_job_runner_fill",
     "org_record_scope_get", "org_record_scope_set", "org_storage_status", "org_workspace_status", "org_workspace_analyze", "org_workspace_reclaim",
     "org_canary_status", "org_canary_run", "org_canary_probes", "org_db_sources", "org_db_source_upsert", "org_db_source_remove",
-    "org_db_source_schema", "org_db_table_policy_set", "org_db_column_mask_set", "org_audit_list", "workspace_activate", "team_create", "team_update",
-    "team_delete", "team_set_members", "vis_axis_list", "vis_axis_set", "project_access_set", "project_access_existing",
+    "org_db_source_schema", "org_db_table_policy_set", "org_db_column_mask_set", "org_audit_list", "workspace_activate",
+    "vis_axis_list", "vis_axis_set", "project_access_set", "project_access_existing",
     "project_access_existing_close", "org_app_job_set", "managed_session_list", "managed_session_set", "managed_session_delete",
     "managed_session_ensure", "collect_claude_run_stats", "collect_session_policy_set", "member_ai_connectors_policy_set", "stack_profile_set",
     "stack_profile_delete", "tool_usage_stats", "org_slack_bridges", "org_slack_bridge_set", "org_slack_bridge_remove", "org_app_grant_set",
@@ -194,12 +200,6 @@ export function isMapped(name: string): boolean {
 /**
  * 전환하면 **일부러 좁아지는** 기능 — 옛 scope 만으로는 더 못 한다. 이 목록 밖에서는 옛 scope 하나가 열던 기능이
  *  번역(auth/permissions.ts LEGACY_SCOPE_GRANTS) 뒤에도 전부 열린다(시험 R3 이 «이 목록이 전부» 임을 잰다).
- *  전환 단계는 이 목록의 기능을 쓰던 사람에게 필요한 권한을 개별로 얹어 옮긴다.
+ *  지금은 비어 있다(결정 2026-11-26: 역할로 옮겨도 잃는 것이 없어야 한다 — 팀 편집 넷과 수집 설정 조회를 종전 자리로 되돌렸다).
  */
-export const NARROWED: Readonly<Record<string, string>> = {
-  team_create: "팀이 권한을 받는 단위가 된다 — 팀 편집은 곧 권한 편집이다. 종전에도 팀 대상 공개범위가 하나라도 있으면 admin 이었다(teams.ts requireTeamWrite)",
-  team_update: "위와 같다",
-  team_delete: "위와 같다",
-  team_set_members: "위와 같다",
-  member_ai_connectors: "수집 설정 조회라 «수집 · 증류» 권한이다 — context 만 있고 memory 가 없는 사람만 잃는다(기본 구성원은 둘 다 가진다)",
-};
+export const NARROWED: Readonly<Record<string, string>> = {};

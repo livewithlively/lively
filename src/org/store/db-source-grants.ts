@@ -74,29 +74,42 @@ export async function clearDbSourceGrants(source: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_db_source_grant WHERE source=$1`, [source]);
 }
 
-/** 이 구성원이 그 소스에 지정됐나 — 본인 지정이거나, 지정된 팀(보관되지 않은)의 구성원이다. */
+/**
+ * «모든 소스» 지정 — source 칸에 이 값으로 적힌 사람 · 팀은 지금 있는 소스와 **앞으로 등록될 소스까지** 전부 조회한다.
+ *  옛 방식에서 `db` 권한은 전 소스였다. 그 사람들을 역할로 옮길 때 이 지정을 준다(결정 2026-11-26: 지금 DB 권한이 있는 사람이
+ *  모든 DB 를 보는 것은 그대로 유지한다). 소스 이름은 슬러그라 이 값과 겹치지 않는다.
+ */
+export const ALL_DB_SOURCES = "*";
+
+/**
+ * 이 구성원이 그 소스에 지정됐나 — 본인 지정이거나, 지정된 팀(보관되지 않은)의 구성원이다. «모든 소스» 지정도 센다.
+ *  내장 self 소스는 «모든 소스» 지정으로만 열린다(self 를 따로 지정하는 길은 없다 — 관리 고치기가 있으면 context.ts 가 먼저 연다).
+ */
 export async function memberHasDbSource(memberId: string, source: string): Promise<boolean> {
   if (!memberId || !source) return false;
+  const names = source === SELF_SOURCE ? [ALL_DB_SOURCES] : [source, ALL_DB_SOURCES];
   const r = await itemsPool.query(
     `SELECT 1 FROM org_db_source_grant g
-      WHERE g.source=$2
+      WHERE g.source = ANY($2::text[])
         AND ((g.subject_kind='member' AND g.subject_id=$1)
           OR (g.subject_kind='team' AND EXISTS(
                 SELECT 1 FROM team_member tm JOIN team t ON t.id=tm.team_id
                  WHERE tm.member_id=$1 AND tm.team_id::text=g.subject_id AND t.state<>'archived')))
-      LIMIT 1`, [memberId, source]);
+      LIMIT 1`, [memberId, names]);
   return (r.rowCount ?? 0) > 0;
 }
 
 /**
  * 이 주체가 그 DB 소스를 조회할 수 있나 — db_sources · db_schema · db_query 가 쓰는 한 판정.
  *  · 옛 구성원(새 권한이 실리지 않은 주체) → 종전 그대로(db scope = 전 소스 · db:<소스> · 내장 self 는 admin).
- *  · 역할을 받은 구성원 → 내장 self 는 종전처럼 관리자에게만. 그 밖의 소스는 «DB» 조회 자격 **그리고** 이 표의 지정.
+ *  · 역할을 받은 구성원 → «DB» 조회 자격 **그리고** 이 표의 지정(그 소스 또는 «모든 소스»). 내장 self 는 관리 고치기가 있으면 종전처럼 열리고,
+ *    그 밖에는 «모든 소스» 지정이 있어야 한다(옛 `db` 가 self 도 열었던 것을 잇는다).
  *    자격은 주체의 것이다(토큰 · 앱 동의로 좁아졌으면 없다). 지정은 그 사람의 것이다(주체가 누구 이름으로 도는가).
  *  조회가 실패하면 던진다 — 부르는 쪽에서 거절이 된다(닫힌 쪽).
  */
 export async function dbSourceAllowed(user: LivelyUser, source: string): Promise<boolean> {
-  if (!user.grants || source === SELF_SOURCE) return canAccessDbSource(user, source);
+  if (!user.grants) return canAccessDbSource(user, source);
+  if (source === SELF_SOURCE && canAccessDbSource(user, source)) return true;
   //  소스 한정 토큰(db:<source>)은 역할을 받은 구성원에게도 그 소스만 연다(org/store/tokens.dbSourceCeilingOf 머리말).
   if (user.dbSourceCeiling && !user.dbSourceCeiling.includes(source)) return false;
   if (!allows(user.grants, { perm: "db", level: "read" })) return false;

@@ -15,7 +15,7 @@ import { forgetDbSecret } from "../../db/secret-store.js";
 import { invalidatePool } from "../../db/pool.js";
 import { listTableNames, listColumnsMeta } from "../../db/catalog.js";
 import { refreshSources, listSourceConfigs } from "../../db/sources.js";
-import { listDbSourceGrants, setDbSourceGrants, clearDbSourceGrants } from "../../org/store/db-source-grants.js";
+import { listDbSourceGrants, setDbSourceGrants, clearDbSourceGrants, ALL_DB_SOURCES } from "../../org/store/db-source-grants.js";
 import { activeMemberIdsAmong } from "../../org/store/members.js";
 import { existingTeamIds } from "../../v6/team-store.js";
 import { refreshPolicy, getSourcePolicy, getMaskStyleMap } from "../../db/policy.js";
@@ -35,6 +35,11 @@ export async function envSourcesPayload(dbNames: Set<string>): Promise<Array<{ n
   await refreshSources();
   return listSourceConfigs().filter((s) => s.origin === "env" && !dbNames.has(s.name))
     .map((s) => ({ name: s.name, host: s.url ? (hostOfUrl(s.url) ?? null) : null, rls: s.rls }));
+}
+
+/** 소스 이름 또는 «모든 소스»('*') — 그 밖에는 슬러그여야 한다. */
+function sourceOrAll(v: unknown): string {
+  return String(v ?? "").trim() === ALL_DB_SOURCES ? ALL_DB_SOURCES : slug(v, "name");
 }
 
 export const dbSourcesCapabilities: Capability[] = [
@@ -166,11 +171,11 @@ export const dbSourcesCapabilities: Capability[] = [
     }),
   // ── DB 소스 지정(#5799) — 이 소스를 조회할 수 있는 사람 · 팀. 기본 불가: 역할을 받은 구성원은 여기 적혀야 조회한다. ──
   restOnly("org_db_source_access", "DB 소스 조회 대상 보기",
-    "DB 소스마다 조회할 수 있게 지정된 구성원 · 팀을 준다(name 을 주면 그 소스만). 역할을 받은 구성원은 «DB» 조회 권한과 이 지정이 **둘 다** 있어야 "
+    "DB 소스마다 조회할 수 있게 지정된 구성원 · 팀을 준다(name 을 주면 그 소스만 · source '*' 는 «모든 소스» 지정 — 그 사람 · 팀은 앞으로 등록될 소스까지 전부 조회한다). 역할을 받은 구성원은 «DB» 조회 권한과 이 지정이 **둘 다** 있어야 "
     + "그 소스를 조회한다(기본 불가 — 소스를 등록한 관리자도 지정돼야 본다). 역할이 없는 옛 구성원은 이 지정과 무관하게 db scope 로 전 소스를 조회한다. 바꾸기는 org_db_source_access_set.",
     [{ method: "GET", paths: ["/api/ui/org/db-source/access"], parse: (req) => ({ name: req.query?.name == null ? undefined : String(req.query.name) }) }],
     async (input: Record<string, unknown>) => {
-      const name = input.name == null || input.name === "" ? undefined : slug(input.name, "name");
+      const name = input.name == null || input.name === "" ? undefined : sourceOrAll(input.name);
       const rows = await listDbSourceGrants(name);
       const by = new Map<string, { source: string; members: string[]; teams: number[] }>();
       if (name) by.set(name, { source: name, members: [], teams: [] });
@@ -188,9 +193,9 @@ export const dbSourcesCapabilities: Capability[] = [
     + "팀으로 지정하면 그 팀의 구성원 변경이 곧 접근권한 변경이라, 팀 편집이 관리자 전용이 된다.",
     [{ method: "POST", paths: ["/api/ui/org/db-source/access"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const name = slug(input.name, "name");
+      const name = sourceOrAll(input.name);
       await refreshSources(true);
-      if (!listSourceConfigs().some((s) => s.name === name)) throw new HttpError(404, `DB 소스 없음: ${name}`);
+      if (name !== ALL_DB_SOURCES && !listSourceConfigs().some((s) => s.name === name)) throw new HttpError(404, `DB 소스 없음: ${name}`);
       const arr = (v: unknown, what: string): unknown[] => {
         if (v === undefined || v === null) return [];
         if (!Array.isArray(v)) throw new HttpError(400, `${what} 는 배열이어야 합니다`);
@@ -214,7 +219,7 @@ export const dbSourcesCapabilities: Capability[] = [
         teams: rows.filter((r) => r.subject_kind === "team").map((r) => Number(r.subject_id)),
       };
     }, {
-      name: z.string().describe("DB 소스 이름(db_sources · org_db_sources 의 name)"),
+      name: z.string().describe("DB 소스 이름(db_sources · org_db_sources 의 name). '*' = 모든 소스(지금 있는 것과 앞으로 등록될 것 전부)"),
       members: z.array(z.string()).optional().describe("조회할 수 있는 구성원 id 목록(전체 교체 · 생략 = 빈 목록)"),
       teams: z.array(z.number().int().positive()).optional().describe("조회할 수 있는 팀 id 목록(전체 교체 · 생략 = 빈 목록) — 소속 팀 · 권한 그룹 모두"),
     }),

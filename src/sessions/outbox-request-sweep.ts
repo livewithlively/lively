@@ -103,6 +103,10 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  멱등이고 풀 것이 없으면 조회 한 번이다. 셀프호스트도 같은 정의로 돈다(housekeeping — 부팅 2분 반 뒤 1회 + 10분마다).
   { key: "draft-release", intervalMs: TEN_MIN_MS, housekeeping: true,
     run: () => import("../v6/project-draft.js").then((m) => m.sweepDraftReleases()) },
+  // 옛 방식 구성원 자동 이관(#5799) — scope 로 권한을 받는 구성원을 잃는 것 없이 역할로 옮긴다(org/role-migration-apply.ts 머리말).
+  //  옮길 사람이 없으면 조회 한 번이다. 셀프호스트도 같은 정의로 돈다(housekeeping — 부팅 2분 반 뒤 1회 + 10분마다). 끄기: LIVELY_ROLE_MIGRATION=off.
+  { key: "member-role-migration", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../org/role-migration-apply.js").then((m) => m.sweepLegacyMembers()) },
   // device-auth 리퍼(#880) — 만료 1h 지난 pending 정리(user_code 회수). 실측 2건 잔존.
   { key: "device-auth-reap", intervalMs: TEN_MIN_MS,
     run: () => import("../org/auth/device-auth.js").then((m) => m.reapDeviceAuth()) },
