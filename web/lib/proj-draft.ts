@@ -30,25 +30,27 @@ export const DRAFT_LABEL = '초안';
 export const DRAFT_HINT = '세션 첫 지시로 자동 생성된, 아직 정리 전인 프로젝트 · 나와 초대한 사람만 봅니다';
 
 // ── 「초안 보기」 토글(#5522, 상민 2026-11-16) ─────────────────────────────────────
-//  «초안만 묶어 놓는 건 말이 안 된다 — 뱃지 하나 두고 프로젝트랑 똑같이 보이게, 위쪽 토글로 초안을 볼지 고르게. 기본은 봄.»
+//  «초안만 묶어 놓는 건 말이 안 된다 — 뱃지 하나 두고 프로젝트랑 똑같이 보이게, 위쪽 토글로 초안을 볼지 고르게.»
 //  그래서 초안은 목록 어디서든 제 자리(상태 · 시간 · 리스트 묶음)에 서고 «초안» 뱃지만 단다. 토글을 끄면 프로젝트 화면 전체
 //   (보드의 모든 뷰 · [프로젝트] 사이드바의 수)에서 빠진다. 「초안」 스코프(사이드바 「초안」 줄)는 토글과 상관없이 초안을 보여 준다.
 //  기기마다 기억한다(localStorage) — 보드 액자와 셸 사이드바가 같은 출처라 같은 값을 읽고, 바뀌면 storage 이벤트로 서로 안다.
+//  기본은 꺼짐(#5794, 상민 2026-11-25 «스위치 off 가 디폴트» — 11-16 의 «기본은 봄» 을 뒤집었다). 켠 사람만 '1' 을 남긴다.
+//   옛 값 '0'(기본이 보임이던 때 끈 사람)은 그대로 숨김으로 읽힌다 — 옮길 것이 없다.
 
-/** 토글 값이 사는 자리. '0' = 숨김 · 없음 = 보임(기본). */
+/** 토글 값이 사는 자리. '1' = 보임 · 없음(또는 옛 '0') = 숨김(기본). */
 export const DRAFTS_SHOWN_KEY = 'pjv:showDrafts';
 
-/** 초안을 보이나(기본 true). 저장소를 못 읽으면(사생활 보호 창 등) 기본값. */
+/** 초안을 보이나(기본 false). 저장소를 못 읽으면(사생활 보호 창 등) 기본값. */
 export function draftsShown(): boolean {
-  try { return globalThis.localStorage?.getItem(DRAFTS_SHOWN_KEY) !== '0'; } catch { return true; }
+  try { return globalThis.localStorage?.getItem(DRAFTS_SHOWN_KEY) === '1'; } catch { return false; }
 }
 
-/** 토글을 바꾼다. 기본(보임)은 키를 지워 둔다 — 저장소에 남는 것은 «숨김» 하나뿐이다. */
+/** 토글을 바꾼다. 기본(숨김)은 키를 지워 둔다 — 저장소에 남는 것은 «보임» 하나뿐이다. */
 export function setDraftsShown(on: boolean): void {
   try {
-    if (on) globalThis.localStorage?.removeItem(DRAFTS_SHOWN_KEY);
-    else globalThis.localStorage?.setItem(DRAFTS_SHOWN_KEY, '0');
-  } catch { /* 못 적어도 이번 화면은 바뀐다 — 다음에 열면 기본(보임)으로 돌아온다 */ }
+    if (on) globalThis.localStorage?.setItem(DRAFTS_SHOWN_KEY, '1');
+    else globalThis.localStorage?.removeItem(DRAFTS_SHOWN_KEY);
+  } catch { /* 못 적어도 이번 화면은 바뀐다 — 다음에 열면 기본(숨김)으로 돌아온다 */ }
 }
 
 /** 토글을 따라 거른다 — 보이면 그대로, 숨기면 초안을 뺀다. */
