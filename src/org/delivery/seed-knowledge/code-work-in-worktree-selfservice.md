@@ -12,7 +12,8 @@
 ## 어떻게 (lively 로컬 MCP — 환경 무관 동일)
 - `lively_local_repo_list` — 이 머신에서 워크트리를 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·현재 브랜치·원격 대비 최신).
 - `lively_local_repo_worktree {repo, path?, branch?, ref?}` — base 를 확보(로컬에 없으면 clone·있으면 fetch)한 뒤 **cwd(기본) 또는 지정 경로에 격리 브랜치 워크트리**를 만든다. base 워킹트리는 건드리지 않고 원격 최신(origin/<ref>)에서 분기한다. 프로젝트 세션이면 브랜치 기본값은 그 프로젝트 브랜치이고, 아니면 `wt/<repo>`. → **반환된 워크트리 경로에서** 편집·커밋·빌드하라.
-- `lively_local_repo_worktree_remove {repo, path?, force?}` — 워크트리 제거(base·다른 워크트리 무영향).
+- 작업면 방식은 둘이다. 기본 `worktree` 는 base 의 `.git` 을 공유하는 git worktree 이고, `clone` 은 작업면마다 자기 `.git` 을 갖고 base 객체는 읽기만 하는 clone 이다. clone 은 stash·config 가 작업면끼리 섞이지 않고, 쓰기를 작업 폴더로 묶는 샌드박스에서도 커밋된다. 고르는 법은 `mode` 인자, env `LIVELY_WORKTREE_MODE`, `~/.lively/worktree-mode` 파일 순이다.
+- `lively_local_repo_worktree_remove {repo, path?, force?}` — 워크트리 제거(base·다른 워크트리 무영향). clone 작업면은 push 하지 않은 커밋·stash 가 그 폴더에만 있어, 남아 있으면 제거를 거부한다. force 로 지우면 영구히 사라지니 먼저 push 한다.
 - lively 가 그 머신의 base 위치·격리를 알아서 해석하므로 하네스는 실행 환경을 몰라도 된다.
 
 ## private 레포에서 클론이 막히면 — 길은 주소의 종류와 자리에 따라 다르다

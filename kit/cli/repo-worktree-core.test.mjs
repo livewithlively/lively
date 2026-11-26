@@ -27,6 +27,7 @@ process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "wt-core-test";
 //  CI(無)가 다른 경로를 탄다. 아래 asSession() 이 «다른 세션» 을 흉내낼 때 이 값만 갈아끼운다.
 process.env.CODEX_THREAD_ID = process.env.CODEX_SESSION_ID = process.env.CLAUDE_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID = "";
 process.env.LIVELY_SESSION_ID = "wt-core-test-A";
+process.env.LIVELY_WORKTREE_MODE = "worktree";   // 이 머신의 ~/.lively/worktree-mode 에 휘둘리지 않게
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "wt-core-test@test.local";
 const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   try { return { stdout: execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "", code: 0 }; }

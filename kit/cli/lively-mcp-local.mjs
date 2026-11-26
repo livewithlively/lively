@@ -226,7 +226,7 @@ registerTool({
     + "— 같은 cwd 에서 뜬 세션들이 한 워킹트리·한 브랜치를 공유하던 자리다(자리 임자는 admin 의 lively-owner.json 으로 판정하고, "
     + "다른 세션 것인지 주인 불명인지를 note 가 구분해 말한다). path 를 명시하면 그 자리를 그대로 주되, 남의 세션 자리면 warning 을 달고 "
     + "주인 표시가 없는 자리면 이 세션 것으로 입양한다. "
-    + "반환 admin 은 그 워크트리의 등록 id(프로젝트별 고유), warning 은 슬롯 브랜치가 갈아타져 있거나 남의 자리를 지목했을 때. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
+    + "반환 mode 는 작업면 방식(worktree|clone), admin 은 worktree 의 등록 id(프로젝트별 고유 · clone 이면 null), warning 은 슬롯 브랜치가 갈아타져 있거나 남의 자리를 지목했을 때. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
     + "— https 주소로 등록된 사설 레포는 라이블리에 등록한 내 HTTPS 토큰(me_git_credential_set {kind:\"https\"})으로 받는다(이 컴퓨터에 git 자격을 따로 설정하지 않아도 된다 · 등록이 없으면 이 컴퓨터의 git 자격). "
     + "fetch_warning 이 오면 원격에서 새 커밋을 받지 못한 것이다 — 그 워크트리는 받아 둔 origin 기준이라 최신이 아닐 수 있다 "
     + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다). "
@@ -242,6 +242,11 @@ registerTool({
         + "여길 벗어나면 브랜치 기본값도 project/<id> 가 아니라 wt/<repo> 계열이 된다(같은 브랜치를 두 자리에 걸 수 없으므로)" },
       branch: { type: "string", description: "워크트리 브랜치. 기본: 기본 경로(프로젝트 슬롯)면 project/<id>, 그 외엔 wt/<repo>[-n]" },
       ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: 레포에 등록한 기본 브랜치의 최신(등록값이 원격에 없으면 origin 기본 브랜치 — 그땐 note 에 사유)" },
+      mode: { type: "string", enum: ["worktree", "clone"], description: "작업면 방식. 보통 주지 마라 — 기본은 이 컴퓨터 설정(env LIVELY_WORKTREE_MODE · ~/.lively/worktree-mode, 없으면 worktree). "
+        + "worktree=base 의 .git 을 공유하는 git worktree. clone=작업면마다 자기 .git 을 갖고 base 객체는 alternates 로 읽기만 하는 clone "
+        + "(stash·config 가 섞이지 않고, 쓰기를 작업 폴더로 묶는 샌드박스에서도 커밋된다). clone 은 push 하지 않은 커밋이 그 폴더에만 있다. "
+        + "clone 에서 branch 를 주면 base 의 같은 이름 로컬 브랜치 → origin/<branch> → origin/<ref> 새 분기 순으로 잡는다(push 해 둔 브랜치로 작업 재개). "
+        + "이미 있는 자리는 그 자리의 방식대로 재사용한다" },
     },
     required: ["repo"],
     additionalProperties: false,
@@ -286,13 +291,14 @@ registerTool({
 registerTool({
   name: "lively_local_repo_worktree_remove",
   title: "워크트리 제거",
-  description: "lively_local_repo_worktree 로 만든 워크트리를 제거한다(base·다른 워크트리 무영향). 커밋 안 한 변경이 있으면 실패하니 정리 후 재시도하거나 force:true 로.",
+  description: "lively_local_repo_worktree 로 만든 워크트리를 제거한다(base·다른 워크트리 무영향). 커밋 안 한 변경이 있으면 실패하니 정리 후 재시도하거나 force:true 로. "
+    + "clone 모드 작업면은 push 하지 않은 커밋·stash 가 있어도 실패한다 — 그 커밋은 이 폴더에만 있어 force 로 지우면 영구히 사라진다(worktree 모드는 브랜치가 base 에 남는다). 실패하면 force 로 재시도하지 말고 먼저 push 하라.",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름" },
       path: { type: "string", description: "워크트리 경로(절대 또는 cwd 상대). 기본: 생성 때와 같은 자리(프로젝트면 <프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>)" },
-      force: { type: "boolean", description: "커밋 안 한 변경이 있어도 제거" },
+      force: { type: "boolean", description: "커밋 안 한 변경이 있어도 제거. clone 모드 작업면이면 push 하지 않은 커밋·stash 도 함께 영구 삭제된다 — 버려도 되는 것을 확인한 뒤에만" },
     },
     required: ["repo"],
     additionalProperties: false,

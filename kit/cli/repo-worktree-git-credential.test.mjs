@@ -45,6 +45,7 @@ process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "wt-gitcred-test"
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "wt-gitcred-test@test.local";
 process.env.CODEX_THREAD_ID = process.env.CODEX_SESSION_ID = process.env.CLAUDE_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID = "";
 process.env.LIVELY_SESSION_ID = "wt-gitcred-test-A";
+process.env.LIVELY_WORKTREE_MODE = "worktree";   // 이 머신의 ~/.lively/worktree-mode 에 휘둘리지 않게
 // 이 컴퓨터의 git 설정(키체인 도우미 등)과 끊는다 — 시험이 고른 전역 설정 파일 하나만 본다.
 const GLOBAL_CFG = join(SB, "gitconfig");
 writeFileSync(GLOBAL_CFG, "");

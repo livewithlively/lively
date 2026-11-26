@@ -16,7 +16,7 @@
 //   ② admin id 를 basename 에 맡기지 않는다(프로젝트별 고유 id 로 relink) ③ 있는 워크트리를 재사용하기 전에 admin 이
 //   자기 것인지 확인한다(아니면 중단·경고). 서버 provision·work.mjs·preview-stage 도 ①을 같이 지킨다.
 // ═══════════════════════════════════════════════════════════════════════════
-import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, realpathSync, renameSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync, rmdirSync, realpathSync, renameSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, dirname, basename, isAbsolute, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -71,6 +71,89 @@ export function markerSyncMode(meta) {
 }
 
 const isGitRepo = (ctx, p) => existsSync(p) && ctx.sh("git", ["-C", p, "rev-parse", "--git-dir"], { allowFail: true }).code === 0;
+
+// ⚠ clone 모드의 대가: push 하지 않은 커밋·stash 는 그 작업면 `.git` 에만 있다 — 폴더를 지우면 함께 사라진다(worktree 는 base 에 남는다).
+export const WT_MODES = ["worktree", "clone"];
+export function worktreeMode(asked, env = process.env, file = join(LIVELY, "worktree-mode")) {   // export=테스트용
+  const pick = (v) => { const m = String(v ?? "").trim().toLowerCase(); return WT_MODES.includes(m) ? m : null; };
+  if (asked !== undefined && asked !== null && String(asked).trim()) {
+    const m = pick(asked);
+    if (!m) throw new Error(`mode 는 ${WT_MODES.join(" | ")} 중 하나입니다: ${asked}`);
+    return m;
+  }
+  const fromEnv = pick(env.LIVELY_WORKTREE_MODE);
+  if (fromEnv) return fromEnv;
+  try { return pick(readFileSync(file, "utf8")) || "worktree"; } catch { return "worktree"; }
+}
+const baseObjectsOf = (base) => join(base, ".git", "objects");
+// alternates 가 이 base 를 가리키는 clone 의 `.git`(소유 스탬프 자리), 아니면 null. 누구 것인지는 스탬프가 따로 판정한다.
+function cloneGitDirOf(wt, base) {
+  const dir = gitfileOf(wt);
+  try { if (!statSync(dir).isDirectory()) return null; } catch { return null; }
+  let alt; try { alt = readFileSync(join(dir, "objects", "info", "alternates"), "utf8"); } catch { return null; }
+  const want = baseObjectsOf(base);
+  return alt.split("\n").some((l) => l.trim() && samePath(l.trim(), want)) ? dir : null;
+}
+const UNBORN_HEAD = "refs/heads/lively-clone-unborn";   // 받아 올 브랜치와 이름이 겹치지 않는 임시 HEAD
+// 네트워크를 다시 타지 않는다 — ensureBase 가 방금 받은 base 의 origin/* 를 옮겨 오고, 객체는 alternates 로 이미 있어 ref 만 쓴다.
+//  옆 임시 폴더에서 끝까지 만든 뒤 rename 으로 올린다. 도중에 죽거나 실패해도 wt 에는 반쯤 만든 자리가 남지 않고,
+//  같은 자리를 동시에 만들던 다른 호출의 결과를 지우지 않는다(rename 이 비어 있지 않은 목적지를 거부한다).
+function cloneFromBase(ctx, base, wt, branch, refBranch) {
+  const existed = existsSync(wt);
+  if (existed && !statSync(wt).isDirectory()) throw new Error(`워크트리 생성 실패: '${wt}' 가 디렉터리가 아닌 파일로 이미 있습니다.`);
+  if (existed && readdirSync(wt).length) throw new Error(`워크트리 생성 실패: '${wt}' 가 이미 있고 비어 있지 않습니다.`);
+  const tmp = join(dirname(wt), `.${basename(wt)}.lively-tmp-${process.pid}-${Date.now().toString(36)}`);
+  const g = (args) => ctx.sh("git", ["-C", tmp, ...args], { allowFail: true });
+  const has = (ref) => g(["show-ref", "--verify", "--quiet", ref]).code === 0;
+  const objects = baseObjectsOf(base);
+  const steps = () => {
+    let r = ctx.sh("git", ["init", "-q", tmp], { allowFail: true });
+    if (r.code !== 0) return r;
+    writeFileSync(join(tmp, ".git", "objects", "info", "alternates"), `${process.platform === "win32" ? objects.replace(/\\/g, "/") : objects}\n`);
+    r = g(["symbolic-ref", "HEAD", UNBORN_HEAD]);
+    if (r.code !== 0) return r;
+    const url = ctx.sh("git", ["-C", base, "remote", "get-url", "origin"], { allowFail: true }).stdout.trim();
+    if (url) { r = g(["remote", "add", "origin", url]); if (r.code !== 0) return r; }
+    const local = ctx.sh("git", ["-C", base, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { allowFail: true }).code === 0;
+    r = g(["-c", "core.logAllRefUpdates=false", "fetch", "-q", "--no-tags", base, "+refs/remotes/origin/*:refs/remotes/origin/*",
+      ...(local ? [`+refs/heads/${branch}:refs/heads/${branch}`] : [])]);
+    if (r.code !== 0) return r;
+    // refspec 은 base 의 symref origin/HEAD 를 값으로 풀어 옮긴다 — 그대로 두면 생성 시점 커밋에 굳는다.
+    const originHead = ctx.sh("git", ["-C", base, "symbolic-ref", "-q", "refs/remotes/origin/HEAD"], { allowFail: true }).stdout.trim();
+    if (originHead && has(originHead)) g(["symbolic-ref", "refs/remotes/origin/HEAD", originHead]);
+    else g(["update-ref", "-d", "refs/remotes/origin/HEAD"]);
+    const tracked = has(`refs/remotes/origin/${branch}`);
+    if (local) {
+      // base 의 로컬 브랜치는 base 가 fetch 만 하므로 원격보다 뒤처져 있기 쉽다 — 뒤처지기만 했으면 원격 쪽을 쓴다.
+      if (tracked && g(["merge-base", "--is-ancestor", `refs/heads/${branch}`, `refs/remotes/origin/${branch}`]).code === 0) {
+        r = g(["update-ref", `refs/heads/${branch}`, `refs/remotes/origin/${branch}`]);
+        if (r.code !== 0) return r;
+      }
+      r = g(["checkout", "-q", branch]);
+      if (r.code === 0 && tracked) g(["branch", "-q", "--set-upstream-to", `origin/${branch}`, branch]);
+      return { ...r, from: "existing" };
+    }
+    if (tracked) return { ...g(["checkout", "-q", "-b", branch, "--track", `origin/${branch}`]), from: "existing" };
+    if (has(`refs/remotes/origin/${refBranch}`)) return { ...g(["checkout", "-q", "-b", branch, `origin/${refBranch}`]), from: "ref" };
+    r = g(["fetch", "-q", "--no-tags", base, "HEAD"]);
+    return r.code !== 0 ? r : { ...g(["checkout", "-q", "-b", branch, "FETCH_HEAD"]), from: "base-head" };
+  };
+  let r;
+  try { r = steps(); } catch (e) { r = { code: 1, stderr: String(e && e.message || e) }; }
+  if (r.code === 0) {
+    try {
+      try { renameSync(tmp, wt); }
+      catch (e) {
+        if (!existed) throw e;
+        rmdirSync(wt);              // 빈 목적지 디렉터리 위로의 rename 을 거부하는 플랫폼(윈도우) — 비어 있지 않으면 여기서 실패한다
+        renameSync(tmp, wt);
+      }
+      return { from: r.from };
+    } catch (e) { r = { code: 1, stderr: `'${wt}' 로 옮기지 못했습니다: ${e.message}` }; }
+  }
+  rmSync(tmp, { recursive: true, force: true });
+  throw new Error(`워크트리 생성 실패(clone 모드): ${gitFail(r.stderr)}`);
+}
 
 // 경로 정규화(비교용) — 있으면 realpath(macOS /var→/private/var · 윈도우 8.3/대소문자), 없으면 **가장 가까운 있는 조상**을
 //  realpath 하고 나머지를 붙인다. git 은 등록 경로를 realpath 로 저장하므로, 아직 없는 목표 경로도 같은 표기로 견줘야
@@ -215,18 +298,25 @@ function isMine(stamp, { pid, me, isSlot }) {
   if (pid !== null && pid !== undefined && stamp.project_id === pid) return true;
   return Boolean(me) && stamp.session === me;
 }
+// 이 툴이 만든 작업면의 스탬프 자리 — clone 이면 그 `.git`, worktree 면 배관이 온전한 admin. 그 밖은 null.
+function ownerDirOf(wt, base) {
+  const cloned = cloneGitDirOf(wt, base);
+  if (cloned) return cloned;
+  const admin = adminOf(wt);
+  if (!admin || !existsSync(admin)) return null;
+  const back = adminBackref(admin);
+  return back && samePath(back, gitfileOf(wt)) ? admin : null;
+}
 // 이 자리를 지금 쓸 수 있나 — "free" | "mine" | "other"(다른 세션 것) | "unowned"(주인을 알 수 없는 자리).
 //  왜 other 와 unowned 를 가르나: **비켜서는 행동은 같아도 사람에게 할 말이 다르다.** 주인을 모르는 자리는
 //  ① 이 변경 이전에 뜬 워크트리 ② `.git` 이 디렉터리인 자리(사람이 손으로 clone 한 폴더 — 이 툴의 워크트리가 아니다)
 //  ③ 배관이 파손된 자리(#3678 사고 상태)다. 셋 다 "다른 세션이 쓰는 중" 이 아닌데 그렇게 안내하면 거짓말이 된다.
 //  워크트리가 아닌데 디렉터리만 있는 경우는 free 로 본다(종전과 같이 git 의 add 가 판정하게 둔다 — 비어 있으면 성공,
 //  아니면 git 이 거부한다).
-function slotStatus(ctx, wt, who) {
+function slotStatus(ctx, wt, who, base) {
   if (!existsSync(gitfileOf(wt)) && !isGitRepo(ctx, wt)) return "free";
-  const admin = adminOf(wt);
-  if (!admin || !existsSync(admin)) return "unowned";
-  const back = adminBackref(admin);
-  if (!back || !samePath(back, gitfileOf(wt))) return "unowned";
+  const admin = ownerDirOf(wt, base);
+  if (!admin) return "unowned";
   const stamp = readOwner(admin);
   if (isMine(stamp, who)) return "mine";
   return stamp ? "other" : "unowned";
@@ -241,13 +331,13 @@ const asideReason = (why) => (why === "other"
 //   상대의 스탬프가 보여 비켜선다. 그 자리에서 재시도를 돌리는 건 창이 ms 단위라 값에 비해 흐름만 복잡해진다.
 //  상한이 9 인 이유(브랜치는 99): 자리는 디스크를 먹고, 10개가 찼다면 그건 배정 문제가 아니라 청소 문제다 —
 //  조용히 100번째를 파는 것보다 여기서 멈추고 사람에게 알리는 편이 낫다.
-function freeSlot(ctx, want, who) {
+function freeSlot(ctx, want, who, base) {
   const taken = [];
   for (let i = 1; i <= 9; i++) {
     const at = i === 1 ? want : `${want}-${i}`;
-    const st = slotStatus(ctx, at, who);
+    const st = slotStatus(ctx, at, who, base);
     if (st === "free" || st === "mine") return { path: at, why: i === 1 ? null : taken[0].why };
-    taken.push({ at, why: st, stamp: readOwner(adminOf(at)) });
+    taken.push({ at, why: st, stamp: readOwner(ownerDirOf(at, base) ?? adminOf(at)) });
   }
   // 막다른 길에 두지 않는다 — 어느 자리가 누구 것인지까지 적는다(스탬프가 이미 그 정보를 갖고 있는데
   //  안 보여주면 사람이 admin 의 json 을 아홉 번 열어 봐야 한다).
@@ -677,8 +767,9 @@ const pinPathOf = (ctx, repo, p, sha) => (p ? (isAbsolute(p) ? p : join(ctx.cwd,
 export function adminIdFor(wt, pid, canonical) {   // export=테스트용·순수
   const name = basename(wt);
   if (pid !== null && pid !== undefined && canonical && wt === canonical) return `${name}-p${pid}`;
-  return `${name}-${createHash("sha1").update(resolve(wt)).digest("hex").slice(0, 8)}`;
+  return `${name}-${pathHash8(wt)}`;
 }
+const pathHash8 = (p) => createHash("sha1").update(resolve(p)).digest("hex").slice(0, 8);
 const gitfileOf = (wt) => join(wt, ".git");
 const readGitdirLine = (file, baseDir) => {         // "gitdir: <경로>" 한 줄 → 절대경로 | "" (파손) | null (파일 없음)
   let txt; try { txt = readFileSync(file, "utf8"); } catch { return null; }
@@ -779,6 +870,7 @@ export async function repoWorktree(ctx, args) {
   const repo = String(args.repo || "").trim();
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
+  const mode = worktreeMode(args.mode);
 
   // ① base 확보(clone or fetch) — 공용.
   const row = registryRow(ctx, repo);
@@ -798,7 +890,7 @@ export async function repoWorktree(ctx, args) {
   //  옮기지 않는다(멱등 계약). canonical 슬롯도 옮기지 않는다: 그 자리는 프로젝트 공용이고 서버 provision 과
   //  같은 자리여야 한다. 남는 건 «마커 없는 세션의 기본 자리 <cwd>/<repo>» — 여러 세션이 같은 cwd 에서 뜨면
   //  전부 이 한 자리로 수렴해 남의 워킹트리를 물던 바로 그 자리다.
-  const slot = (asked || who.isSlot) ? { path: want, why: null } : freeSlot(ctx, want, who);
+  const slot = (asked || who.isSlot) ? { path: want, why: null } : freeSlot(ctx, want, who, base);
   const wt = slot.path;
   const asideFrom = wt === want ? null : want;
   const isSlot = canonical !== null && pid !== null && wt === canonical;
@@ -809,13 +901,20 @@ export async function repoWorktree(ctx, args) {
   //  판정은 `.git` 의 존재다(git 이 열 수 있는지가 아니라) — gitfile 이 파손·미아가 된 워크트리도 «새로 만들 자리» 가 아니라
   //  «검증해서 알려 줄 자리» 다(그 자리엔 사람의 파일이 있다).
   if (existsSync(gitfileOf(wt)) || isGitRepo(ctx, wt)) {
-    const { admin } = verifyOwnAdmin(wt);                       // 남의 admin 을 잇고 있으면 여기서 멈춘다(조용히 재사용 금지)
-    const adminNow = admin ? relinkAdmin(wt, admin, adminId) : null; // 서버 provision 등이 basename id 로 만든 것도 고유 id 로
+    // 있는 자리의 방식은 지금 고른 mode 가 아니라 그 자리가 정한다 — clone 으로 뜬 자리는 mode 가 바뀌어도 clone 으로 재사용한다.
+    const cloneDir = cloneGitDirOf(wt, base);
+    let adminNow = cloneDir;
+    if (!cloneDir) {
+      const { admin } = verifyOwnAdmin(wt);                       // 남의 admin 을 잇고 있으면 여기서 멈춘다(조용히 재사용 금지)
+      adminNow = admin ? relinkAdmin(wt, admin, adminId) : null;  // 서버 provision 등이 basename id 로 만든 것도 고유 id 로
+    }
     const b = ctx.sh("git", ["-C", wt, "rev-parse", "--abbrev-ref", "HEAD"], { allowFail: true }).stdout.trim();
     const stamp = readOwner(adminNow);
     const mine = isMine(stamp, who);
     if (mine) writeOwner(adminNow, { session: me, project_id: pid, branch: b || null, worktree: wt });
-    const out = { repo, worktree: wt, branch: b || null, base, admin: adminNow ? basename(adminNow) : null, note: "이미 워크트리가 있어 그대로 사용합니다." };
+    const out = { repo, worktree: wt, branch: b || null, base, mode: cloneDir ? "clone" : "worktree",
+      admin: !cloneDir && adminNow ? basename(adminNow) : null, note: "이미 워크트리가 있어 그대로 사용합니다." };
+    if (args.mode && out.mode !== mode) out.note += ` 요청한 mode(${mode})와 달리 이 자리는 ${out.mode} 방식이라 그 방식대로 씁니다 — ${mode} 가 필요하면 path 로 다른 자리를 지정하세요.`;
     // 내 것이 아닌 자리를 그대로 쓰는 경로는 이제 하나뿐이다 — 호출자가 path 로 그 자리를 **지목**한 경우(기본 자리는
     //  위에서 비켜섰다). 지목은 존중하되 조용히 넘기지는 않는다: 여기서 커밋하면 그 세션의 브랜치에 얹힌다.
     if (!mine && stamp === null) {
@@ -864,14 +963,17 @@ export async function repoWorktree(ctx, args) {
   //  서로 멱등이다(먼저 뜬 쪽을 뒤에 온 쪽이 그대로 재사용). 슬롯 밖(path 를 따로 준 경우)에까지 project/<id> 를
   //  걸면 그 프로젝트의 provision 이 502 로 죽는다 — **싱글턴 이름은 싱글턴 자리에만**(#932). 밖이면 이 워크트리
   //  전용 wt/<repo>[-n](점유되지 않은 첫 이름 — 슬롯 밖 워크트리끼리도 안 겹치게).
+  //  clone 모드는 브랜치를 공유하지 않으니 점유 검사 대신 경로에서 유일한 이름을 쓴다 — 두 작업면이 같은 원격 브랜치로 push 하지 않게.
   const branch = (args.branch && String(args.branch).trim())
-    || (isSlot ? `project/${pid}` : freeBranch(checkedOutBranches(live), `wt/${repo}`));
+    || (isSlot ? `project/${pid}`
+      : mode === "clone" ? `wt/${repo}-${pathHash8(wt)}` : freeBranch(checkedOutBranches(live), `wt/${repo}`));
   if (!BRANCH_RE.test(branch)) throw new Error(`브랜치명 형식 오류: ${branch}`);
   clearStaleRegistrations(ctx, base, { paths: [wt], branch }, regs);
 
   // ⑤ worktree add — 새 브랜치(origin/<ref> 최신 기준) 시도 → 같은 브랜치가 이미 있으면 attach 폴백(provision 동형).
   //  ref 를 안 줬으면 레포에 등록한 기본 브랜치가 기준이다(#1723). 있는 워크트리를 돌려주는 위쪽 경로는 기준이 필요 없어 묻지 않는다.
   const { branch: refBranch, note: refNote } = await refBranchOf(ctx, base, args.ref, row);
+  if (mode === "clone") return repoWorktreeClone({ ctx, repo, base, wt, branch, refBranch, refNote, fetchWarning, asideFrom, slot, me, pid, live });
   let r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch, `origin/${refBranch}`], { allowFail: true });
   if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, branch], { allowFail: true });          // 기존 브랜치 attach
   if (r.code !== 0) r = ctx.sh("git", ["-C", base, "worktree", "add", wt, "-b", branch], { allowFail: true });     // origin/<ref> 없을 때 base HEAD
@@ -883,7 +985,7 @@ export async function repoWorktree(ctx, args) {
   const stampable = Boolean(me) || (pid !== null && pid !== undefined);   // 신원 없는 호출은 표시를 남기지 않는다(writeOwner)
   const stamped = stampable && writeOwner(adminNow, { session: me, project_id: pid, branch, worktree: wt });
 
-  const out = { repo, worktree: wt, branch, base, ref: refBranch, admin: adminNow ? basename(adminNow) : null,
+  const out = { repo, worktree: wt, branch, base, mode: "worktree", ref: refBranch, admin: adminNow ? basename(adminNow) : null,
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
   if (asideFrom) {
     out.note += ` · 기본 자리(${asideFrom})는 ${asideReason(slot.why)} 옆자리로 비켜섰습니다.`;
@@ -892,6 +994,31 @@ export async function repoWorktree(ctx, args) {
   if (fetchWarning) out.fetch_warning = fetchWarning;   // 새 워크트리가 «받아 둔 origin» 에서 떴다 — 최신이 아닐 수 있다
   // 스탬프가 없으면 다음 호출이 이 자리를 «모르는 자리» 로 보고 또 옆으로 비켜선다 — 자리가 늘어나는 건 그 신호다.
   if (adminNow && stampable && !stamped) out.warning = `소유 표시(${basename(adminNow)}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`;
+  return out;
+}
+
+function repoWorktreeClone({ ctx, repo, base, wt, branch, refBranch, refNote, fetchWarning, asideFrom, slot, me, pid, live }) {
+  // clone 이 빌려 쓰는 객체를 base 가 지우면 그 clone 은 복구할 수 없게 깨진다. base 에서 떨어진 객체(지워진 원격 브랜치·
+  //  force-push 이전 커밋)를 gc 가 지우지 않게 한다. 해제 조건: 이 base 를 alternates 로 쓰는 clone 이 하나도 없을 때.
+  //  `git gc --prune=now`·`git prune` 을 base 에서 직접 돌리면 이 보호를 넘는다.
+  const guarded = ctx.sh("git", ["-C", base, "config", "gc.pruneExpire", "never"], { allowFail: true }).code === 0;
+  const { from } = cloneFromBase(ctx, base, wt, branch, refBranch);
+  const gitDir = gitfileOf(wt);
+  const stampable = Boolean(me) || (pid !== null && pid !== undefined);
+  const stamped = stampable && writeOwner(gitDir, { session: me, project_id: pid, branch, worktree: wt });
+  const out = { repo, worktree: wt, branch, base, mode: "clone", ref: refBranch, admin: null,
+    note: `이 경로에서 작업하세요: ${wt} · clone 모드 — .git 이 이 폴더 안에 있고 base(${base}) 객체는 읽기만 합니다.`
+      + ` push 하지 않은 커밋은 이 폴더에만 있으니 폴더를 지우기 전에 push 하세요.` };
+  if (asideFrom) out.note += ` · 기본 자리(${asideFrom})는 ${asideReason(slot.why)} 옆자리로 비켜섰습니다.`;
+  if (from === "existing") out.note += ` · 기존 브랜치 '${branch}' 를 이어받았습니다(origin/${refBranch} 최신에서 새로 분기한 것이 아닙니다).`;
+  if (refNote) { out.ref_note = refNote; out.note += ` · ${refNote}`; }
+  if (fetchWarning) out.fetch_warning = fetchWarning;
+  const warnings = [];
+  const heldAt = checkedOutBranches(live).get(branch);
+  if (heldAt) warnings.push(`브랜치 '${branch}' 는 worktree 모드 작업면 '${heldAt}' 에도 걸려 있습니다 — 두 자리에서 따로 커밋하면 갈라지니 한쪽에서만 작업하세요.`);
+  if (stampable && !stamped) warnings.push(`소유 표시(${gitDir}/lively-owner.json)를 쓰지 못했습니다 — 다음 호출이 이 자리를 재사용하지 않고 옆자리를 팝니다.`);
+  if (!guarded) warnings.push(`base(${base}) 에 gc.pruneExpire=never 를 쓰지 못했습니다 — base 의 gc 가 이 clone 이 빌린 객체를 지우면 clone 이 깨집니다.`);
+  if (warnings.length) out.warning = warnings.join(" · ");
   return out;
 }
 
@@ -997,6 +1124,22 @@ export function repoWorktreeRemove(ctx, args) {
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
   const wt = resolveWtPath(ctx.cwd, repo, args.path && String(args.path).trim());
+  if (cloneGitDirOf(wt, base)) {
+    // clone 작업면은 git 이 지울 등록이 없어 폴더째 지운다. 그래서 git worktree remove 가 지켜 주던 «미커밋 거부» 를 여기서
+    //  지키고, worktree 엔 없던 «미push 거부» 를 더한다 — 커밋이 이 폴더에만 있기 때문이다.
+    if (!args.force) {
+      const st = ctx.sh("git", ["-C", wt, "status", "--porcelain", "--untracked-files=normal"], { allowFail: true });
+      if (st.code !== 0 || st.stdout.trim()) throw new Error(`워크트리 제거 실패: 커밋하지 않은 변경이 있거나 상태를 읽지 못했습니다(force 로 강제).`);
+      // HEAD 와 --all 을 함께 본다 — detached HEAD 의 커밋·stash·태그만 가리키는 커밋도 원격에 없으면 이 폴더에만 있다.
+      const lg = ctx.sh("git", ["-C", wt, "log", "--oneline", "-n", "5", "HEAD", "--all", "--not", "--remotes"], { allowFail: true });
+      if (lg.code !== 0 || lg.stdout.trim()) {
+        throw new Error(`워크트리 제거 실패: push 하지 않은 커밋(stash·detached 포함)이 있습니다 — clone 모드라 폴더를 지우면 영구히 사라집니다.`
+          + ` push 하거나, 정말 버릴 것이면 force 로 지우세요.\n${lg.stdout.trim()}`);
+      }
+    }
+    rmSync(wt, { recursive: true, force: true });
+    return { removed: wt };
+  }
   const r = ctx.sh("git", ["-C", base, "worktree", "remove", ...(args.force ? ["--force"] : []), wt], { allowFail: true });
   if (r.code !== 0) throw new Error(`워크트리 제거 실패: ${gitFail(r.stderr)}`);
   return { removed: wt };

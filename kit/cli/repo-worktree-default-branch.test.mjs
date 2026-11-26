@@ -28,6 +28,7 @@ process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "wt-defbranch-tes
 process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "wt-defbranch-test@test.local";
 process.env.CODEX_THREAD_ID = process.env.CODEX_SESSION_ID = process.env.CLAUDE_SESSION_ID = process.env.CLAUDE_CODE_SESSION_ID = "";
 process.env.LIVELY_SESSION_ID = "wt-defbranch-test-A";
+process.env.LIVELY_WORKTREE_MODE = "worktree";   // 이 머신의 ~/.lively/worktree-mode 에 휘둘리지 않게
 const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   try { return { stdout: execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "", code: 0 }; }
   catch (e) { if (!allowFail) throw e; return { stdout: e.stdout || "", stderr: e.stderr || "", code: e.status ?? 1 }; }

@@ -3660,6 +3660,7 @@ async function cmdRepo(rest) {
     if (t === "--branch") o.branch = rest[++i];
     else if (t === "--ref") o.ref = rest[++i];
     else if (t === "--path") o.path = rest[++i];
+    else if (t === "--mode") o.mode = rest[++i];
     else if (t === "--force") o.force = true;
     else pos.push(t);
   }
@@ -3682,9 +3683,9 @@ async function cmdRepo(rest) {
         ok(`워크트리 제거: ${res.removed}`); return;
       }
       const repo = pos[0];
-      if (!repo) die("레포 이름이 필요합니다.  예: lively repo worktree <repo> [--branch b] [--ref main] [--path .]");
-      const res = await repoWorktree(ctx, { repo, branch: o.branch, ref: o.ref, path: o.path });
-      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(브랜치 ${res.branch}${res.admin ? ` · admin ${res.admin}` : ""})`)}`);
+      if (!repo) die("레포 이름이 필요합니다.  예: lively repo worktree <repo> [--branch b] [--ref main] [--path .] [--mode worktree|clone]");
+      const res = await repoWorktree(ctx, { repo, branch: o.branch, ref: o.ref, path: o.path, mode: o.mode });
+      ok(`워크트리: ${bold(res.worktree)}  ${dim(`(${res.mode} · 브랜치 ${res.branch}${res.admin ? ` · admin ${res.admin}` : ""})`)}`);
       say("  " + dim(res.note));
       if (res.warning) warn(res.warning);   // #3678 — 슬롯 브랜치가 갈아타져 있음(중단은 아님)
       if (res.fetch_warning) warn(res.fetch_warning);   // 원격에서 새 커밋을 못 받았다 — 받아 둔 origin 기준
@@ -3704,7 +3705,7 @@ async function cmdRepo(rest) {
       if (res.fetch_warning) warn(res.fetch_warning);   // 이 핀의 SHA 는 받아 둔 origin 의 것 — 최신이 아닐 수 있다
       return;
     }
-    die(`알 수 없는 하위명령: ${sub}\n  lively repo list  ·  lively repo pin <repo> [--ref]  ·  lively repo worktree <repo> [--branch --ref --path]  ·  … remove <repo> [--force]`);
+    die(`알 수 없는 하위명령: ${sub}\n  lively repo list  ·  lively repo pin <repo> [--ref]  ·  lively repo worktree <repo> [--branch --ref --path --mode]  ·  … remove <repo> [--force]`);
   } catch (e) { die(e.message || String(e)); }
 }
 
