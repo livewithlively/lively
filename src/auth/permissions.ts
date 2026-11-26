@@ -240,10 +240,76 @@ export function sanitizeGrants(x: unknown): Grants {
   return out;
 }
 
-/** 구성원 행의 새 권한 = 역할 ∪ 개별 추가. 역할이 없으면(옛 구성원) undefined — 개별 추가만 있고 역할이 없는 행도 옛 구성원이다. */
-export function memberGrants(row: { role?: unknown; grants?: unknown } | null | undefined): Grants | undefined {
+/** 팀 하나가 구성원에게 더해 주는 것(#5799) — 팀의 역할 · 개별 권한. 구성원을 읽을 때 소속 팀(보관되지 않은)마다 한 조각씩 실린다. */
+export interface TeamAccess { team_id: number; name: string | null; role: Role | null; grants: Grants }
+
+/** DB 에서 읽은 팀 조각들을 고른다 — 모르는 역할 · 권한 · 수준은 버리고, 아무것도 주지 않는 팀은 뺀다. */
+export function sanitizeTeamAccess(x: unknown): TeamAccess[] {
+  if (!Array.isArray(x)) return [];
+  const out: TeamAccess[] = [];
+  for (const t of x) {
+    if (!t || typeof t !== "object") continue;
+    const r = t as Record<string, unknown>;
+    const id = Number(r.team_id);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    const role = isRole(r.role) ? r.role : null;
+    const grants = sanitizeGrants(r.grants);
+    if (!role && !Object.keys(grants).length) continue;
+    out.push({ team_id: id, name: typeof r.name === "string" ? r.name : null, role, grants });
+  }
+  return out;
+}
+
+/** 팀 하나가 주는 권한 = 팀의 역할이 주는 것 ∪ 팀의 개별 권한. */
+export function teamGrants(t: { role?: unknown; grants?: unknown } | null | undefined): Grants {
+  if (!t) return {};
+  return mergeGrants(isRole(t.role) ? ROLE_GRANTS[t.role] : {}, sanitizeGrants(t.grants));
+}
+
+/**
+ * 구성원 행 → 그 사람의 새 권한. 역할이 없으면 undefined(옛 구성원 — scopes 로 판정받는다).
+ *  = 본인 역할 ∪ 본인 개별 권한 ∪ 소속 팀들이 주는 것(team_access). 팀은 **역할을 받은 구성원에게만** 더한다 —
+ *  옛 방식 구성원은 팀에 들어 있어도 종전 그대로다(옛 주체를 조용히 넓히지 않는다).
+ */
+export function memberGrants(row: { role?: unknown; grants?: unknown; team_access?: unknown } | null | undefined): Grants | undefined {
   if (!row || !isRole(row.role)) return undefined;
-  return mergeGrants(ROLE_GRANTS[row.role], sanitizeGrants(row.grants));
+  return mergeGrants(ROLE_GRANTS[row.role], sanitizeGrants(row.grants), ...sanitizeTeamAccess(row.team_access).map(teamGrants));
+}
+
+/**
+ * 주체에 실을 scopes — 역할을 받은 구성원이면 지금 권한(역할 ∪ 개별 ∪ 팀)을 옛 이름으로 비춘 것, 옛 구성원이면 저장된 값 그대로.
+ *  저장된 scopes 사본은 본인 역할 ∪ 개별 권한만 비춘다(팀이 바뀔 때마다 다시 쓰지 않는다). 그래서 아직 scopes 를 읽는 자리
+ *  (인라인 `scopes.includes("admin")` 들)가 팀이 준 권한을 놓치지 않게, 주체를 만드는 자리는 이 값을 싣는다.
+ */
+export function effectiveScopes(row: { role?: unknown; grants?: unknown; team_access?: unknown; scopes?: unknown } | null | undefined): string[] {
+  const g = memberGrants(row);
+  if (g) return grantsToLegacyScopes(g);
+  return Array.isArray(row?.scopes) ? (row.scopes as unknown[]).filter((x): x is string => typeof x === "string") : [];
+}
+
+/** 주려는 권한 중 «내가 갖지 않은 위험 권한의 고치기» — 비어 있어야 줄 수 있다(구성원 역할 · 팀 권한 · 팀원 넣기가 같은 규칙을 쓴다). */
+export function ungivable(mine: Grants, giving: Grants): Permission[] {
+  return PERMISSIONS.filter((p) => DANGEROUS_PERMISSIONS.has(p) && giving[p] === "write" && !allows(mine, { perm: p, level: "write" }));
+}
+
+/** 권한 하나가 어디서 왔나 — 그 수준을 주는 출처들(본인 역할 · 본인 개별 권한 · 팀). 화면의 «이 권한이 어디서 왔나». */
+export interface GrantSource { from: "role" | "own" | "team"; level: Level; team_id?: number; name?: string | null }
+export function grantSources(row: { role?: unknown; grants?: unknown; team_access?: unknown } | null | undefined): Partial<Record<Permission, GrantSource[]>> {
+  const out: Partial<Record<Permission, GrantSource[]>> = {};
+  const eff = memberGrants(row);
+  if (!eff || !row || !isRole(row.role)) return out;
+  const own = sanitizeGrants(row.grants);
+  const teams = sanitizeTeamAccess(row.team_access);
+  for (const p of PERMISSIONS) {
+    const lv = eff[p];
+    if (!lv) continue;
+    const src: GrantSource[] = [];
+    if (ROLE_GRANTS[row.role][p] === lv) src.push({ from: "role", level: lv });
+    if (own[p] === lv) src.push({ from: "own", level: lv });
+    for (const t of teams) if (teamGrants(t)[p] === lv) src.push({ from: "team", level: lv, team_id: t.team_id, name: t.name });
+    out[p] = src;
+  }
+  return out;
 }
 
 /**
@@ -294,7 +360,7 @@ export function principalGrants(
 }
 
 /** 구성원 행으로 만드는 주체에 **펼쳐 넣을 칸** — 역할을 받은 구성원이면 `{ grants }`, 옛 구성원이면 빈 객체(scopes 가 판정한다). */
-export function grantsField(row: { role?: unknown; grants?: unknown } | null | undefined): { grants?: Grants } {
+export function grantsField(row: { role?: unknown; grants?: unknown; team_access?: unknown } | null | undefined): { grants?: Grants } {
   const g = memberGrants(row);
   return g ? { grants: g } : {};
 }

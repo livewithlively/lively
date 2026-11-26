@@ -20,7 +20,7 @@
 //   봇을 직접 부른 것(태그 · DM · 버튼)이면 그 사람에게만 보이는 안내를 스레드에 단다.
 //  (b) 워크플로 · 봇 글 — 다리의 run_as 구성원으로 돌린다. 그 작업은 «자동화» 표시를 단다(정할 것 2 — 개인 구독은 못 쓰고 공용 시트 · 워크스페이스 API 키만 · 공용 시트는 2026-11-22 부터).
 import os from "node:os";
-import { grantsField } from "../../auth/permissions.js";
+import { grantsField, effectiveScopes } from "../../auth/permissions.js";
 import crypto from "node:crypto";
 import type WebSocket from "ws";
 import { itemsPool } from "../../db/client.js";
@@ -411,7 +411,7 @@ async function forwardClaimed(c: Conn, env: SocketEnvelope, v: EnvelopeVerdict, 
     return;
   }
   const member = await getMember(actor.member);
-  const user: LivelyUser = { userId: actor.member, email: member?.email ?? "", scopes: member?.scopes ?? [], ...grantsField(member), projects: ["*"] };
+  const user: LivelyUser = { userId: actor.member, email: member?.email ?? "", scopes: effectiveScopes(member), ...grantsField(member), projects: ["*"] };
   //  run_as 작업은 자동화로 표시한다(AI 실행이 개인 구독을 거절한다 — 공용 시트 · API 키는 받는다 · ai-runs/plan.ts AUTOMATION_REFUSAL) — 다리가 run_as_human 을
   //   켰으면(사람이 양식을 내는 워크플로만 고름) 사람의 질문으로 보고 표시하지 않는다(사람이 보지 않음 표시도 달지 않아, run_as 구성원 본인의 구독이 실행 계정이면
   //   그 구독으로도 돈다). 그래도 신원은 run_as 구성원이고, 공용 시트의 «활성 구성원이 보낸 요청» 조건도 그 구성원이 채운다.

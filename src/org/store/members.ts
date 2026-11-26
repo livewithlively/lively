@@ -4,7 +4,8 @@ import { itemsPool } from "../../db/client.js";
 import { IDENTITY_GLOBAL_DEFAULT_EXPR, TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { DEFAULT_MEMBER_SCOPES } from "../../auth/scopes.js";
-import { isRole, sanitizeGrants, grantsToLegacyScopes, mergeGrants, ROLE_GRANTS, type Role, type Grants, DEFAULT_MEMBER_ROLE } from "../../auth/permissions.js";
+import { teamAccessSql } from "./team-access-sql.js";
+import { isRole, sanitizeGrants, sanitizeTeamAccess, type TeamAccess, grantsToLegacyScopes, mergeGrants, ROLE_GRANTS, type Role, type Grants, DEFAULT_MEMBER_ROLE } from "../../auth/permissions.js";
 import { logger } from "../../log.js";
 import {
   parseScopePref, defaultScopePref, applyLocalScopeChange as applyScopeChange, defaultOrgRecordScope,
@@ -56,6 +57,8 @@ export interface OrgMember {
   role: Role | null;
   /** 역할 위에 개별로 얹은 권한. 역할이 없으면 뜻이 없다(늘 빈 객체). */
   grants: Grants;
+  /** 소속 팀이 주는 권한(#5799) — 역할을 받은 구성원에게만 실린다(옛 구성원은 빈 배열). 유효 권한 = 역할 ∪ grants ∪ 이것(auth/permissions.ts memberGrants). */
+  team_access?: TeamAccess[];
   sort: number;
   version: number;
   updated_at: string | null;
@@ -80,6 +83,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
     scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
     role: isRole(row.role) ? row.role : null,
     grants: isRole(row.role) ? sanitizeGrants(row.grants) : {},
+    team_access: isRole(row.role) ? sanitizeTeamAccess(row.team_access) : [],
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
     updated_at: (row.updated_at as string) ?? null,
@@ -89,7 +93,7 @@ function mapMember(row: Record<string, unknown>): OrgMember {
 
 //  role · grants 는 칸 이름으로 고르지 않고 행에서 꺼낸다 — 롤 창에 칸이 아직 없어도 이 조회가 깨지지 않게(없으면 NULL = 옛 구성원).
 //   그래서 이 목록은 **별칭 없는 `FROM org_member`** 에서만 쓴다.
-const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by, to_jsonb(org_member) -> 'role' AS role, to_jsonb(org_member) -> 'grants' AS grants";
+const MEMBER_COLS = "id, kind, display_name, nickname, use_nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by, to_jsonb(org_member) -> 'role' AS role, to_jsonb(org_member) -> 'grants' AS grants" + `, ${teamAccessSql("org_member.id")} AS team_access`;
 
 export async function listMembers(): Promise<OrgMember[]> {
   const r = await itemsPool.query(`SELECT ${MEMBER_COLS} FROM org_member ORDER BY sort, id`);

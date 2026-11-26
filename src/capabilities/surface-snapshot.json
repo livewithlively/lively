@@ -2444,7 +2444,7 @@
   "rest": [
    "POST /api/ui/teams"
   ],
-  "input_hash": "e4ccea4492f73432"
+  "input_hash": "d1f09bec423f3122"
  },
  {
   "name": "team_update",
@@ -2454,7 +2454,7 @@
   "rest": [
    "POST /api/ui/teams/:id"
   ],
-  "input_hash": "a71dc2ff47578df4"
+  "input_hash": "b4cef5bdc4c4699f"
  },
  {
   "name": "team_delete",

@@ -171,3 +171,56 @@ export function migrationSummary(counts: Record<string, number> | null | undefin
 export function legacyCount(members: Array<{ role?: string | null }> | null | undefined): number {
   return (members || []).filter((m) => !m.role).length;
 }
+
+//  ── 팀이 주는 권한 · «이 권한이 어디서 왔나» ──
+//   서버 auth/permissions.ts 의 teamGrants · memberGrants · grantSources 와 같은 규칙이다(시험이 서버와 맞춘다).
+export interface TeamAccess { team_id: number; name?: string | null; role?: string | null; grants?: Grants | null }
+
+const raise = (into: Grants, add: Grants | null | undefined): void => {
+  for (const [pk, lv] of Object.entries(add || {})) if ((lv === 'read' || lv === 'write') && rank(lv) > rank(into[pk])) into[pk] = lv;
+};
+
+/** 팀 하나가 주는 권한 = 팀의 역할이 주는 것 ∪ 팀의 개별 권한. */
+export function teamGrantsOf(t: { role?: string | null; grants?: Grants | null } | null | undefined): Grants {
+  const out: Grants = {};
+  if (!t) return out;
+  if (t.role && ROLE_GRANTS[t.role]) raise(out, ROLE_GRANTS[t.role]);
+  raise(out, t.grants);
+  return out;
+}
+
+/** 구성원의 지금 권한 = 본인 역할 ∪ 본인 개별 권한 ∪ 소속 팀들이 주는 것. 역할이 없으면(옛 방식) 빈 것 — 팀은 역할을 받은 구성원에게만 더한다. */
+export function effectiveGrants(m: { role?: string | null; grants?: Grants | null; team_access?: TeamAccess[] | null } | null | undefined): Grants {
+  const out: Grants = {};
+  if (!m?.role || !ROLE_GRANTS[m.role]) return out;
+  raise(out, ROLE_GRANTS[m.role]);
+  raise(out, m.grants);
+  for (const t of m.team_access || []) raise(out, teamGrantsOf(t));
+  return out;
+}
+
+/** 권한 하나가 어디서 왔나 — 지금 수준을 주는 출처들을 사람 말로(«역할» · «개별 권한» · «팀 이름»). 권한이 없으면 빈 배열. */
+export function sourceTexts(m: { role?: string | null; grants?: Grants | null; team_access?: TeamAccess[] | null } | null | undefined, perm: string): string[] {
+  const lv = effectiveGrants(m)[perm];
+  if (!lv || !m?.role) return [];
+  const out: string[] = [];
+  if (ROLE_GRANTS[m.role]?.[perm] === lv) out.push((ROLE_INFO[m.role]?.label || m.role) + ' 역할');
+  if ((m.grants || {})[perm] === lv) out.push('개별 권한');
+  for (const t of m.team_access || []) if (teamGrantsOf(t)[perm] === lv) out.push('팀 ' + (t.name || '#' + t.team_id));
+  return out;
+}
+
+/** 팀이 주는 권한을 한 줄로 — «구성원 역할 · 코드 고치기 · DB 조회». 주는 것이 없으면 빈 줄. */
+export function teamAccessText(t: { role?: string | null; grants?: Grants | null } | null | undefined): string {
+  if (!t) return '';
+  const parts: string[] = [];
+  if (t.role && ROLE_INFO[t.role]) parts.push(ROLE_INFO[t.role].label + ' 역할');
+  for (const pk of PERMISSION_KEYS) { const lv = (t.grants || {})[pk]; if (lv === 'read' || lv === 'write') parts.push(PERMISSION_INFO[pk].label + ' ' + levelText(pk, lv)); }
+  return parts.join(' · ');
+}
+
+/** 팀에 개별 권한으로 줄 수 있는 수준들 — 권한 종류대로(보기 · 고치기 / 조회 / 있음). */
+export function teamLevelChoices(perm: string): Level[] {
+  const kind = PERMISSION_INFO[perm]?.levels;
+  return kind === 'read-only' ? ['read'] : kind === 'on-off' ? ['write'] : ['read', 'write'];
+}

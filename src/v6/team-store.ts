@@ -15,11 +15,16 @@ export interface TeamRow {
   state: string; sort: number; created_at: string; updated_at: string;
   /** 종류(#5799) — team = 소속 팀 · group = 권한 그룹(접근 판정은 같고 보이는 자리만 다르다). */
   kind?: TeamKind;
+  /** 이 팀의 구성원이 함께 받는 역할 · 개별 권한(#5799) — 역할을 받은 구성원에게만 더해진다. 없으면 null. */
+  access_role?: string | null;
+  access_grants?: unknown;
 }
 export type TeamKind = "team" | "group";
 export const isTeamKind = (s: unknown): s is TeamKind => s === "team" || s === "group";
 /** 종류 칸을 행에서 꺼내는 식 — 칸 이름으로 고르지 않는다(롤 창에 칸이 아직 없어도 팀 조회가 깨지지 않게 · 없으면 소속 팀). ref = 표 이름 또는 별칭. */
-const KIND = (ref: string): string => `COALESCE(to_jsonb(${ref}) ->> 'kind', 'team') AS kind`;
+//  팀이 주는 권한(access_role · access_grants)도 같은 까닭으로 행에서 꺼낸다 — 이 식 하나에 함께 싣는다(팀을 읽는 자리가 전부 이 식을 쓴다).
+const KIND = (ref: string): string =>
+  `COALESCE(to_jsonb(${ref}) ->> 'kind', 'team') AS kind, to_jsonb(${ref}) ->> 'access_role' AS access_role, to_jsonb(${ref}) -> 'access_grants' AS access_grants`;
 
 export interface TeamMemberRow {
   member_id: string; role: string; sort: number;
@@ -67,14 +72,16 @@ export async function existingTeamIds(ids: number[]): Promise<number[]> {
 }
 
 // 팀이 실제로 접근권한의 주체가 됐나(#1291 v2) — 팀을 대상(subject)으로 지정한 grant 가 하나라도 있으면
-//  팀 편집 = 권한 편집이다. 리스트·폴더·지식·소스 네 축을 한 번에 본다(어느 하나라도 있으면 true).
+//  팀 편집 = 권한 편집이다. 리스트·폴더·지식·소스·DB 소스, 그리고 팀이 구성원에게 주는 권한(#5799)을 한 번에 본다(어느 하나라도 있으면 true).
 export async function anyTeamGrant(): Promise<boolean> {
   const r = await itemsPool.query(
     `SELECT 1 WHERE EXISTS(SELECT 1 FROM project_list_team)
                OR EXISTS(SELECT 1 FROM project_folder_member WHERE subject_kind='team')
                OR EXISTS(SELECT 1 FROM knowledge_member WHERE subject_kind='team')
                OR EXISTS(SELECT 1 FROM source_member WHERE subject_kind='team')
-               OR EXISTS(SELECT 1 FROM org_db_source_grant WHERE subject_kind='team') LIMIT 1`);
+               OR EXISTS(SELECT 1 FROM org_db_source_grant WHERE subject_kind='team')
+               OR EXISTS(SELECT 1 FROM team t WHERE to_jsonb(t) ->> 'access_role' IS NOT NULL
+                                                 OR COALESCE(to_jsonb(t) ->> 'access_grants', '{}') NOT IN ('{}', 'null')) LIMIT 1`);
   return (r.rowCount ?? 0) > 0;
 }
 
@@ -117,6 +124,17 @@ export async function setTeamKind(id: number, kind: TeamKind, ctx?: WriteCtx): P
   const before: TeamRow | undefined = await one(itemsPool, `SELECT ${TEAM_COLS}, ${KIND("team")} FROM team WHERE id=$1`, [id]);
   if (!before) throw new Error(`팀 #${id} 없음`);
   const row: TeamRow = await one(itemsPool, `UPDATE team SET kind=$2, updated_at=now() WHERE id=$1 RETURNING ${TEAM_COLS}, ${KIND("team")}`, [id, kind]);
+  await auditTeam(String(id), "update", before, row, ctx);
+  return row;
+}
+
+/** 팀이 주는 권한 바꾸기(#5799) — 종류와 같은 까닭으로 만들기 · 고치기와 따로 쓴다. role null · 빈 grants = 주는 것 없음. */
+export async function setTeamAccess(id: number, access: { role: string | null; grants: Record<string, string> }, ctx?: WriteCtx): Promise<TeamRow> {
+  const before: TeamRow | undefined = await one(itemsPool, `SELECT ${TEAM_COLS}, ${KIND("team")} FROM team WHERE id=$1`, [id]);
+  if (!before) throw new Error(`팀 #${id} 없음`);
+  const grants = Object.keys(access.grants).length ? JSON.stringify(access.grants) : null;
+  const row: TeamRow = await one(itemsPool,
+    `UPDATE team SET access_role=$2, access_grants=$3::jsonb, updated_at=now() WHERE id=$1 RETURNING ${TEAM_COLS}, ${KIND("team")}`, [id, access.role, grants]);
   await auditTeam(String(id), "update", before, row, ctx);
   return row;
 }

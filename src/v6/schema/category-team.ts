@@ -183,6 +183,12 @@ export async function initV6CategoryTeam(pool: Pool): Promise<void> {
     --  접근 판정에서는 둘이 같다(team_member 로 푼다). 다른 것은 «어디에 보이는가» 뿐이다. 읽을 때는 to_jsonb(행) ->> 'kind' 로 꺼낸다(롤 창).
     ALTER TABLE team ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'team';
     ${ensureCheck("team", { team_kind_chk: "kind IN ('team','group')" })}
+    -- 팀이 주는 권한(#5799) — 이 팀의 구성원이 함께 받는 역할(access_role)과 개별 권한(access_grants {권한: read|write}).
+    --  역할을 받은 구성원에게만 더해진다(본인 역할 ∪ 본인 개별 권한 ∪ 소속 팀들의 것). 옛 방식 구성원에게는 아무 효과가 없다.
+    --  team_member.role(lead · pm · dev … 표시 메타)과 다른 것이다. 읽을 때는 to_jsonb(행) 에서 꺼낸다(롤 창).
+    ALTER TABLE team ADD COLUMN IF NOT EXISTS access_role TEXT;
+    ALTER TABLE team ADD COLUMN IF NOT EXISTS access_grants JSONB;
+    ${ensureCheck("team", { team_access_role_chk: "access_role IS NULL OR access_role IN ('guest','member','admin','owner')" })}
     CREATE UNIQUE INDEX IF NOT EXISTS team_key_uq ON team(key) WHERE state <> 'archived';
   `);
 
