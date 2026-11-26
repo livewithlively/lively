@@ -3,8 +3,8 @@
 //  하네스(캐시 심기·러너 실행·랑데부 조각)는 kit/testlib/run-custom-harness.mjs — run-custom-cost.test.mjs(#5034)와 함께 쓴다.
 //  오프라인·fs-only: 샌드박스 HOME/LIVELY_HOME 의 로컬 캐시(custom-hooks-<Event>.json)에 훅을 심고
 //  러너를 실제 프로세스로 띄운다(토큰 부재 → 게이트웨이 미도달 → 캐시 폴백). 실제 ~/.lively 무접촉.
-//  실행: node scripts/run-tests.mjs run-custom (직접 실행하려면 LIVELY_HOST_EFFECTS_TEST_MODE=sandbox 필요 —
-//   테스트가 심는 LIVELY_HOST_EFFECTS=deny 가 그 값 없이는 훅 자식 spawn 까지 막는다)
+//  실행: node scripts/run-tests.mjs run-custom 또는 node kit/hooks/run-custom.test.mjs — 호스트 효과 시험 모드(deny + sandbox)는
+//   하네스가 자식 env 에 직접 심는다(러너가 심어 줄 때만 초록이던 것을 고침).
 //
 //  왜 이 테스트가 있나(#892): 러너는 하네스 눈에 **훅 하나**다 — 관리자 훅이 여럿이어도 러너가 대표해 하나의 응답을 낸다.
 //  그 대표 응답이 전달되지 않으면 관리자는 "게이트를 걸었다"고 믿는데 도구는 그냥 통과한다(무음 실패).

@@ -4,12 +4,19 @@
 //   다른 오류(500 등)가 난다 — 그래서 «정해진 상태 코드가 나왔다» 가 곧 «DB 전에 막았다» 의 증거다.
 //  사양 표(A1 · D · E7 · F7 · H) — 행마다 시험 하나.
 import assert from "node:assert/strict";
-import { registry } from "./index.js";
-import { REGISTER_SAVE } from "./connect-register.js";
-import { REGISTRATION_SLOTS, RELAY_ENV } from "../org/connect-unregister.js";
-import { githubAppReady, googleReady, linearAppReady, microsoftReady, notionPublicReady, slackAppReady } from "../org/credentials/oauth-broker.js";
-import { APP_REGISTRATIONS, registrationMarkdown } from "../org/connect-registration.js";
-import { CONNECT_SKILL_SPECS, assembleConnectBody } from "../org/delivery/connect-skills.js";
+
+// «DB 없는 환경» · «셀프호스트» 는 이 시험의 전제다 — 실행한 셸에서 물려받지 않고 여기서 만든다.
+//  db/client.ts 는 import 되는 순간 ITEMS_DATABASE_URL 을 읽으므로 **정적 import 전에** 지운다(그래서 아래는 동적 import).
+//  셸에 그 주소가 있으면(pg-test 를 돌리던 개발자) E7 이 실제 DB 를 조회해 «앱마다 조회 실패» 가 깨졌다. 매니지드 판정
+//  (LIVELY_TENANT_HEADER_SECRET)도 같은 부류다 — 매니지드여야 하는 단언은 withEnv 로 그 자리에서만 켠다.
+delete process.env.ITEMS_DATABASE_URL;
+delete process.env.LIVELY_TENANT_HEADER_SECRET;
+const { registry } = await import("./index.js");
+const { REGISTER_SAVE } = await import("./connect-register.js");
+const { REGISTRATION_SLOTS, RELAY_ENV } = await import("../org/connect-unregister.js");
+const { githubAppReady, googleReady, linearAppReady, microsoftReady, notionPublicReady, slackAppReady } = await import("../org/credentials/oauth-broker.js");
+const { APP_REGISTRATIONS, registrationMarkdown } = await import("../org/connect-registration.js");
+const { CONNECT_SKILL_SPECS, assembleConnectBody } = await import("../org/delivery/connect-skills.js");
 
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
