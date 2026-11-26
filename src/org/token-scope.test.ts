@@ -1,6 +1,12 @@
 // P1: 유효 권한 = intersection(토큰 scope, 멤버 scope). 순수 함수라 DB 없이 검증.
 import assert from "node:assert";
 import { computeEffectiveScopes } from "./store.js";
+import { isDbSourceScope, dbSourceCeilingOf } from "./store/tokens.js";
+import { dbSourceAllowed } from "./store/db-source-grants.js";
+import { canAccessDbSource, visibleDbSources, hasAnyDbAccess, requireNeed, type LivelyUser } from "../context.js";
+import { slug } from "../http/rest-util.js";
+import { parseMintScopes } from "../capabilities/delivery/tokens-devices.js";
+import { needForExternalTool } from "../capabilities/permission-map.js";
 
 // member_id 없는 서비스/레거시 토큰 → 토큰 scope 그대로(교집합 대상 없음).
 assert.deepStrictEqual(
@@ -178,6 +184,59 @@ assert.deepStrictEqual(
   ["items", "admin"],
 );
 
+// ── 소스 한정 DB scope 'db:<source>' ──
+//  멤버 scope 는 'db' 까지만 받는다 — 토큰의 'db:<source>' 는 멤버 'db' 아래에서만 산다.
+type Case = { name: string; memberId: string | null; tokenScopes: string[]; memberScopes: string[]; follow?: boolean; want: string[] };
+const dbSourceCases: Case[] = [
+  { name: "(a) 멤버 db + 토큰 db:x → db:x", memberId: "m", tokenScopes: ["db:x"], memberScopes: ["items", "db"], want: ["db:x"] },
+  { name: "(b) 멤버 db 없음 + 토큰 db:x → 버림", memberId: "m", tokenScopes: ["db:x"], memberScopes: ["items"], want: [] },
+  { name: "(c) 규칙 위반 이름은 멤버 db 가 있어도 버림", memberId: "m",
+    tokenScopes: ["db:a b", "db:", "db:x;y", "db:../x", "db: x", "db:x\n", `db:${"a".repeat(101)}`], memberScopes: ["db"], want: [] },
+  { name: "(d) 멤버 없는 토큰 db:x → db:x, 규칙 위반 이름은 여기서도 버림", memberId: null, tokenScopes: ["items", "db:x", "db:a b"], memberScopes: [], want: ["items", "db:x"] },
+  { name: "(e) 토큰 db + db:x 를 함께 → 둘 다", memberId: "m", tokenScopes: ["db", "db:x"], memberScopes: ["db"], want: ["db", "db:x"] },
+  { name: "(f) 추종 토큰은 박제(db:x)를 안 보고 멤버 그대로", memberId: "m", tokenScopes: ["db:x"], memberScopes: ["items", "db"], follow: true, want: ["items", "db"] },
+  { name: "(g) 추종 토큰 — 멤버 쪽 db:x(위조)는 떨군다", memberId: "m", tokenScopes: [], memberScopes: ["items", "db:x"], follow: true, want: ["items"] },
+];
+for (const c of dbSourceCases) {
+  assert.deepStrictEqual(
+    computeEffectiveScopes({
+      memberId: c.memberId, memberState: c.memberId ? "active" : null,
+      tokenScopes: c.tokenScopes, memberScopes: c.memberScopes, followMemberScopes: c.follow,
+    }),
+    c.want, c.name,
+  );
+}
+// 멤버 없는 앱 토큰 — 켜져 있으면 db:x 도 통과(꺼진 앱의 거부는 위 appLive 표가 덮는다).
+assert.deepStrictEqual(
+  computeEffectiveScopes({ memberId: null, memberState: null, tokenScopes: ["db:x"], memberScopes: [], appId: "bot", appLive: true }),
+  ["db:x"],
+);
+
+// 이름 규칙은 DB 소스 등록(org_db_source_upsert 의 slug)과 같아야 한다 — 복제한 정규식의 대조 표.
+const accepts = (name: string): boolean => { try { return slug(name, "name") === name; } catch { return false; } };
+for (const name of ["x", "Prod_DB", "dw-01", "운영", "a".repeat(100), "a".repeat(101), "", "a b", "x;y", "../x", "x.y", "x:y", "x\n"]) {
+  assert.strictEqual(isDbSourceScope(`db:${name}`), accepts(name), `db:${JSON.stringify(name)} 판정이 소스 등록 규칙과 다르다`);
+}
+
+// 끝까지 — 유효 권한 → DB 소스 접근 판정. db:x 토큰은 x 만 연다.
+{
+  const scopes = computeEffectiveScopes({ memberId: "m", memberState: "active", tokenScopes: ["db:x"], memberScopes: ["db"] });
+  assert.ok(scopes);
+  const u: LivelyUser = { userId: "m", email: "", scopes, projects: ["*"] };
+  assert.strictEqual(canAccessDbSource(u, "x"), true);
+  assert.strictEqual(canAccessDbSource(u, "y"), false);
+  // db_sources 목록 — 좁힌 토큰은 그 소스만, db 전체는 전부, admin 은 db 없이도 self 를 포함해 전부 본다.
+  const srcs = [{ name: "x" }, { name: "y" }, { name: "self" }];
+  const names = (scopes: string[]): string[] => visibleDbSources({ ...u, scopes }, srcs).map((s) => s.name);
+  assert.deepStrictEqual(names(u.scopes), ["x"], "소스 하나로 좁힌 토큰이 db_sources 로 다른 소스까지 열거한다");
+  assert.deepStrictEqual(names(["db"]), ["x", "y", "self"]);
+  assert.deepStrictEqual(names(["admin"]), ["x", "y", "self"]);
+}
+
+// 발급 입력 검증(org_token_mint) — db:<source> 는 받고 이름 규칙 위반은 400.
+assert.deepStrictEqual(parseMintScopes(["items", "db:x"]), ["items", "db:x"]);
+assert.throws(() => parseMintScopes(["db:a b"]), (e: unknown) => (e as { status?: number }).status === 400 && /허용되지 않은 scope/.test(String((e as Error).message)));
+
 console.log("token-scope.test ok");
 
 // ── #5712 비위험 권한 추종(followSafeScopes) ───────────────────────────────────
@@ -239,3 +298,43 @@ console.log("token-scope.test ok");
     ["items", "context"], "S14 표시 없는 토큰");
 }
 console.log("token-scope: followSafeScopes 14 rows passed");
+
+// ── 역할을 받은 구성원(grants)의 소스 한정 토큰 — 'db:<source>' 가 새 권한 'db' 로 번역돼도 그 소스만 연다 ──
+{
+  assert.deepStrictEqual(dbSourceCeilingOf(["items", "db:x"]), ["x"]);
+  assert.deepStrictEqual(dbSourceCeilingOf(["db:x", "db:y"]), ["x", "y"]);
+  assert.strictEqual(dbSourceCeilingOf(["db", "db:x"]), null, "db 전체가 함께 있으면 상한이 없다");
+  assert.strictEqual(dbSourceCeilingOf(["items", "memory"]), null);
+  assert.deepStrictEqual(dbSourceCeilingOf(["db:bad name!"]), [], "이름 규칙 위반만 실린 손상 행은 빈 상한(닫힌 쪽)");
+  const roleUser: LivelyUser = { userId: "m", email: "", scopes: ["db:x"], projects: ["*"], grants: { db: "read" }, dbSourceCeiling: ["x"] };
+  const srcs = [{ name: "x" }, { name: "y" }, { name: "self" }];
+  assert.deepStrictEqual(visibleDbSources(roleUser, srcs).map((s) => s.name), ["x", "self"], "역할 구성원의 좁힌 토큰이 다른 소스를 열거한다");
+  assert.deepStrictEqual(visibleDbSources({ ...roleUser, dbSourceCeiling: undefined }, srcs).map((s) => s.name), ["x", "y", "self"]);
+  //  상한 밖 소스는 지정 조회(DB) 전에 거절한다 — 그 사람이 y 에 지정돼 있어도 이 토큰으로는 못 연다.
+  assert.strictEqual(await dbSourceAllowed(roleUser, "y"), false, "역할 구성원의 좁힌 토큰이 상한 밖 소스를 연다");
+  //  손상 행의 빈 상한([])은 닫힌 쪽이다 — 상한 밖은 전부 거절, 목록엔 self 만.
+  const brokenUser: LivelyUser = { ...roleUser, dbSourceCeiling: [] };
+  assert.deepStrictEqual(visibleDbSources(brokenUser, srcs).map((s) => s.name), ["self"], "빈 상한이 소스를 연다");
+  assert.strictEqual(await dbSourceAllowed(brokenUser, "x"), false, "빈 상한이 소스를 연다");
+}
+console.log("token-scope: role-member db source ceiling passed");
+
+// ── 소스 한정 토큰은 «DB 전체» 를 묻는 판정을 통과하지 못한다 — 외부 앱 도구(http_proxy · MCP 프록시)의 호출 scope 'db' ──
+//  옛 주체는 'db:x' 가 'db' 가 아니라 이미 막힌다. 역할 주체는 번역(legacyScopesToGrants)이 'db:x' 를 권한 db 로 바꾸므로 따로 막아야
+//  같은 답이 된다. 소스는 dbSourceAllowed 가 하나씩 열고, db_sources 목록(hasAnyDbAccess)은 그대로 열린다(상한 안의 소스만 싣는다).
+{
+  const ext = needForExternalTool("db", "L0");
+  const roleUser: LivelyUser = { userId: "m", email: "", scopes: ["db:x"], projects: ["*"], grants: { db: "read" }, dbSourceCeiling: ["x"] };
+  const legacyUser: LivelyUser = { userId: "m", email: "", scopes: ["db:x"], projects: ["*"], dbSourceCeiling: ["x"] };
+  assert.throws(() => requireNeed(roleUser, ext, "db"), /Forbidden/, "역할 구성원의 소스 한정 토큰이 호출 scope 'db' 인 외부 도구를 부른다");
+  assert.throws(() => requireNeed({ ...roleUser, dbSourceCeiling: [] }, ext, "db"), /Forbidden/, "빈 상한(손상 행)이 호출 scope 'db' 인 외부 도구를 부른다");
+  assert.throws(() => requireNeed(legacyUser, ext, "db"), /Forbidden/, "옛 주체의 소스 한정 토큰이 호출 scope 'db' 인 외부 도구를 부른다");
+  //  무회귀 — 상한 없는 주체(역할 · 옛)는 종전 그대로 통과한다.
+  assert.doesNotThrow(() => requireNeed({ ...roleUser, dbSourceCeiling: undefined }, ext, "db"));
+  assert.doesNotThrow(() => requireNeed({ userId: "m", email: "", scopes: ["db"], projects: ["*"] }, ext, "db"));
+  //  db_sources 목록은 소스 한정 토큰에도 열린다(목록은 visibleDbSources 가 상한으로 거른다).
+  assert.strictEqual(hasAnyDbAccess(roleUser), true, "역할 구성원의 소스 한정 토큰이 db_sources 목록을 못 연다");
+  assert.strictEqual(hasAnyDbAccess(legacyUser), true);
+  assert.strictEqual(hasAnyDbAccess({ ...roleUser, grants: { content: "read" } }), false, "DB 권한 없는 역할 주체가 db_sources 목록을 연다");
+}
+console.log("token-scope: source-limited token vs whole-db checks passed");

@@ -231,6 +231,41 @@ export async function resolveTokenHandle(raw: string): Promise<ResolvedHandle> {
   return { ok: true, tokenHash: row?.hash as string };
 }
 
+// ── 소스 한정 DB scope 'db:<source>' — 토큰 발급 검증(org_token_mint)과 아래 유효 권한 계산만 쓴다.
+//  SCOPES(auth/scopes.ts)에 넣지 않는 이유: 그 배열은 Capability.scope union·mw() 게이트·멤버 scope 검증의
+//  원천이라, 넣으면 capability 가 'db:x' 를 요구 scope 로 쓸 수 있게 되고 멤버에게도 부여 가능해진다.
+//  판정은 context.canAccessDbSource 가 한다('db' = 전 소스, 'db:<source>' = 그 소스만).
+//
+// 이름 규칙은 org_db_source_upsert 의 name 검증(http/rest-util slug)과 같아야 한다 — 다르면 등록은 되는데
+//  그 소스로 좁힌 토큰을 못 만들거나, 등록될 수 없는 이름이 토큰에 실린다. org → http import 가 금지라
+//  (scripts/check-imports.mjs) 정규식을 공유하지 못하고 복제했다. 일치는 token-scope.test 의 대조 표가 지킨다.
+const DB_SOURCE_NAME = /^[A-Za-z0-9가-힣_-]+$/;
+const DB_SOURCE_NAME_MAX = 100;
+const DB_SOURCE_SCOPE_PREFIX = "db:";
+
+/**
+ * 토큰이 DB 를 소스 몇 개로만 연다면 그 소스 이름들(아니면 null). 'db' 가 함께 있으면 전 소스라 상한이 없다.
+ *  옛 scope 주체는 canAccessDbSource 가 scopes 로 이미 좁히지만, 역할을 받은 구성원(#5799)의 주체는 'db:<source>' 가
+ *  새 권한 'db' 로 번역돼(legacyScopesToGrants) 소스 한정이 사라진다 — 그래서 이 목록을 주체에 따로 싣고
+ *  dbSourceAllowed·visibleDbSources 가 지정 판정 앞에 건다. 비우면 좁힌 서비스 토큰이 그 사람이 지정된 모든 소스를 연다.
+ */
+export function dbSourceCeilingOf(tokenScopes: readonly string[]): string[] | null {
+  if (tokenScopes.includes("db")) return null;
+  //  'db:' 접두가 하나라도 있으면 상한을 건다 — 이름 규칙에 안 맞는 손상 행은 빈 상한(아무 소스도 못 연다). 번역(legacyScopesToGrants)은
+  //   접두만 보고 'db' 권한을 주므로, 여기서 null 로 두면 그런 행이 지정된 전 소스를 연다.
+  if (!tokenScopes.some((s) => s.startsWith(DB_SOURCE_SCOPE_PREFIX))) return null;
+  return tokenScopes.filter(isDbSourceScope).map((s) => s.slice(DB_SOURCE_SCOPE_PREFIX.length));
+}
+
+export function isDbSourceScope(s: unknown): s is string {
+  if (typeof s !== "string" || !s.startsWith(DB_SOURCE_SCOPE_PREFIX)) return false;
+  const name = s.slice(DB_SOURCE_SCOPE_PREFIX.length);
+  return name.length <= DB_SOURCE_NAME_MAX && DB_SOURCE_NAME.test(name);
+}
+
+// 발급 입력의 길이 상한(org_token_mint)이 이 값을 따른다.
+export const DB_SOURCE_SCOPE_MAX = DB_SOURCE_SCOPE_PREFIX.length + DB_SOURCE_NAME_MAX;
+
 // 유효 권한 계산(순수 함수 — 단위 테스트 대상). 토큰은 '발급된 상한', 멤버는 '라이브 상한' →
 //  유효 = 둘의 intersection. 멤버 연결 토큰(member_id 있음)인데 멤버가 active 가 아니면(비활성/삭제 → LEFT JOIN
 //  state=null) null=거부 → 퇴사·강등이 즉시 모든 토큰을 무효화(보안 핵심). member_id 없는 서비스/레거시 토큰은
@@ -250,7 +285,8 @@ export function computeEffectiveScopes(opts: {
   followSafeScopes?: boolean;     // 로그인 토큰(#5712) — 위험 scope 를 뺀 나머지만 멤버를 따른다. 위험 scope 는 토큰에 실린 것만.
 }): string[] | null {
   // B4: 허용 scope 만(JSONB 손상·마이그레이션·위조로 admin/runtime 섞여 들어와도 여기서 떨군다).
-  const tokenScopes = opts.tokenScopes.filter(isScope);
+  //  소스 한정 'db:<source>' 도 허용 — 이걸 떨구면 소스 하나로 좁힌 토큰을 만들 수 없어 'db' 전체를 줘야 한다.
+  const tokenScopes = opts.tokenScopes.filter((s) => isScope(s) || isDbSourceScope(s));
   if (!opts.memberId) {
     if (opts.appId) return opts.appLive === true ? tokenScopes : null;
     return tokenScopes;
@@ -278,8 +314,9 @@ export function computeEffectiveScopes(opts: {
     const issued = new Set(tokenScopes);
     return memberScopes.filter((s) => !DANGEROUS_SCOPES.has(s) || issued.has(s));
   }
-  const allowed = new Set(memberScopes);
-  return tokenScopes.filter((s) => allowed.has(s));
+  const allowed = new Set<string>(memberScopes);
+  // 멤버는 'db:<source>' 를 가질 수 없다(org_member_upsert 가 거부) — 멤버 'db' 가 모든 'db:<source>' 의 상한이다.
+  return tokenScopes.filter((s) => allowed.has(s) || (isDbSourceScope(s) && allowed.has("db")));
 }
 
 // verifyDbToken 이 돌려주는 토큰 신원 — LivelyUser 원재료 + OAuth 발급분의 바인딩 3종(#1473 T2).
@@ -306,6 +343,8 @@ export interface DbTokenIdentity {
    *  관리자가 scope 를 골라 구운 토큰은 그때 구성원 권한과 우연히 같았더라도 여기 들지 않는다. OAuth 발급분 · 앱 토큰도 들지 않는다.
    */
   followsMemberSafe?: true;
+  /** 소스 한정 DB scope(db:<source>)가 실린 토큰의 소스 목록 — LivelyUser.dbSourceCeiling 으로 간다(dbSourceCeilingOf). */
+  dbSourceCeiling?: string[];
 }
 
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
@@ -382,6 +421,8 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     if (toolCeiling != null && !row.app_id) return null;
     //  구성원의 비위험 권한을 따르는 토큰인가(DbTokenIdentity.followsMemberSafe 머리말) — 구성원 토큰이고 OAuth · 앱 토큰이 아닐 때만.
     const held = new Set(tokenScopes);
+    //  추종 토큰은 비위험 scope 를 구성원에게서 가져오고 박제를 보지 않으므로(computeEffectiveScopes) 소스 상한도 걸지 않는다 — 옛 주체와 역할 주체의 판정을 맞춘다.
+    const dbSourceCeiling = row.follow_member_scopes === true || followSafeScopes ? null : dbSourceCeilingOf(tokenScopes);
     const followsMemberSafe = !!row.member_id && !row.client_id && !row.app_id
       && (row.follow_member_scopes === true || followSafeScopes || SAFE_SCOPES.every((s) => held.has(s)));
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
@@ -389,6 +430,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     return {
       userId: row.user_id, email: row.email ?? "", scopes, projects: strArr(row.projects, ["*"]),
       ...(grants ? { grants } : {}),
+      ...(dbSourceCeiling ? { dbSourceCeiling } : {}),
       clientId: row.client_id ?? null,
       resource: row.resource ?? null,
       appId: row.app_id ?? null,

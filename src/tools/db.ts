@@ -9,7 +9,7 @@ import { AuditWriteError, collectSubjectKeys, persistAccessBestEffort, persistAc
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs, resolveUnmaskKeys, peekMaskedSrcKeyToCol } from "../db/policy.js";
 import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from "../db/mask.js";
-import { resolveUser, hasAnyDbAccess, confinedToAppTools, type LivelyUser } from "../context.js";
+import { resolveUser, hasAnyDbAccess, visibleDbSources, confinedToAppTools, type LivelyUser } from "../context.js";
 import { dbSourceAllowed, requireDbSourceAccess } from "../org/store/db-source-grants.js";
 import { requireAppTool } from "../apps/principal.js";
 
@@ -65,7 +65,7 @@ function dbToolDefs(harness?: string | null): DbToolDef[] {
         }
         await refreshSources(); // env∪DB 병합 스냅샷 최신화(웹에서 추가한 소스 즉시 반영)
         //  allowed — #5799: 역할을 받은 구성원이면 소스별 지정까지 본다(dbSourceAllowed). 옛 구성원은 종전 판정 그대로.
-        const sources = await Promise.all(listSourceConfigs().map(async (s) => ({
+        const sources = await Promise.all(visibleDbSources(user, listSourceConfigs()).map(async (s) => ({
           name: s.name,
           driver: s.driver,
           authMode: s.authMode,

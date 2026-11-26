@@ -10,6 +10,8 @@
 //   S5 팀으로 지정 — 팀 구성원은 됨 · 팀에서 빠지면 즉시 안 됨 · 보관된 팀은 안 됨
 //   S6 옛 구성원 — 지정과 무관하게 종전 그대로(db 가 있으면 전 소스)
 //   S7 좁혀 구운 토큰 — 구성원이 지정돼 있어도 토큰에 DB 자격이 없으면 안 됨
+//   S7b 소스 한정 토큰(db:<source>) — 구성원이 두 소스에 지정돼 있어도 토큰에 실린 소스만 연다(검증 경로가 주체에 상한을 싣는다)
+//   S7c 소스 한정 토큰은 «DB 전체» 를 묻는 판정(외부 도구 호출 scope 'db')을 통과하지 못한다 · db_sources 목록은 연다
 //   S8 팀이 DB 지정의 대상이 되면 «팀이 권한 주체» 로 센다(팀 편집이 관리자 전용이 된다)
 //   S9 관리 기능 — 없는 소스 404 · 활성 아닌 구성원 400 · 없는 팀 400 · 배열 아님 400 · 성공하면 목록을 돌려준다 · 조회 기능이 같은 것을 준다
 //   S10 소스의 지정 지우기 — 그 소스만
@@ -25,6 +27,8 @@ const dbCaps = await import(`${DIST}/capabilities/delivery/db-sources.js`);
 const { registry } = await import(`${DIST}/capabilities/index.js`);
 const { verifyDbToken } = await import(`${DIST}/org/store/tokens.js`);
 const { ROLE_GRANTS, memberGrants } = await import(`${DIST}/auth/permissions.js`);
+const { requireNeed, hasAnyDbAccess } = await import(`${DIST}/context.js`);
+const { needForExternalTool } = await import(`${DIST}/capabilities/permission-map.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -105,6 +109,21 @@ try {
   const vNarrow = await verifyDbToken(tNarrow.token), vWide = await verifyDbToken(tWide.token);
   chk("S7 구성원이 지정돼 있어도 토큰에 DB 자격이 없으면 안 된다 · 자격이 실린 토큰은 된다",
     vNarrow?.grants?.db === undefined && (await G.dbSourceAllowed(vNarrow, SRC)) === false && vWide?.grants?.db === "read" && (await G.dbSourceAllowed(vWide, SRC)) === true, J({ n: vNarrow?.grants, w: vWide?.grants }));
+  await G.setDbSourceGrants(SRC2, [{ kind: "member", id: alice }], "pgt");
+  const tSrc = await store.mintToken({ userId: alice, memberId: alice, scopes: ["memory", `db:${SRC}`] }, "pgt");
+  const vSrc = await verifyDbToken(tSrc.token);
+  chk("S7b 소스 한정 토큰은 구성원이 두 소스에 지정돼 있어도 토큰에 실린 소스만 연다",
+    J(vSrc?.dbSourceCeiling) === J([SRC]) && (await G.dbSourceAllowed(vSrc, SRC)) === true && (await G.dbSourceAllowed(vSrc, SRC2)) === false
+      && (await G.dbSourceAllowed(vWide, SRC2)) === true,
+    J({ ceiling: vSrc?.dbSourceCeiling, grants: vSrc?.grants }));
+  //  S7c — 검증 경로가 만든 주체 그대로: 소스 한정 토큰은 «DB 전체» 를 묻는 외부 도구(호출 scope 'db')를 못 부르고, db 전체 토큰은 부른다.
+  //   db_sources 목록(hasAnyDbAccess)은 둘 다 연다.
+  const extNeed = needForExternalTool("db", "L0");
+  const passes = (u) => { try { requireNeed(u, extNeed, "db"); return true; } catch { return false; } };
+  chk("S7c 소스 한정 토큰은 호출 scope 'db' 인 외부 도구를 못 부른다 · db 전체 토큰은 부른다 · 둘 다 목록은 연다",
+    passes(vSrc) === false && passes(vWide) === true && hasAnyDbAccess(vSrc) === true && hasAnyDbAccess(vWide) === true,
+    J({ src: passes(vSrc), wide: passes(vWide), list: [hasAnyDbAccess(vSrc), hasAnyDbAccess(vWide)] }));
+  await G.setDbSourceGrants(SRC2, [], "pgt");
 
   // ── S8 팀이 권한 주체가 됐나 ──
   await itemsPool.query(`DELETE FROM org_db_source_grant WHERE subject_kind='team'`);

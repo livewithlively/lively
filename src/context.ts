@@ -2,7 +2,7 @@
 // 모든 툴 핸들러는 첫 줄에서 resolveUser() → requireScope() 를 통과해야 한다.
 
 import { SELF_SOURCE } from "./db/self-source.js"; // 값 상수만(런타임 의존 없음 — self-source.ts 는 무-import)
-import { permits, type Grants, type Need } from "./auth/permissions.js";
+import { allows, permits, type Grants, type Need } from "./auth/permissions.js";
 
 export interface LivelyUser {
   userId: string;
@@ -47,6 +47,8 @@ export interface LivelyUser {
   //  이 자격으로 디바이스 로그인을 승인하거나 본인 토큰을 다시 구울 때, 새 토큰도 구성원을 따르게 구워도 되는가의 근거다
   //  (org/auth/grant-util.credentialFollowsMember). 범위가 고정된 토큰(관리자가 scope 를 골라 구운 것 · OAuth · 앱 토큰)은 없다(undefined).
   followsMemberSafe?: boolean;
+  // 소스 한정 DB scope(db:<source>)가 실린 토큰이면 그 소스들(org/store/tokens.dbSourceCeilingOf). 역할을 받은 구성원도 이 밖의 소스는 못 연다.
+  dbSourceCeiling?: readonly string[];
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.
@@ -115,6 +117,20 @@ export function requireDbSource(user: LivelyUser, source: string): void {
 //  #604: admin 은 내장 self 소스를 발견/사용할 수 있어야 하므로 db 스코프가 없어도 목록 열람 허용(내용은 canAccessDbSource 로 재차 게이트).
 export function hasAnyDbAccess(user: LivelyUser): boolean {
   //  #5799 — 역할을 받은 구성원: DB 조회 자격이 있거나 관리자면 목록을 본다(어느 소스가 열리는지는 canAccessDbSource 가 다시 잰다).
-  if (user.grants) return permits(user, "db", { perm: "db", level: "read" }) || permits(user, "admin", { perm: "admin", level: "write" });
+  //   allows 로 직접 잰다 — permits 는 소스 한정 토큰(dbSourceCeiling)의 «DB 전체» 판정을 닫지만, 목록은 그 토큰에도 열고 상한 안의 소스만 싣는다(visibleDbSources).
+  if (user.grants) return allows(user.grants, { perm: "db", level: "read" }) || permits(user, "admin", { perm: "admin", level: "write" });
   return user.scopes.includes("admin") || user.scopes.some((s) => s === "db" || s.startsWith("db:"));
+}
+
+// db_sources 목록에 실을 소스 — 소스 하나로 좁힌 토큰(db:<source>)에는 그 소스만 보인다.
+//  좁힌 서비스 토큰이 새면 다른 소스의 이름·드라이버·한도까지 열거되기 때문이다. 옛 주체의 db 전체·admin 은 종전대로 전부 본다.
+//  역할을 받은 구성원(grants, #5799)은 목록을 싣고 소스마다 allowed 로 답한다(tools/db.ts) — 좁히기는 토큰의 소스 상한(dbSourceCeiling)으로만 건다.
+//   내장 self 는 상한과 무관하게 관리자 판정(dbSourceAllowed)을 따르므로 목록에서도 빼지 않는다.
+export function visibleDbSources<T extends { name: string }>(user: LivelyUser, sources: readonly T[]): T[] {
+  if (user.grants) {
+    const ceiling = user.dbSourceCeiling;
+    return ceiling ? sources.filter((s) => s.name === SELF_SOURCE || ceiling.includes(s.name)) : [...sources];
+  }
+  const all = user.scopes.includes("db") || user.scopes.includes("admin");
+  return sources.filter((s) => all || canAccessDbSource(user, s.name));
 }
