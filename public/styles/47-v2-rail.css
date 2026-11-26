@@ -287,6 +287,8 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-railtg.hid { color: var(--blue); }
 /* 데스크톱 창 맨 윗줄의 ☰ — 좁은 폭엔 ☰, 넓은 폭엔 패널 아이콘(둘 중 하나만). */
 .v2-mbar-menu .v2-mbar-ic--m { display: none; }
+/* #5807 돋보기 — 사이드바가 없는 앱 화면에서만 선다(아래 app-ctx 블록). 그 밖엔 늘 감춘다. */
+.v2-mbar-menu .v2-mbar-ic--s { display: none; }
 @media (max-width: 900px) { .v2-mbar-menu .v2-mbar-ic--m { display: block; } .v2-mbar-menu .v2-mbar-ic--w { display: none; } }
 /* #4632 원준 2026-10-19 «아니 각자 앱 사이드바로» — 좁은 폭의 ☰ 는 그 앱의 사이드바만 연다. 사이드바가 없는 앱(mobile.ts setSide(false))에선 ☰ 를 걷는다.
    넓은 폭의 같은 단추는 레일 여닫이라 그대로 선다. 창 맨 윗줄의 자리 규칙(43-v2-topbar-search)이 display 를 정해 두어 !important 로 이긴다([hidden] 과 같은 결). */
@@ -907,20 +909,26 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
    사이드바를 손으로 접은 화면(side-closed)은 #5319 4차가 이미 줄을 걷었는데, 사이드바가 없는 앱(app-ctx — 설정 · 확인할 것 · 외부 앱 연결 ·
    지난 세션 · 휴지통 · 앱 화면 …)은 ①-c(43-v2-topbar-search.css) 그대로 [‹][›][검색] 이 창을 가로질렀다. 같은 배치로 맞춘다:
    줄은 레일 칸 위 토막만 남고(레일 칸의 자리가 화면마다 오르내리지 않게 — 색은 레일과 같아 레일의 머리로 읽힌다), 본문 · 우측 사이드바는
-   창 맨 위부터 서고, 검색은 레일 맨 위 [검색] 칸(.v2-rail-search)이 맡는다(⌘K 는 그대로).
-   ☰ 는 감춘다 — 그 화면엔 접고 펼 사이드바가 없다(좁은 폭의 .no-side 와 같은 답 · main.ts toggleSideBar).
+   창 맨 위부터 선다(⌘K 는 그대로).
+   ★ #5807(상민님 2026-11-26) — 검색은 **☰ 가 서던 그 자리의 단추**가 맡는다. 종전엔 ☰ 를 감추고 레일 맨 위에 [검색] 칸을 따로 세웠는데, 사이드바가 있는
+     화면 ↔ 없는 앱을 오갈 때마다 레일 칸이 한 칸(40px)씩 오르내렸다(«아이콘이 하나씩 내려가고 검색 아이콘이 생기는데, 이거 위치가 쉬프트돼서 불편함 …
+     사이드바 없는 앱은 어차피 해당버튼필요없으니 그냥 해당 버튼을 검색버튼으로»). 그 화면엔 접고 펼 사이드바가 없으니 단추의 그림만 돋보기로 바꾸고
+     누르면 통합검색을 연다(main.ts menuIsSearch). 레일 칸은 화면이 바뀌어도 제자리다.
+   ⚠ 사이드바를 손으로 접어 둔 기기(side-closed)는 종전 그대로다 — 접힌 홈에 이미 레일 [검색] 칸이 서 있어서(#5319 4차), 앱 화면에서도 그 칸을 그대로 두고
+     ☰ 자리는 비운다. 거기서 돋보기로 바꾸면 이번엔 접힌 홈 ↔ 앱 사이에서 레일 칸이 오르내린다.
    ⚠ 레일까지 숨긴 사람(rail-hidden)에겐 ①-c 전폭 줄이 그대로 선다 — 레일도 사이드바도 없는 화면에서 다른 데로 가는 길이 그 줄뿐이다.
    ⚠ 데스크톱 앱은 그 줄이 OS 타이틀바(창 버튼 · 끌 자리)라 해당 없다(topbar-web 이 아니다). 좁은 폭(≤900)은 서랍이라 해당 없다. */
 @media (min-width: 901px) {
-  #v2-root.topbar-web.app-ctx:not(.rail-hidden) .v2-rail-search { display: flex; margin: 2px auto 4px; }
-  #v2-root.topbar-web.app-ctx:not(.rail-hidden) .v2-rail-top > .v2-rail-search { align-self: stretch; margin: 2px 6px 4px; }
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar {
     grid-column: 1 / 3; border-bottom: 0; border-right: 0; background: var(--rail-bg);
   }
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-side-nav { display: none; }
-  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
-  /*  데스크톱 앱(창 맨 윗줄 = OS 타이틀바 — 줄 자체는 그대로 선다)에서도 그 화면의 ☰ 는 감춘다. 누를 수 있는데 아무 일도 안 하는 단추가 된다(main.ts toggleSideBar). */
-  #v2-root.has-topbar.app-ctx:not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
+  /*  ☰ 자리의 단추 = 검색(돋보기). 사이드바를 접어 둔 기기에선 레일 [검색] 칸이 서 있으니(위 side-closed 규칙) 이 자리는 비운다. */
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden):not(.side-closed) > .v2-topbar > .v2-mbar-menu .v2-mbar-ic--w { display: none; }
+  #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden):not(.side-closed) > .v2-topbar > .v2-mbar-menu .v2-mbar-ic--s { display: block; }
+  #v2-root.has-topbar.topbar-web.app-ctx.side-closed:not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
+  /*  데스크톱 앱(창 맨 윗줄 = OS 타이틀바 — 줄 자체는 그대로 서고 [‹][›][검색] 도 그 줄에 있다)에선 그 화면의 ☰ 를 감춘다. 누를 수 있는데 아무 일도 안 하는 단추가 된다(main.ts toggleSideBar). */
+  #v2-root.has-topbar.app-ctx:not(.topbar-web):not(.rail-hidden) > .v2-topbar > .v2-mbar-menu { visibility: hidden; }
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-side + .v2-split-x,
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-main,
   #v2-root.has-topbar.topbar-web.app-ctx:not(.rail-hidden) > .v2-main + .v2-split-x,
