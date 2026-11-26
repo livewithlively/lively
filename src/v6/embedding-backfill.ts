@@ -579,3 +579,5 @@ export function nudgeAutoBackfill(): void {
   const t = setTimeout(() => { nudgeArmed = false; void runAutoBackfillSweep(); }, NUDGE_DELAY_MS);
   t.unref?.();
 }
+/** 시험 전용 — 걸어 둔 nudge 도 도는 자동 스윕도 없나. 앞 단계 저장이 깨운 스윕(NUDGE_DELAY_MS 뒤)이 다음 단계의 측정과 겹치지 않게 기다릴 때 쓴다. */
+export function __autoBackfillIdle(): boolean { return !nudgeArmed && !sweepRunning; }

@@ -166,6 +166,11 @@ try {
   chk("K8 코사인 질의가 된다", Number(near[0]?.s) > 0.99, JSON.stringify(near));
 
   // ── K9 ──
+  //  앞 단계의 저장(upsertKnowledge → markEmbeddingPending)이 건 nudge 는 1초 뒤 지식 벡터 스윕(runAutoBackfillSweep)을 깨운다.
+  //   일시중지를 풀 때 그 타이머가 아직 걸려 있으면 그 스윕이 아래 조각 정비와 겹쳐 같은 가짜 서버로 헬스체크(1건)와 지식 글 배치(3건 —
+  //   batch_size 16)를 보내 요청 크기에 섞인다(CI 44492120892 · 44582255512: [1,1,1,1,1,3,…] 38건 = 조각 36건 + 헬스체크 1건 + 지식 3개를 실은 1건).
+  //   풀기 전에 그 스윕이 (일시중지라 빈손으로) 끝나기를 기다린다 — K10 의 지식 벡터 스윕도 그래야 제가 채울 지식을 본다.
+  chk("K9 전제: 앞 단계 저장이 깨운 자동 스윕이 끝났다", await until(async () => eb.__autoBackfillIdle()));
   await q(`UPDATE knowledge_chunk SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL`);
   await q(`UPDATE org_runtime_config SET embedding_backfill_paused=false WHERE id=1`);
   await q(`INSERT INTO knowledge(name, title, body_md, updated_by) VALUES('k-many','많은 조각','','x')`);
