@@ -3,9 +3,10 @@ import assert from "node:assert";
 import { computeEffectiveScopes } from "./store.js";
 import { isDbSourceScope, dbSourceCeilingOf } from "./store/tokens.js";
 import { dbSourceAllowed } from "./store/db-source-grants.js";
-import { canAccessDbSource, visibleDbSources, type LivelyUser } from "../context.js";
+import { canAccessDbSource, visibleDbSources, hasAnyDbAccess, requireNeed, type LivelyUser } from "../context.js";
 import { slug } from "../http/rest-util.js";
 import { parseMintScopes } from "../capabilities/delivery/tokens-devices.js";
+import { needForExternalTool } from "../capabilities/permission-map.js";
 
 // member_id 없는 서비스/레거시 토큰 → 토큰 scope 그대로(교집합 대상 없음).
 assert.deepStrictEqual(
@@ -317,3 +318,23 @@ console.log("token-scope: followSafeScopes 14 rows passed");
   assert.strictEqual(await dbSourceAllowed(brokenUser, "x"), false, "빈 상한이 소스를 연다");
 }
 console.log("token-scope: role-member db source ceiling passed");
+
+// ── 소스 한정 토큰은 «DB 전체» 를 묻는 판정을 통과하지 못한다 — 외부 앱 도구(http_proxy · MCP 프록시)의 호출 scope 'db' ──
+//  옛 주체는 'db:x' 가 'db' 가 아니라 이미 막힌다. 역할 주체는 번역(legacyScopesToGrants)이 'db:x' 를 권한 db 로 바꾸므로 따로 막아야
+//  같은 답이 된다. 소스는 dbSourceAllowed 가 하나씩 열고, db_sources 목록(hasAnyDbAccess)은 그대로 열린다(상한 안의 소스만 싣는다).
+{
+  const ext = needForExternalTool("db", "L0");
+  const roleUser: LivelyUser = { userId: "m", email: "", scopes: ["db:x"], projects: ["*"], grants: { db: "read" }, dbSourceCeiling: ["x"] };
+  const legacyUser: LivelyUser = { userId: "m", email: "", scopes: ["db:x"], projects: ["*"], dbSourceCeiling: ["x"] };
+  assert.throws(() => requireNeed(roleUser, ext, "db"), /Forbidden/, "역할 구성원의 소스 한정 토큰이 호출 scope 'db' 인 외부 도구를 부른다");
+  assert.throws(() => requireNeed({ ...roleUser, dbSourceCeiling: [] }, ext, "db"), /Forbidden/, "빈 상한(손상 행)이 호출 scope 'db' 인 외부 도구를 부른다");
+  assert.throws(() => requireNeed(legacyUser, ext, "db"), /Forbidden/, "옛 주체의 소스 한정 토큰이 호출 scope 'db' 인 외부 도구를 부른다");
+  //  무회귀 — 상한 없는 주체(역할 · 옛)는 종전 그대로 통과한다.
+  assert.doesNotThrow(() => requireNeed({ ...roleUser, dbSourceCeiling: undefined }, ext, "db"));
+  assert.doesNotThrow(() => requireNeed({ userId: "m", email: "", scopes: ["db"], projects: ["*"] }, ext, "db"));
+  //  db_sources 목록은 소스 한정 토큰에도 열린다(목록은 visibleDbSources 가 상한으로 거른다).
+  assert.strictEqual(hasAnyDbAccess(roleUser), true, "역할 구성원의 소스 한정 토큰이 db_sources 목록을 못 연다");
+  assert.strictEqual(hasAnyDbAccess(legacyUser), true);
+  assert.strictEqual(hasAnyDbAccess({ ...roleUser, grants: { content: "read" } }), false, "DB 권한 없는 역할 주체가 db_sources 목록을 연다");
+}
+console.log("token-scope: source-limited token vs whole-db checks passed");

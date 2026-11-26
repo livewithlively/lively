@@ -95,8 +95,11 @@ export function intersectGrants(a: Grants, b: Grants): Grants {
  */
 export const DANGEROUS_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>(["admin", "secrets", "harness"]);
 
-/** 권한을 가진 주체의 최소 꼴 — LivelyUser 가 이 꼴이다(이 파일은 context.ts 를 import 하지 않는 잎으로 둔다). */
-export interface GrantHolder { scopes?: readonly string[] | null; grants?: Grants | null }
+/**
+ * 권한을 가진 주체의 최소 꼴 — LivelyUser 가 이 꼴이다(이 파일은 context.ts 를 import 하지 않는 잎으로 둔다).
+ *  dbSourceCeiling — 소스 한정 DB 토큰(db:<source>)의 소스 목록(org/store/tokens.dbSourceCeilingOf). 있으면 permits 가 «DB 전체» 판정을 닫는다.
+ */
+export interface GrantHolder { scopes?: readonly string[] | null; grants?: Grants | null; dbSourceCeiling?: readonly string[] | null }
 
 /**
  * 이 주체가 가진 권한. 새 값(grants)이 실려 있으면 그것, 없으면 옛 scope 를 번역한다.
@@ -121,6 +124,10 @@ export function grantsOf(u: GrantHolder | null | undefined): Grants {
 export function permits(u: GrantHolder | null | undefined, legacyScope: string | null, need: Need | null): boolean {
   if (!need || legacyScope === null) return true;
   if (!u) return false;
+  //  소스 한정 DB 토큰(db:<source>)은 «DB 전체» 를 묻는 판정(외부 앱 도구의 호출 scope 'db' 등)을 통과하지 못한다 — 소스는
+  //   org/store/db-source-grants.dbSourceAllowed 가 하나씩 연다. 옛 주체는 'db:x' 가 'db' 가 아니라 아래 줄에서 이미 그렇다. 역할 주체는
+  //   번역(legacyScopesToGrants)이 'db:x' 를 권한 db 로 바꿔 allows 를 통과하므로 여기서 같은 답으로 맞춘다.
+  if (need.perm === "db" && u.dbSourceCeiling != null) return false;
   if (u.grants) return allows(u.grants, need);
   return Array.isArray(u.scopes) && u.scopes.includes(legacyScope);
 }

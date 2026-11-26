@@ -2,7 +2,7 @@
 // 모든 툴 핸들러는 첫 줄에서 resolveUser() → requireScope() 를 통과해야 한다.
 
 import { SELF_SOURCE } from "./db/self-source.js"; // 값 상수만(런타임 의존 없음 — self-source.ts 는 무-import)
-import { permits, type Grants, type Need } from "./auth/permissions.js";
+import { allows, permits, type Grants, type Need } from "./auth/permissions.js";
 
 export interface LivelyUser {
   userId: string;
@@ -117,7 +117,8 @@ export function requireDbSource(user: LivelyUser, source: string): void {
 //  #604: admin 은 내장 self 소스를 발견/사용할 수 있어야 하므로 db 스코프가 없어도 목록 열람 허용(내용은 canAccessDbSource 로 재차 게이트).
 export function hasAnyDbAccess(user: LivelyUser): boolean {
   //  #5799 — 역할을 받은 구성원: DB 조회 자격이 있거나 관리자면 목록을 본다(어느 소스가 열리는지는 canAccessDbSource 가 다시 잰다).
-  if (user.grants) return permits(user, "db", { perm: "db", level: "read" }) || permits(user, "admin", { perm: "admin", level: "write" });
+  //   allows 로 직접 잰다 — permits 는 소스 한정 토큰(dbSourceCeiling)의 «DB 전체» 판정을 닫지만, 목록은 그 토큰에도 열고 상한 안의 소스만 싣는다(visibleDbSources).
+  if (user.grants) return allows(user.grants, { perm: "db", level: "read" }) || permits(user, "admin", { perm: "admin", level: "write" });
   return user.scopes.includes("admin") || user.scopes.some((s) => s === "db" || s.startsWith("db:"));
 }
 
