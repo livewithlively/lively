@@ -10,6 +10,7 @@ import { api, busy, cardHead, el, errorNote, profileAvatar, state, toast, uiText
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { gainText, legacyCount, lossText, migrationSummary, planTargetText } from './lib/permissions.js';   // #5799 옛 방식 구성원 이관
 import { CUSTOM_CHOICE, LEGACY_CHOICE, MEMBER_DEFAULT_ROLE, PERMISSION_KEYS, PERMISSION_INFO, ROLE_GRANTS, ROLE_INFO, abilityText, accessChoiceOf, accessChoices, accessPayload, extraChoices, extrasForChoice, grantsFor, levelText, roleOfChoice, suggestRole } from './lib/permissions.js';   // #5799 역할 · 권한
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
@@ -118,10 +119,86 @@ function membersEditor(detail, data) {
     onclick: () => { location.hash = '#/system/member-add'; } }) : null;
   const bar = el('div', { class: 'admin-member-searchbar' }, members.length ? searchInp : el('span', {}), addBtn);
 
+  // 옛 방식 구성원 안내(#5799) — scope 로 권한을 받는 구성원이 남아 있으면 관리자에게 역할로 옮기는 길을 보여 준다. 0명이면 아무것도 없다.
+  const legacy = canEdit ? legacyCount(members) : 0;
+  const legacyNote = legacy ? el('div', { class: 'legacy-note' },
+    el('span', { text: '옛 방식으로 권한을 받는 구성원이 ' + legacy + '명 있습니다. 역할로 옮기면 보기와 고치기를 따로 줄 수 있습니다.' }),
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '역할로 옮기기', onclick: () => openRoleMigration(detail) })) : null;
+
   detail.replaceChildren(el('div', { class: 'card' },
     cardHead('구성원 목록'),
+    legacyNote,
     (members.length || canEdit) ? bar : null,
     listCol));
+}
+
+// ── 옛 방식 구성원을 역할로 옮기기(#5799) — 미리보기(누가 어느 역할로 · 얻는 것 · 잃는 것 · DB 소스) → 골라서 옮긴다.
+//  계획은 서버가 계산한다(org_member_role_plan). 여기서는 보여 주고, 고른 사람만 org_member_role_apply 로 보낸다.
+//  한 번에 여러 사람의 권한이 바뀌므로 두 번 눌러야 옮긴다(첫 누름은 «N명을 옮깁니다 — 한 번 더»).
+function openRoleMigration(detail) {
+  const body = el('div', { class: 'role-migration' });
+  let back: any = null;
+  let keep = false;
+  let plan: any = null;
+  const picked = new Set<string>();
+  const load = async () => {
+    body.replaceChildren(el('p', { class: 'admin-hint', text: '계획을 불러오는 중…' }));
+    try {
+      plan = await api('/api/ui/org/members/role-plan?keep=' + (keep ? '1' : '0'));
+      picked.clear();
+      for (const r of plan.members) if (r.role) picked.add(r.id);
+      draw();
+    } catch (e) { body.replaceChildren(errorNote(e, '이관 계획을 불러오지 못했습니다')); }
+  };
+  const draw = () => {
+    const rows = plan.members as any[];
+    const goBtn = el('button', { class: 'btn btn-primary', type: 'button' });
+    let armed = false;
+    const syncBtn = () => { goBtn.textContent = armed ? picked.size + '명을 옮깁니다 — 한 번 더 누르세요' : '고른 ' + picked.size + '명 옮기기'; goBtn.disabled = !picked.size; };
+    const keepChk = el('input', { type: 'checkbox' });
+    keepChk.checked = keep;
+    keepChk.addEventListener('change', () => { keep = keepChk.checked; load(); });
+    const trs = rows.map((r) => {
+      const chk = el('input', { type: 'checkbox', 'aria-label': (r.display_name || r.id) + ' 옮기기' });
+      chk.checked = picked.has(r.id);
+      chk.disabled = !r.role;
+      chk.addEventListener('change', () => { if (chk.checked) picked.add(r.id); else picked.delete(r.id); armed = false; syncBtn(); });
+      const gains = (r.gains || []).map(gainText).join(', ');
+      const losses = (r.losses || []).map(lossText).join(', ');
+      return el('tr', { class: r.role ? '' : 'mig-skip' },
+        el('td', {}, chk),
+        el('td', { class: 'mig-name' }, el('div', { text: r.display_name || r.id }), el('div', { class: 'mig-sub', text: (r.scopes || []).join(' · ') || '권한 없음' })),
+        el('td', { text: planTargetText(r) }),
+        el('td', { class: gains ? '' : 'mig-none', text: gains || '—' }),
+        el('td', { class: losses ? 'mig-loss' : 'mig-none', text: losses || '—' }),
+        el('td', { class: (r.db_sources || []).length ? '' : 'mig-none', text: (r.db_sources || []).join(', ') || '—' }));
+    });
+    const withApps = rows.filter((r) => r.role && r.app_consents > 0).length;
+    goBtn.addEventListener('click', async () => {
+      if (!armed) { armed = true; syncBtn(); return; }
+      goBtn.disabled = true;
+      try {
+        const res: any = await api('/api/ui/org/members/role-apply', { method: 'POST', body: JSON.stringify({ ids: [...picked], keep }) });
+        await loadAdmin(true);
+        toast(res.moved.length + '명을 역할로 옮겼습니다' + (res.remaining ? ' — 옛 방식 ' + res.remaining + '명 남음' : ''));
+        if (back) back.remove();
+        rerenderPanel(detail, 'members-list', state.admin.data);
+      } catch (e) { toast(e.message, true); armed = false; syncBtn(); }
+    });
+    syncBtn();
+    //  replaceChildren 은 null 을 «null» 글자로 그린다 — 없는 조각은 걸러서 넣는다.
+    body.replaceChildren(...[
+      el('p', { class: 'admin-hint', text: '옛 방식 구성원 ' + plan.total + '명 — ' + migrationSummary(plan.counts) }),
+      el('label', { class: 'admin-check' }, keepChk, ' 역할이 낮추는 권한을 개별 권한으로 남기기 (잃는 것이 없어집니다)'),
+      el('div', { class: 'mig-scroll' }, el('table', { class: 'perm-table mig-table' },
+        el('thead', {}, el('tr', {}, ...['', '구성원 · 지금 권한', '옮길 곳', '얻는 것', '잃는 것', '지정할 DB 소스'].map((h) => el('th', { text: h })))),
+        el('tbody', {}, ...trs))),
+      withApps ? el('p', { class: 'admin-hint', text: '연결한 앱이 있는 구성원 ' + withApps + '명: 옮긴 뒤 그 앱은 지식 · 메모리와 분류체계 · 공유폴더를 «맥락» 하나로 읽습니다(둘 중 하나만 허락했어도 둘 다).' }) : null,
+      el('p', { class: 'admin-hint', text: 'DB 는 지금 조회하던 소스에만 지정됩니다. 나중에 등록하는 소스는 따로 지정해야 열립니다. 옮기기 전의 권한은 감사 로그에 남습니다.' }),
+      el('div', { class: 'admin-actions' }, goBtn)].filter(Boolean));
+  };
+  back = overlay('옛 방식 구성원을 역할로 옮기기', body);
+  load();
 }
 
 // ── 구성원 상세/편집 모달(#613 후속) — 카드 클릭 시 그리드 위에 오버레이로 띄운다.

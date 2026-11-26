@@ -435,6 +435,20 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 
 
 /* 역할 · 권한 표(#5799) — 구성원 편집 폼과 읽기 뷰. 권한마다 «이름 · 수준 · 할 수 있는 일» 한 줄. */
+/* 옛 방식 구성원 이관(#5799) — 명부 위 안내 · 미리보기 표 */
+.legacy-note { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--border, rgba(127, 127, 127, .25)); border-radius: 8px; font-size: 13px; }
+.legacy-note > span { flex: 1; min-width: 0; }
+.legacy-note > .btn { flex: none; }
+.role-migration { min-width: 0; }
+.mig-table { table-layout: auto; }
+.mig-table td { overflow-wrap: anywhere; }
+.mig-scroll { max-height: 52vh; overflow: auto; margin: 8px 0; }
+.mig-table th { position: sticky; top: 0; background: var(--surface, #fff); text-align: left; font-weight: 600; font-size: 12px; padding: 5px 8px; white-space: nowrap; }
+.mig-table .mig-name { min-width: 150px; }
+.mig-table .mig-sub { font-size: 11px; opacity: .6; }
+.mig-table .mig-none { opacity: .45; }
+.mig-table .mig-loss { color: var(--danger-fill, #c0392b); }
+.mig-table tr.mig-skip { opacity: .55; }
 .role-box { margin-top: 8px; }
 .perm-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
 .perm-table td { padding: 5px 8px; border-top: 1px solid var(--border, rgba(127, 127, 127, .25)); vertical-align: top; }

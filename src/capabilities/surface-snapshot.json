@@ -416,6 +416,26 @@
   "input_hash": "160459e1264b1b93"
  },
  {
+  "name": "org_member_role_plan",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/members/role-plan"
+  ],
+  "input_hash": "e25d0db07574b8e4"
+ },
+ {
+  "name": "org_member_role_apply",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/members/role-apply"
+  ],
+  "input_hash": "6944947336ae1adc"
+ },
+ {
   "name": "org_member_remove",
   "scope": "admin",
   "mcp": true,
