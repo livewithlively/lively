@@ -50,10 +50,19 @@ t("upstreamCallError: 주입 자격을 스크럽하고, UnauthorizedError 는 �
   assert.equal(unauthorized.message, "refresh rejected for [REDACTED]");
   const http = upstreamCallError(Object.assign(new Error(`Error POSTing to endpoint: bad token ${secret}`), { code: 500 }), secret);
   assert.equal(http.message, "[HTTP 500] Error POSTing to endpoint: bad token [REDACTED]");
+  //  자격 여러 개 — oauth 는 연결 전에 읽은 토큰과 연결 중 SDK 가 갱신한 토큰을 함께 지운다(secretsToScrub).
+  const before = "tok-BEFORE-0123456789", refreshed = "tok-REFRESHED-9876543210";
+  const both = upstreamCallError(Object.assign(new Error(`echo Bearer ${refreshed} (was ${before})`), { code: 500 }), [before, refreshed]);
+  assert.equal(both.message, "[HTTP 500] echo Bearer [REDACTED] (was [REDACTED])");
+  const bothUnauthorized = upstreamCallError(new UnauthorizedError(`rejected ${refreshed}`), [before, refreshed]);
+  assert.ok(bothUnauthorized instanceof UnauthorizedError);
+  assert.equal(bothUnauthorized.message, "rejected [REDACTED]");
 });
 t("proxyCallFailureText: 인증 실패가 아니거나 oauth 서버가 아니면 종전 문구 그대로", () => {
   const oauth = { name: "example-docs", auth_mode: "oauth" as const };
   assert.equal(proxyCallFailureText(oauth, new Error("[HTTP 503] Service Unavailable")), "프록시 호출 실패: [HTTP 503] Service Unavailable");
+  //  [HTTP 401] 은 upstreamCallError 가 붙인 머리에서만 본다 — 상류 본문에 같은 글이 섞여도 인증 실패로 읽지 않는다.
+  assert.equal(proxyCallFailureText(oauth, new Error("[HTTP 500] upstream said: [HTTP 401] nope")), "프록시 호출 실패: [HTTP 500] upstream said: [HTTP 401] nope");
   assert.equal(proxyCallFailureText({ name: "x", auth_mode: "sigv4" as const }, new UnauthorizedError()), "프록시 호출 실패: Unauthorized");
 });
 
