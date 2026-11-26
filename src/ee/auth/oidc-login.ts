@@ -23,14 +23,15 @@ import { itemsPool } from "../../db/client.js";
 import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { getMember, upsertMember, memberIdByEmail, type MemberIdentity } from "../../org/store/members.js";
 import { hasCredential } from "../../auth/local-accounts.js";
-import { DEFAULT_MEMBER_SCOPES } from "../../auth/scopes.js";
+import { DEFAULT_MEMBER_ROLE } from "../../auth/permissions.js";
 import { logger } from "../../log.js";
 import { domainOf, emailFromClaims, type IdTokenClaims, type OidcConfig } from "./oidc.js";
 
 export const OIDC_IDENTITY_SYSTEM = "oidc";
-// 자동 가입 구성원의 초기 권한 — 새 구성원 기본 권한(auth/scopes.ts DEFAULT_MEMBER_SCOPES)과 같은 값. 생략해도 같은 값이
+// 자동 가입 구성원의 초기 권한 — 새 구성원 기본 역할(auth/permissions.ts DEFAULT_MEMBER_ROLE, 구성원). 생략해도 같은 역할이
 //  들어가지만 여기서 명시적으로 준다: '자동 가입이 무엇을 주는가'가 코드에 보여야 검토가 가능하다.
-export const AUTO_PROVISION_SCOPES: readonly string[] = DEFAULT_MEMBER_SCOPES;
+//  DB 는 역할만으로 열리지 않는다 — 소스마다 조회 대상으로 지정돼야 한다(org_db_source_access_set).
+export const AUTO_PROVISION_ROLE = DEFAULT_MEMBER_ROLE;
 
 export interface OidcIdentity { sub: string; email: string; displayName: string | null }
 
@@ -122,7 +123,7 @@ export async function provisionOidcMember(idn: OidcIdentity): Promise<string> {
       system: OIDC_IDENTITY_SYSTEM, external_id: idn.sub, email: idn.email,
       display_name: idn.displayName ?? undefined,
     }],
-    state: "active", scopes: [...AUTO_PROVISION_SCOPES],
+    state: "active", role: AUTO_PROVISION_ROLE,
   }, id, "web");
   logger.info({ memberId: id, domain: domainOf(idn.email) }, "[oidc] 새 구성원으로 시작(allowlist 도메인)");
   return id;

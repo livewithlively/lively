@@ -21,7 +21,8 @@ import { myAiSection } from './me-ai.js';
 import { myLoginsSection } from './me-logins.js';
 import { myAssetsSection } from './me-assets.js';
 import { recordScopeEditor } from './admin-record-scope.js';
-import { MEMBER_DEFAULT_SCOPES, memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
+import { memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
+import { MEMBER_DEFAULT_ROLE } from './lib/permissions.js';   // #5799 새 구성원 기본 역할
 import { memberAiConnectorsPanel } from './admin-ai-connectors.js';   // #4427 구성원 Claude 커넥터 — 정책 스위치 · 연결 현황
 import { reposPanel } from './admin-repos.js';
 import { myNodesPanel, orgNodesPanel } from './admin-nodes.js';
@@ -552,7 +553,7 @@ function membersSection(detail, data) {
 function memberAddSection(detail, data) {
   const formBox = el('div', { class: 'admin-form-narrow' });
   const draw = () => {
-    const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: [...MEMBER_DEFAULT_SCOPES] };
+    const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', role: MEMBER_DEFAULT_ROLE, grants: {} };
     memberForm(formBox, blank, data, detail, true, {
       saveLabel: '구성원 등록', showCancel: false, showRemove: false,
       onSaved: () => { toast('구성원이 등록됐습니다 — 임시 비밀번호를 전달하세요'); draw(); },

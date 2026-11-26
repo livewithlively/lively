@@ -87,3 +87,46 @@ export function suggestRole(scopes: string[] | null | undefined): string {
   if (s.has('admin')) return s.has('runtime') ? 'owner' : 'admin';
   return s.size ? 'member' : 'guest';
 }
+
+/** 새 구성원 등록 폼이 미리 골라 두는 역할 — 서버의 새 구성원 기본 역할(src/auth/permissions.ts DEFAULT_MEMBER_ROLE)과 같은 값. */
+export const MEMBER_DEFAULT_ROLE = 'member';
+
+//  ── 폼의 «권한 주는 방식» 고르기 ──
+//   역할 넷 + «직접 고르기». «직접 고르기» 는 따로 저장되는 종류가 아니다 — 게스트 역할(맥락 보기) 위에 개별 권한을 얹은 것이다.
+//   그래서 게스트인데 개별 권한이 있는 구성원은 «직접 고르기» 로 읽는다. 옛 방식(역할 없음)은 이미 옛 방식인 구성원을 고칠 때만 남는다.
+export const CUSTOM_CHOICE = 'custom';
+export const LEGACY_CHOICE = '';
+
+/** 이 구성원이 지금 어느 방식인가 — 역할 이름 · 'custom'(직접 고르기) · ''(옛 방식). */
+export function accessChoiceOf(m: { role?: string | null; grants?: Grants | null } | null | undefined): string {
+  const role = m?.role;
+  if (!role || !ROLE_GRANTS[role]) return LEGACY_CHOICE;
+  return role === 'guest' && Object.keys(m?.grants || {}).length ? CUSTOM_CHOICE : role;
+}
+
+/** 고른 방식이 실제로 저장되는 역할 — «직접 고르기» 는 게스트. 옛 방식이면 null. */
+export function roleOfChoice(choice: string): string | null {
+  if (choice === CUSTOM_CHOICE) return 'guest';
+  return ROLE_GRANTS[choice] ? choice : null;
+}
+
+/** 폼에 보여 줄 방식들 — 새 구성원과 역할 구성원에게는 옛 방식을 내놓지 않는다(옛 방식으로 새로 들어가는 길을 닫는다). */
+export function accessChoices(m: { role?: string | null } | null | undefined, isNew: boolean): string[] {
+  const all = [...ROLE_KEYS, CUSTOM_CHOICE];
+  return !isNew && !m?.role ? [LEGACY_CHOICE, ...all] : all;
+}
+
+/** 방식을 바꿨을 때 남길 개별 권한 — 그 역할이 이미 주는 것(얹을 것이 아닌 것)은 버린다. 옛 방식이면 전부 버린다. */
+export function extrasForChoice(choice: string, extras: Grants | null | undefined): Grants {
+  const role = roleOfChoice(choice);
+  const out: Grants = {};
+  if (!role) return out;
+  for (const [pk, lv] of Object.entries(extras || {})) if (extraChoices(role, pk).includes(lv)) out[pk] = lv;
+  return out;
+}
+
+/** 저장할 값 — 역할 방식이면 {role, grants}. 옛 방식이면 null(부르는 쪽이 scopes 를 보낸다). */
+export function accessPayload(choice: string, extras: Grants | null | undefined): { role: string; grants: Grants } | null {
+  const role = roleOfChoice(choice);
+  return role ? { role, grants: extrasForChoice(choice, extras) } : null;
+}

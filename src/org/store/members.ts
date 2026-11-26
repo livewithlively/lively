@@ -4,7 +4,7 @@ import { itemsPool } from "../../db/client.js";
 import { IDENTITY_GLOBAL_DEFAULT_EXPR, TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 import { audit } from "./audit.js";
 import { DEFAULT_MEMBER_SCOPES } from "../../auth/scopes.js";
-import { isRole, sanitizeGrants, grantsToLegacyScopes, mergeGrants, ROLE_GRANTS, type Role, type Grants } from "../../auth/permissions.js";
+import { isRole, sanitizeGrants, grantsToLegacyScopes, mergeGrants, ROLE_GRANTS, type Role, type Grants, DEFAULT_MEMBER_ROLE } from "../../auth/permissions.js";
 import { logger } from "../../log.js";
 import {
   parseScopePref, defaultScopePref, applyLocalScopeChange as applyScopeChange, defaultOrgRecordScope,
@@ -896,6 +896,7 @@ export interface MemberInput {
 
 /**
  * 역할 · 개별 권한 입력을 «저장할 값» 으로 푼다(순수 — 시험 대상).
+ *  · 새 구성원은 역할도 scopes 도 주지 않으면 구성원 역할(DEFAULT_MEMBER_ROLE)로 만든다.
  *  · 역할이 정해지면 scopes 는 그 권한의 사본이다. · 역할을 걷으면(null) 개별 권한도 걷고, scopes 는 준 값(없으면 지금 값)이 다시 권한이 된다.
  *  · scopes 만 준 저장(옛 화면 · 옛 클라이언트)은 역할이 있는 구성원이면 **사본과 같을 때만** 받는다 — 옛 화면이 구성원을 통째로 다시
  *    보내는 저장으로 역할이 조용히 사라지지 않게. 다른 값이면 오류(역할을 먼저 걷으라고 말한다).
@@ -904,7 +905,11 @@ export function resolveMemberAccess(
   before: { role: Role | null; grants: Grants; scopes: string[] } | null,
   input: { role?: Role | null; grants?: Grants; scopes?: string[] },
 ): { role: Role | null; grants: Grants | null; scopes: string[] } {
-  const role = input.role === undefined ? (before?.role ?? null) : input.role;
+  //  새 구성원(before 없음)은 역할로 시작한다 — 역할도 scopes 도 주지 않았으면 구성원 역할. scopes 만 준 생성(옛 클라이언트 · 시스템 구성원의
+  //   빈 scopes)과 role: null 을 명시한 생성은 옛 방식 그대로 만든다. 있는 구성원은 주지 않은 값을 지킨다(옛 구성원이 조용히 옮겨지지 않는다).
+  const role = input.role !== undefined ? input.role
+    : before ? before.role
+    : input.scopes === undefined ? DEFAULT_MEMBER_ROLE : null;
   if (role === null) {
     if (input.grants !== undefined && Object.keys(input.grants).length) throw new Error("개별 권한은 역할이 있는 구성원에게만 줄 수 있습니다 — role 을 함께 주세요");
     return { role: null, grants: null, scopes: input.scopes ?? before?.scopes ?? [...DEFAULT_MEMBER_SCOPES] };
