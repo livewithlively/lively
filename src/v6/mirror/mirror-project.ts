@@ -5,7 +5,7 @@ import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
 import { markProjectEmbeddingPending } from "../project-store.js";
-import { merge3, msToKstDate, nativeStatusOf } from "./clickup-fields.js";
+import { merge3, msToKstDate, nativeStatusOf, unechoDescription } from "./clickup-fields.js";
 import { auditConnector, listIdByExternal, projectIdByExternal, resolveMemberId } from "./mirror-common.js";
 import { syncMirrorAttachments, syncMirrorChecklists, syncMirrorCustomFields, syncMirrorLinks, syncMirrorTags } from "./mirror-task-parts.js";
 
@@ -173,16 +173,17 @@ export async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system
         AND updated_at > now() - interval '24 hours' LIMIT 1`,
       [system, prevRow!.id]);
     const hasPendingPush = (pendingPush.rowCount ?? 0) > 0;
+    const { description: theirsDesc, isPushEcho } = unechoDescription(prevRow!.external_base, description);
     const base = hasPendingPush
       ? {
-          name, description, status_category: statusCategory,
+          name, description: theirsDesc, status_category: statusCategory,
           status_raw: statusRaw, priority, start_date: startDate,
           due_date: dueDate, assignee: theirsAssigneeCol, list_ext: listExt,
           tags: theirsTags.map((t) => String(t.name).trim().toLowerCase()),
         } as Record<string, unknown>
       : (prevRow!.external_base ?? null);
     const mName = merge3(base?.name as string | undefined, prevRow!.name, name) ?? "";
-    const mDesc = merge3(base?.description as string | null | undefined, prevRow!.description, description);
+    const mDesc = merge3(base?.description as string | null | undefined, prevRow!.description, theirsDesc);
     const mCat = merge3(base?.status_category as string | undefined, prevRow!.status_category, statusCategory) ?? "unstarted";
     let mRaw = merge3(base?.status_raw as string | null | undefined, prevRow!.status_raw, statusRaw);
     // 레거시 라벨 정규화(#541 업그레이드 경로) — 구버전 미러는 status_raw 에 **원문 라벨**("to do")을 심었고,
@@ -223,6 +224,7 @@ export async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system
     //    theirs 를 기록하면 t==b 로 ours 가 안정 유지되고, 외부 실변경 시에만 채택/충돌 판정이 돈다.
     const newBase = JSON.stringify({
       name: mName, description: mDesc, status_category: mCat,
+      description_echo: isPushEcho && mDesc === theirsDesc ? description : undefined,
       priority: mPriority, start_date: mStart, due_date: mDue,
       status_raw: statusRaw, assignee: theirsAssigneeCol, list_ext: listExt,
       tags: theirsTags.map((t) => String(t.name).trim().toLowerCase()),
@@ -272,7 +274,7 @@ export async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system
 
     // 수렴 — 머지결과가 theirs 와 다르면(우리값 우세) ClickUp 도 merged 로 끌어와야 다음 싱크 진동 안 함 → 아웃박스(같은 client, 원자적).
     //  priority/dates 포함(#541) — mkBody 가 싣는 필드는 전부: base=merged 규칙(위)의 전제가 '우세 시 반드시 푸시'이므로.
-    if (mName !== name || (mDesc ?? null) !== (description ?? null) || mCat !== statusCategory
+    if (mName !== name || (mDesc ?? null) !== (theirsDesc ?? null) || mCat !== statusCategory
       || (mPriority ?? null) !== (priority ?? null) || (mStart ?? null) !== (startDate ?? null) || (mDue ?? null) !== (dueDate ?? null)) {
       await client.query(
         `INSERT INTO external_outbox(entity_id, system, op) VALUES($1,$2,'upsert')

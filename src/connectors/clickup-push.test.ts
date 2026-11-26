@@ -7,7 +7,8 @@
 //
 // 실행: npm run build && node dist/connectors/clickup-push.test.js
 import assert from "node:assert/strict";
-import { isClickupTaskGone, isClickupTaskInaccessible, pushLinkedUpsert } from "./clickup-push.js";
+import { descriptionEchoOf, isClickupTaskGone, isClickupTaskInaccessible, pushLinkedUpsert } from "./clickup-push.js";
+import type { ClickUpTask } from "./clickup/types.js";
 
 let pass = 0;
 const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
@@ -81,6 +82,37 @@ for (const [label, err] of [["401", unauthorized], ["502", serverErr]] as const)
     (e: unknown) => e === detachFail,
   );
   ok("연결 끊기가 실패하면 던진다 — 다음 틱에 다시 본다(조용히 done 으로 닫지 않는다)");
+}
+
+// 푸시 메아리 — 인바운드(toRawItem)가 볼 본문과 같은 값을 남겨야 다음 싱크가 우리 값으로 환원한다.
+{
+  const task = (o: Partial<ClickUpTask>) => o as ClickUpTask;
+  const row = (description: string | null, base_description: string | null = null, base_description_echo: string | null = null) =>
+    ({ description, base_description, base_description_echo });
+  let fetched = 0;
+  const fetchOf = (t: ClickUpTask) => async () => { fetched++; return t; };
+
+  assert.equal(await descriptionEchoOf(row(null), "t", fetchOf(task({ markdown_description: "x" }))), null);
+  assert.equal(fetched, 0);
+  ok("본문 없는 푸시 → 메아리 null · 조회 안 함");
+
+  assert.equal(await descriptionEchoOf(row("a"), "t", fetchOf(task({ markdown_description: "\\<!-- a -->" }))), "\\<!-- a -->");
+  assert.equal(fetched, 1);
+  ok("푸시 뒤 markdown_description 을 메아리로");
+
+  assert.equal(await descriptionEchoOf(row("a"), "t", fetchOf(task({ markdown_description: "", description: "평문" }))), "평문");
+  ok("markdown_description 이 비면 인바운드와 같은 폴백(description)");
+
+  fetched = 0;
+  assert.equal(await descriptionEchoOf(row("a", "a", "e"), "t", fetchOf(task({ markdown_description: "다른 값" }))), "e");
+  assert.equal(fetched, 0);
+  ok("본문이 base 와 같고 메아리가 있으면 재조회 없이 그 메아리");
+
+  assert.equal(await descriptionEchoOf(row("b", "a", "e"), "t", fetchOf(task({ markdown_description: "B" }))), "B");
+  ok("본문이 바뀌었으면 다시 조회");
+
+  assert.equal(await descriptionEchoOf(row("a"), "t", async () => { throw serverErr; }), null);
+  ok("조회 실패 → null(푸시는 성공으로 둔다)");
 }
 
 console.log(`\n${pass} passed`);

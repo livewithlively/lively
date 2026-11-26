@@ -276,6 +276,12 @@ export function extractInlineAttachments(markdown?: string | null): Array<{ exte
   return out;
 }
 
+// 본문: markdown_description(서식·불릿·들여쓰기 무손실) 우선 → description(평문) → text_content 폴백.
+//  마이그레이션 손실 1순위였던 "- 불릿/탭 들여쓰기"는 markdown_description 에만 있다(hydration 필수).
+export function taskBodyOf(task: ClickUpTask): string {
+  return task.markdown_description || task.description || task.text_content || "";
+}
+
 export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
   const { teamId } = ctx;
   const creator = task.creator ?? undefined;
@@ -284,9 +290,7 @@ export function toRawItem(task: ClickUpTask, ctx: ToRawItemCtx): RawItem {
   const email = creator?.email?.trim().toLowerCase() || undefined;
   const actorExternalId = email ?? (creator ? String(creator.id) : undefined);
 
-  // 본문: markdown_description(서식·불릿·들여쓰기 무손실) 우선 → description(평문) → text_content 폴백.
-  //  마이그레이션 손실 1순위였던 "- 불릿/탭 들여쓰기"는 markdown_description 에만 있다(hydration 필수).
-  const body = task.markdown_description || task.description || task.text_content || "";
+  const body = taskBodyOf(task);
 
   // 첨부: hydration 의 attachments[] + 본문 인라인 이미지 파싱을 URL 로 dedup 병합(무손실).
   const nativeAtt = (task.attachments ?? []).map((a) => ({
