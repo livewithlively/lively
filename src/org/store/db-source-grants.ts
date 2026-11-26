@@ -54,6 +54,21 @@ export async function setDbSourceGrants(source: string, subjects: readonly DbSou
   return listDbSourceGrants(source);
 }
 
+/**
+ * 한 소스의 지정에 구성원을 **더한다**(있는 지정은 그대로 · 이미 있으면 아무 일도 없다). 옛 방식 구성원을 역할로 옮길 때 조회가 끊기지 않게 쓴다.
+ *  통째 교체(setDbSourceGrants)를 읽고-고쳐-쓰기로 부르면 그 사이의 다른 저장을 지울 수 있어 따로 둔다.
+ */
+export async function addDbSourceMembers(source: string, memberIds: readonly string[], actor: string | null): Promise<number> {
+  const ids = [...new Set(memberIds.map((x) => String(x ?? "").trim()).filter(Boolean))];
+  if (!source || !ids.length) return 0;
+  const r = await itemsPool.query(
+    `INSERT INTO org_db_source_grant(source, subject_kind, subject_id, granted_at, granted_by)
+       SELECT $1, 'member', i, now(), $3 FROM unnest($2::text[]) AS u(i)
+        WHERE NOT EXISTS(SELECT 1 FROM org_db_source_grant g WHERE g.source=$1 AND g.subject_kind='member' AND g.subject_id=u.i)
+     ON CONFLICT DO NOTHING`, [source, ids, actor]);
+  return r.rowCount ?? 0;
+}
+
 /** 소스를 지울 때 그 소스의 지정도 지운다(이름을 다시 쓴 새 소스가 옛 지정을 물려받지 않게). */
 export async function clearDbSourceGrants(source: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_db_source_grant WHERE source=$1`, [source]);

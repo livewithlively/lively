@@ -17,6 +17,11 @@
 //   W13 accessChoices — 새 구성원 · 역할 구성원에게는 옛 방식이 없다 · 옛 구성원을 고칠 때만 옛 방식이 맨 앞에 있다 · 직접 고르기는 늘 있다
 //   W14 accessPayload — 역할 → {role, grants} · 직접 고르기 → 게스트 + 고른 권한 · 옛 방식 → null · 역할이 이미 주는 개별 권한은 버린다
 //   W15 직접 고르기로 저장한 값은 다시 열면 직접 고르기다(왕복) · 아무것도 안 고른 직접 고르기는 게스트다
+//   W16 planTargetText — 역할 이름 · 역할 + 개별 권한 n개 · 직접 고른 권한 · 옮기지 않음(권한 없음)
+//   W17 gainText · lossText — «하네스 설정 보기» · «코드 고치기 → 보기» · 다 잃으면 «→ 없음» · DB 는 «조회» · 세션은 «있음»
+//   W18 migrationSummary — 0 인 것은 빼고 소유자 → 관리자 → 구성원 → 직접 고른 권한 → 옮기지 않음 순서 · 빈 값은 빈 줄
+//   W19 legacyCount — 역할 없는 구성원 수 · 빈 목록 0
+//   W20 배선 — 명부는 옛 방식 구성원이 있을 때만 안내를 보이고 · 이관 창은 계획을 읽어 고른 id 만 보낸다 · 두 번 눌러야 옮긴다
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -191,6 +196,48 @@ t("W10 배선 — DB 소스의 조회 대상 · 팀 종류를 화면에서 정�
   const teams = code("web/admin-teams.ts");
   assert.match(teams, /lead_member_id: leadM \? leadM\.member_id : null, kind: kindSel\.value \}/, "팀 저장이 종류를 보낸다");
   assert.match(teams, /field\('종류', kindSel\)/, "팀 폼에 종류 칸이 있다");
+});
+
+
+t("W16 planTargetText — 갈 곳을 사람 말로", () => {
+  assert.equal(W.planTargetText({ id: "a", role: "member", grants: {} }), "구성원");
+  assert.equal(W.planTargetText({ id: "a", role: "owner" }), "소유자");
+  assert.equal(W.planTargetText({ id: "a", role: "admin", grants: { secrets: "write" } }), "관리자 + 개별 권한 1개");
+  assert.equal(W.planTargetText({ id: "a", role: "guest", custom: true, grants: { code: "write" } }), "직접 고른 권한");
+  assert.equal(W.planTargetText({ id: "a", role: null, skip: "no-permissions" }), "옮기지 않음 (권한 없음)");
+  assert.equal(W.planTargetText({ id: "a", role: null }), "옮기지 않음");
+});
+
+t("W17 gainText · lossText — 달라지는 것을 사람 말로", () => {
+  assert.equal(W.gainText({ perm: "harness", from: null, to: "read" }), "하네스 설정 보기");
+  assert.equal(W.gainText({ perm: "db", from: null, to: "read" }), "DB 조회");
+  assert.equal(W.gainText({ perm: "session", from: null, to: "write" }), "세션 있음");
+  assert.equal(W.lossText({ perm: "code", from: "write", to: "read" }), "코드 고치기 → 보기");
+  assert.equal(W.lossText({ perm: "secrets", from: "write", to: null }), "자격 고치기 → 없음");
+  assert.equal(W.lossText({ perm: "zzz", from: "write", to: "read" }), "zzz 고치기 → 보기", "모르는 권한은 키 그대로");
+});
+
+t("W18 migrationSummary — 역할별 수 한 줄", () => {
+  assert.equal(W.migrationSummary({ owner: 82, admin: 0, member: 8, custom: 1, skipped: 3 }), "소유자 82명 · 구성원 8명 · 직접 고른 권한 1명 · 옮기지 않음 3명");
+  assert.equal(W.migrationSummary({ admin: 2 }), "관리자 2명");
+  assert.equal(W.migrationSummary({}), "");
+  assert.equal(W.migrationSummary(null), "");
+});
+
+t("W19 legacyCount — 옛 방식 구성원 수", () => {
+  assert.equal(W.legacyCount([{ role: null }, { role: "member" }, {}, { role: "" }]), 3);
+  assert.equal(W.legacyCount([]), 0);
+  assert.equal(W.legacyCount(null), 0);
+});
+
+t("W20 배선 — 명부의 안내와 이관 창", () => {
+  const form = code("web/admin-members.ts");
+  assert.match(form, /const legacy = canEdit \? legacyCount\(members\) : 0;/, "관리자에게만, 옛 방식 구성원 수로");
+  assert.match(form, /const legacyNote = legacy \? /, "0명이면 안내가 없다");
+  assert.match(form, /api\('\/api\/ui\/org\/members\/role-plan\?keep=' \+ \(keep \? '1' : '0'\)\)/, "계획은 서버에서 읽는다");
+  assert.match(form, /body: JSON\.stringify\(\{ ids: \[\.\.\.picked\], keep \}\)/, "고른 id 만 보낸다(all 을 쓰지 않는다)");
+  assert.match(form, /if \(!armed\) \{ armed = true; syncBtn\(\); return; \}/, "두 번 눌러야 옮긴다");
+  assert.match(form, /chk\.disabled = !r\.role;/, "옮기지 않을 구성원은 고를 수 없다");
 });
 
 console.log(`\nweb-permissions: ${pass} 통과`);

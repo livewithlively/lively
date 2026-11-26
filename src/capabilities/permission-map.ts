@@ -116,6 +116,7 @@ export const CAPABILITY_PERMISSIONS: Readonly<Record<Permission, readonly string
   admin: [
     "org_update_section", "org_delete_section", "org_reorder_sections",   // 세션 주입 문구 — 관리자만 바꾼다(#5801)
     "org_db_source_access", "org_db_source_access_set",                  // DB 소스를 조회할 수 있는 사람 · 팀(대상 지정)
+    "org_member_role_plan", "org_member_role_apply",                     // 옛 방식 구성원을 역할로 옮기기(미리보기 · 적용)
     "org_member_upsert", "org_member_reset_password", "org_member_remove", "org_runtime_update", "org_context_job_runner_fill",
     "org_record_scope_get", "org_record_scope_set", "org_storage_status", "org_workspace_status", "org_workspace_analyze", "org_workspace_reclaim",
     "org_canary_status", "org_canary_run", "org_canary_probes", "org_db_sources", "org_db_source_upsert", "org_db_source_remove",

@@ -130,3 +130,44 @@ export function accessPayload(choice: string, extras: Grants | null | undefined)
   const role = roleOfChoice(choice);
   return role ? { role, grants: extrasForChoice(choice, extras) } : null;
 }
+
+//  ── 옛 방식 구성원을 역할로 옮기기(이관 계획을 사람 말로) ──
+export interface LevelChange { perm: string; from: string | null; to: string | null }
+export interface MigrationRow {
+  id: string; display_name?: string | null; kind?: string | null; scopes?: string[];
+  role: string | null; custom?: boolean; grants?: Grants; gains?: LevelChange[]; losses?: LevelChange[];
+  db_sources?: string[]; app_consents?: number; skip?: string | null;
+}
+
+/** 이 구성원이 갈 곳 — 역할 이름 · «직접 고른 권한» · 옮기지 않음. */
+export function planTargetText(r: MigrationRow): string {
+  if (!r.role) return r.skip === 'no-permissions' ? '옮기지 않음 (권한 없음)' : '옮기지 않음';
+  if (r.custom) return '직접 고른 권한';
+  const extra = Object.keys(r.grants || {}).length;
+  return (ROLE_INFO[r.role]?.label || r.role) + (extra ? ' + 개별 권한 ' + extra + '개' : '');
+}
+
+/** 얻는 것 한 조각 — «하네스 설정 보기». */
+export function gainText(c: LevelChange): string {
+  return (PERMISSION_INFO[c.perm]?.label || c.perm) + ' ' + levelText(c.perm, c.to || undefined);
+}
+
+/** 잃는 것 한 조각 — «코드 고치기 → 보기»(다 잃으면 «→ 없음»). */
+export function lossText(c: LevelChange): string {
+  return (PERMISSION_INFO[c.perm]?.label || c.perm) + ' ' + levelText(c.perm, c.from || undefined) + ' → ' + levelText(c.perm, c.to || undefined);
+}
+
+/** 역할별 수를 한 줄로 — 0 인 것은 뺀다. */
+export function migrationSummary(counts: Record<string, number> | null | undefined): string {
+  const c = counts || {};
+  const parts: Array<[string, number]> = [
+    [ROLE_INFO.owner.label, c.owner || 0], [ROLE_INFO.admin.label, c.admin || 0], [ROLE_INFO.member.label, c.member || 0],
+    ['직접 고른 권한', c.custom || 0], ['옮기지 않음', c.skipped || 0],
+  ];
+  return parts.filter(([, n]) => n > 0).map(([k, n]) => k + ' ' + n + '명').join(' · ');
+}
+
+/** 옛 방식(역할 없음)인 구성원 수 — 명부 위 안내에 쓴다. */
+export function legacyCount(members: Array<{ role?: string | null }> | null | undefined): number {
+  return (members || []).filter((m) => !m.role).length;
+}
