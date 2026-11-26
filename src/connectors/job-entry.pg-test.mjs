@@ -81,6 +81,7 @@ function runEntry(args, o = {}) {
 function fakeOp(handler) {
   const sock = path.join(TMP, `op-${Math.random().toString(16).slice(2, 8)}.sock`);
   const reqs = [];
+  const arrived = new Set();   // 요청이 닿을 때마다 부를 것(opReached 가 건다)
   const srv = net.createServer({ allowHalfOpen: true }, (c) => {
     const chunks = [];
     c.on("data", (d) => chunks.push(d));
@@ -89,15 +90,32 @@ function fakeOp(handler) {
       const nl = all.indexOf(0x0a);
       const req = { head: JSON.parse(all.subarray(0, nl).toString("utf8")), body: all.subarray(nl + 1), at: Date.now() };
       reqs.push(req);
+      for (const f of arrived) f(req);
       const r = await handler(req);
       c.end(JSON.stringify(r) + "\n");
     });
   });
-  return new Promise((resolve) => srv.listen(sock, () => resolve({ sock, reqs, close: () => new Promise((r) => srv.close(() => r())) })));
+  return new Promise((resolve) => srv.listen(sock, () => resolve({ sock, reqs, arrived, close: () => new Promise((r) => srv.close(() => r())) })));
 }
 let opReply = async () => ({ ok: true });
 const op = await fakeOp((req) => opReply(req));
 const opsOf = (kind) => op.reqs.filter((r) => r.head.op === kind);
+/**
+ * 이 판에 이 op 요청이 닿을 때까지 기다린다(상한 ms) — 닿으면 true, 끝내 안 오면 false.
+ *  감시(watchRunUnit)는 끝(done)을 먼저 알리고 치움(reap)은 그 **뒤에** 기다리지 않고 던진다(best-effort — 못 치운 판은 다음 시작의
+ *  결과 폴더 청소가 줍는다). 그래서 done 직후 한 번 보면 reap 이 아직 소켓 위에 있을 수 있다 — 붐비는 러너에서 DB 한 번 왕복이
+ *  먼저 끝나 «치움» 단언만 떨어졌다(CI 45631386734 외 2회). 시간을 재워 넘기지 않고 도착을 기다린다.
+ */
+function opReached(kind, unit, ms = 5_000) {
+  const hit = (q) => q.head.op === kind && q.head.unit === unit;
+  if (op.reqs.some(hit)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (v) => { op.arrived.delete(on); clearTimeout(t); resolve(v); };
+    const on = (q) => { if (hit(q)) done(true); };
+    const t = setTimeout(() => done(false), ms);
+    op.arrived.add(on);
+  });
+}
 
 try {
   await tracker.listConnectorRuns();   // 표 보장(ensureRunSchema)
@@ -214,9 +232,9 @@ try {
     //  판 추적기 흉내 — 행을 ok 로 닫으면 감시가 끝나고 판을 치운다
     await itemsPool.query(`UPDATE connector_run SET status='ok', exit_code=0, finished_at=now() WHERE id=$1`, [run.runId]);
     const d = await Promise.race([run.done, sleep(15_000).then(() => "timeout")]);
-    await sleep(300);
-    chk("W-a 감시 — 행이 ok 가 되면 ok 로 끝나고 판을 치운다", d !== "timeout" && d.ok === true && opsOf("reap").some((q) => q.head.unit === `lvly-task-pgtest-${run.runId}-j1`),
-      JSON.stringify({ d, reaps: opsOf("reap").map((q) => q.head.unit) }));
+    const reaped = await opReached("reap", `lvly-task-pgtest-${run.runId}-j1`);
+    chk("W-a 감시 — 행이 ok 가 되면 ok 로 끝나고 판을 치운다", d !== "timeout" && d.ok === true && reaped,
+      JSON.stringify({ d, reaped, reaps: opsOf("reap").map((q) => q.head.unit) }));
   }
   {
     //  동시 시작 — 같은 범위로 둘이 겹쳐 들어와도 판 1 · running 행 1(트랜잭션 advisory lock).
@@ -339,9 +357,9 @@ try {
     const id = await insertRun({ system: "__runjob_w6", quietSec: 600 });
     const d = await Promise.race([tracker.watchRunUnit(id, "pgtest", { everyMs: 200 }), sleep(10_000).then(() => "timeout")]);
     const row = await rowOf(id);
-    chk("W-h 감시: 박동 끊김 + 판 죽음 → error(사유) · 치움", d !== "timeout" && d.ok === false && row.status === "error" && row.log.includes("oom-kill")
-      && opsOf("reap").some((q) => q.head.unit === `lvly-task-pgtest-${id}-j1`),
-      JSON.stringify({ d, status: row.status, log: row.log.slice(-200) }));
+    const reaped = await opReached("reap", `lvly-task-pgtest-${id}-j1`);
+    chk("W-h 감시: 박동 끊김 + 판 죽음 → error(사유) · 치움", d !== "timeout" && d.ok === false && row.status === "error" && row.log.includes("oom-kill") && reaped,
+      JSON.stringify({ d, status: row.status, log: row.log.slice(-200), reaped, reaps: opsOf("reap").map((q) => q.head.unit) }));
     //  감시 — 박동 끊김 + 판 active → 닫지 않는다
     opReply = async (req) => (req.head.op === "status" ? { ok: true, load: "loaded", active: "active", result: "success", exec_code: "0", exec_status: "0" } : { ok: true });
     const id2 = await insertRun({ system: "__runjob_w6b", quietSec: 600 });
