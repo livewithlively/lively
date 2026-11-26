@@ -37,7 +37,9 @@ const MAX_RESTORE_BYTES = 8 * 1024 * 1024;
 
 /**
  * 감시 대상. `keys` 가 있으면 **그 최상위 키만** 보고 그 키만 부분 원복한다(나머지는 하네스 것).
- * 없으면 파일 전체를 본다 — 하네스가 스스로 갱신하지 않는 파일에만 쓴다.
+ * `json` 이면 파일 전체를 **JSON 내용으로** 본다(서식·끝 줄바꿈·키 순서 무시) — 원복은 원래 바이트 그대로.
+ *  라이블리 자신이 세션마다 같은 내용을 다른 서식으로 다시 쓰는 파일에 쓴다(아래 hooks-config.json).
+ * 둘 다 없으면 파일 전체를 바이트로 본다 — 하네스가 스스로 갱신하지 않는 파일에만 쓴다.
  *
  * 경로 정본은 kit/hooks/harness-registry.mjs 의 HARNESS[*].home/configFile 이다(여기선 그 결과만 나열 —
  *  이 파일은 발행 번들 밖 러너 전용이라 정적 import 를 걸지 않는다. 레지스트리가 바뀌면 여기도 맞춘다).
@@ -70,7 +72,11 @@ export function watchedTargets(env = process.env, home = homedir()) {
     { path: join(home, ".lively", "token") },
     { path: join(home, ".lively", "gateway-url") },
     { path: join(home, ".lively", "mcp-servers.json") },
-    { path: join(home, ".lively", "hooks-config.json") },
+    // hooks-config.json 은 라이블리 세션 시작 훅(session-preload refreshRuntimeConfig)이 **세션마다** 게이트웨이 값으로 다시 쓴다(끝 줄바꿈 없음).
+    //  설치기·자가 업데이트(user-install — 발행 묶음 사본)는 끝 줄바꿈을 붙인다. 그래서 테스트가 도는 사이 그 기계에서 세션이 하나
+    //  열리면 같은 설정인데 바이트가 달라져 «테스트 격리 실패» 로 잡혔고, 가드가 **그 세션의 쓰기를 되돌렸다**(2026-11-26 실측 — 쓴 프로세스는
+    //  `claude` 세션의 session-preload 였고 시험 자식이 아니었다). 내용(JSON)으로만 본다 — 새는 시험은 늘 다른 값을 쓰므로 그대로 잡힌다.
+    { path: join(home, ".lively", "hooks-config.json"), json: true },
     { path: join(home, ".lively", "kit-version") },
   ];
   const ccd = String(env.CLAUDE_CONFIG_DIR || "").trim();
@@ -91,14 +97,23 @@ export function watchedTargets(env = process.env, home = homedir()) {
   return t.filter(({ path }) => !seen.has(path) && seen.add(path));
 }
 
-// 감시 대상의 상태. keys 가 있으면 그 키들만 뽑아 정규화한 문자열로 본다.
+// JSON 내용의 정규형 — 객체 키를 정렬해 서식·키 순서와 무관하게 같은 내용이면 같은 문자열이 된다.
+const canonical = (v) => Array.isArray(v) ? v.map(canonical)
+  : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v;
+
+// 감시 대상의 상태. keys 가 있으면 그 키들만 뽑아 정규화한 문자열로 본다. json 이면 문서 전체의 정규형으로 본다(원복용 바이트도 든다).
 //  없으면 exists:false 로 **없다는 사실도 기록**한다(테스트가 없던 파일을 새로 만드는 것도 오염이다).
-function readState({ path: p, keys }) {
+function readState({ path: p, keys, json }) {
   try {
     if (!existsSync(p)) return { exists: false };
     const size = statSync(p).size;
     if (size > MAX_RESTORE_BYTES) return { exists: true, size, big: true };
     const data = readFileSync(p);
+    if (json) {
+      // 파싱 실패(잘린 파일 등)면 바이트 비교로 안전 폴백 — 부분 감시와 같은 규칙.
+      try { return { exists: true, size, data, view: JSON.stringify(canonical(JSON.parse(data.toString("utf8")))) }; }
+      catch { return { exists: true, size, data }; }
+    }
     if (!keys) return { exists: true, size, data };
     // 부분 감시 — 파싱 실패(잘린 파일 등)면 전체 비교로 안전 폴백.
     try {

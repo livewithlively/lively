@@ -2,8 +2,8 @@
 // 하네스 주입 프롬프트 표시 사양테스트 — 판정 모듈 · 러너 표시 · 시드 훅 침묵을 함께 고정한다.
 //  하네스가 밀어 넣은 메시지(작업 끝 알림·하위 에이전트 보고·슬래시 래퍼·리마인더)도 UserPromptSubmit 의 prompt 로 온다.
 //  사람 의도에 반응하는 훅이 여기에 반응하면 엉뚱한 위탁·핸드오버·이름짓기 안내가 끼어든다.
-//  실행: node scripts/run-tests.mjs prompt-origin (직접 실행하려면 LIVELY_HOST_EFFECTS_TEST_MODE=sandbox 필요 —
-//   러너 하네스가 심는 LIVELY_HOST_EFFECTS=deny 가 그 값 없이는 훅 자식 spawn 까지 막는다)
+//  실행: node scripts/run-tests.mjs prompt-origin 또는 node kit/hooks/prompt-origin.test.mjs — 호스트 효과 시험 모드(deny + sandbox)는
+//   러너 하네스(kit/testlib/run-custom-harness.mjs)가 자식 env 에 직접 심는다. 시드 훅도 샌드박스 홈·임시폴더에서 띄운다(SEED_ENV).
 import { readFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { INJECTED_PROMPT_RE, isInjectedPrompt } from "./prompt-origin.mjs";
 import { SANDBOX, ok, bad, run, dbg, finish } from "../testlib/run-custom-harness.mjs";
-import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -135,14 +135,16 @@ function received(r, tag) {
 
 // ── 시드 훅을 실제 프로세스로 띄운다 ──
 const HOOK_TMP = join(SANDBOX, "seed-tmp");
+const HOOK_HOME = join(SANDBOX, "seed-home");
 mkdirSync(HOOK_TMP, { recursive: true });
+mkdirSync(HOOK_HOME, { recursive: true });
 const SEED_ENV = {
-  ...process.env, ...offlineLivelyEnv(),
+  // 홈도 샌드박스로 돌린다 — 실 홈을 물려주면 knowledge-recall 이 토큰이 빈 칸에서 실 ~/.lively/token·gateway-url 로 폴백한다.
+  ...process.env, ...sandboxEnv({ home: HOOK_HOME, tmp: HOOK_TMP }), LIVELY_HOME: HOOK_HOME,
   LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
   // 억제 env 를 비운다 — 상속되면 훅이 통째로 침묵해 '표시 때문에 침묵' 단언이 공짜로 통과한다(대조군이 잡는다).
   LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "", LIVELY_TASK_WS: "", LIVELY_SESSION_LABEL_SOURCE: "",
   LIVELY_HARNESS: "claude", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "",
-  TMPDIR: HOOK_TMP, TEMP: HOOK_TMP, TMP: HOOK_TMP,
 };
 function runSeed(id, input, env = {}) {
   return new Promise((resolve) => {

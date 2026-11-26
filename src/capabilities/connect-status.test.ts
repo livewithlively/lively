@@ -2,15 +2,22 @@
 //  실행: npm run build && node dist/capabilities/connect-status.test.js
 //  ⚠ DB 를 요구하지 않는다 — DB 주소가 없으면 앱 상태 조회가 즉시 실패한다(db/client.ts #2457). 그 상태가 곧 N12(모든 앱 조회 실패)다.
 import assert from "node:assert/strict";
-import { decideConnectNext, type ConnectFacts } from "../org/connect-next.js";
-import { registry } from "./index.js";
-import { CONNECT_APPS, routeFactsOf, githubViaOf, githubSlotKindOf, claudeLoginOf, aiStatusByName, stalledOf, markStalled } from "./connect-status.js";
-import { tokenMeta } from "../org/credentials/oauth-broker.js";
-import { decideRoutes, appRouteState } from "../org/connect-routes.js";
-import { APP_REGISTRATIONS, registrationView, registrationMarkdown } from "../org/connect-registration.js";
-import { REGISTER_SAVE, slackServerPayload, slackServerUsable } from "./connect-register.js";
-import { MCP_SERVER_PRESETS } from "../org/delivery/mcp-server-presets.js";
-import { CONNECT_SKILL_SPECS } from "../org/delivery/connect-skills.js";
+import type { ConnectFacts } from "../org/connect-next.js";
+
+// «DB 없는 환경»(N12) · «셀프호스트»(N12 variant) 는 이 시험의 전제다 — 실행한 셸에서 물려받지 않고 여기서 만든다.
+//  db/client.ts 는 import 되는 순간 ITEMS_DATABASE_URL 을 읽으므로 **정적 import 전에** 지운다(그래서 아래는 동적 import).
+//  셸에 그 주소가 있으면(pg-test 를 돌리던 개발자) N12 가 실제 DB 를 조회해 «앱마다 error» 가 깨졌다.
+delete process.env.ITEMS_DATABASE_URL;
+delete process.env.LIVELY_TENANT_HEADER_SECRET;
+const { decideConnectNext } = await import("../org/connect-next.js");
+const { registry } = await import("./index.js");
+const { CONNECT_APPS, routeFactsOf, githubViaOf, githubSlotKindOf, claudeLoginOf, aiStatusByName, stalledOf, markStalled } = await import("./connect-status.js");
+const { tokenMeta } = await import("../org/credentials/oauth-broker.js");
+const { decideRoutes, appRouteState } = await import("../org/connect-routes.js");
+const { APP_REGISTRATIONS, registrationView, registrationMarkdown } = await import("../org/connect-registration.js");
+const { REGISTER_SAVE, slackServerPayload, slackServerUsable } = await import("./connect-register.js");
+const { MCP_SERVER_PRESETS } = await import("../org/delivery/mcp-server-presets.js");
+const { CONNECT_SKILL_SPECS } = await import("../org/delivery/connect-skills.js");
 
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };

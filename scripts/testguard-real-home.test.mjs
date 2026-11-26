@@ -169,5 +169,39 @@ const writeJson = (p, o) => { mkdirSync(join(p, ".."), { recursive: true }); wri
     : bad("⑪ 중복", JSON.stringify(plain.filter((p) => p.includes(".grok"))));
 }
 
+// ── ⑫ ~/.lively/hooks-config.json — 같은 설정을 다른 서식으로 다시 쓰면 → **탐지하지 않는다**(라이블리 자기 갱신) ──
+//  세션 시작 훅(session-preload refreshRuntimeConfig)이 세션마다 이 파일을 게이트웨이 값으로 다시 쓰는데 끝 줄바꿈이 없고,
+//  설치기·자가 업데이트(user-install — 발행 묶음 사본)는 끝 줄바꿈을 붙인다. 테스트가 도는 사이 실제 세션이 하나 열리면
+//  같은 설정인데 바이트가 달라져 «테스트 격리 실패» 가 났고, 가드가 **그 세션의 쓰기를 되돌렸다**(2026-11-26 실측 — ② 와 같은 부류).
+{
+  const home = box(), p = join(home, ".lively", "hooks-config.json");
+  const cfg = { hooks: { session_preload: true, work_flag: true }, writeback_notice: "기록하세요" };
+  mkdirSync(join(home, ".lively"), { recursive: true });
+  writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");             // 설치기 사본 서식(끝 줄바꿈)
+  const snap = snapshotRealHome(ENV, home);
+  const rewritten = JSON.stringify({ writeback_notice: cfg.writeback_notice, hooks: cfg.hooks }, null, 2);   // 세션 훅 서식(줄바꿈 없음 · 키 순서도 달라도)
+  writeFileSync(p, rewritten);
+  eq("⑫ 같은 설정의 서식만 바뀜 — 탐지하지 않는다", verifyRealHome(snap).filter((c) => c.path === p).length, 0);
+  readFileSync(p, "utf8") === rewritten
+    ? ok("⑫-b 세션 훅이 쓴 내용을 되돌리지 않는다")
+    : bad("⑫-b", `되돌렸다: ${JSON.stringify(readFileSync(p, "utf8").slice(-20))}`);
+  rmSync(home, { recursive: true, force: true });
+}
+
+// ── ⑬ ~/.lively/hooks-config.json — 설정 **내용**이 바뀌면 여전히 잡고 원래 바이트로 되돌린다(⑫ 가 감시를 끄지 않았다는 증거) ──
+{
+  const home = box(), p = join(home, ".lively", "hooks-config.json");
+  const original = JSON.stringify({ hooks: { work_flag: true } }, null, 2) + "\n";
+  mkdirSync(join(home, ".lively"), { recursive: true });
+  writeFileSync(p, original);
+  const snap = snapshotRealHome(ENV, home);
+  writeFileSync(p, JSON.stringify({ hooks: { work_flag: false }, hook_grace_ms: 0 }));   // 새는 시험이 쓸 법한 값
+  const hit = verifyRealHome(snap).find((c) => c.path === p);
+  hit && hit.change === "수정됨" && hit.restored && readFileSync(p, "utf8") === original
+    ? ok("⑬ 설정 내용 오염 — 탐지하고 원래 바이트로 원복한다")
+    : bad("⑬", `hit=${JSON.stringify(hit)} after=${JSON.stringify(readFileSync(p, "utf8"))}`);
+  rmSync(home, { recursive: true, force: true });
+}
+
 console.log(`testguard-real-home tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);

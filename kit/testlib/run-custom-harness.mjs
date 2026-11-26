@@ -22,6 +22,11 @@ mkdirSync(TMP, { recursive: true });
 
 // 게이트웨이에 닿을 수 없는 구성원 머신을 재현한다 — 토큰/URL 이 없어야 러너가 로컬 캐시(우리가 심은 훅)로 폴백한다.
 export const ENV = { ...process.env, ...offlineLivelyEnv(), HOME, LIVELY_HOME: HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "",
+  // 호스트 효과는 시험 샌드박스(deny + sandbox)로 **명시**한다 — 물려받지 않는다. offlineLivelyEnv() 가 deny 를 세우는데, 시험 모드가
+  //  없으면 러너가 훅을 띄우는 node(프로세스·스레드)까지 막혀 «HostEffects denied external-cli: node» 로 모든 훅이 크래시한다.
+  //  종전엔 이 값을 scripts/run-tests.mjs(test-runner-env.mjs)가 심어 줄 때만 초록이라, 같은 시험을 `node <파일>` 로 돌리면 개발자
+  //  기계에서만 빨갰다(prompt-origin R1~R3 · run-custom · run-custom-cost). sandbox 는 node·임시폴더·루프백 고포트만 연다(host-effects.mjs).
+  LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox",
   // 러너 조정 env 는 시험이 정한 값만 — 라이블리 세션 안에서 돌리면 그 세션의 LIVELY_HARNESS(예: codex)가 상속돼 예산이 바뀐다(#5034
   //  재리뷰). 실행 방식만은 RUN_CUSTOM_TEST_HOOK_RUNTIME 으로 시험 묶음 전체를 돌릴 수 있다(run-custom-worker-parity 가 worker 로).
   LIVELY_HARNESS: "", LIVELY_HOOK_EVENT_BUDGET_MS: "", LIVELY_HOOK_LIST_TTL_MS: "",
