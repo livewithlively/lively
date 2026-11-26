@@ -8,8 +8,10 @@
 //
 //  엣지 표:
 //   D1 기본 권한 = items · context · memory · db · code (비지 않음 · 위험 권한 admin · runtime 없음 · 전부 실재하는 scope)
-//   D2 웹 등록 폼의 미리 체크된 권한(web/admin-members.ts MEMBER_DEFAULT_SCOPES) = 서버 값
-//   D3 웹에서 새 구성원 폼을 여는 두 자리가 그 상수를 쓴다(손으로 적은 배열 없음)
+//   D2 웹 등록 폼이 미리 골라 두는 역할(web/lib/permissions.ts MEMBER_DEFAULT_ROLE) = 서버의 새 구성원 기본 역할(#5799 — 새 구성원은 역할로 만든다)
+//   D3 웹에서 새 구성원 폼을 여는 두 자리가 그 상수를 쓰고, 옛 scopes 를 싣지 않는다(옛 방식으로 새로 만드는 길이 없다)
+//   D6 구성원 역할의 scopes 사본 = 옛 기본 권한(역할로 만든 구성원도 scope 로 재는 자리에서 종전과 같은 값을 보인다)
+//   D7 회사 계정 자동 가입이 주는 것 = 새 구성원 기본 역할
 //   D4 DB 칸 기본값(칸을 만드는 문장 · 옛 DB 를 맞추는 문장) = 서버 값
 //   D5 공용 시트 허용 권한은 함께 넓어지지 않았다(items · context · memory 그대로)
 import test from "node:test";
@@ -18,6 +20,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_MEMBER_SCOPES, DANGEROUS_SCOPES, isScope } from "./scopes.js";
 import { SEAT_BASIC_SCOPES, seatElevated } from "../ai-runs/plan.js";
+import { DEFAULT_MEMBER_ROLE, ROLE_GRANTS, grantsToLegacyScopes } from "./permissions.js";
 
 const SRC_ROOT = new URL("../", import.meta.url).pathname.replace("/dist/", "/src/");
 const REPO_ROOT = path.resolve(SRC_ROOT, "..");
@@ -37,19 +40,20 @@ test("D1 기본 권한은 items · context · memory · db · code 다", () => {
   }
 });
 
-test("D2 웹 등록 폼의 미리 체크된 권한이 서버 값과 같다", () => {
-  const m = /export const MEMBER_DEFAULT_SCOPES = \[([^\]]*)\]/.exec(code("web/admin-members.ts"));
-  assert.ok(m, "web/admin-members.ts 에 MEMBER_DEFAULT_SCOPES 가 있어야 한다");
-  const web = [...m![1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
-  assert.deepEqual(sorted(web), EXPECTED);
+test("D2 웹 등록 폼이 미리 골라 두는 역할이 서버 값과 같다", () => {
+  const m = /export const MEMBER_DEFAULT_ROLE = '([^']+)'/.exec(code("web/lib/permissions.ts"));
+  assert.ok(m, "web/lib/permissions.ts 에 MEMBER_DEFAULT_ROLE 이 있어야 한다");
+  assert.equal(m![1], DEFAULT_MEMBER_ROLE);
+  assert.equal(DEFAULT_MEMBER_ROLE, "member");
 });
 
-test("D3 새 구성원 폼을 여는 두 자리가 상수를 쓴다", () => {
+test("D3 새 구성원 폼을 여는 두 자리가 역할 상수를 쓰고 옛 scopes 를 싣지 않는다", () => {
   for (const rel of ["web/admin-members.ts", "web/admin-shell.ts"]) {
-    const blanks = [...code(rel).matchAll(/const blank = \{[^}]*\}/g)].map((x) => x[0]);
+    const blanks = [...code(rel).matchAll(/const blank = \{[^\n]*\};/g)].map((x) => x[0]);
     assert.ok(blanks.length >= 1, `${rel} 에 새 구성원 폼의 빈 값이 있어야 한다(관측 장치가 살아 있나)`);
     for (const b of blanks) {
-      assert.match(b, /scopes: \[\.\.\.MEMBER_DEFAULT_SCOPES\]/, `${rel} 의 빈 값이 상수를 쓰지 않는다: ${b}`);
+      assert.match(b, /role: MEMBER_DEFAULT_ROLE\b/, `${rel} 의 빈 값이 역할 상수를 쓰지 않는다: ${b}`);
+      assert.doesNotMatch(b, /scopes:/, `${rel} 의 빈 값이 옛 scopes 를 싣는다: ${b}`);
     }
   }
 });
@@ -65,4 +69,15 @@ test("D5 공용 시트 허용 권한은 넓어지지 않았다", () => {
   assert.deepEqual(sorted([...SEAT_BASIC_SCOPES]), ["context", "items", "memory"]);
   assert.equal(seatElevated(["items", "context", "memory"]), false);
   assert.equal(seatElevated([...DEFAULT_MEMBER_SCOPES]), true, "기본값 그대로 만든 구성원은 db · code 를 내려야 공용 시트가 된다");
+});
+
+test("D6 구성원 역할의 scopes 사본은 옛 기본 권한과 같다", () => {
+  assert.deepEqual(sorted(grantsToLegacyScopes(ROLE_GRANTS[DEFAULT_MEMBER_ROLE])), EXPECTED);
+});
+
+test("D7 회사 계정 자동 가입은 새 구성원 기본 역할을 준다", () => {
+  const src = code("src/ee/auth/oidc-login.ts");
+  assert.match(src, /export const AUTO_PROVISION_ROLE = DEFAULT_MEMBER_ROLE;/);
+  assert.match(src, /state: "active", role: AUTO_PROVISION_ROLE,/, "자동 가입 저장이 역할을 준다");
+  assert.doesNotMatch(src, /state: "active", scopes:/, "자동 가입 저장이 옛 scopes 를 주지 않는다");
 });

@@ -2,7 +2,12 @@
 //  실제 행에 적히는 값과 로그인 경로는 auth/member-role.pg-test.mjs 가 잰다. 여기는 «무엇을 저장할 것인가» 의 규칙만.
 //
 //  엣지 표:
-//   M1 새 구성원 · 아무것도 안 줌            → 옛 구성원 · 기본 scope 다섯
+//   M1 새 구성원 · 아무것도 안 줌            → 구성원 역할 · 개별 권한 빈 것 · scopes = 그 사본(기본 다섯)
+//   M13 새 구성원 · scopes 만 줌(빈 배열 포함) → 옛 방식 그대로(옛 클라이언트 · 권한 없는 시스템 구성원)
+//   M14 새 구성원 · 개별 권한만 줌            → 구성원 역할 + 그 개별 권한
+//   M15 새 구성원 · role: null 을 명시         → 옛 방식 · 기본 scope 다섯(일부러 고른 옛 방식)
+//   M16 옛 구성원 · 아무것도 안 줌            → 그대로(이름만 고친 저장이 권한을 역할로 옮기지 않는다)
+//   M17 새 구성원 · scopes + 개별 권한(역할 없음) → 거절
 //   M2 옛 구성원 · scopes 만 줌               → 그 scopes 그대로(역할 없음)
 //   M3 역할을 줌                              → 역할 · 개별 권한 빈 것 · scopes = 그 역할의 사본
 //   M4 역할 + 개별 권한                       → 사본에 개별 권한이 비친다(하네스 설정 고치기 → runtime)
@@ -25,11 +30,38 @@ const FIVE = sorted(DEFAULT_MEMBER_SCOPES);
 const legacy = (scopes: string[]) => ({ role: null, grants: {} as Grants, scopes });
 const roleMember = (extras: Grants = {}) => ({ role: "member" as const, grants: extras, scopes: [...DEFAULT_MEMBER_SCOPES] });
 
-test("M1 새 구성원은 옛 구성원으로 시작한다", () => {
+test("M1 새 구성원은 구성원 역할로 시작한다", () => {
   const r = resolveMemberAccess(null, {});
+  assert.equal(r.role, "member");
+  assert.deepEqual(r.grants, {});
+  assert.deepEqual(sorted(r.scopes), FIVE);
+});
+
+test("M13 새 구성원에게 scopes 만 주면 옛 방식 그대로 만든다", () => {
+  assert.deepEqual(resolveMemberAccess(null, { scopes: ["items", "admin"] }), { role: null, grants: null, scopes: ["items", "admin"] });
+  assert.deepEqual(resolveMemberAccess(null, { scopes: [] }), { role: null, grants: null, scopes: [] }, "권한 없는 시스템 구성원");
+});
+
+test("M14 새 구성원에게 개별 권한만 주면 구성원 역할 위에 얹는다", () => {
+  const r = resolveMemberAccess(null, { grants: { code: "write" } });
+  assert.equal(r.role, "member");
+  assert.deepEqual(r.grants, { code: "write" });
+});
+
+test("M15 새 구성원에게 role: null 을 명시하면 옛 방식이다", () => {
+  const r = resolveMemberAccess(null, { role: null });
   assert.equal(r.role, null);
   assert.equal(r.grants, null);
   assert.deepEqual(sorted(r.scopes), FIVE);
+});
+
+test("M16 옛 구성원은 아무것도 안 주면 그대로다", () => {
+  assert.deepEqual(resolveMemberAccess(legacy(["items", "admin"]), {}), { role: null, grants: null, scopes: ["items", "admin"] });
+  assert.deepEqual(resolveMemberAccess(legacy([]), {}), { role: null, grants: null, scopes: [] });
+});
+
+test("M17 새 구성원에게 scopes 와 개별 권한을 역할 없이 함께 주면 거절한다", () => {
+  assert.throws(() => resolveMemberAccess(null, { scopes: ["items"], grants: { code: "write" } }), /역할이 있는 구성원/);
 });
 
 test("M2 옛 구성원의 scopes 저장은 종전 그대로", () => {

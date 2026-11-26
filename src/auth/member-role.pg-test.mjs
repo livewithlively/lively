@@ -16,6 +16,9 @@
 //   G11 관리자(admin scope · runtime 없음)가 소유자를 주려 함 → 403(내가 갖지 않은 하네스 설정 고치기) · 관리자 역할은 줄 수 있다
 //   G12 역할을 건드리지 않는 저장(이름만)           → 역할 · 개별 권한이 그대로다
 //   G13 역할 구성원에게 DB 소스는 기본 불가         → 조회 자격이 있어도 소스는 닫혀 있다 · 옛 구성원은 종전 그대로
+//   G14 아무것도 정하지 않고 만든 새 구성원      → role='member' · grants={} · scopes 사본 다섯 · 세션에 grants 가 실린다 · DB 소스는 닫혀 있다
+//   G15 scopes 만 주고 만든 새 구성원(옛 클라이언트) → 옛 방식 그대로(role NULL)
+//   G16 옛 구성원의 이름만 고친 저장                → 역할로 옮겨지지 않는다
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/items/store.js`);
 const store = await import(`${DIST}/org/store.js`);
@@ -164,6 +167,23 @@ try {
     canAccessDbSource({ userId: "u", email: "", scopes: ["db"], projects: [] }, "crm") === true && canAccessDbSource(s1, "crm") === false, "");
   const ownerSession = { ...s13, grants: ROLE_GRANTS.owner };
   chk("G13c 관리 고치기가 있으면 내장 self 소스만 열린다", canAccessDbSource(ownerSession, "self") === true && canAccessDbSource(ownerSession, "crm") === false, "");
+
+  // ── G14 · G15 · G16 새 구성원의 기본값 ──
+  const fresh = `${P}fresh`;
+  await upsert({ id: fresh, display_name: "fresh" });
+  const r14 = await row(fresh);
+  chk("G14a 아무것도 정하지 않은 새 구성원은 구성원 역할", r14?.role === "member" && J(r14?.grants) === "{}" && sameSet(r14.scopes, FIVE), J(r14));
+  const s14 = await session(fresh);
+  chk("G14b 그 웹 세션에 새 권한이 실린다(맥락 고치기 · 코드 보기 · 관리 없음)",
+    !!s14?.grants && s14.grants.content === "write" && s14.grants.code === "read" && !s14.grants.admin, J(s14?.grants));
+  chk("G14c DB 소스는 지정 전까지 닫혀 있다", canAccessDbSource(s14, "crm") === false, "");
+  const viaScopes = `${P}viascopes`;
+  await upsert({ id: viaScopes, display_name: "via scopes", scopes: ["items", "context"] });
+  const r15 = await row(viaScopes);
+  chk("G15 scopes 만 주고 만들면 옛 방식 그대로", r15?.role === null && r15?.grants === null && sameSet(r15.scopes, ["items", "context"]), J(r15));
+  await upsert({ id: old, display_name: "old renamed" });
+  const r16 = await row(old);
+  chk("G16 옛 구성원의 이름만 고친 저장은 역할로 옮기지 않는다", r16?.role === null && r16?.grants === null && r16?.display_name === "old renamed", J(r16));
 } catch (e) {
   bad("예외", String(e?.stack || e));
 } finally {

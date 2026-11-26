@@ -183,6 +183,9 @@ export function legacyScopesToGrants(scopes: readonly string[] | null | undefine
 export const ROLES = ["guest", "member", "admin", "owner"] as const;
 export type Role = (typeof ROLES)[number];
 
+/** 새 구성원이 받는 역할 — 권한을 정하지 않고 만든 구성원(등록 화면 · REST · MCP · 회사 계정 자동 가입)은 이 역할로 시작한다. */
+export const DEFAULT_MEMBER_ROLE: Role = "member";
+
 export function isRole(s: unknown): s is Role {
   return typeof s === "string" && (ROLES as readonly string[]).includes(s);
 }

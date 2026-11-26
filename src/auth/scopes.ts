@@ -21,9 +21,10 @@ export const DANGEROUS_SCOPES: ReadonlySet<Scope> = new Set<Scope>(["admin", "ru
 //  새 scope 를 더하면 위험 목록에 넣지 않는 한 여기에 저절로 든다.
 export const SAFE_SCOPES: readonly Scope[] = SCOPES.filter((s) => !DANGEROUS_SCOPES.has(s));
 
-// 새 구성원의 기본 권한 — scope 를 고르지 않고 구성원을 만들 때 주는 값(상민 2026-11-23: 종전 items · context · memory 는
-//  너무 좁았다 — DB 조회 · 코드 도구까지가 기본). 만드는 길(웹 등록 폼 · REST/MCP org_member_upsert · 회사 계정 자동 가입 ·
-//  DB 칸 기본값)이 전부 이 값을 쓴다: 웹은 web/admin-members.ts MEMBER_DEFAULT_SCOPES, DB 는 org/schema/core.ts 의 DEFAULT 가 같은 값이다.
-//  ⚠ SAFE_SCOPES 에서 파생하지 않고 일부러 적는다 — 새 scope 를 더했다고 모든 새 구성원의 기본값이 저절로 넓어지면 안 된다.
+// 옛 방식 구성원의 기본 권한(상민 2026-11-23: 종전 items · context · memory 는 너무 좁았다 — DB 조회 · 코드 도구까지가 기본).
+//  ⚠ 새 구성원은 이제 이 값이 아니라 **구성원 역할**로 만든다(#5799, auth/permissions.ts DEFAULT_MEMBER_ROLE). 이 값이 남는 자리:
+//   ① 구성원 · 관리자 역할의 scopes 사본(grantsToLegacyScopes — 옛 scope 로 재는 자리들이 읽는다)
+//   ② role: null 을 명시해 옛 방식으로 만든 구성원의 기본값 ③ DB 칸 기본값(org/schema/core.ts) ④ 구성원 행이 없는 토큰 발급의 기본값.
+//  ⚠ SAFE_SCOPES 에서 파생하지 않고 일부러 적는다 — 새 scope 를 더했다고 기본값이 저절로 넓어지면 안 된다.
 //  ⚠ 공용 시트가 가져도 되는 권한(ai-runs/plan.ts SEAT_BASIC_SCOPES)은 이 값과 별개다(더 좁다).
 export const DEFAULT_MEMBER_SCOPES: readonly Scope[] = ["items", "context", "memory", "db", "code"];
