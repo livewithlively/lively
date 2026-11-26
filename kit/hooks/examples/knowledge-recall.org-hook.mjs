@@ -26,7 +26,7 @@ const SCOPE_HDRS = {
 const MIN_PROMPT_CHARS = 12;  // 너무 짧은 프롬프트(ok/네/yes 등)는 스킵(노이즈·낭비 방지)
 const FETCH_MS = 4000;
 // 사람이 쓰지 않은 입력 — 작업 완료 알림·서브에이전트 보고·세션 간 메시지(#5197). 주입 턴의 86%가 여기 붙었고 같은 턴 열람률은
-//  0.1~0.2%였다(사람 프롬프트 6.4%). 훅 입력에 출처 칸이 없어 글머리로 가른다. 앞 세 꼴이 stdin 에 그대로 온다(Claude Code 2.1.314 실측).
+//  0.1~0.2%였다(사람 프롬프트 6.4%). 러너가 lively_prompt_injected 를 싣지 않는 경로(표시 이전 키트 등)의 폴백으로 글머리로 가른다. 앞 세 꼴이 stdin 에 그대로 온다(Claude Code 2.1.314 실측).
 //  «Another Claude session…» 은 대화 기록(jsonl)에 저장될 때 붙는 머리말이다 — stdin 에 와도 걸리게 함께 둔다.
 //  화면이 «사람이 친 말» 을 가르는 넓은 목록은 web/lib/ask-text.ts INJECTED_RE 다. 여기엔 stdin 에서 잰 것만 둔다.
 const NOT_HUMAN = /^(?:<task-notification>|<agent-message[\s>]|<cross-session-message[\s>]|Another Claude session sent a message)/;
@@ -93,6 +93,8 @@ const writePrev = (file, text) => {
     }
     return;
   }
+  // lively_prompt_injected: 작업 끝 알림·하위 에이전트 보고 같은 하네스 주입 메시지(러너가 kit/hooks/prompt-origin.mjs 로 판정).
+  if (input.lively_prompt_injected) return;
   const prompt = String(input.prompt || "").trim();
   if (prompt.startsWith("/") || prompt.startsWith("!")) return; // 슬래시·뱅 커맨드 → 스킵
   if (NOT_HUMAN.test(prompt)) return;                           // 알림·메시지 → 스킵

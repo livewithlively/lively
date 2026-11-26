@@ -1,6 +1,6 @@
 // UserPromptSubmit 의 prompt 가 사람이 친 말인지, 하네스가 밀어 넣은 메시지인지 가른다.
 //  하네스는 작업 끝 알림·하위 에이전트 보고·슬래시 명령 래퍼도 같은 이벤트로 보낸다(#1631 이 last_prompt 에서 같은 원인을 고쳤다).
-//  러너(run-custom.mjs)가 이 판정을 훅 입력의 `lively_prompt_injected` 로 실어 보내고, 사람의 의도에 반응하는 훅(라우터·이름짓기 안내)이
+//  러너(run-custom.mjs)가 이 판정을 훅 입력의 `lively_prompt_injected` 로 실어 보내고, 사람의 의도에 반응하는 훅(라우터·이름짓기 안내·지식 회수)이
 //  그 값을 보고 빠진다. 훅마다 제 판별을 두면 갈라진다(project-auto-bind 의 `startsWith("<")` 가 그 흔적이다).
 //
 //  접두 목록은 web/lib/ask-text.ts 의 INJECTED_RE 와 같다 — 그쪽이 훅이 보고한 lastPrompt 에서 실제로 관측된 봉투를 모은
