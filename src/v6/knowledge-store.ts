@@ -344,8 +344,16 @@ export function appendBody(base: string, chunk: string): string {
   const c = normalizeAppendChunk(chunk);
   if (!b) return c;
   if (!c) return b;
+  // 표 끝에 표 행을 붙이면 빈 줄 없이 잇는다 — 빈 줄이 끼면 붙인 행이 머리 없는 별개 표가 되어 표로 보이지 않는다
+  //  (행을 쌓는 원장이 이렇게 깨져 있었다).
+  //  조각이 머리줄·구분줄로 시작하는 새 표면 따로 둔다.
+  const lastLine = b.slice(b.lastIndexOf("\n") + 1);
+  const [first, second = ""] = c.split("\n", 2);
+  if (TABLE_ROW_RE.test(lastLine) && TABLE_ROW_RE.test(first) && !TABLE_SEP_LINE_RE.test(second)) return `${b}\n${c}`;
   return `${b}\n\n${c}`;
 }
+const TABLE_ROW_RE = /^\s*\|.*\|\s*$/;
+const TABLE_SEP_LINE_RE = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 
 // 조각 정규화 — appendBody 와 isDuplicateAppend 가 반드시 같은 문자열을 봐야 해서 한 곳에 둔다
 //  (다르면 '붙인 것'과 '중복 판정 대상'이 어긋나 감지가 헛돈다).
