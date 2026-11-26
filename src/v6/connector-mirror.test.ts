@@ -39,11 +39,16 @@
 // C24 | users: 배열(username→email→id 폴백) · 비배열 | 'a, b' 조인 / 원값
 // C25 | progress: percent_complete·current·원시  | 반올림 정수
 // C26 | 미지 타입                                | 원값 투과(손실 0)
+// [unechoDescription]
+// C27 | theirs === base.description_echo         | base.description(우리 값 — 저쪽 방언은 편집 아님)
+// C28 | theirs ≠ echo(저쪽 사람 편집)            | theirs
+// C29 | echo 없음(구 base·null base) · 비문자열   | theirs(종전 동작)
 import assert from "node:assert/strict";
 import {
   nativeStatusOf, merge3, mergeSet, msToKstDate,
   mapClickUpFieldType, mapClickUpFieldConfig, mapClickUpFieldValue,
 } from "./connector-mirror.js";
+import { unechoDescription } from "./mirror/clickup-fields.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -199,6 +204,23 @@ t("C26 미지 타입 → 원값 투과(손실 0)", () => {
   assert.equal(mapClickUpFieldValue("mystery", "as-is", null), "as-is");
   const obj = { nested: true };
   assert.equal(mapClickUpFieldValue("mystery", obj, null), obj);
+});
+
+// ── unechoDescription ──
+const OURS = "본문\n<!-- lively:auto-created-from-first-prompt -->";
+const ECHO = "본문\n\\<!-- lively:auto-created-from-first-prompt -->";
+t("C27 theirs 가 푸시 메아리와 같다 → base.description(우리 값)", () => {
+  const r = unechoDescription({ description: OURS, description_echo: ECHO }, ECHO);
+  assert.deepEqual(r, { description: OURS, isPushEcho: true });
+  assert.equal(merge3(OURS, OURS, r.description), OURS);
+});
+t("C28 theirs 가 메아리와 다르다(저쪽 편집) → theirs 그대로", () => {
+  assert.deepEqual(unechoDescription({ description: OURS, description_echo: ECHO }, "고친 본문"), { description: "고친 본문", isPushEcho: false });
+});
+t("C29 메아리 없음·base null·비문자열 메아리 → theirs(종전 동작)", () => {
+  assert.deepEqual(unechoDescription({ description: OURS }, ECHO), { description: ECHO, isPushEcho: false });
+  assert.deepEqual(unechoDescription(null, ECHO), { description: ECHO, isPushEcho: false });
+  assert.deepEqual(unechoDescription({ description: OURS, description_echo: null }, null), { description: null, isPushEcho: false });
 });
 
 console.log(`\n${pass} passed`);

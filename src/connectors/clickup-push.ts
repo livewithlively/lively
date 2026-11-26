@@ -5,7 +5,9 @@
 //  status: **그 카드가 속한 리스트**의 상태셋에서 뽑는다(판정은 clickup/push-status.ts). 불일치 시 status 빼고 1회 재시도.
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
-import { clickupFetch, createTask, updateTask, getTeam, createTaskComment, getTask } from "./clickup.js";
+import { clickupFetch, createTask, updateTask, getTeam, createTaskComment, getTask, getTaskFull, taskBodyOf } from "./clickup.js";
+import type { ClickUpTask } from "./clickup/types.js";
+import { redactString } from "../org/ingest/redact.js";
 import { CLOSED_CATEGORIES, closeCommentText, type CloseNote } from "./clickup/close-comment.js";
 import { rootProjectIdOfTaskNode } from "../v6/project-store.js";
 import { getMember } from "../org/store/members.js";
@@ -44,6 +46,8 @@ interface ProjRow {
   list_ext: string | null;        // 인바운드가 남긴 그 카드의 ClickUp 리스트 좌표(external_base.list_ext).
   base_status_raw: string | null; // 저쪽(ClickUp)의 현재 상태 라벨/슬러그 — status 판정의 기준. push-status.ts 머리말 참조.
   base_status_category: string | null; // 마지막 동기화(인바운드·푸시) 때의 우리 카테고리 — 그 뒤 로컬 status 편집 여부 판정.
+  base_description: string | null;
+  base_description_echo: string | null;
 }
 
 function mkBody(p: ProjRow, status: string | undefined): Record<string, unknown> {
@@ -69,6 +73,23 @@ async function createSafe(listId: string, body: Record<string, unknown>) {
 async function updateSafe(taskId: string, body: Record<string, unknown>) {
   try { await updateTask(taskId, body); return { statusApplied: body.status != null }; }
   catch (e) { if (isClickupTaskGone(e)) throw e; if (body.status) { const { status, ...b } = body; logger.warn({ name: body.name }, "update status 빼고 재시도"); await updateTask(taskId, b); return { statusApplied: false }; } throw e; }
+}
+
+// 푸시한 본문을 ClickUp 이 다시 써서 저장한 값 — 인바운드가 이것과 같은 theirs 를 우리 값으로 본다(unechoDescription).
+//  못 읽으면 null 이고 그 행은 종전처럼 방언을 외부 편집으로 받는다.
+//  PUT 과 이 조회 사이에 ClickUp 에서 사람이 본문을 고치면 그 편집이 메아리로 기록돼 수입되지 않는다 — 창이 짧아 수용했다.
+export async function descriptionEchoOf(
+  p: Pick<ProjRow, "description" | "base_description" | "base_description_echo">, taskId: string,
+  fetchFull: (taskId: string) => Promise<ClickUpTask> = getTaskFull,
+): Promise<string | null> {
+  if (p.description == null) return null;
+  if (p.base_description_echo != null && p.description === p.base_description) return p.base_description_echo;
+  try {
+    return redactString(taskBodyOf(await fetchFull(taskId)));
+  } catch (e) {
+    logger.warn({ task: taskId, err: (e as Error)?.message }, "푸시한 본문의 ClickUp 저장값을 못 읽었다 — 다음 인바운드가 방언을 외부 편집으로 받을 수 있다");
+    return null;
+  }
 }
 
 // 닫힘 근거 코멘트 — 상태 PUT 이 성공한 뒤에만. 실패해도 행은 done 으로 둔다: 상태는 이미 나갔고, 행을 다시 돌리면
@@ -285,7 +306,9 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
                 external_system, external_id, folder,
                 external_base->>'list_ext'   AS list_ext,
                 external_base->>'status_raw' AS base_status_raw,
-                external_base->>'status_category' AS base_status_category
+                external_base->>'status_category' AS base_status_category,
+                external_base->>'description' AS base_description,
+                external_base->>'description_echo' AS base_description_echo
          FROM project WHERE id=$1`, [ob.entity_id]);
       if (!p || p.folder === "__board_anchor__") { await markDone(ob.id); continue; } // 삭제됨/보드앵커 → skip
 
@@ -364,9 +387,10 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
       // 푸시하는 ours 값 → external_base 갱신(#6d 3-way 의 공통조상). 인바운드가 이 base 로 외부편집 변화를 판정.
       //  #541: **병합**(|| 연산) — 통째 교체하면 인바운드 미러가 관리하는 확장 키(status_raw/assignee/list_ext/tags)가
       //  푸시 때마다 소거되어 다음 3-way 가 base=NULL 로 동작한다. 푸시에 실리는 필드만 전진(name/desc/category/priority/dates).
-      const baseJson = JSON.stringify({
+      const baseJsonOf = async (taskId: string) => JSON.stringify({
         name: p.name, description: p.description, status_category: p.status_category,
         priority: p.priority, start_date: p.start_date, due_date: p.due_date,
+        description_echo: await descriptionEchoOf(p, taskId),
       });
 
       if (willUpdate && p.external_id) {
@@ -386,7 +410,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         }
         await itemsPool.query(
           `UPDATE project SET external_base = COALESCE(external_base, '{}'::jsonb) || $2::jsonb WHERE id=$1`,
-          [p.id, baseJson]);
+          [p.id, await baseJsonOf(extId)]);
         await markDone(ob.id); pushed++;
         if (ob.close_note && statusApplied) await postCloseComment(p, p.external_id, ob.close_note);
         else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부·저쪽이 이미 닫힘)");
@@ -438,7 +462,7 @@ export async function pushOutbox(opts?: { limit?: number; startedAtMs?: number }
         await itemsPool.query(
           `UPDATE project SET external_system='clickup', external_instance=$2, external_id=$3, external_url=$4,
                   external_base = COALESCE(external_base, '{}'::jsonb) || $5::jsonb, updated_at=now() WHERE id=$1`,
-          [p.id, teamId, ct.id, url, baseJson]);
+          [p.id, teamId, ct.id, url, await baseJsonOf(ct.id)]);
         await markDone(ob.id); pushed++;
         if (ob.close_note && statusApplied) await postCloseComment(p, ct.id, ob.close_note); // 첫 푸시 전에 이미 닫힌 경우
         else if (ob.close_note) logger.warn({ entity: p.id }, "닫힘 근거 코멘트 생략 — status 가 ClickUp 에 실리지 않았다(상태셋 미해소·거부)");

@@ -24,6 +24,19 @@ export function merge3<T>(base: T | null | undefined, ours: T | null | undefined
   return o;                // 충돌 → ours(우리 DB 타이브레이크)
 }
 
+// ClickUp 은 PUT 으로 받은 markdown_description 을 자기 방언으로 다시 써서 돌려준다(`<`·`_`·`[` 앞 역슬래시, `-` 불릿→`*`,
+//  `~`→`~~`, 표 재서식). 그 값을 외부 편집으로 보면 merge3 가 우리 본문을 방언으로 덮는다 — `<!-- … -->` 표식이 `\<!--` 로
+//  깨져 표식을 읽는 코드가 못 알아본다. 푸시가 기록한 메아리(base.description_echo)와 theirs 가 같으면 저쪽은 우리 값 그대로다.
+export function unechoDescription(
+  base: Record<string, unknown> | null | undefined, theirs: string | null,
+): { description: string | null; isPushEcho: boolean } {
+  const echo = base?.description_echo;
+  if (typeof echo === "string" && theirs === echo) {
+    return { description: (base?.description as string | null | undefined) ?? null, isPushEcho: true };
+  }
+  return { description: theirs, isPushEcho: false };
+}
+
 // 집합 3-way 머지(태그 등 이름 집합) — result = (ours − (base−theirs)) ∪ (theirs−base).
 //  외부 추가는 들어오고, 외부 삭제는 우리가 재추가하지 않은 것만 빠진다. 충돌 없는 결정적 수렴.
 export function mergeSet(base: string[] | null | undefined, ours: string[], theirs: string[]): string[] {
