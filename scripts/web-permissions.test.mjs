@@ -238,6 +238,7 @@ t("W20 배선 — 명부의 안내와 이관 창", () => {
   assert.match(form, /body: JSON\.stringify\(\{ ids: \[\.\.\.picked\], keep \}\)/, "고른 id 만 보낸다(all 을 쓰지 않는다)");
   assert.match(form, /if \(!armed\) \{ armed = true; syncBtn\(\); return; \}/, "두 번 눌러야 옮긴다");
   assert.match(form, /chk\.disabled = !r\.role;/, "옮기지 않을 구성원은 고를 수 없다");
+  assert.match(form, /el\('div', \{ class: 'admin-actions' \}, goBtn\)\]\.filter\(Boolean\)\);/, "없는 조각(null)을 그리지 않는다");
 });
 
 console.log(`\nweb-permissions: ${pass} 통과`);

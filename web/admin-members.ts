@@ -186,15 +186,16 @@ function openRoleMigration(detail) {
       } catch (e) { toast(e.message, true); armed = false; syncBtn(); }
     });
     syncBtn();
-    body.replaceChildren(
+    //  replaceChildren 은 null 을 «null» 글자로 그린다 — 없는 조각은 걸러서 넣는다.
+    body.replaceChildren(...[
       el('p', { class: 'admin-hint', text: '옛 방식 구성원 ' + plan.total + '명 — ' + migrationSummary(plan.counts) }),
       el('label', { class: 'admin-check' }, keepChk, ' 역할이 낮추는 권한을 개별 권한으로 남기기 (잃는 것이 없어집니다)'),
       el('div', { class: 'mig-scroll' }, el('table', { class: 'perm-table mig-table' },
-        el('thead', {}, el('tr', {}, ...['', '구성원 · 지금 권한', '옮길 곳', '얻는 것', '잃는 것', '조회 대상으로 지정할 DB 소스'].map((h) => el('th', { text: h })))),
+        el('thead', {}, el('tr', {}, ...['', '구성원 · 지금 권한', '옮길 곳', '얻는 것', '잃는 것', '지정할 DB 소스'].map((h) => el('th', { text: h })))),
         el('tbody', {}, ...trs))),
       withApps ? el('p', { class: 'admin-hint', text: '연결한 앱이 있는 구성원 ' + withApps + '명: 옮긴 뒤 그 앱은 지식 · 메모리와 분류체계 · 공유폴더를 «맥락» 하나로 읽습니다(둘 중 하나만 허락했어도 둘 다).' }) : null,
       el('p', { class: 'admin-hint', text: 'DB 는 지금 조회하던 소스에만 지정됩니다. 나중에 등록하는 소스는 따로 지정해야 열립니다. 옮기기 전의 권한은 감사 로그에 남습니다.' }),
-      el('div', { class: 'admin-actions' }, goBtn));
+      el('div', { class: 'admin-actions' }, goBtn)].filter(Boolean));
   };
   back = overlay('옛 방식 구성원을 역할로 옮기기', body);
   load();

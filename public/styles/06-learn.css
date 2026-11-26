@@ -439,7 +439,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .legacy-note { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--border, rgba(127, 127, 127, .25)); border-radius: 8px; font-size: 13px; }
 .legacy-note > span { flex: 1; min-width: 0; }
 .legacy-note > .btn { flex: none; }
-.role-migration { min-width: min(920px, 86vw); }
+.role-migration { min-width: 0; }
+.mig-table { table-layout: auto; }
+.mig-table td { overflow-wrap: anywhere; }
 .mig-scroll { max-height: 52vh; overflow: auto; margin: 8px 0; }
 .mig-table th { position: sticky; top: 0; background: var(--surface, #fff); text-align: left; font-weight: 600; font-size: 12px; padding: 5px 8px; white-space: nowrap; }
 .mig-table .mig-name { min-width: 150px; }
