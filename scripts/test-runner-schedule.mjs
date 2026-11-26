@@ -28,6 +28,18 @@ export const soloLast = (files, solo) => [...files.filter((f) => !solo.has(f)), 
  *  혼자 도는 파일이 맨 뒤에 모여 있으니(soloLast) 그것이 도는 동안 보통 파일이 끼어들 일은 없다. */
 export const mayStart = (nextIsSolo, running, jobs) => (nextIsSolo ? running === 0 : running < jobs);
 
+// ── 브라우저 시험 — 헤드리스 크롬을 띄우는 시험은 러너가 크롬을 예열한 뒤에 띄운다 ─────────────────────────────────
+//  갓 뜬 CI 러너에서 처음 띄우는 크롬 몇 개는 크롬을 디스크에서 처음 읽느라 첫 출력까지만 10~25초 막혀 시험의 30초 상한을 넘겼다
+//  («크롬이 30초 안에 결과를 안 냈다» — 2026-11-19~26 유닛 1,536잡 중 21잡 · 전부 그 잡의 1~4번째 크롬. 근거는 headless-chrome.mjs warmChrome).
+//  러너는 브라우저 시험이 하나라도 있으면 시작하자마자 크롬을 한 번 띄워 두고, 그 예열이 끝날 때까지 **브라우저 시험만** 안 띄운다.
+//  크롬을 띄우는 길은 둘뿐이다 — scripts/headless-chrome.mjs(dumpDom · findChrome)와 직접 띄우는 CDP 시험(--remote-debugging-port).
+//  ⚠ 앞 4KB(readHead)로는 모자란다 — 가져오기 줄이 11.7KB 에 있는 시험이 있다. 그래서 파일 전체를 보되 후보를 BROWSER_DIR 로 좁힌다
+//   (브라우저 시험은 전부 거기 산다 — test-runner-schedule.test.mjs S10 이 지킨다. 밖에 생기면 예열을 안 기다릴 뿐 빠지지는 않는다).
+const BROWSER_MARK = /["'](?:[^"'\n]*\/)?headless-chrome\.mjs["']|\bfindChrome\s*\(|--remote-debugging-port/;
+export const BROWSER_DIR = "scripts/";
+/** 글이 헤드리스 크롬을 띄우는 시험인가. */
+export const usesBrowser = (text) => BROWSER_MARK.test(String(text ?? ""));
+
 // ── 조각(shard) — 한 벌의 시험을 여러 CI 잡이 나눠 돈다 ─────────────────────────────────────────
 //  CI 벽시계를 잡던 것은 시험의 수가 아니라 **한 잡이 전부를 혼자 돈다**는 것이었다(실측 2026-11-18: 유닛 1211 파일 · CPU 합 1749초를
 //  4코어 한 대가 511초에, 그 뒤 PG 통합 106건을 같은 잡에서 하나씩 429초). 조각은 같은 체크아웃에서 `--shard=i/N` 을 N 번 부르면

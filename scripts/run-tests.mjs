@@ -27,6 +27,9 @@
 //   그런 flake 가 보이면 -j 를 낮추지 말고 해당 테스트의 상한을 부하 내성 있게 고치는 쪽이 맞다.
 //   다만 그 상한이 **제품의 마감 동작 자체**(훅이 1.2초에 끊는다 · 예산의 70% 에서 멈춘다)라 늘리면 사양이 바뀌는 시험은
 //   머리에 `// @lively-test exclusive` 를 달아 병렬 묶음이 끝난 뒤 혼자 돌린다(#5029 — 2코어 중앙 박스에서 넷이 그랬다).
+//  · **크롬 예열** — 브라우저 시험(헤드리스 크롬을 띄우는 시험)이 하나라도 있으면 시작하자마자 크롬을 한 번 띄워 두고, 그 예열이 끝날
+//    때까지 브라우저 시험만 안 띄운다(다른 시험은 그대로 돈다). 갓 뜬 CI 러너의 첫 크롬 몇 개가 기동에서만 10~25초 막혀 «30초 안에
+//    결과를 안 냈다» 로 빨갰다 — 근거·수치는 headless-chrome.mjs warmChrome. 끄기: LIVELY_TEST_CHROME_WARM=0.
 //
 // 사용: node scripts/run-tests.mjs                    전체 실행(병렬 · 끝까지)
 //       node scripts/run-tests.mjs <부분문자열>…       경로 부분일치만(여러 개면 OR)
@@ -57,7 +60,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
 import { testChildEnv } from "./test-runner-env.mjs";
-import { readHead, isSoloTest, soloLast, mayStart, parseShard, shardFiles } from "./test-runner-schedule.mjs";
+import { readHead, isSoloTest, soloLast, mayStart, parseShard, shardFiles, usesBrowser, BROWSER_DIR } from "./test-runner-schedule.mjs";
+import { findChrome, warmChrome } from "./headless-chrome.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
@@ -248,6 +252,33 @@ process.on("exit", () => {
   }
 });
 
+// ── 크롬 예열 — 브라우저 시험은 예열이 끝난 뒤에 띄운다(근거: headless-chrome.mjs warmChrome · 판정: test-runner-schedule.mjs usesBrowser) ──
+//  병렬일 땐 예열이 다른 시험과 나란히 돈다. 차례는 바꾸지 않는다 — 예열 중에 차례가 브라우저 시험에 오면 그 뒤 파일도 함께 기다린다.
+//   CI 조각에선 첫 브라우저 시험이 시작 13~61초 뒤에야 차례가 오고 예열은 3~12초라 대개 아무도 안 기다린다.
+//   직렬(-j 1)에선 spawnSync 가 이벤트 루프를 막아 예열이 첫 브라우저 시험 앞에서 차례로 돈다.
+//  예열이 실패하거나 상한(90초)에 걸려도 브라우저 시험은 그대로 띄운다 — 판정은 시험이 제 상한으로 한다(예열은 시험을 바꾸지 않는다).
+//  중단(SIGINT·SIGTERM)이나 --fail-fast 로 멈추면 예열 크롬을 거둔다(warmAbort) — 남은 예열을 기다리며 매달리지 않는다.
+const BROWSER = new Set(files.filter((f) => {
+  if (!posix(f).startsWith(BROWSER_DIR) || missing.has(f)) return false;
+  try { return usesBrowser(readFileSync(path.join(ROOT, f), "utf8")); } catch { return false; }
+}));
+const warm = { pending: false, done: null, heldAt: 0 };
+const warmAbort = new AbortController();
+const chromeBin = BROWSER.size && process.env.LIVELY_TEST_CHROME_WARM !== "0" ? findChrome() : null;
+if (chromeBin) {
+  warm.pending = true;
+  warm.done = warmChrome(chromeBin, { signal: warmAbort.signal }).then((r) => {
+    warm.pending = false;
+    if (warmAbort.signal.aborted) return;   // 중단·첫 실패로 거둔 예열 — 알릴 것이 없다
+    const secs = (r.ms / 1000).toFixed(1);
+    const held = warm.heldAt ? ` · 그동안 브라우저 시험이 ${((Date.now() - warm.heldAt) / 1000).toFixed(1)}s 기다렸다` : "";
+    console.log(r.ok
+      ? `— 크롬 예열 ${secs}s — 브라우저 시험 ${BROWSER.size}건은 이 뒤에 띄운다${held}`
+      : `— 크롬 예열 실패 ${secs}s(${r.note}) — 브라우저 시험 ${BROWSER.size}건은 그대로 띄운다${held}`);
+  });
+}
+const heldForWarm = (f) => warm.pending && BROWSER.has(f);
+
 // --pg 도 --itest 처럼 실 DB 하나를 나눠 쓰니 직렬 고정이다(명시적 -j 로만 덮는다).
 const jobs = Math.max(1, Math.min(opts.jobs ?? (opts.itest || opts.pg ? 1 : DEFAULT_JOBS), files.length));
 const argsFor = (f) => (opts.itest || ENV_FILE_TESTS.has(f) ? ["--env-file-if-exists=.env", f] : [f]);
@@ -259,6 +290,7 @@ let done = 0;
 let failed = 0;
 let interrupted = false;
 const t0 = Date.now();
+let wake = () => {};   // 병렬 펌프를 다시 돌린다 — 예열을 기다리던 중(돌고 있는 자식 0)에 중단돼도 끝나게
 
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
@@ -266,6 +298,8 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
     interrupted = true;
     console.error(`\n${sig} — 실행 중인 테스트 ${live.size}건 정리 후 중단합니다.`);
     for (const c of live.keys()) c.kill("SIGKILL");
+    warmAbort.abort();
+    wake();
   });
 }
 
@@ -285,6 +319,7 @@ if (jobs === 1 && !opts.pg) {
     if (missing.has(f)) {
       record(idx, { f, ms: 0, status: 1, signal: null, missing: true });
     } else {
+      if (heldForWarm(f)) { warm.heldAt ||= Date.now(); await warm.done; if (interrupted) break; }
       const t = Date.now();
       const r = spawnSync(process.execPath, argsFor(f), { cwd: ROOT, stdio: "inherit", env: TEST_ENV });
       record(idx, { f, ms: Date.now() - t, status: r.status, signal: r.signal });
@@ -310,7 +345,10 @@ if (jobs === 1 && !opts.pg) {
   let soloAnnounced = false;
   await new Promise((resolve) => {
     const pump = () => {
+      let holding = false;
       while (!interrupted && !(opts.failFast && failed) && next < files.length && mayStart(SOLO.has(files[next]), live.size, jobs)) {
+        //  예열이 안 끝났으면 브라우저 시험에서 멈춘다(차례는 바꾸지 않는다 — 뒤의 파일도 함께 기다린다). 예열이 끝나면 다시 돈다.
+        if (heldForWarm(files[next])) { warm.heldAt ||= Date.now(); holding = true; break; }
         const idx = next++;
         if (SOLO.has(files[idx]) && !soloAnnounced) {
           soloAnnounced = true;
@@ -345,11 +383,15 @@ if (jobs === 1 && !opts.pg) {
         child.on("error", (err) => finish(err.code === "ENOENT" ? 127 : 1, null, err));
         child.on("close", (status, signal) => finish(status, signal));
       }
-      if (live.size === 0) resolve();
+      if (live.size === 0 && !holding) resolve();
     };
+    wake = pump;
+    warm.done?.then(pump);
     pump();
   });
 }
+//  여기까지 예열이 안 끝났다면 브라우저 시험에 차례가 안 온 실행이다(--fail-fast · 중단) — 예열 크롬을 거둔다.
+if (warm.pending) warmAbort.abort();
 
 // ── 보고 ──
 const wall = `${((Date.now() - t0) / 1000).toFixed(1)}s`;

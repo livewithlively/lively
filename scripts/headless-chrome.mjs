@@ -85,9 +85,10 @@ async function startStatic(dir) {
  *   postMessage 를 잴 수 없다 — 세션 화면과 터미널 액자가 주고받는 시험이 그렇다. 기본은 종전 그대로(file://).
  *  timeoutMs — 크롬의 **실시간** 상한(--timeout, 기본 20초). 장면이 많고 액자(xterm)를 여럿 싣는 시험은 가상시간이 남아도 이 상한에
  *   먼저 걸려 결과 없이 끝난다(term-warm-runtime: 이 박스 실시간 13~15초, 동시 실행 3개면 «결과를 안 냄» — #4794 격리 검토).
+ *  signal — AbortSignal. 끊기면 크롬을 죽이고 던진다(러너가 중단·첫 실패에서 예열을 거둔다).
  * @returns dump 된 DOM — 표지 없이 끝났으면 그때까지 받은 것(판정은 호출자가 한다). 실시간 상한 + 10초(최소 30초) 안에 안 끝나면 던진다.
  */
-export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [], serve = false, timeoutMs = 20000 }) {
+export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [], serve = false, timeoutMs = 20000, signal = null }) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   let closed = Promise.resolve();
   let breather = null;
@@ -98,6 +99,8 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
     writeFileSync(path.join(dir, "page.html"), html);
     if (serve) server = await startStatic(dir);
     const pageUrl = server ? server.url + "page.html" : `file://${path.join(dir, "page.html")}`;
+    const aborted = () => new Error("크롬 띄우기를 거뒀다(abort)");
+    if (signal?.aborted) throw aborted();
     return await new Promise((resolve, reject) => {
       const child = spawn(chrome, [
         "--headless=old", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
@@ -119,17 +122,25 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
       ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
       closed = new Promise((r) => child.once("close", r));
       let out = "", errOut = "", settled = false;
-      const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch (_) { /* 이미 끝났다 */ } fn(v); };
+      const onAbort = () => done(reject, aborted());
+      const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener("abort", onAbort); try { child.kill("SIGKILL"); } catch (_) { /* 이미 끝났다 */ } fn(v); };
+      //  이 상한은 늘리지 마라 — 2026-11 CI 의 «30초 안에 결과를 안 냈다» 는 페이지가 아니라 **러너의 첫 크롬 기동**이 막힌 것이었다
+      //   (warmChrome 머리말). 같은 잡의 5번째 크롬부터는 이 상한에 한 번도 안 걸렸다 — 데워진 크롬에는 30초가 넉넉하다.
       const limitMs = Math.max(30_000, timeoutMs + 10_000);
-      const timer = setTimeout(() => done(reject, new Error(`크롬이 ${limitMs / 1000}초 안에 결과를 안 냈다\n` + errOut.slice(0, 800))), limitMs);
+      //  첫 출력까지 걸린 시간을 실패 문구에 싣는다 — 크롬은 뜨자마자 stderr 에 몇 줄을 쓴다. 첫 출력이 10초 넘게 늦었으면 기동이 막힌 것이고
+      //   (디스크에서 크롬을 처음 읽는 러너), 곧바로 나왔는데 결과가 없으면 페이지가 매달린 것이다 — 두 원인을 로그에서 가른다.
+      const t0 = Date.now();
+      let firstOutMs = 0;
+      const timer = setTimeout(() => done(reject, new Error(`크롬이 ${limitMs / 1000}초 안에 결과를 안 냈다 — 첫 출력 ${firstOutMs ? `${(firstOutMs / 1000).toFixed(1)}초 뒤` : "없음"}\n` + errOut.slice(0, 800))), limitMs);
       //  ⚠ 글자로 받는다(setEncoding) — 조각(Buffer)마다 따로 바꾸면 조각 경계에 걸친 한글이 깨진다
       //   (CI 실측 2026-10-09: «기타» → «���타», session-history-side-runtime H9 가 무작위로 빨갰다 · headless-chrome-decode.test.mjs).
       child.stdout.setEncoding("utf8");
       child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (b) => { out += b; if (out.includes(marker)) done(resolve, out); });
-      child.stderr.on("data", (b) => { errOut += b; });
+      child.stdout.on("data", (b) => { firstOutMs ||= Date.now() - t0; out += b; if (out.includes(marker)) done(resolve, out); });
+      child.stderr.on("data", (b) => { firstOutMs ||= Date.now() - t0; errOut += b; });
       child.on("error", (e) => done(reject, e));
       child.on("close", () => done(resolve, out));
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
   } finally {
     breather?.close();
@@ -137,6 +148,48 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
     await new Promise((r) => { const t = setTimeout(r, 3000); closed.then(() => { clearTimeout(t); r(); }); });
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
     catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }
+  }
+}
+
+/** 예열 페이지가 다 돌았다는 표지 — 페이지 소스에는 둘로 쪼개 두어 스크립트가 돈 뒤의 DOM 에만 이어져 나온다. */
+export const WARM_MARK = "LV-CHROME-WARM-OK";
+//  시험 페이지들이 처음 건드리는 것을 한 번씩 건드린다 — 크롬은 실행 파일(306MB)을 쪽 단위로 읽어 들이니, 시험이 쓰는 길을 예열이 먼저
+//   지나가야 그 쪽이 데워진다: 한글·일본어·이모지·고정폭 글꼴 · 캔버스 · 같은 출처 액자 · 샌드박스 액자(다른 렌더러) · 워커 ·
+//   http 받기(네트워크 서비스 — serve 로 싣는다) · localStorage(저장소 서비스) · Intl(ICU) · 타이머·애니메이션 프레임.
+const WARM_HTML = `<!doctype html><meta charset="utf-8"><title>warm</title>
+<body><h1>예열 — 한글 · English · 日本語 · 😀</h1><pre style="font-family:monospace">mono 0123 가나다</pre>
+<canvas id="c" width="80" height="30"></canvas><iframe srcdoc="<p>액자 안 글</p>"></iframe>
+<iframe sandbox="allow-scripts" srcdoc="<script>parent.postMessage('sandbox', '*')</script>"></iframe><pre id="out">PENDING</pre>
+<script>
+const c = document.getElementById("c").getContext("2d"); c.font = "16px sans-serif"; c.fillText("가A😀", 2, 20);
+try { localStorage.setItem("warm", new Intl.DateTimeFormat("ko-KR", { dateStyle: "full" }).format(new Date())); } catch (_) {}
+const work = [
+  fetch(location.href).then((r) => r.text()).catch(() => ""),
+  new Promise((r) => { try { const w = new Worker(URL.createObjectURL(new Blob(["postMessage(1)"]))); w.onmessage = r; } catch (_) { r(); } }),
+  new Promise((r) => requestAnimationFrame(() => r())),
+];
+Promise.race([Promise.all(work), new Promise((r) => setTimeout(r, 1500))])
+  .then(() => { document.getElementById("out").textContent = "LV-CHROME-" + "WARM-OK"; });
+</script></body>`;
+
+/**
+ * 크롬을 한 번 띄워 둔다(예열) — 테스트 러너가 브라우저 시험보다 먼저 부른다(run-tests.mjs · test-runner-schedule.mjs usesBrowser).
+ *  왜: 갓 뜬 CI 러너에서 **처음 띄우는 크롬 몇 개**는 크롬 실행 파일·라이브러리·글꼴을 디스크에서 처음 읽느라 첫 출력까지만 10~25초
+ *   막힌다. 실측(2026-11-19~26 CI 유닛 1,536잡): «30초 안에 결과를 안 냈다» 42건(21잡)이 **전부 그 잡의 1~4번째 크롬**이었다 —
+ *   5번째부터는 0건이다. 같은 때 돌던 크롬 아닌 시험은 평소 속도였고, 함께 막힌 크롬들은 같은 μs 에 첫 줄을 찍었다(같은 파일 읽기를
+ *   함께 기다렸다). 실패까지 안 가도 첫 크롬 1~4개 가운데 하나가 평소보다 4초 넘게 느린 잡이 42%였다(5~8번째는 2%).
+ *   예열이 그 몫을 시험 밖에서 치르면 시험의 크롬은 데워진 채로 뜬다 — 시험의 상한(30초)은 그대로다.
+ *  signal — 끊으면 예열 크롬을 죽이고 곧바로 ok=false 로 돌아온다(러너가 중단·첫 실패에서 거둔다).
+ * @returns {Promise<{ ok: boolean, ms: number, note: string }>} 던지지 않는다 — 예열이 실패해도 시험은 그대로 돌고 제 상한으로 판정한다.
+ */
+export async function warmChrome(chrome, { limitMs = 90_000, signal = null } = {}) {
+  const t0 = Date.now();
+  try {
+    const dom = await dumpDom(chrome, { html: WARM_HTML, marker: WARM_MARK, prefix: "chrome-warm-", virtualTimeBudget: 3000, serve: true, timeoutMs: Math.max(1000, limitMs - 10_000), signal });
+    const ok = dom.includes(WARM_MARK);
+    return { ok, ms: Date.now() - t0, note: ok ? "" : "표지 없이 끝났다" };
+  } catch (e) {
+    return { ok: false, ms: Date.now() - t0, note: String(e?.message ?? e).split("\n")[0] };
   }
 }
 

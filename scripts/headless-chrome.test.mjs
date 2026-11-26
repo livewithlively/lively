@@ -12,11 +12,15 @@
 //  H3 표지 없이 끝나면 받은 것을 그대로 돌려준다(판정은 호출자 몫) — 던지지 않는다
 //  H4 보조 프로세스가 파이프를 오래 쥐어도 기다림은 상한이 있다(끝없이 매달리지 않는다)
 //  H5 끝내 못 지우는 디렉터리면 알리기만 하고 던지지 않는다(임시 디렉터리 때문에 테스트를 죽이지 않는다)
+//  H6 예열(warmChrome) — 예열 표지가 오면 ok · 표지 없이 끝나거나 크롬이 안 뜨면 ok=false 로 알리고 **던지지 않는다**
+//     (러너는 예열이 실패해도 시험을 그대로 띄운다 — 판정은 시험이 제 상한으로 한다)
+//  H6‴ 예열을 거두면(signal) 매달린 크롬을 죽이고 곧바로 ok=false — 러너가 중단·--fail-fast 에서 남은 예열을 안 기다린다
+//  H7 진짜 크롬이 있으면 — 예열 페이지가 정말 표지를 낸다(페이지가 깨지면 예열이 매번 «실패» 로 헛돌아도 시험은 초록이다)
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { dumpDom } from "./headless-chrome.mjs";
+import { dumpDom, findChrome, warmChrome, WARM_MARK } from "./headless-chrome.mjs";
 
 if (process.platform === "win32") { console.log("skip  가짜 크롬은 셔뱅 실행이라 POSIX 전용"); process.exit(0); }
 
@@ -56,7 +60,8 @@ if (mode === 'writer') {
   while (!fs.existsSync(first) && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
 }
 if (mode === 'holder') spawn(process.execPath, ['-e', ${JSON.stringify(HELPER)}, profile, 'holder', '5000'], { stdio: ['ignore', 'inherit', 'inherit'] });
-process.stdout.write('DIR=' + path.dirname(profile) + '\\n' + (mode === 'nomarker' ? 'NO-MARKER' : '<pre>RESULT[]ENDRESULT</pre>') + '\\n');
+if (mode === 'hang') { setTimeout(() => {}, 60000); return; }   // 아무것도 안 낸 채 매달린다 — 첫 기동이 막힌 크롬 흉내
+process.stdout.write('DIR=' + path.dirname(profile) + '\\n' + (mode === 'nomarker' ? 'NO-MARKER' : mode === 'warm' ? '<pre id="out">' + process.env.FAKE_PRINT + '</pre>' : '<pre>RESULT[]ENDRESULT</pre>') + '\\n');
 if (mode === 'nomarker') process.exit(0);
 setTimeout(() => {}, 20000);   // 진짜 크롬처럼 다 뱉고도 매달린다 — 호출자가 SIGKILL 로 끊는다
 `;
@@ -108,6 +113,34 @@ try {
 
   const h4 = await run("holder");
   ok(!h4.threw && h4.ms < 4500, "H4 파이프를 오래 쥔 보조 프로세스가 있어도 기다림에 상한이 있다(5초를 다 기다리지 않는다)", `${h4.ms}ms`);
+
+  {
+    const warmWith = async (mode, bin = fake) => {
+      Object.assign(process.env, { FAKE_MODE: mode, FAKE_PRINT: WARM_MARK });
+      try { return await warmChrome(bin); } catch (e) { return { threw: e }; } finally { delete process.env.FAKE_MODE; delete process.env.FAKE_PRINT; }
+    };
+    const w1 = await warmWith("warm");
+    ok(w1.ok === true && w1.note === "" && w1.ms >= 0, "H6 예열 표지가 오면 ok", JSON.stringify(w1));
+    const w2 = await warmWith("nomarker");
+    ok(!w2.threw && w2.ok === false && /표지/.test(w2.note), "H6′ 표지 없이 끝나면 ok=false — 던지지 않는다", JSON.stringify(w2));
+    const w3 = await warmWith("warm", path.join(bin, "no-such-chrome"));
+    ok(!w3.threw && w3.ok === false && w3.note.length > 0, "H6″ 크롬이 안 뜨면 ok=false 와 까닭 — 던지지 않는다", JSON.stringify(w3));
+    process.env.FAKE_MODE = "hang";
+    const ac = new AbortController();
+    const tA = Date.now();
+    setTimeout(() => ac.abort(), 300);
+    let w4;
+    try { w4 = await warmChrome(fake, { signal: ac.signal }); } catch (e) { w4 = { threw: e }; } finally { delete process.env.FAKE_MODE; }
+    ok(!w4.threw && w4.ok === false && /abort/.test(w4.note) && Date.now() - tA < 5000, "H6‴ 예열을 거두면 매달린 크롬을 죽이고 곧바로 ok=false", `${Date.now() - tA}ms ${JSON.stringify(w4)}`);
+  }
+  {
+    const real = findChrome();
+    if (!real) console.log("skip  H7 — 진짜 크롬이 없다(CHROME_BIN 으로 지정)");
+    else {
+      const w = await warmChrome(real);
+      ok(w.ok === true, "H7 진짜 크롬에서 예열 페이지가 표지를 낸다", JSON.stringify(w));
+    }
+  }
 } finally {
   rmSync(bin, { recursive: true, force: true });
 }
