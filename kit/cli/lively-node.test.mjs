@@ -315,7 +315,7 @@ try {
     const TOKEN3 = "lvk_test_collision_gateway_55";
     const NODE_TOKEN3 = "lvk_test_node_agent_collide";
     const SLUG = (osHostname().split(".")[0] || "node").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "node";
-    const MINE = `${SLUG}-mina`;
+    const MINE = `${SLUG.replace(/-+$/, "")}-mina`;   // collisionNodeId 처럼 잘린 호스트 이름 끝의 - 를 뗀다(40자째가 - 인 호스트)
     const reg3 = [], rot3 = [];
     const srv3 = createServer((req, res) => {
       const p3 = (req.url || "").split("?")[0];
@@ -388,7 +388,7 @@ try {
     const NODE_TOKEN5 = "lvk_test_node_agent_admin";
     const ROTATED = "lvk_test_node_agent_rotated";   // 회전이 내주는 열쇠 — 남의 노드였다면 «가져온 열쇠» 다
     const SLUG = (osHostname().split(".")[0] || "node").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "node";
-    const MINE = `${SLUG}-jisoo`;
+    const MINE = `${SLUG.replace(/-+$/, "")}-jisoo`;   // collisionNodeId 처럼 잘린 호스트 이름 끝의 - 를 뗀다
     // 케이스마다 바꾸는 서버 상태: 호스트 이름 그대로의 노드 주인·종류, 목록·프로필이 읽히는가.
     //  altOwner = 비킨 이름의 노드가 이미 있을 때 그 주인(null = 없음) · altFail = 비킨 이름 등록이 409 가 아닌 오류로 실패.
     const WORLD0 = { owner: "mina", kind: "member", listOk: true, profileOk: true, altOwner: null, altFail: false };
