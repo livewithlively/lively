@@ -88,10 +88,10 @@ test("R4 안전한 scope 를 어떻게 모아도 옛 admin · runtime 기능은 
   const runtimeCaps = scoped.filter((c) => c.scope === "runtime");
   assert.deepEqual(names(runtimeCaps.filter((c) => newAllows(SCOPES.filter((s) => s !== "runtime"), c))), [], "admin 을 가져도 runtime 기능은 안 열린다");
   assert.deepEqual(names(adminCaps.filter((c) => newAllows(SCOPES.filter((s) => s !== "admin"), c))), [], "runtime 을 가져도 admin 기능은 안 열린다");
-  // 반대 방향 — 표가 안전한 scope 의 기능을 위험 권한으로 옮긴 자리는 팀 편집뿐이다
+  // 반대 방향 — 표가 안전한 scope 의 기능을 위험 권한으로 옮긴 자리는 없다(팀 편집을 «관리» 로 올렸던 것은 2026-11-26 에 되돌렸다 — 조건부 관리자 검사는 핸들러에 있다)
   const movedUp = scoped.filter((c) => c.scope !== "admin" && c.scope !== "runtime"
     && ["admin", "secrets", "harness"].includes(permissionOf(c.name, c.scope) as Permission));
-  assert.deepEqual(names(movedUp), TEAM_EDITS);
+  assert.deepEqual(names(movedUp), []);
   // 위험 scope 의 기능이 안전한 권한으로 내려간 자리는 없다
   const movedDown = dangerous.filter((c) => !["admin", "secrets", "harness"].includes(permissionOf(c.name, c.scope) as Permission));
   assert.deepEqual(names(movedDown), []);
@@ -111,18 +111,17 @@ test("R6 넓어지는 자리는 이 표가 전부다", () => {
       widened[k] = (widened[k] ?? 0) + 1;
     }
   }
-  // 다섯 쌍뿐이다:
+  // 네 쌍뿐이다:
   //  · «맥락» — context 의 분류체계 · 도메인맵 · 공유폴더 파일과 memory 의 지식 · 프로젝트가 서로 열린다
   //  · «코드» «원격 실행» — context 의 레포 등록부 조회 · 위탁과 code 의 레포 판 읽기 · 프리뷰가 서로 열린다
-  //  · 팀 편집 — context 에서 «관리» 로 옮겼으므로 context 없이 admin 만 가진 사람에게 열린다(NARROWED 의 반대쪽)
-  assert.deepEqual(Object.keys(widened).sort(), ["code←context", "context←admin", "context←code", "context←memory", "memory←context"]);
+  assert.deepEqual(Object.keys(widened).sort(), ["code←context", "context←code", "context←memory", "memory←context"]);
   assert.deepEqual(widened, EXPECTED_WIDENED);
 
-  // 기본 구성원(items · context · memory · db · code)에게 새로 열리는 것은 없고, 닫히는 것은 팀 편집 넷뿐이다
+  // 기본 구성원(items · context · memory · db · code)에게 새로 열리는 것도 닫히는 것도 없다
   const opened = scoped.filter((c) => !legacyAllows(DEFAULT_MEMBER_SCOPES, c) && newAllows(DEFAULT_MEMBER_SCOPES, c));
   const closed = scoped.filter((c) => legacyAllows(DEFAULT_MEMBER_SCOPES, c) && !newAllows(DEFAULT_MEMBER_SCOPES, c));
   assert.deepEqual(names(opened), []);
-  assert.deepEqual(names(closed), TEAM_EDITS);
+  assert.deepEqual(names(closed), []);
 });
 
 test("R7 보기만 받으면 바꾸는 기능은 막힌다", () => {
@@ -158,7 +157,7 @@ test("R8 역할이 여는 것", () => {
     ["knowledge_save", true], ["org_distiller_upsert", true], ["org_github_connect", true], ["repo_file", true], ["browser_navigate", true],
     ["delegate_run", true], ["preview_env_ensure", true], ["org_hooks", true],
     ["repo_create", false], ["org_hook_upsert", false], ["org_member_upsert", false], ["org_credentials", false], ["org_token_mint", false],
-    ["team_set_members", false],
+    ["team_set_members", true],   // 표로는 열려 있다 — 팀이 권한을 받는 단위가 된 조직에서는 핸들러(teams.ts requireTeamWrite)가 관리자만 받는다
   ] as const) assert.equal(roleAllows(member, name), ok, `구성원 ${name}`);
   // 관리자 — 자격은 보기만, 하네스 설정도 보기만
   for (const [name, ok] of [
@@ -174,8 +173,8 @@ test("R8 역할이 여는 것", () => {
   const gained = scoped.filter((c) => !legacyAllows(DEFAULT_MEMBER_SCOPES, c) && allows(member, need(c)));
   assert.deepEqual(names(lost), [
     "repo_create", "repo_delete", "repo_deprecate", "repo_refresh", "repo_rename", "repo_set_source",   // 코드 고치기(레포 등록부)는 관리자부터
-    ...TEAM_EDITS,                                                                                    // 팀 편집은 관리
   ]);
+  assert.deepEqual(names(TEAM_EDITS.map(cap).filter((c) => !allows(member, need(c)))), [], "팀 편집은 구성원 역할에게도 표로는 열려 있다");
   assert.deepEqual(names(gained), [   // 하네스 설정 보기 — 무엇이 깔려 있는지는 구성원도 본다
     "org_asset_members", "org_asset_prefs", "org_harness_assets", "org_hooks", "org_http_tool_presets", "org_tools",
   ]);
@@ -202,9 +201,8 @@ function newAllowsNeed(scopes: readonly string[], n: Need | null): boolean {
 
 // 넓어지는 쌍마다 새로 열리는 기능 수 — 표를 고쳐 이 수가 바뀌면 «누구에게 무엇이 더 열리는가» 가 바뀐 것이다.
 const EXPECTED_WIDENED: Record<string, number> = {
-  "context←memory": 35,   // context 의 맥락 34 + 수집 설정 조회 1(member_ai_connectors)
+  "context←memory": 39,   // context 의 맥락 34 + 수집 설정 조회 1(member_ai_connectors) + 팀 편집 4(«맥락» 고치기 — 팀이 권한 단위인 조직에서는 핸들러가 관리자만 받는다)
   "memory←context": 152,  // memory 의 맥락 전부
   "context←code": 13,     // 레포 등록부 조회 4 + 위탁 · 에이전트 작업 9
   "code←context": 12,     // code 의 기능 전부(레포 판 읽기 5 + 프리뷰 · 브로커 7)
-  "context←admin": 4,     // 팀 편집
 };

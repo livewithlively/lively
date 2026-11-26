@@ -48,11 +48,14 @@ test("D3 역할 구성원에게 DB 조회 자격이 없으면 지정을 보지�
   assert.equal(await dbSourceAllowed(user({ scopes: ["db"], grants: { content: "write", admin: "write" } }), "crm"), false, "관리자여도 자격이 없으면 불가");
 });
 
-test("D4 역할 구성원의 내장 self — 관리 고치기가 있을 때만", async () => {
+test("D4 역할 구성원의 내장 self — 관리 고치기가 있으면 열리고, 없으면 «모든 소스» 지정을 본다", async () => {
   assert.equal(await dbSourceAllowed(user({ grants: ROLE_GRANTS.owner }), "self"), true);
   assert.equal(await dbSourceAllowed(user({ grants: ROLE_GRANTS.admin }), "self"), true);
-  assert.equal(await dbSourceAllowed(user({ grants: ROLE_GRANTS.member }), "self"), false, "DB 조회 자격만으로 self 는 안 열린다");
-  assert.equal(await dbSourceAllowed(user({ grants: { admin: "read", db: "read" } }), "self"), false, "관리 보기로는 안 된다");
+  assert.equal(await dbSourceAllowed(user({ grants: { admin: "read", content: "write" } }), "self"), false, "DB 조회 자격이 없으면 지정을 보지도 않고 닫힌다");
+  //  DB 조회 자격이 있으면 «모든 소스» 지정이 있는지 표를 읽는다(옛 db 가 self 도 열었던 것을 잇는다 — 실제 판정은 auth/role-migration.pg-test A14).
+  //   이 시험에는 DB 가 없어 그 조회가 던진다 = 닫힌 쪽이다(지정을 확인하지 못하면 열지 않는다).
+  await assert.rejects(() => dbSourceAllowed(user({ grants: ROLE_GRANTS.member }), "self"));
+  await assert.rejects(() => dbSourceAllowed(user({ grants: { admin: "read", db: "read" } }), "self"));
 });
 
 test("D5 거절 문구는 종전 꼴이다", async () => {

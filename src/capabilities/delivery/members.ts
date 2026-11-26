@@ -20,10 +20,8 @@ import { chooseTempPassword } from "../../auth/temp-password.js";
 import { reresolveMirrorMembers } from "../../v6/connector-mirror.js";
 import { logger } from "../../log.js";
 import { actorOf, assertEmail, restOnly, restRead, slug, str } from "./shared.js";
-import { planMigration, selectPlans, type MigrationPlan } from "../../auth/role-migration.js";
-import { addDbSourceMembers } from "../../org/store/db-source-grants.js";
-import { listSourceConfigs, refreshSources } from "../../db/sources.js";
-import { SELF_SOURCE } from "../../db/self-source.js";
+import { selectPlans, type MigrationPlan } from "../../auth/role-migration.js";
+import { applyMigrationPlans, legacyMemberPlans } from "../../org/role-migration-apply.js";
 
 function parseIdentities(raw: unknown): MemberIdentity[] {
   if (raw === undefined || raw === null) return [];
@@ -74,13 +72,6 @@ export const membersReadCapabilities: Capability[] = [
       return { members: await membersPayload(isAdmin), canEdit: isAdmin, meaning: MEANING["member"] };
     }, true),
 ];
-
-/** 옛 방식 구성원 전원의 이관 계획 — DB 소스는 지금 등록된 것(내장 self 제외). */
-async function roleMigrationPlans(keep: boolean): Promise<MigrationPlan[]> {
-  await refreshSources(true);
-  const sources = listSourceConfigs().map((s) => s.name).filter((n) => n !== SELF_SOURCE);
-  return planMigration(await listMembers(), { sources, keep });
-}
 
 /** 계획을 화면 · AI 가 읽을 모양으로 — 이름 · 지금 scopes · 앱 동의 수를 붙이고 역할별로 센다. */
 async function roleMigrationView(plans: MigrationPlan[], keep: boolean): Promise<Record<string, unknown>> {
@@ -252,13 +243,13 @@ export const membersCapabilities: Capability[] = [
   //   조회지만 restOnly(관리 권한)다 — 구성원 전원의 권한이 드러난다. GET 뿐이라 «보기» 수준으로 판정된다.
   restOnly("org_member_role_plan", "옛 방식 구성원 이관 계획",
     "옛 방식(scope 로 권한을 받는) 구성원을 역할로 옮기면 어떻게 되는지 미리 본다 — 구성원마다 옮길 역할(role) · 얹을 개별 권한(grants) · "
-    + "얻는 것(gains) · 잃는 것(losses) · 조회 대상으로 지정할 DB 소스(db_sources) · 앱 동의 수(app_consents — 이관 뒤 그 앱은 context 와 memory 를 "
+    + "얻는 것(gains) · 잃는 것(losses) · 조회 대상으로 지정할 DB 소스(db_sources — '*' 는 «모든 소스»: 지금 있는 것과 앞으로 등록될 것) · 앱 동의 수(app_consents — 이관 뒤 그 앱은 context 와 memory 를 "
     + "합친 «맥락» 단위로 읽는다). 권한이 하나도 없는 구성원은 옮기지 않는다(skip='no-permissions'). keep=1 이면 잃는 것을 개별 권한으로 남기는 계획. "
     + "아무것도 바꾸지 않는다 — 적용은 org_member_role_apply.",
     [{ method: "GET", paths: ["/api/ui/org/members/role-plan"], parse: (req) => ({ keep: req.query?.keep }) }],
     async (input: Record<string, unknown>) => {
       const keep = input.keep === true || input.keep === "1" || input.keep === "true";
-      return roleMigrationView(await roleMigrationPlans(keep), keep);
+      return roleMigrationView(await legacyMemberPlans(keep), keep);
     }, {
       keep: z.union([z.boolean(), z.string()]).optional().describe("true(1) = 역할이 낮추는 권한을 개별 권한으로 남긴다. 기본은 역할 그대로(잃는 것은 잃는다)"),
     }),
@@ -273,22 +264,11 @@ export const membersCapabilities: Capability[] = [
       if (input.ids !== undefined && !Array.isArray(input.ids)) throw new HttpError(400, "ids 는 배열이어야 합니다");
       const ids = ((input.ids as unknown[] | undefined) ?? []).map((x) => str(x, "ids[]", 200));
       let picked: MigrationPlan[];
-      try { picked = selectPlans(await roleMigrationPlans(keep), ids, all); }
+      try { picked = selectPlans(await legacyMemberPlans(keep), ids, all); }
       catch (e) { throw new HttpError(400, (e as Error).message); }
-      const moved: Array<{ id: string; role: string; custom: boolean }> = [];
-      const skipped: Array<{ id: string; reason: string }> = [];
-      //  DB 소스 지정을 **먼저** 넣는다 — 역할이 먼저 바뀌면 그 사이 조회가 끊긴다. 옛 방식 구성원에게 지정은 아무 효과가 없어(전 소스를 이미 본다) 먼저 넣어도 넓어지지 않는다.
-      const bySource = new Map<string, string[]>();
-      for (const p of picked) if (p.role) for (const src of p.dbSources) bySource.set(src, [...(bySource.get(src) ?? []), p.id]);
-      let dbGrants = 0;
-      for (const [src, members] of bySource) dbGrants += await addDbSourceMembers(src, members, actorOf(user));
-      for (const p of picked) {
-        if (!p.role) { skipped.push({ id: p.id, reason: p.skip ?? "skip" }); continue; }
-        await upsertMember({ id: p.id, role: p.role, grants: p.grants }, actorOf(user), "role-migration");
-        moved.push({ id: p.id, role: p.role, custom: p.custom });
-      }
+      const { moved, skipped, dbGrants } = await applyMigrationPlans(picked, actorOf(user));
       logger.info({ actor: actorOf(user), moved: moved.length, skipped: skipped.length, dbGrants, keep }, "[role-migration] 옛 방식 구성원을 역할로 옮김");
-      return { moved, skipped, db_grants_added: dbGrants, remaining: (await roleMigrationPlans(keep)).filter((p) => p.role).length };
+      return { moved, skipped, db_grants_added: dbGrants, remaining: (await legacyMemberPlans(keep)).filter((p) => p.role).length };
     }, {
       ids: z.array(z.string()).optional().describe("옮길 구성원 id 목록(org_member_role_plan 의 id)"),
       all: z.boolean().optional().describe("true = 옮길 수 있는 옛 방식 구성원 전원"),

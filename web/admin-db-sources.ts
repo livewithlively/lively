@@ -36,6 +36,12 @@ function dbSourceEditor(detail, data) {
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     el('p', { class: 'admin-hint' }, ...uiText('db_query/db_schema 가 조회하는 외부 운영 DB 목록입니다. 읽기 전용 role(RLS 적용)로 접속하는 것을 전제로 하며, 접속 비밀번호는 값을 저장하지 않고 참조(auth_ref — 게이트웨이 환경변수 이름 또는 GCP · AWS 시크릿 저장소)만 저장합니다. 왼쪽에서 소스를 선택하면 테이블 정책·컬럼 마스킹, 원본 열람 권한, 감사 대상 식별자 설정이 함께 열립니다. .env 로 등록한 소스는 「env」 표시가 붙으며 이 화면에서는 수정할 수 없습니다.')));
+  //  모든 소스 지정(#5799) — 소스를 고르지 않은 화면에 둔다(어느 한 소스의 설정이 아니다). 관리자만.
+  if (!editing && state.admin.canEdit) {
+    const allPanel = el('div', { class: 'card', style: 'margin-top:12px' });
+    right.append(allPanel);
+    void renderDbAccessPanel(allPanel, ALL_DB_SOURCES, data);
+  }
   // 등록된 소스를 고르면 그 소스의 **설정** 3종이 따라 붙는다(라이브 스키마 오버레이, 무재시작):
   //  ① 테이블 정책·컬럼 마스킹 ② 원본 개인정보 열람 권한(unmask grant) ③ 감사 대상 식별자 컬럼(subject-key).
   //  ③은 구 [DB 접근 감사] 화면에 꽂혀 있었지만 그건 **감사가 아니라 설정**이고, 서버도 /org/db-source/subject-key(s)
@@ -223,6 +229,9 @@ async function setColumnMask(source, table, column, style) {
 // 조회 대상(#5799 새 권한 체계의 «대상 지정») — 이 DB 소스를 조회할 수 있는 사람 · 팀. 서버: /api/ui/org/db-source/access.
 //  역할을 받은 구성원은 «DB» 조회 권한과 이 지정이 둘 다 있어야 조회한다(기본 불가 — 소스를 등록한 관리자도 지정돼야 본다).
 //  역할이 없는 옛 방식 구성원은 이 지정과 무관하게 DB 권한으로 전 소스를 조회한다 — 그 사실을 화면이 그대로 말한다.
+/** «모든 소스» 지정의 소스 이름 — 서버 org/store/db-source-grants.ts ALL_DB_SOURCES 와 같은 값. */
+export const ALL_DB_SOURCES = '*';
+
 async function renderDbAccessPanel(panel, source, data) {
   busy(panel, el('p', { class: 'admin-hint' }, ...uiText('조회 대상 불러오는 중…')));
   let members: string[] = [];
@@ -268,9 +277,12 @@ async function renderDbAccessPanel(panel, source, data) {
       renderDbAccessPanel(panel, source, data);
     } catch (e: any) { toast(e.message, true); saveBtn.disabled = false; }
   } });
+  //  «모든 소스»(source = '*') — 지금 있는 소스와 앞으로 등록될 소스를 전부 조회하는 사람 · 팀. 옛 방식에서 DB 권한이 있던 사람은 역할로 옮길 때 여기에 들어온다.
+  const all = source === ALL_DB_SOURCES;
   panel.replaceChildren(
-    sectionTitle('조회할 수 있는 사람 · 팀 — ' + source, '역할을 받은 구성원은 여기 지정된 사람과 팀만 이 DB 를 조회합니다. 아무도 지정하지 않으면 아무도 조회하지 못합니다(소스를 등록한 관리자도 지정해야 봅니다). 팀으로 지정하면 팀 구성원을 바꾸는 일이 관리자 전용이 됩니다.'),
-    el('p', { class: 'admin-hint' }, ...uiText('역할이 없는 옛 방식 구성원은 이 지정과 무관하게, DB 권한이 있으면 모든 소스를 조회합니다. 구성원을 역할로 옮기면 이 지정이 적용됩니다.')),
+    all
+      ? sectionTitle('모든 DB 소스를 조회하는 사람 · 팀', '여기 지정된 사람과 팀은 지금 있는 DB 소스와 앞으로 등록될 소스를 모두 조회합니다. 예전에 DB 권한이 있던 구성원은 역할로 옮길 때 여기에 들어옵니다. 팀으로 지정하면 팀 구성원을 바꾸는 일이 관리자 전용이 됩니다.')
+      : sectionTitle('조회할 수 있는 사람 · 팀 — ' + source, '여기 지정된 사람과 팀, 그리고 «모든 DB 소스» 에 지정된 사람과 팀이 이 DB 를 조회합니다. 어느 쪽에도 없으면 조회하지 못합니다(소스를 등록한 관리자도 지정해야 봅니다). 팀으로 지정하면 팀 구성원을 바꾸는 일이 관리자 전용이 됩니다.'),
     field('구성원', el('div', {}, chips, el('div', { class: 'row-gap', style: 'display:flex;gap:8px;margin-top:6px;align-items:center' }, combo.el, addBtn))),
     field('팀', teamWrap),
     el('div', { class: 'admin-actions' }, saveBtn));

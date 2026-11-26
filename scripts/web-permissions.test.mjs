@@ -20,13 +20,14 @@
 //   W16 planTargetText — 역할 이름 · 역할 + 개별 권한 n개 · 직접 고른 권한 · 옮기지 않음(권한 없음)
 //   W17 gainText · lossText — «하네스 설정 보기» · «코드 고치기 → 보기» · 다 잃으면 «→ 없음» · DB 는 «조회» · 세션은 «있음»
 //   W18 migrationSummary — 0 인 것은 빼고 소유자 → 관리자 → 구성원 → 직접 고른 권한 → 옮기지 않음 순서 · 빈 값은 빈 줄
-//   W19 legacyCount — 역할 없는 구성원 수 · 빈 목록 0
+//   W19 legacyCount — 역할 없고 권한이 있는 구성원 수 · 권한 없는 구성원(시스템 계정)은 세지 않는다 · 빈 목록 0
 //   W20 배선 — 명부는 옛 방식 구성원이 있을 때만 안내를 보이고 · 이관 창은 계획을 읽어 고른 id 만 보낸다 · 두 번 눌러야 옮긴다
 //   W21 effectiveGrants — 서버 memberGrants 와 같은 값(역할 4 × 개별 권한 × 팀 조합) · 옛 방식(역할 없음)은 빈 것 · 팀은 올리기만
 //   W22 sourceTexts — 지금 수준을 주는 출처만 · «구성원 역할» · «개별 권한» · «팀 이름»(이름 없으면 #id) · 권한이 없으면 빈 배열 — 서버 grantSources 와 같은 출처 수
 //   W23 teamAccessText — «관리자 역할 · 코드 고치기 · DB 조회» · 주는 것이 없으면 빈 줄 · 모르는 역할 · 수준은 뺀다
 //   W24 teamLevelChoices — 보기/고치기 · DB 는 조회뿐 · 세션 · 원격 실행은 있음뿐
 //   W25 배선 — 구성원 읽기 화면은 출처가 붙은 표를 쓴다 · 팀 폼은 관리자일 때만 권한을 보낸다 · 팀 읽기 화면이 팀이 주는 권한을 보인다
+//   W26 배선 — DB 소스 화면이 «모든 소스» 지정 칸을 관리자에게 보인다 · 화면의 '*' 가 서버 값과 같다
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -230,7 +231,8 @@ t("W18 migrationSummary — 역할별 수 한 줄", () => {
 });
 
 t("W19 legacyCount — 옛 방식 구성원 수", () => {
-  assert.equal(W.legacyCount([{ role: null }, { role: "member" }, {}, { role: "" }]), 3);
+  assert.equal(W.legacyCount([{ role: null, scopes: ["items"] }, { role: "member", scopes: ["items"] }, { scopes: ["admin"] }, { role: "", scopes: ["db"] }]), 3);
+  assert.equal(W.legacyCount([{ role: null, scopes: [] }, { role: null }, {}]), 0, "권한이 없는 구성원은 옮길 사람이 아니다");
   assert.equal(W.legacyCount([]), 0);
   assert.equal(W.legacyCount(null), 0);
 });
@@ -295,6 +297,16 @@ t("W25 배선 — 출처 표 · 팀 권한 폼", () => {
   assert.match(teams, /const canAccess = !!state\.admin\.canEdit;/, "팀 권한은 관리자만 바꾼다");
   assert.match(teams, /\.\.\.\(canAccess \? \{ access_role: accessRoleSel\.value \|\| null, access_grants: \{ \.\.\.accessGrants \} \} : \{\}\)/, "관리자가 아니면 권한 칸을 보내지 않는다");
   assert.match(teams, /roRow\('팀이 주는 권한', teamAccessText\(\{ role: team\.access_role, grants: team\.access_grants \}\) \|\| '없음'\)/, "읽기 화면이 팀이 주는 권한을 보인다");
+});
+
+t("W26 배선 — 모든 DB 소스 지정", () => {
+  const db = code("web/admin-db-sources.ts");
+  assert.match(db, /if \(!editing && state\.admin\.canEdit\) \{/, "소스를 고르지 않은 화면에서 관리자에게");
+  assert.match(db, /void renderDbAccessPanel\(allPanel, ALL_DB_SOURCES, data\);/, "같은 조회 대상 칸을 '*' 로 그린다");
+  const web = /export const ALL_DB_SOURCES = '([^']+)';/.exec(db);
+  const srv = /export const ALL_DB_SOURCES = "([^"]+)";/.exec(code("src/org/store/db-source-grants.ts"));
+  assert.ok(web && srv, "두 쪽 모두 상수가 있어야 한다");
+  assert.equal(web[1], srv[1]);
 });
 
 console.log(`\nweb-permissions: ${pass} 통과`);

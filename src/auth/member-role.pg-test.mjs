@@ -92,7 +92,9 @@ try {
   chk("G4a 구성원 역할 — scopes 사본은 기본 다섯 · 개별 권한이 적힌다", r4?.role === "member" && sameObj(r4.grants, { code: "write" }) && sameSet(r4.scopes, FIVE), J(r4));
   const s4 = await session(m);
   chk("G4b 구성원 + 코드 고치기 — 레포 등록이 열리고 구성원 관리 · 훅 편집은 닫힌다 · 훅 조회는 열린다",
-    can(s4, "repo_create") && !can(s4, "org_member_upsert") && !can(s4, "org_hook_upsert") && can(s4, "org_hooks") && can(s4, "knowledge_save") && !can(s4, "team_create"),
+    can(s4, "repo_create") && !can(s4, "org_member_upsert") && !can(s4, "org_hook_upsert") && can(s4, "org_hooks") && can(s4, "knowledge_save")
+      //  팀 편집은 표로는 구성원에게 열려 있다(옛 방식과 같다 — 팀이 권한을 받는 단위가 된 조직에서는 핸들러가 관리자만 받는다: team-access.pg-test P10)
+      && can(s4, "team_create"),
     J(s4?.grants));
 
   // ── G5 로그인 토큰(비위험 권한 추종) ──

@@ -75,7 +75,8 @@ test("C2 새 주체는 요구를 덮는가로만 판정받는다 — scopes 사�
   const writer = { scopes: [], grants: { content: "write" } as Grants };
   assert.equal(capAllowed(writer, cap("knowledge_save")), true);
   assert.equal(capAllowed(writer, cap("category_create")), true);
-  assert.equal(capAllowed(writer, cap("team_create")), false, "팀 편집은 관리");
+  assert.equal(capAllowed(writer, cap("team_create")), true, "팀 편집은 표로는 맥락 고치기다(옛 방식과 같다) — 팀이 권한을 받는 단위가 된 조직에서 관리자만 받는 것은 핸들러의 검사다(teams.ts requireTeamWrite)");
+  assert.equal(capAllowed({ scopes: [], grants: { content: "read" } as Grants }, cap("team_create")), false, "맥락 보기로는 팀을 못 만든다");
   // 역할 그대로
   assert.equal(capAllowed({ scopes: [], grants: ROLE_GRANTS.member }, cap("org_member_upsert")), false);
   assert.equal(capAllowed({ scopes: [], grants: ROLE_GRANTS.admin }, cap("org_member_upsert")), true);

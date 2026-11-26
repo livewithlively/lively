@@ -9,12 +9,15 @@
 //   · 그 밖은 구성원 역할 — 단, 구성원 역할이 지금보다 **실제로 넓히면**(아래 HARMLESS_GAINS 밖의 것을 얻으면) 구성원으로 옮기지 않고
 //     게스트 위에 지금 권한을 그대로 얹는다(«직접 고른 권한»). 이관이 조용히 권한을 넓히지 않게.
 //   · 역할이 지금보다 낮추는 것(잃는 것)은 기본으로 그대로 낮춘다 — 미리보기가 잃는 것을 보여 주고, keep 을 주면 개별 권한으로 남긴다.
-//   · DB 는 역할만으로 열리지 않는다(소스마다 지정). 옛 `db` 는 전 소스였으므로 지금 등록된 소스 전부에, `db:<소스>` 는 그 소스에 지정한다.
-//     내장 self 소스는 지정으로 열리지 않아(관리 고치기에게만) 넣지 않는다.
+//   · DB 는 역할만으로 열리지 않는다(소스마다 지정). 옛 `db` 는 전 소스였으므로 «모든 소스»(지금 있는 것 + 앞으로 등록될 것)로 지정하고,
+//     `db:<소스>` 는 등록된 그 소스에 지정한다. 지금 DB 를 보던 사람이 보던 범위 그대로 본다(결정 2026-11-26).
 import {
   PERMISSIONS, ROLE_GRANTS, legacyScopesToGrants, mergeGrants,
   type Grants, type Level, type Permission, type Role,
 } from "./permissions.js";
+
+/** «모든 소스» 지정 — org/store/db-source-grants.ts ALL_DB_SOURCES 와 같은 값(이 파일은 순수라 저장 계층을 import 하지 않는다 — 시험이 둘을 맞춘다). */
+export const ALL_SOURCES = "*";
 
 /** 옮기며 얻어도 실제로 넓어지지 않는 것 — 하네스 설정 보기(구성원 역할의 바탕 · 읽기뿐)와 DB 조회 자격(소스 지정 없이는 아무것도 못 본다). */
 const HARMLESS_GAINS: ReadonlyArray<readonly [Permission, Level]> = [["harness", "read"], ["db", "read"]];
@@ -87,9 +90,10 @@ export function planMemberMigration(
   const after = mergeGrants(ROLE_GRANTS[role], grants);
   const { gains, losses } = diffGrants(now, after);
 
-  const all = [...new Set(opts.sources ?? [])];
-  const named = new Set(scopes.filter((s) => s.startsWith("db:") && s.length > 3).map((s) => s.slice(3)));
-  const dbSources = !after.db ? [] : scopes.includes("db") ? all : all.filter((s) => named.has(s));
+  //  옛 `db` 는 전 소스였다(나중에 등록되는 소스까지) — 그대로 잇도록 «모든 소스» 로 지정한다. `db:<소스>` 는 등록된 그 소스만.
+  const registered = new Set(opts.sources ?? []);
+  const named = [...new Set(scopes.filter((s) => s.startsWith("db:") && s.length > 3).map((s) => s.slice(3)))].filter((s) => registered.has(s));
+  const dbSources = !after.db ? [] : scopes.includes("db") ? [ALL_SOURCES] : named;
   return { id: m.id, role, grants, custom, gains, losses, dbSources, skip: null };
 }
 
