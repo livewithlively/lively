@@ -29,7 +29,7 @@ import { HttpError } from "../http-error.js";
 import { domainErrorReply } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { isScope } from "../auth/scopes.js";
-import { grantsField } from "../auth/permissions.js";
+import { grantsField, effectiveScopes } from "../auth/permissions.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { OrgMember } from "../org/store/members.js";
 import type { TenantContext } from "../org/tenant-context.js";
@@ -59,7 +59,7 @@ export interface ApiReply { status: number; json: unknown }
 /** 사람 구성원 → 그 사람의 주체(웹 로그인과 같은 «사람 본인»). 권한 축소(그 사람의 앱 동의)는 runAppTool 이 한다. */
 export function memberPrincipal(m: Pick<OrgMember, "id" | "email" | "scopes"> & Partial<Pick<OrgMember, "role" | "grants">>, address: AppVariant): LivelyUser {
   return {
-    userId: m.id, email: m.email ?? "", scopes: (m.scopes ?? []).filter(isScope), ...grantsField(m), projects: ["*"], tokenSource: "session",
+    userId: m.id, email: m.email ?? "", scopes: effectiveScopes(m).filter(isScope), ...grantsField(m), projects: ["*"], tokenSource: "session",
     appAddress: address,
   };
 }

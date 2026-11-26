@@ -23,7 +23,7 @@ import { canSeeApp } from "./visibility.js";
 import { getMember } from "../org/store/members.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope } from "../auth/scopes.js";
-import { cappedGrantsField, memberGrants } from "../auth/permissions.js";
+import { cappedGrantsField, memberGrants, effectiveScopes } from "../auth/permissions.js";
 import { isBuiltinSource } from "./store-ddl.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import { verifyAppIdentity, type VerifyAppIdentityOpts } from "./app-identity.js";
@@ -120,10 +120,10 @@ export async function resolveAppServerPrincipal(user: LivelyUser, header: string
   if (!(await workspaceAccessAllowed(member.id))) throw new HttpError(403, "신원의 구성원이 이 워크스페이스의 구성원이 아닙니다");
   //  #4667 공개 범위 — 나만 보는 앱으로 되돌린 뒤엔 동의가 남은 다른 구성원도 못 쓴다(mintAppToken 과 같은 판정 · 재검토 3-(b)).
   const app = await getApp(bound.appId);
-  if (!app || !canSeeApp(app, { userId: member.id, scopes: member.scopes })) throw new HttpError(403, `이 사람은 앱 '${bound.appId}' 을(를) 쓸 수 없습니다(나만 보는 앱)`);
+  if (!app || !canSeeApp(app, { userId: member.id, scopes: effectiveScopes(member) })) throw new HttpError(403, `이 사람은 앱 '${bound.appId}' 을(를) 쓸 수 없습니다(나만 보는 앱)`);
   const grant = await getActiveGrant(bound.appId, member.id);
   if (!grant) throw new HttpError(403, `이 사람은 앱 '${bound.appId}' 사용에 동의하지 않았습니다 — 앱 화면에서 동의한 뒤 다시 하세요`);
-  const allowed = new Set(member.scopes.filter(isScope));
+  const allowed = new Set(effectiveScopes(member).filter(isScope));   // #5799 — 팀이 준 권한까지 비춘 값
   return {
     userId: member.id,
     email: member.email ?? "",

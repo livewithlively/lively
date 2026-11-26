@@ -22,6 +22,11 @@
 //   W18 migrationSummary — 0 인 것은 빼고 소유자 → 관리자 → 구성원 → 직접 고른 권한 → 옮기지 않음 순서 · 빈 값은 빈 줄
 //   W19 legacyCount — 역할 없는 구성원 수 · 빈 목록 0
 //   W20 배선 — 명부는 옛 방식 구성원이 있을 때만 안내를 보이고 · 이관 창은 계획을 읽어 고른 id 만 보낸다 · 두 번 눌러야 옮긴다
+//   W21 effectiveGrants — 서버 memberGrants 와 같은 값(역할 4 × 개별 권한 × 팀 조합) · 옛 방식(역할 없음)은 빈 것 · 팀은 올리기만
+//   W22 sourceTexts — 지금 수준을 주는 출처만 · «구성원 역할» · «개별 권한» · «팀 이름»(이름 없으면 #id) · 권한이 없으면 빈 배열 — 서버 grantSources 와 같은 출처 수
+//   W23 teamAccessText — «관리자 역할 · 코드 고치기 · DB 조회» · 주는 것이 없으면 빈 줄 · 모르는 역할 · 수준은 뺀다
+//   W24 teamLevelChoices — 보기/고치기 · DB 는 조회뿐 · 세션 · 원격 실행은 있음뿐
+//   W25 배선 — 구성원 읽기 화면은 출처가 붙은 표를 쓴다 · 팀 폼은 관리자일 때만 권한을 보낸다 · 팀 읽기 화면이 팀이 주는 권한을 보인다
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -194,7 +199,7 @@ t("W10 배선 — DB 소스의 조회 대상 · 팀 종류를 화면에서 정�
   assert.match(db, /api\('\/api\/ui\/org\/db-source\/access', \{ method: 'POST', body: JSON\.stringify\(\{ name: source, members: \[\.\.\.chosen\], teams: teamChks\.filter\(\(x\) => x\.chk\.checked\)\.map\(\(x\) => x\.id\) \}\) \}\)/, "구성원 · 팀을 통째로 보낸다");
   assert.match(db, /api\('\/api\/ui\/org\/db-source\/access\?name=' \+ encodeURIComponent\(source\)\)/, "그 소스의 지정을 읽는다");
   const teams = code("web/admin-teams.ts");
-  assert.match(teams, /lead_member_id: leadM \? leadM\.member_id : null, kind: kindSel\.value \}/, "팀 저장이 종류를 보낸다");
+  assert.match(teams, /lead_member_id: leadM \? leadM\.member_id : null, kind: kindSel\.value,/, "팀 저장이 종류를 보낸다");
   assert.match(teams, /field\('종류', kindSel\)/, "팀 폼에 종류 칸이 있다");
 });
 
@@ -239,6 +244,57 @@ t("W20 배선 — 명부의 안내와 이관 창", () => {
   assert.match(form, /if \(!armed\) \{ armed = true; syncBtn\(\); return; \}/, "두 번 눌러야 옮긴다");
   assert.match(form, /chk\.disabled = !r\.role;/, "옮기지 않을 구성원은 고를 수 없다");
   assert.match(form, /el\('div', \{ class: 'admin-actions' \}, goBtn\)\]\.filter\(Boolean\)\);/, "없는 조각(null)을 그리지 않는다");
+});
+
+
+t("W21 effectiveGrants — 서버와 같은 값", () => {
+  const teamSets = [[], [{ team_id: 1, name: "a", role: "member", grants: {} }], [{ team_id: 1, name: "a", role: null, grants: { code: "write", db: "read" } }, { team_id: 2, name: "b", role: "admin", grants: { harness: "write" } }],
+    [{ team_id: 3, name: "c", role: null, grants: { content: "read", code: "read" } }]];
+  const ownSets = [{}, { code: "write" }, { secrets: "write", session: "write" }];
+  for (const role of W.ROLE_KEYS) for (const grants of ownSets) for (const team_access of teamSets) {
+    const row = { role, grants, team_access };
+    assert.deepEqual(W.effectiveGrants(row), S.memberGrants(row), JSON.stringify(row));
+  }
+  assert.deepEqual(W.effectiveGrants({ role: null, grants: { code: "write" }, team_access: teamSets[1] }), {}, "옛 방식 구성원은 팀이 넓히지 않는다");
+  assert.deepEqual(W.effectiveGrants(null), {});
+  assert.deepEqual(W.teamGrantsOf({ role: "guest", grants: { code: "write" } }), S.teamGrants({ role: "guest", grants: { code: "write" } }));
+  assert.deepEqual(W.teamGrantsOf(null), {});
+});
+
+t("W22 sourceTexts — 어디서 왔나", () => {
+  const m = { role: "member", grants: { code: "write" }, team_access: [{ team_id: 1, name: "개발", role: null, grants: { code: "write", admin: "read" } }, { team_id: 2, name: null, role: "member", grants: {} }, { team_id: 3, name: "읽기", role: null, grants: { code: "read" } }] };
+  assert.deepEqual(W.sourceTexts(m, "code"), ["개별 권한", "팀 개발"]);
+  assert.deepEqual(W.sourceTexts(m, "content"), ["구성원 역할", "팀 #2"]);
+  assert.deepEqual(W.sourceTexts(m, "admin"), ["팀 개발"]);
+  assert.deepEqual(W.sourceTexts(m, "secrets"), []);
+  assert.deepEqual(W.sourceTexts({ role: null, grants: { code: "write" } }, "code"), []);
+  const srv = S.grantSources(m);
+  for (const p of W.PERMISSION_KEYS) assert.equal(W.sourceTexts(m, p).length, (srv[p] || []).length, p);
+});
+
+t("W23 teamAccessText — 팀이 주는 권한 한 줄", () => {
+  assert.equal(W.teamAccessText({ role: "admin", grants: { code: "write", db: "read" } }), "관리자 역할 · 코드 고치기 · DB 조회");
+  assert.equal(W.teamAccessText({ role: null, grants: { session: "write" } }), "세션 있음");
+  assert.equal(W.teamAccessText({ role: "nope", grants: { code: "zzz" } }), "");
+  assert.equal(W.teamAccessText({ role: null, grants: null }), "");
+  assert.equal(W.teamAccessText(null), "");
+});
+
+t("W24 teamLevelChoices — 권한 종류대로", () => {
+  assert.deepEqual(W.teamLevelChoices("code"), ["read", "write"]);
+  assert.deepEqual(W.teamLevelChoices("db"), ["read"]);
+  assert.deepEqual(W.teamLevelChoices("session"), ["write"]);
+  assert.deepEqual(W.teamLevelChoices("run"), ["write"]);
+});
+
+t("W25 배선 — 출처 표 · 팀 권한 폼", () => {
+  const form = code("web/admin-members.ts");
+  assert.match(form, /effectiveTable\(m\)\)\)/, "읽기 화면은 출처가 붙은 표");
+  assert.match(form, /text: sourceTexts\(m, pk\)\.join\(', '\) \|\| '—'/, "권한마다 어디서 왔나");
+  const teams = code("web/admin-teams.ts");
+  assert.match(teams, /const canAccess = !!state\.admin\.canEdit;/, "팀 권한은 관리자만 바꾼다");
+  assert.match(teams, /\.\.\.\(canAccess \? \{ access_role: accessRoleSel\.value \|\| null, access_grants: \{ \.\.\.accessGrants \} \} : \{\}\)/, "관리자가 아니면 권한 칸을 보내지 않는다");
+  assert.match(teams, /roRow\('팀이 주는 권한', teamAccessText\(\{ role: team\.access_role, grants: team\.access_grants \}\) \|\| '없음'\)/, "읽기 화면이 팀이 주는 권한을 보인다");
 });
 
 console.log(`\nweb-permissions: ${pass} 통과`);

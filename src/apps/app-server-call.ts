@@ -13,7 +13,7 @@ import { getApp, getActiveGrant } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
 import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope } from "../auth/scopes.js";
-import { cappedGrantsField, memberGrants } from "../auth/permissions.js";
+import { cappedGrantsField, memberGrants, effectiveScopes } from "../auth/permissions.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { AwsError } from "../net/aws/aws-json.js";
 import { parseReport } from "../net/aws/lambda-lite.js";
@@ -317,10 +317,10 @@ export async function resolveCallRunPrincipal(user: LivelyUser, raw: string, now
   if (!member || member.state !== "active") throw new HttpError(403, "부른 사람이 이 워크스페이스에서 활성 상태가 아닙니다");
   if (!(await workspaceAccessAllowed(member.id))) throw new HttpError(403, "부른 사람이 이 워크스페이스의 구성원이 아닙니다");
   const app = await getApp(row.app_id);
-  if (!app || !canSeeApp(app, { userId: member.id, scopes: member.scopes })) throw new HttpError(403, `이 사람은 앱 '${row.app_id}' 을(를) 쓸 수 없습니다(나만 보는 앱)`);
+  if (!app || !canSeeApp(app, { userId: member.id, scopes: effectiveScopes(member) })) throw new HttpError(403, `이 사람은 앱 '${row.app_id}' 을(를) 쓸 수 없습니다(나만 보는 앱)`);
   const grant = await getActiveGrant(row.app_id, member.id);
   if (!grant) throw new HttpError(403, `부른 사람이 앱 '${row.app_id}' 사용 동의를 거두었습니다`);
-  const allowed = new Set(member.scopes.filter(isScope));
+  const allowed = new Set(effectiveScopes(member).filter(isScope));   // #5799 — 팀이 준 권한까지 비춘 값
   const granted = new Set(grant.scopes);
   return {
     userId: member.id, email: member.email ?? "", scopes: row.scopes.filter((s) => isScope(s) && allowed.has(s) && granted.has(s)), projects: ["*"],

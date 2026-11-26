@@ -1,6 +1,6 @@
 // 앱 AI 실행 — 살아 있는 의존(DB · 자격 금고 · 작업 컨테이너 · LLM · 정책)을 service.ts 에 잇는다 (#4488 앱 v2-9).
 import crypto from "node:crypto";
-import { grantsField } from "../auth/permissions.js";
+import { grantsField, effectiveScopes } from "../auth/permissions.js";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
@@ -155,7 +155,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       const { getMember } = await import("../org/store/members.js");
       const m = await getMember(member);
       if (!m || m.state !== "active") return false;
-      const r = await aiLoginCheck({ userId: m.id, email: m.email ?? "", scopes: Array.isArray(m.scopes) ? m.scopes : [], ...grantsField(m), projects: ["*"] } as LivelyUser, "claude");
+      const r = await aiLoginCheck({ userId: m.id, email: m.email ?? "", scopes: effectiveScopes(m), ...grantsField(m), projects: ["*"] } as LivelyUser, "claude");
       return r.loggedIn;
     }),
     isAdmin,

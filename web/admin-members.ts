@@ -10,7 +10,7 @@ import { api, busy, cardHead, el, errorNote, profileAvatar, state, toast, uiText
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
-import { gainText, legacyCount, lossText, migrationSummary, planTargetText } from './lib/permissions.js';   // #5799 옛 방식 구성원 이관
+import { effectiveGrants, gainText, legacyCount, lossText, migrationSummary, planTargetText, sourceTexts } from './lib/permissions.js';   // #5799 옛 방식 구성원 이관
 import { CUSTOM_CHOICE, LEGACY_CHOICE, MEMBER_DEFAULT_ROLE, PERMISSION_KEYS, PERMISSION_INFO, ROLE_GRANTS, ROLE_INFO, abilityText, accessChoiceOf, accessChoices, accessPayload, extraChoices, extrasForChoice, grantsFor, levelText, roleOfChoice, suggestRole } from './lib/permissions.js';   // #5799 역할 · 권한
 
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
@@ -271,6 +271,23 @@ function permissionTable(role, extras, onExtra, custom = false) {
   return el('table', { class: 'perm-table' }, el('tbody', {}, ...rows));
 }
 
+// 지금 권한과 출처(#5799) — 읽기 화면용. 본인 역할 ∪ 개별 권한 ∪ 소속 팀이 주는 것을 권한마다 «이름 · 수준 · 할 수 있는 일 · 어디서 왔나» 로.
+function effectiveTable(m) {
+  const g = effectiveGrants(m);
+  const rows = PERMISSION_KEYS.map((pk) => {
+    const info = PERMISSION_INFO[pk];
+    const lv = g[pk];
+    return el('tr', {},
+      el('td', { class: 'perm-name', text: info.label, title: info.definition }),
+      el('td', { class: 'perm-level' + (lv ? '' : ' perm-none'), text: levelText(pk, lv) }),
+      el('td', { class: 'perm-can', text: lv ? abilityText(pk, lv) : '—' }),
+      el('td', { class: 'perm-source' + (lv ? '' : ' perm-none'), text: sourceTexts(m, pk).join(', ') || '—' }));
+  });
+  return el('table', { class: 'perm-table' },
+    el('thead', {}, el('tr', {}, ...['권한', '수준', '할 수 있는 일', '어디서 왔나'].map((h) => el('th', { text: h })))),
+    el('tbody', {}, ...rows));
+}
+
 // 구성원 권한(scope) 옵션 — 보기/편집 공유. 서버 SCOPES(capabilities/scopes.ts) 전체와 일치시킨다.
 const MEMBER_SCOPE_OPTS = [
   ['items', '아이템 조회'], ['context', '컨텍스트'], ['memory', '지식·메모리'],
@@ -338,7 +355,7 @@ function memberRead(root, m, data, detail, opts: any = {}) {
       //  #5799 — 역할을 받은 구성원은 역할과 그 역할이 여는 일을, 옛 방식 구성원은 고른 권한을 보여 준다.
       m.role
         ? field('권한', el('div', {}, el('div', { class: 'admin-ro', text: accessChoiceOf(m) === CUSTOM_CHOICE ? '직접 고른 권한' : '역할: ' + (ROLE_INFO[m.role]?.label || m.role) }),
-          permissionTable(m.role, m.grants || {}, null, accessChoiceOf(m) === CUSTOM_CHOICE)))
+          effectiveTable(m)))
         : roRow('권한 (직접 고른 권한 · 옛 방식)', scopeText),
       field('외부 계정 연결 (신원 매칭 키)', idnSummary(m.identities || [])),
       field('개인 레이어', el('div', { class: 'admin-ro admin-ro-pre', text: (m.body_md && m.body_md.trim()) || '—' })));
@@ -419,10 +436,12 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
       return;
     }
     extras = extrasForChoice(ck, extras);   // 역할이 이미 주는 것은 얹을 것이 아니다
+    const fromTeams = (m.team_access || []).map((t) => (t.name || '#' + t.team_id)).join(', ');
     const custom = ck === CUSTOM_CHOICE;
-    roleBox.replaceChildren(
+    roleBox.replaceChildren(...([
       el('p', { class: 'admin-hint', text: custom ? '권한을 하나씩 정합니다. 맥락 보기는 모든 구성원의 바탕이라 뺄 수 없습니다.' : ROLE_INFO[rk].definition }),
-      permissionTable(rk, extras, (pk, lv) => { if (lv) extras[pk] = lv; else delete extras[pk]; renderRole(); }, custom));
+      permissionTable(rk, extras, (pk, lv) => { if (lv) extras[pk] = lv; else delete extras[pk]; renderRole(); }, custom),
+      fromTeams ? el('p', { class: 'admin-hint', text: '소속 팀(' + fromTeams + ')이 주는 권한은 여기에 더해집니다. 팀이 주는 권한은 [팀]에서 바꿉니다.' }) : null].filter(Boolean) as any[]));
   };
   roleSel.addEventListener('change', renderRole);
   renderRole();

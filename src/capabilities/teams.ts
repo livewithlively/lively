@@ -14,8 +14,12 @@ import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import {
   listTeams, getTeam, createTeam, updateTeam, deleteTeam,
-  setTeamMembers, anyTeamGrant, setTeamKind, isTeamKind, type TeamKind,
+  setTeamMembers, anyTeamGrant, setTeamKind, setTeamAccess, isTeamKind, type TeamKind, type TeamRow,
 } from "../v6/team-store.js";
+import {
+  PERMISSIONS, PERMISSION_INFO, ROLES, grantsOf, isPermission, isRole, permits, sanitizeGrants, teamGrants, ungivable,
+  type Grants, type Role,
+} from "../auth/permissions.js";
 
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -25,6 +29,58 @@ function parseKind(v: unknown): TeamKind | undefined {
   if (!isTeamKind(v)) throw new HttpError(400, "kind 는 team|group 입니다");
   return v;
 }
+//  ── 팀이 주는 권한(#5799) ── 팀의 구성원이 함께 받는 역할(access_role) · 개별 권한(access_grants).
+//   팀에 권한을 싣는 것은 그 팀 전원에게 권한을 주는 것이다 — 그래서 ① 관리 고치기가 있어야 하고(팀 grant 가 아직 없어 팀 편집이 열려 있는 조직에서도)
+//   ② 내가 갖지 않은 위험 권한의 고치기는 팀으로도 못 준다(구성원 역할을 줄 때와 같은 규칙 — auth/permissions.ts ungivable).
+//   권한이 실린 팀에 사람을 **새로 넣는 것**도 주는 것이라 ②를 건다.
+interface AccessInput { role?: Role | null; grants?: Grants }
+/** 요청 몸통에서 팀 권한 칸을 꺼낸다 — 입력 스키마와 같은 이름(access_role · access_grants)으로 돌려준다. 주지 않은 칸은 싣지 않는다(= 그대로). */
+function parseAccess(b: Record<string, unknown>): { access_role?: Role | null; access_grants?: Grants } {
+  const out: { access_role?: Role | null; access_grants?: Grants } = {};
+  if ("access_role" in b && b.access_role !== undefined) {
+    if (b.access_role !== null && b.access_role !== "" && !isRole(b.access_role)) throw new HttpError(400, `access_role 은 ${ROLES.join("|")} 중 하나거나 null 입니다`);
+    out.access_role = b.access_role === "" ? null : (b.access_role as Role | null);
+  }
+  if ("access_grants" in b && b.access_grants !== undefined) {
+    const g = b.access_grants;
+    if (g === null) out.access_grants = {};
+    else {
+      if (typeof g !== "object" || Array.isArray(g)) throw new HttpError(400, "access_grants 는 {권한: \"read\"|\"write\"} 객체여야 합니다");
+      for (const [k, v] of Object.entries(g as Record<string, unknown>)) {
+        if (!isPermission(k)) throw new HttpError(400, `모르는 권한: ${k} — ${PERMISSIONS.join("|")}`);
+        if (v !== "read" && v !== "write") throw new HttpError(400, `권한 ${k} 의 수준은 read|write 입니다`);
+      }
+      out.access_grants = sanitizeGrants(g);
+    }
+  }
+  return out;
+}
+/** 입력(스키마 이름)에서 «바꿀 권한» 을 꺼낸다 — access_grants null 은 비우기. */
+const accessInputOf = (input: { access_role?: Role | null; access_grants?: Record<string, string> | null }): AccessInput => ({
+  ...(input.access_role === undefined ? {} : { role: input.access_role }),
+  ...(input.access_grants === undefined ? {} : { grants: sanitizeGrants(input.access_grants ?? {}) }),
+});
+const accessOf = (t: Pick<TeamRow, "access_role" | "access_grants"> | undefined | null): { role: Role | null; grants: Grants } =>
+  ({ role: isRole(t?.access_role) ? t.access_role : null, grants: sanitizeGrants(t?.access_grants) });
+/** 이 권한 묶음을 내가 줄 수 있나 — 못 주면 403(어느 권한 때문인지 화면 이름으로). */
+function assertGivable(user: LivelyUser, giving: Grants): void {
+  const blocked = ungivable(grantsOf(user), giving);
+  if (blocked.length) throw new HttpError(403, `${blocked.map((p) => PERMISSION_INFO[p].label).join(" · ")} 고치기 권한은 그 권한을 가진 사람만 줄 수 있습니다`);
+}
+/** 팀의 권한을 바꾼다(준 것만 · 나머지는 그대로). 바뀐 팀 행을 돌려준다. 준 것이 없으면 null. */
+async function applyAccess(id: number, input: AccessInput, user: LivelyUser, ctx?: CapabilityCtx): Promise<TeamRow | null> {
+  if (input.role === undefined && input.grants === undefined) return null;
+  if (!permits(user, "admin", { perm: "admin", level: "write" })) throw new HttpError(403, "팀에 권한을 싣는 것은 관리자만 할 수 있습니다 — 그 팀의 구성원 전원이 그 권한을 받습니다");
+  const now = accessOf(await getTeam(id));
+  const next = { role: input.role === undefined ? now.role : input.role, grants: input.grants === undefined ? now.grants : input.grants };
+  assertGivable(user, teamGrants(next));
+  const row = await setTeamAccess(id, next, writeCtxOf(user, ctx));
+  tgAt = 0;   // 팀이 방금 권한 주체가 됐을 수 있다 — 팀 쓰기 게이트의 캐시를 버린다
+  return row;
+}
+const ACCESS_ROLE_DESC = "이 팀의 구성원이 함께 받는 역할(guest|member|admin|owner) — 역할을 받은 구성원에게만 더해진다(옛 방식 구성원에게는 효과 없음). null = 없음. 관리자만";
+const ACCESS_GRANTS_DESC = "이 팀의 구성원이 함께 받는 개별 권한 {권한: read|write} — 권한: content|pipeline|external|code|session|run|db|admin|secrets|harness. null · {} = 없음. 관리자만";
+
 function parseKey(v: unknown): string {
   const key = String(v ?? "").trim().toLowerCase();
   if (!KEY_RE.test(key)) throw new HttpError(400, "key 는 소문자 슬러그(a-z0-9_-, 64자 이내)여야 합니다");
@@ -96,6 +152,8 @@ const teamCreateInput = {
   key: z.string(), name: z.string().optional(), description: z.string().optional(),
   body_md: z.string().optional(), lead_member_id: z.string().optional(),
   kind: z.enum(["team", "group"]).optional().describe(`${KIND_DESC}. 생략 = team`),
+  access_role: z.enum(ROLES).nullable().optional().describe(ACCESS_ROLE_DESC),
+  access_grants: z.record(z.enum(["read", "write"])).nullable().optional().describe(ACCESS_GRANTS_DESC),
 };
 type TeamCreateInput = z.infer<z.ZodObject<typeof teamCreateInput>>;
 const teamCreate: Capability = {
@@ -116,15 +174,23 @@ const teamCreate: Capability = {
           body_md: b.body_md != null ? String(b.body_md) : undefined,
           lead_member_id: b.lead_member_id ? String(b.lead_member_id) : undefined,
           kind: parseKind(b.kind),
+          ...parseAccess(b),
         };
       } }],
   },
   handler: async (input: TeamCreateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     await requireTeamWrite(user);
-    const { kind, ...rest } = input;
+    const { kind, access_role: _ar, access_grants: _ag, ...rest } = input;
+    const a = accessInputOf(input);
+    //  권한을 실어 만드는 팀이면 만들기 전에 자격을 본다(팀만 생기고 권한 저장이 거절되는 반쪽 상태를 만들지 않는다).
+    if (a.role !== undefined || a.grants !== undefined) {
+      if (!permits(user, "admin", { perm: "admin", level: "write" })) throw new HttpError(403, "팀에 권한을 싣는 것은 관리자만 할 수 있습니다 — 그 팀의 구성원 전원이 그 권한을 받습니다");
+      assertGivable(user, teamGrants({ role: a.role ?? null, grants: a.grants ?? {} }));
+    }
     const team = await createTeam(rest, writeCtxOf(user, ctx));
-    //  종류는 따로 쓴다(team-store.setTeamKind 머리말). 소속 팀(기본값)이면 쓸 것이 없다.
-    return { team: kind && kind !== "team" ? await setTeamKind(team.id, kind, writeCtxOf(user, ctx)) : { ...team, kind: "team" as const } };
+    //  종류 · 권한은 따로 쓴다(team-store.setTeamKind 머리말). 소속 팀(기본값)이면 쓸 것이 없다.
+    const kinded = kind && kind !== "team" ? await setTeamKind(team.id, kind, writeCtxOf(user, ctx)) : { ...team, kind: "team" as const };
+    return { team: (await applyAccess(team.id, a, user, ctx)) ?? kinded };
   },
 };
 
@@ -134,6 +200,8 @@ const teamUpdateInput = {
   body_md: z.string().optional(), lead_member_id: z.string().nullable().optional(),
   state: z.enum(["active", "archived"]).optional(),
   kind: z.enum(["team", "group"]).optional().describe(`${KIND_DESC}. 생략 = 그대로`),
+  access_role: z.enum(ROLES).nullable().optional().describe(`${ACCESS_ROLE_DESC}. 생략 = 그대로`),
+  access_grants: z.record(z.enum(["read", "write"])).nullable().optional().describe(`${ACCESS_GRANTS_DESC}. 생략 = 그대로`),
 };
 type TeamUpdateInput = z.infer<z.ZodObject<typeof teamUpdateInput>>;
 const teamUpdate: Capability = {
@@ -157,16 +225,27 @@ const teamUpdate: Capability = {
           lead_member_id: "lead_member_id" in b ? (b.lead_member_id ? String(b.lead_member_id) : null) : undefined,
           state: b.state === "archived" || b.state === "active" ? b.state : undefined,
           kind: parseKind(b.kind),
+          ...parseAccess(b),
         };
       } }],
   },
   handler: async (input: TeamUpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     await requireTeamWrite(user);
-    const { id, kind, ...patch } = input;
-    const team = await updateTeam(id, patch, writeCtxOf(user, ctx));
-    //  종류는 따로 쓴다(team-store.setTeamKind 머리말) — 준 값이 지금과 다를 때만.
+    const { id, kind, access_role: _ar, access_grants: _ag, ...patch } = input;
+    const a = accessInputOf(input);
+    //  권한을 바꾸는 저장이면 다른 칸을 쓰기 전에 자격을 본다(이름만 바뀌고 권한 저장이 거절되는 반쪽 저장을 만들지 않는다).
+    if (a.role !== undefined || a.grants !== undefined) {
+      if (!permits(user, "admin", { perm: "admin", level: "write" })) throw new HttpError(403, "팀에 권한을 싣는 것은 관리자만 할 수 있습니다 — 그 팀의 구성원 전원이 그 권한을 받습니다");
+      const cur = accessOf(await getTeam(id));
+      assertGivable(user, teamGrants({ role: a.role === undefined ? cur.role : a.role, grants: a.grants === undefined ? cur.grants : a.grants }));
+    }
+    await updateTeam(id, patch, writeCtxOf(user, ctx));
+    //  종류 · 권한은 따로 쓴다(team-store.setTeamKind 머리말) — 준 값이 지금과 다를 때만.
     const now = (await getTeam(id))?.kind ?? "team";
-    return { team: kind && kind !== now ? await setTeamKind(id, kind, writeCtxOf(user, ctx)) : { ...team, kind: now } };
+    if (kind && kind !== now) await setTeamKind(id, kind, writeCtxOf(user, ctx));
+    await applyAccess(id, a, user, ctx);
+    const { members: _m, ...team } = (await getTeam(id))!;
+    return { team };
   },
 };
 
@@ -212,6 +291,14 @@ const teamSetMembers: Capability = {
   },
   handler: async (input: TeamSetMembersInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     await requireTeamWrite(user);
+    //  권한이 실린 팀에 사람을 새로 넣는 것은 그 권한을 주는 것이다(#5799) — 내가 갖지 않은 위험 권한의 고치기가 실린 팀에는 넣지 못한다.
+    //   이미 있던 팀원을 그대로 두거나 빼는 것은 주는 것이 아니다.
+    const cur = await getTeam(input.id);
+    const giving = teamGrants(accessOf(cur));
+    if (Object.keys(giving).length) {
+      const had = new Set((cur?.members ?? []).map((m) => m.member_id));
+      if (input.members.some((m) => m.member_id && !had.has(m.member_id.trim()))) assertGivable(user, giving);
+    }
     return { members: await setTeamMembers(input.id, input.members, writeCtxOf(user, ctx)) };
   },
 };

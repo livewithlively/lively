@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 import type pg from "pg";
 import { itemsPool } from "../../db/client.js";
 import { isScope, DANGEROUS_SCOPES, SAFE_SCOPES } from "../../auth/scopes.js";
-import { memberGrants, principalGrants, type Grants } from "../../auth/permissions.js";
+import { memberGrants, principalGrants, type Grants, effectiveScopes } from "../../auth/permissions.js";
+import { teamAccessSql } from "./team-access-sql.js";
 import { audit, sha256 } from "./audit.js";
 
 // ── auth_token (DB 기반 bearer) ──
@@ -371,6 +372,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
               to_jsonb(t) -> 'follow_safe_scopes' AS follow_safe_scopes,
               -- 구성원의 역할 · 개별 권한(#5799)도 같은 까닭으로 행에서 꺼낸다(칸이 없거나 구성원이 없으면 NULL = 옛 구성원).
               to_jsonb(m) -> 'role' AS member_role, to_jsonb(m) -> 'grants' AS member_grants,
+              ${teamAccessSql("m.id")} AS member_team_access,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
         WHERE t.token_hash=$1 AND t.revoked_at IS NULL
@@ -380,7 +382,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const row = r.rows[0] as {
       user_id: string; member_id: string | null; email: string | null;
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
-      follow_member_scopes: boolean | null; follow_safe_scopes: unknown; member_role: unknown; member_grants: unknown;
+      follow_member_scopes: boolean | null; follow_safe_scopes: unknown; member_role: unknown; member_grants: unknown; member_team_access: unknown;
       client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
       app_live: boolean | null; app_server_principal: boolean | null; tool_ceiling: unknown;
     } | undefined;
@@ -391,6 +393,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : fb;
     // 유효 권한 = intersection(토큰 scope, 멤버 scope). 멤버가 '라이브 상한' — 비활성/삭제면 거부.
     const tokenScopes = strArr(row.token_scopes, []);
+    const memberAccessRow = { role: row.member_role, grants: row.member_grants, team_access: row.member_team_access };
     //  OAuth 발급분(client_id)과 앱 토큰(app_id)에는 켜져 있어도 듣지 않는다 — 그 둘의 범위는 동의 화면 · 앱 동의가 정한다
     //   (발급부가 켜지 않지만, 칸이 잘못 켜진 행이 범위를 넓히지 못하게 여기서도 막는다).
     const followSafeScopes = row.follow_safe_scopes === true && !row.client_id && !row.app_id;
@@ -398,7 +401,8 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       memberId: row.member_id,
       memberState: row.member_state,
       tokenScopes,
-      memberScopes: strArr(row.member_scopes, []),
+      //  역할을 받은 구성원이면 지금 권한(역할 ∪ 개별 ∪ 팀)을 비춘 값 — 팀이 준 권한이 토큰의 scopes 에도 닿게(옛 구성원은 저장된 값 그대로).
+      memberScopes: effectiveScopes({ ...memberAccessRow, scopes: strArr(row.member_scopes, []) }),
       appId: row.app_id,
       appLive: row.app_live,
       followMemberScopes: row.follow_member_scopes === true,
@@ -407,7 +411,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
     //  역할을 받은 구성원의 토큰이면 새 권한을 싣는다(#5799) = 구성원의 지금 권한 ∩ 이 토큰에 발급된 상한(같은 추종 규칙 — principalGrants).
     //   옛 구성원 · 구성원 없는 토큰은 싣지 않는다 — 위 scopes 가 종전 그대로 판정한다.
-    const mg = row.member_id ? memberGrants({ role: row.member_role, grants: row.member_grants }) : undefined;
+    const mg = row.member_id ? memberGrants(memberAccessRow) : undefined;
     const grants = mg === undefined ? undefined : principalGrants(mg,
       row.follow_member_scopes === true ? { follow: "all" } : { follow: followSafeScopes ? "safe" : "none", scopes: tokenScopes });
     //  #4891 — 앱 서버 급 표시는 앱 토큰에만 뜻이 있다. 앱 없이 켜져 있으면(있어선 안 되는 행) 받지 않는다 — 앱 도구 게이트가 안 걸린다.

@@ -18,7 +18,7 @@
 //    이 출처의 문서로 열리지 않게 한다. 그림 · 소리 · 영상 · PDF · 글만 제 종류로, 나머지는 octet-stream.
 //  · Referrer-Policy: no-referrer · no-store — 주소(=자격)가 다른 곳으로 새거나 캐시에 남지 않게.
 import express from "express";
-import { grantsField } from "../auth/permissions.js";
+import { grantsField, effectiveScopes } from "../auth/permissions.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { LivelyUser } from "../context.js";
@@ -94,7 +94,7 @@ function claimsOf(token: string, want: "GET" | "PUT", d: SignedRouteDeps): { cla
 async function principalUser(claims: FileUrlClaims, d: SignedRouteDeps): Promise<LivelyUser> {
   const m = await d.activeMember(claims.s);
   if (!m) throw new HttpError(403, "이 주소를 받은 구성원이 지금 이 워크스페이스에서 활성 상태가 아닙니다");
-  return { userId: m.id, email: m.email, scopes: m.scopes, ...grantsField(m), projects: [] } as LivelyUser;
+  return { userId: m.id, email: m.email, scopes: effectiveScopes(m), ...grantsField(m), projects: [] } as LivelyUser;
 }
 
 

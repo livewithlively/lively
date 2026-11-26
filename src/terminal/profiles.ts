@@ -1,6 +1,7 @@
 // 중앙 박스 — 멤버 신원 파생(slug) + 멀티프로필(#346) + OS 유저 프로비저닝(#524) + AI 계정 상태/로그아웃(#1085).
 //  terminal-sessions.ts 분할(#1313 R15). "이 멤버의 세션이 누구 계정·어느 홈으로 뜨나"의 단일 소유 모듈.
 import { execFile } from "node:child_process";
+import { effectiveScopes } from "../auth/permissions.js";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -257,7 +258,7 @@ export async function mintSessionHookToken(memberId: string, boxId: string): Pro
   if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
   await revokeSessionTokensLabeled(new Set([`${SESSION_TOKEN_LABEL}${boxId}`]), "createSession");   // 같은 box id 재생성 — 옛 자격은 즉시 죽인다
   const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
-  const scopes = (member.scopes || []).filter((s) => isScope(s) && !dangerous.has(s));   // 세션 최소권한(admin/runtime 제외)
+  const scopes = effectiveScopes(member).filter((s) => isScope(s) && !dangerous.has(s));   // 세션 최소권한(admin/runtime 제외)
   const { token } = await mintToken(
     { userId: memberId, memberId, scopes, label: `${SESSION_TOKEN_LABEL}${boxId}` },
     "createSession", "terminal-sessions",
@@ -286,7 +287,7 @@ export async function mintSessionMcpToken(memberId: string, boxId: string): Prom
   const member = await getMember(memberId);
   if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
   await revokeSessionTokensLabeled(new Set([`${SESSION_MCP_TOKEN_LABEL}${boxId}`]), "createSession");
-  const scopes = (member.scopes || []).filter((s) => isScope(s));
+  const scopes = effectiveScopes(member).filter((s) => isScope(s));
   if (!scopes.length) return null;                // 실어 봐야 아무것도 못 한다 — 종전 경로를 막지 않는다
   // #2174 — 추종으로 굽는다. 이 토큰은 세션 수명 내내 살아 있어서, 그 사이 멤버 권한이 바뀌면 세션만 옛 권한에
   //  묶인다(세션을 껐다 켜야 반영되는 건 사람이 알 길이 없다). 추종이면 다음 호출부터 바로 맞는다.
@@ -302,7 +303,7 @@ export async function provisionProfile(memberId: string): Promise<{ slug: string
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug);
+  const token = await mintCentralBoxToken(memberId, effectiveScopes(member), slug);
 
   const script = path.join(REPO_ROOT, "deploy", "provision-profile.sh");
   // 게이트웨이 env 상속 + 멤버 토큰(프로필 .claude.json 에 구움) + KIT_PROFILE_ONLY(공유 ~/.lively 보존). 최대 3분(키트 다운로드+등록).
@@ -325,7 +326,7 @@ export async function provisionMemberOs(memberId: string): Promise<{ slug: strin
   const member = await getMember(memberId);
   if (!member) throw new HttpError(404, `구성원 없음: ${memberId}`);
   const slug = userSlug(u);
-  const token = await mintCentralBoxToken(memberId, member.scopes || [], slug);
+  const token = await mintCentralBoxToken(memberId, effectiveScopes(member), slug);
   await execFileAsync("sudo", ["-n", PROVISION_BIN, memberId], {
     timeout: 180_000,
     env: { ...process.env, LIVELY_TOKEN: token, MEMBER_NAME: member.display_name || slug, MEMBER_EMAIL: member.email || "" },

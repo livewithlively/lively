@@ -3,6 +3,7 @@
 import { api, busy, cardHead, el, errorNote, state, toast, uiText } from './core.js';
 import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
+import { PERMISSION_INFO, PERMISSION_KEYS, ROLE_INFO, levelText, teamAccessText, teamLevelChoices } from './lib/permissions.js';   // #5799 팀이 주는 권한
 
 // ── 팀 — 구성원을 팀(스쿼드)으로 묶는다. 여기선 팀 CRUD + 팀원(역할). 편집은 context 스코프(canContext).
 //  ⚠ #4233(원준 2026-09-25): 팀이 카테고리를 «소유»하던 개념(소유/이해관계 카테고리)은 폐기했다.
@@ -72,6 +73,7 @@ function teamView(root, team, data, detail) {
       team.state === 'archived' ? el('span', { class: 'pill', text: '보관됨' }) : null),
     roRow('키(슬러그)', team.key),
     roRow('종류', team.kind === 'group' ? '권한 그룹 (접근을 묶으려고 만든 것 · 프로필의 소속에 보이지 않습니다)' : '소속 팀'),
+    roRow('팀이 주는 권한', teamAccessText({ role: team.access_role, grants: team.access_grants }) || '없음'),
     roRow('설명', team.description),
     roRow('리드', team.lead_member_id ? memberName(team.lead_member_id) : ''),
     field('팀원', el('div', { class: 'admin-ro admin-ro-pre', text:
@@ -95,6 +97,25 @@ function teamForm(root, team, data, detail, isNew) {
     el('option', { value: 'team', text: '소속 팀' }),
     el('option', { value: 'group', text: '권한 그룹 (DB 조회 대상처럼 접근을 묶을 때)' })) as HTMLSelectElement;
   kindSel.value = team.kind === 'group' ? 'group' : 'team';
+  // 팀이 주는 권한(#5799) — 이 팀의 구성원이 함께 받는 역할과 개별 권한. 관리자만 바꾼다(그 팀 전원에게 권한을 주는 것이다).
+  //  역할을 받은 구성원에게만 더해진다 — 옛 방식 구성원은 팀에 들어 있어도 종전 그대로다.
+  const canAccess = !!state.admin.canEdit;
+  const accessRoleSel = el('select', { 'aria-label': '팀이 주는 역할', disabled: canAccess ? undefined : '' },
+    el('option', { value: '', text: '없음' }),
+    ...['member', 'admin', 'owner'].map((rk) => el('option', { value: rk, text: ROLE_INFO[rk].label })));
+  accessRoleSel.value = ['member', 'admin', 'owner'].includes(team.access_role) ? team.access_role : '';
+  const accessGrants = { ...(team.access_grants || {}) };
+  const accessTable = el('table', { class: 'perm-table' }, el('tbody', {}, ...PERMISSION_KEYS.map((pk) => {
+    const sel = el('select', { 'aria-label': PERMISSION_INFO[pk].label + ' 팀 권한', disabled: canAccess ? undefined : '' },
+      el('option', { value: '', text: '없음' }),
+      ...teamLevelChoices(pk).map((lv) => el('option', { value: lv, text: levelText(pk, lv) })));
+    sel.value = accessGrants[pk] || '';
+    sel.addEventListener('change', () => { if (sel.value) accessGrants[pk] = sel.value; else delete accessGrants[pk]; });
+    return el('tr', {}, el('td', { class: 'perm-name', text: PERMISSION_INFO[pk].label, title: PERMISSION_INFO[pk].definition }), el('td', { class: 'perm-extra' }, sel));
+  })));
+  const accessBox = el('div', {},
+    el('p', { class: 'admin-hint', text: '이 팀의 구성원 전원이 함께 받습니다. 역할을 받은 구성원에게만 더해집니다(옛 방식 구성원에게는 효과가 없습니다).' + (canAccess ? '' : ' 관리자만 바꿀 수 있습니다.') }),
+    field('역할', accessRoleSel), accessTable);
   // 팀원 — 멤버별 체크 + 역할 select(역할에 '리드' 포함 → 별도 리드 필드 불필요, 역할에서 파생). 기존 멤버는 체크/역할 프리필.
   const existing: any = {}; (team.members || []).forEach((m) => { existing[m.member_id] = m.role || 'member'; });
   const memberRows: any[] = [];
@@ -119,7 +140,9 @@ function teamForm(root, team, data, detail, isNew) {
       const members = memberRows.filter((r) => r.chk.checked).map((r) => ({ member_id: r.id, role: r.roleSel.value }));
       // 리드 = 역할이 '리드'인 팀원에서 파생(별도 필드 없음). 여럿이면 첫 번째.
       const leadM = members.find((m) => m.role === 'lead');
-      const payload = { key, name: nameIn.value.trim(), description: descIn.value.trim(), body_md: bodyTa.value, lead_member_id: leadM ? leadM.member_id : null, kind: kindSel.value };
+      const payload = { key, name: nameIn.value.trim(), description: descIn.value.trim(), body_md: bodyTa.value, lead_member_id: leadM ? leadM.member_id : null, kind: kindSel.value,
+        //  권한은 관리자만 보낸다 — 관리자가 아닌 사람의 저장이 팀 권한을 건드리지 않게(서버도 거절한다).
+        ...(canAccess ? { access_role: accessRoleSel.value || null, access_grants: { ...accessGrants } } : {}) };
       if (isNew) { const r = await api('/api/ui/teams', { method: 'POST', body: JSON.stringify(payload) }); teamId = r && r.team && r.team.id; }
       else await api('/api/ui/teams/' + team.id, { method: 'POST', body: JSON.stringify(payload) });
       if (teamId) await api('/api/ui/teams/' + teamId + '/members', { method: 'POST', body: JSON.stringify({ members }) });
@@ -140,6 +163,7 @@ function teamForm(root, team, data, detail, isNew) {
 
   root.replaceChildren(
     field('키 (슬러그 · 영문)', keyIn), field('팀 이름', nameIn), field('종류', kindSel), field('설명', descIn),
+    field('팀이 주는 권한', accessBox),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '팀원 (체크 + 역할 · 리드는 역할에서 지정)' }), membersWrap),
     field('팀 charter (AI 세션 주입 · 선택)', bodyTa),
     actions);
