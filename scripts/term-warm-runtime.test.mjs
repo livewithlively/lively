@@ -73,6 +73,11 @@
 //   W33b 그 뒤 사람이 [⋯ ▸ 보기 ▸ 대화로] → 대화창으로 돌아온다
 //   W34 이 화면 **밖**의 입력칸(곁칸 «요청» 칸의 비밀 값 칸 — #5713)에 치는 중에 저절로 터미널로 넘어간다 → 넘어가되 초점·값은 그 칸에 남는다
 //       (#4940 격리 리뷰 실측: 터미널이 초점을 가져가 이어 치는 값이 하네스 입력칸으로 갔다)
+//   W41 #5809 넘길 때 입력칸에 쓰는 중이라 대화창에 붙들어 둔 판(W5) → 그 글을 보내면, 그 말이 들어간 뒤 터미널로(붙든 채 영영 남지 않는다)
+//       (상민님 2026-11-26: «프롬프트 보내고 하네스 띄우기 전에 하나 더 보내면 하네스가 떴는데도 터미널로 안 넘어간다»)
+//   W42 #5809 멈춘 세션에 말을 보내 되살리는 중에 한 번 더 보냈다 → 그 말은 입력칸으로 돌아온다(종전 그대로) → 하네스가 떠도 쓰는 중이라 대화창
+//       → 돌아온 글을 보내면 그 말이 들어간 뒤 터미널로
+//   W43 #5809 붙들어 둔 판에서 사람이 [⋯ ▸ 보기] 로 터미널에 갔다가 대화로 돌아왔다 → 그 뒤에 보내도 대화창에 머문다(고른 화면이 이긴다)
 //   G  겹친 읽기 가드(배선 — 소스 글로 본다): 오프셋·지켜보는 곳 둘 다 보고 버린 뒤 곧 다시 읽는다 · 압축 뒤 두 번째 읽기도 · 다시 여는 중엔
 //       읽지 않는다. 런타임으로 재기 어려운 갈래(지켜보는 곳 갈아타기 · 통보 중 30초 주기)는 격리 검토가 따로 재 두었다.
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
@@ -844,6 +849,87 @@ async function PAGE_MAIN() {
       pane.remove();
       v.done();
     }
+    // W41~W43 — #5809 쓰는 중이라 대화창에 붙들어 둔 판에서 그 글을 보낸다
+    {
+      const submit = (inp) => { const f = inp.closest("form"); if (f && f.requestSubmit) f.requestSubmit(); else inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); };
+      //  첫 말이 기록에 들어간 뒤의 기록(그 줄 그대로) + 둘째 말이 ms 뒤에 들어간다 — 기록은 뒤로만 자란다(앞 줄의 글자가 바뀌면 화면이 «파일이 바뀌었다» 로 읽는다).
+      const nextEcho = (sid, ms, text) => { const e = ECHO[sid]; TRANSCRIPTS[sid] = (TRANSCRIPTS[sid] || "") + said("user", e.text, new Date(e.at).toISOString()); echoAt(sid, ms, text); };
+      // W41 — 말을 보내 연 화면 · 넘길 때 쓰는 중 → 붙듦 → 보냄
+      {
+        echoAt("box-w41", 300, "첫 지시 W41");
+        const v = mount("box-w41", "ink=900", { firstPrompt: "첫 지시 W41" });
+        await sleep(300);
+        const inp = v.input();
+        inp.focus(); inp.value = "이어서 보낸 말 W41"; inp.dispatchEvent(new Event("input"));
+        await sleep(1700);                                              // 그렸고 첫 말도 들어갔다 — 쓰는 중이라 대화창(W5)
+        R.w41 = { held: v.snap() };
+        nextEcho("box-w41", 1200, "이어서 보낸 말 W41");
+        const sentAt = Date.now();
+        submit(inp);
+        await sleep(400);
+        R.w41.sent = v.snap();                                          // 보낸 말이 아직 안 들어갔다 — 대화창에서 기다린다(#4794)
+        R.w41.qn = v.count("이어서 보낸 말 W41");
+        await sleep(2600);
+        R.w41.after = v.snap();
+        R.w41.termAfterSend = v.termAt() ? v.t0 + v.termAt() - sentAt : 0;
+        R.w41.echoAfterSend = ECHO["box-w41"].at - sentAt;
+        v.done();
+      }
+      // W42 — 멈춘 세션 · 되살리는 중에 한 번 더 보냄(입력칸으로 돌아옴) → 하네스가 뜸 → 돌아온 글을 보냄
+      {
+        const v = mount("box-w42", "ink=300", {}, false);
+        await sleep(400);
+        const inp = v.input();
+        inp.focus(); inp.value = "되살리며 보낸 말 W42"; inp.dispatchEvent(new Event("input"));
+        submit(inp);
+        echoAt("box-w42", 2200, "되살리며 보낸 말 W42");
+        await sleep(300);                                               // 복원 요청(0.9초)이 도는 중
+        inp.focus(); inp.value = "뜨기 전에 한 번 더 W42"; inp.dispatchEvent(new Event("input"));
+        submit(inp);
+        await sleep(200);
+        R.w42 = { bounced: inp.value, toasts: document.getElementById("toasts").textContent };
+        await sleep(3400);                                              // 복원 → 숨겨 붙임 → 그림 → 첫 말이 들어감: 넘길 때 입력칸에 돌아온 글이 있다
+        R.w42.held = v.snap();
+        R.w42.heldValue = inp.value;
+        nextEcho("box-w42", 1200, "뜨기 전에 한 번 더 W42");
+        const sentAt = Date.now();
+        inp.focus();
+        submit(inp);
+        await sleep(3000);
+        R.w42.after = v.snap();
+        R.w42.termAfterSend = v.termAt() ? v.t0 + v.termAt() - sentAt : 0;
+        R.w42.echoAfterSend = ECHO["box-w42"].at - sentAt;
+        R.w42.n = v.count("뜨기 전에 한 번 더 W42");
+        v.done();
+      }
+      // W43 — 붙들어 둔 판에서 사람이 [보기] 로 터미널에 갔다가 대화로 돌아왔다 → 보내도 대화창
+      {
+        echoAt("box-w43", 300, "첫 지시 W43");
+        const v = mount("box-w43", "ink=900", { firstPrompt: "첫 지시 W43" });
+        await sleep(300);
+        const inp = v.input();
+        inp.focus(); inp.value = "이어서 보낸 말 W43"; inp.dispatchEvent(new Event("input"));
+        await sleep(1700);
+        const pickView = async (label) => {
+          const more = v.box.querySelector('button[aria-label="더 보기"]');
+          if (more) more.click();
+          await sleep(150);
+          const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === label);
+          if (b) b.click();
+          await sleep(200);
+          return !!b;
+        };
+        R.w43 = { held: v.snap() };
+        R.w43.toTerm = await pickView("터미널로"); R.w43.atTerm = v.snap();
+        R.w43.toChat = await pickView("대화로"); R.w43.atChat = v.snap();
+        nextEcho("box-w43", 600, "이어서 보낸 말 W43");
+        inp.focus();
+        submit(inp);
+        await sleep(2600);
+        R.w43.after = v.snap();
+        v.done();
+      }
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -1086,6 +1172,24 @@ check(w29b.ink && (w29b.during || {}).warm && !(w29b.during || {}).term && w29b.
   "W29b 매니지드 행(세션 호스트 · 대화 id 모름 · 파일 없음) — 박스 기록을 지켜봐 그 말이 들어갈 때까지 대화창(#4904)", w29b);
 check((w29b.after || {}).term && w29b.termAt >= w29b.echoAt && w29b.termAt <= w29b.echoAt + 1000,
   "W29b 기록 파일이 생기며 그 말이 나타난 뒤 터미널로(W27 과 같다)", { echoAt: w29b.echoAt, termAt: w29b.termAt, after: w29b.after });
+{
+  //  W41~W43 — #5809 쓰는 중이라 대화창에 붙들어 둔 판에서 그 글을 보낸다
+  const w41 = R.w41 || {}, w42 = R.w42 || {}, w43 = R.w43 || {};
+  check((w41.held || {}).term === false && (w41.held || {}).chatShown === true,
+    "W41 전제 — 넘길 때 입력칸에 쓰는 중이면 대화창에 붙든다(W5 와 같다)", w41.held);
+  check((w41.sent || {}).term === false && w41.qn >= 1,
+    "W41 그 글을 보낸 직후엔 아직 대화창이다 — 보낸 말이 들어가기를 기다린다(말풍선이 보인다)", { sent: w41.sent, qn: w41.qn });
+  check((w41.after || {}).term === true && w41.termAfterSend >= w41.echoAfterSend && w41.termAfterSend <= w41.echoAfterSend + 1500,
+    "W41 ★ 붙들어 둔 판에서 보낸 말이 들어간 뒤 터미널로 넘어간다(종전: 영영 대화창)", { after: w41.after, termAfterSend: w41.termAfterSend, echoAfterSend: w41.echoAfterSend });
+  check(w42.bounced === "뜨기 전에 한 번 더 W42" && /이어서 여는 중/.test(w42.toasts || ""),
+    "W42 전제 — 되살리는 중에 한 번 더 보낸 말은 입력칸으로 돌아오고 안내가 뜬다", { bounced: w42.bounced, toasts: w42.toasts });
+  check((w42.held || {}).term === false && w42.heldValue === "뜨기 전에 한 번 더 W42",
+    "W42 전제 — 하네스가 뜨고 첫 말이 들어가도, 돌아온 글이 입력칸에 있어 대화창에 붙든다", { held: w42.held, value: w42.heldValue });
+  check((w42.after || {}).term === true && w42.termAfterSend >= w42.echoAfterSend && w42.termAfterSend <= w42.echoAfterSend + 1500 && w42.n >= 1,
+    "W42 ★ 돌아온 글을 보내면 그 말이 들어간 뒤 터미널로 넘어간다(종전: 하네스가 떴는데도 영영 대화창)", { after: w42.after, termAfterSend: w42.termAfterSend, echoAfterSend: w42.echoAfterSend, n: w42.n });
+  check(w43.toTerm && (w43.atTerm || {}).term === true && w43.toChat && (w43.atChat || {}).term === false && (w43.after || {}).term === false,
+    "W43 붙들어 둔 판에서 사람이 [보기] 로 화면을 직접 골랐으면(터미널 → 대화) 그 뒤에 보내도 고른 대화창에 머문다", w43);
+}
 {
   //  G — 겹친 읽기 가드의 배선(소스 글). 런타임으로 못 잡는 갈래를 한 글자도 안 빠뜨리게 박아 둔다.
   const scSrc = readFileSync(path.join(ROOT, "web/session-chat.ts"), "utf8");

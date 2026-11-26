@@ -8,7 +8,7 @@ import path from "node:path";
 import { buildSync } from "esbuild";
 import { dumpDom, readOut } from "./headless-chrome.mjs";
 
-/** 장면 묶음(group: "reopen" | "live")을 헤드리스 크롬에서 돌려 결과(R)를 돌려준다. 결과를 못 받으면 { fatal } 을 담아 돌려준다. */
+/** 장면 묶음(group: "reopen" | "live" | "longturn")을 헤드리스 크롬에서 돌려 결과(R)를 돌려준다. 결과를 못 받으면 { fatal } 을 담아 돌려준다. */
 export async function runQueuedSayScenes(chrome, group, root) {
   const CSS = ["01-base.css", "03-components.css", "36-chat.css", "38-chat-tui.css"].map((f) => path.join(root, "public/styles", f)).filter(existsSync);
   const sc = buildSync({
@@ -149,6 +149,47 @@ async function PAGE_MAIN(GROUP) {
   const freshSig = async (sid, o = {}) => { const v = mount(sid, { alive: false, desktop: o.desktop }); await sleep(1500); const s = v.sig(); const a = v.asks(); v.done(); return { sig: s, asks: a }; };
 
   try {
+    if (GROUP === "longturn") {
+    // ── L1 한 턴이 창 여러 개에 걸친 기록 — 위로 끝까지 올려도 그 턴의 내용이 전부 남는다 (#5809) ─────────────
+    //  신고(상민님 2026-11-26): «처음에 딱 들어갔을 땐 이전 것이 보이다가 스크롤을 올리다 보면 맨 마지막 것만 남고 사라진다».
+    //   실측 세션(9.5MB · 사람 말 하나 · 13분짜리 턴)은 꼬리 창 + 위 창 넷으로 읽혔고, 다 올린 화면엔 머리 창의 도구 호출만 남았다.
+    {
+      //  화면이 안 그리는 큰 줄(파일 기록 사진) 1.7MB — 한 창(1.5MB)보다 길어, 그 앞뒤의 내용이 서로 다른 창에 든다.
+      const pad = (tag) => Array.from({ length: 34 }, (_, i) => line({ type: "file-history-snapshot", messageId: tag + i, snapshot: { pad: "x".repeat(50_000) } })).join("");
+      const parts = [
+        user("A 긴 지시 L1", "u-l1") + toolUse("l1a", "echo head-cmd-L1") + toolRes("l1a", "head ok") + ai("머리 창 글 L1-H", "h-l1"),
+        toolUse("l1b", "echo mid1-cmd-L1") + toolRes("l1b", "mid1 ok") + ai("가운데 창 글 L1-M1", "m1-l1"),
+        toolUse("l1c", "echo mid2-cmd-L1") + toolRes("l1c", "mid2 ok") + ai("가운데 창 글 L1-M2", "m2-l1"),
+        toolUse("l1d", "echo tail-cmd-L1") + toolRes("l1d", "tail ok")
+          //  도는 동안 끼워 넣은 완료 알림 — 꼬리 창에서 라이브 길로 그려지고, 위 창을 붙일 때마다 그 턴과 함께 다시 그려져야 한다(턴 끝 줄도).
+          + line({ type: "attachment", uuid: "q-n-l1", timestamp: ts(), attachment: { type: "queued_command", prompt: NOTE("ag0-l1"), commandMode: "task-notification", origin: { kind: "task-notification", producer: "session-task" }, timestamp: ts() } })
+          + ai("끝 답 L1-T", "t-l1") + end()
+          + user(NOTE("ag-l1"), "n-l1") + ai("알림 뒤 글 L1-N", "an-l1") + end(),
+      ];
+      TR["box-l1"] = parts[0] + pad("p") + parts[1] + pad("q") + parts[2] + pad("r") + parts[3];
+      TR["box-l1s"] = parts.join("");                 // 같은 대화 줄 · 큰 줄 없음 — 한 창에 다 들어 한 번에 그려진다(견줄 정답)
+      const MARKS = ["머리 창 글 L1-H", "가운데 창 글 L1-M1", "가운데 창 글 L1-M2", "끝 답 L1-T", "알림 뒤 글 L1-N", "echo head-cmd-L1", "echo mid1-cmd-L1", "echo mid2-cmd-L1", "echo tail-cmd-L1"];
+      const snap = (v) => {
+        const all = norm(v.box.querySelector(".livc-list").textContent);
+        return { asks: v.asks(), where: Object.fromEntries(MARKS.map((m) => [m, v.where(m)])), count: Object.fromEntries(MARKS.map((m) => [m, all.split(m).length - 1])),
+          pos: MARKS.slice(0, 4).map((m) => all.indexOf(m)), sig: v.sig(), older: !!v.box.querySelector(".sc-older"), notices: v.notices().length };
+      };
+      const v = mount("box-l1", { alive: false });
+      await sleep(300);
+      //  사람이 위로 올린다(휠) — 목록이 화면을 채운 뒤에는 그때부터 위 창을 이어 부른다(#4996). 머리에 닿을 때까지 기다린다.
+      //   (이 장면의 목록은 짧아 휠 없이도 이어 부른다 — 화면을 채울 때까지는 스스로 부르는 길이다. 두 길 모두 같은 loadOlder 다.)
+      v.box.querySelector(".livc-list").dispatchEvent(new WheelEvent("wheel", { deltaY: -240 }));
+      for (let i = 0; i < 40 && !v.asks().includes("A 긴 지시 L1"); i++) await sleep(500);
+      await sleep(1000);
+      const full = snap(v);
+      v.done();
+      const s = mount("box-l1s", { alive: false });
+      await sleep(1500);
+      const whole = snap(s);
+      s.done();
+      R.l1 = { size: TR["box-l1"].length, full, whole };
+    }
+    } else
     if (GROUP === "reopen") {
     // ── R1 다시 열기 — tui · desktop ───────────────────────────────────────────
     TR["box-r1"] = user("A 첫 지시 — 로그 정리해 줘", "u-a") + toolUse("t1", "sleep 30") + toolRes("t1", "Running in the background")
