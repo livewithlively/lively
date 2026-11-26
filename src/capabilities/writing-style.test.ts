@@ -37,6 +37,18 @@ await ta("서버 처리 판정 — 홈 경로는 지식 저장에서 치환으�
   const actLp = lp(((act.info as { style?: { findings: F[] } }).style?.findings) ?? []);
   if (actLp) assert.ok(actLp.ask_human, "작업기록 표면엔 경로 치환이 없는데 서버가 처리한다고 했다");
 });
+await ta("서버 처리 판정 — 서버가 바꾸지 않는 홈 경로(코드 펜스 안·계정 둘 이상)는 사람 확인으로 남는다", async () => {
+  type F = { rule: string; ask_human?: true };
+  const lp = (r: Awaited<ReturnType<typeof checkWriting>>) => ((r.info as { style: { findings: F[] } }).style.findings).find((f) => f.rule === "local_path");
+  const fenced = { title: "배포 노트 범위", body: "결론이다.\n\n```\ncat /Users/bob/app.conf\n```" };
+  assert.equal(lp(await checkWriting("knowledge", fenced, {}, on))?.ask_human, true, "펜스 안 경로를 서버가 처리한다고 했다");
+  const two = { title: "배포 노트 범위", body: "결론이다. 복사는 /Users/alice/a.csv/x 에서 /Users/bob/a.csv/x 로 한다." };
+  assert.equal(lp(await checkWriting("knowledge", two, {}, on))?.ask_human, true, "계정이 둘인 경로를 서버가 처리한다고 했다");
+  // 판정은 본문으로만 한다 — 탐지도 치환도 본문만 본다(제목의 다른 계정이 본문 치환 판정을 바꾸지 않는다).
+  const titled = { title: "설정 /Users/alice/x.conf 위치", body: "결론이다. 설정은 /Users/bob/app.conf 에 둔다." };
+  const t = lp(await checkWriting("knowledge", titled, {}, on));
+  assert.ok(t && !t.ask_human, JSON.stringify(t));
+});
 await ta("형식이 꺼져 있거나 위반이 없으면 아무것도 싣지 않는다", async () => {
   assert.deepEqual(await checkWriting("knowledge", BAD, {}, async () => resolveWritingFormat({})), { info: {}, rejects: [], guide: "" });
   assert.deepEqual(await checkWriting("knowledge", CLEAN, {}, on), { info: {}, rejects: [], guide: "" });

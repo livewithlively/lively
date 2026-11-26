@@ -7,7 +7,7 @@
 // 순수 함수다(DB·네트워크 없음). 배치 스크립트와 테스트가 같은 판정을 쓴다.
 import type { WritingFormat, WritingRuleId } from "../org/policies/writing-format.js";
 import { lintWriting, type WritingFinding } from "./writing-lint.js";
-import { normalizeHomePaths } from "./writing-resolve.js";
+import { homeAccounts, normalizeHomePaths } from "./writing-resolve.js";
 
 // 자동으로 고쳐도 되는 규칙 — 글의 모양만 보고 고칠 수 있는 것들.
 //  relative_time·undated_status·revision_banner·local_path·body_length 는 뺀다: 고치려면 «그날이 언제였나»·
@@ -153,10 +153,11 @@ function tableRowsOf(prose: string): string[] {
 }
 
 // 홈 경로 접두를 $HOME 으로 바꾸는 것은 가리키는 곳이 같아 사실 변경이 아니다(local_path 정리) — 양쪽을 같은 꼴로 맞춘 뒤 센다.
+//  서버 치환(writing-resolve normalizeHomePaths)과 같은 범위만 맞춘다: 코드 블록은 떼어 낸 뒤 서술·인라인 코드에만 걸므로 펜스 안
+//  경로를 바꾼 재작성은 여전히 코드 블록 위반이다. 계정이 바뀌거나 새로 생긴 경우는 checkInvariants 의 homePaths 가 따로 잡는다.
 function proseParts(doc: RewriteDoc): { blocks: string[]; codes: string[]; prose: string } {
-  const text = normalizeHomePaths(`${String(doc.title ?? "")}\n${String(doc.body_md ?? "")}`);
-  const f = splitFences(text);
-  const inl = splitInline(f.rest);
+  const f = splitFences(`${String(doc.title ?? "")}\n${String(doc.body_md ?? "")}`);
+  const inl = splitInline(normalizeHomePaths(f.rest));
   return { blocks: f.blocks, codes: inl.codes, prose: inl.rest };
 }
 
@@ -337,6 +338,12 @@ export function checkInvariants(
     const d = setDiff(ib[k], ia[k]);
     if (d.missing.length || d.added.length) violations.push({ kind: `invariant:${k}`, detail: diffDetail(d), missing: d.missing, added: d.added });
   }
+
+  // 홈 경로는 정규화한 꼴로 비교하므로(proseParts) /Users/alice/x → /Users/bob/x 도 같아 보인다 — 원문에 없던 계정의 경로가 생기면
+  //  (계정을 바꿨거나 $HOME 을 남의 계정으로 되돌렸다) 사실 변경이다.
+  const homeBefore = homeAccounts(`${String(before.title ?? "")}\n${String(before.body_md ?? "")}`);
+  const homeAdded = [...homeAccounts(`${String(after.title ?? "")}\n${String(after.body_md ?? "")}`)].filter((a) => !homeBefore.has(a));
+  if (homeAdded.length) violations.push({ kind: "invariant:homePaths", detail: diffDetail({ missing: [], added: homeAdded }), missing: [], added: homeAdded });
 
   const cb = proseChars(before), ca = proseChars(after);
   if (cb > 0 && ca < cb * SHRINK_MIN_RATIO) {

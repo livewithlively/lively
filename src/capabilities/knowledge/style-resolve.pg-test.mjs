@@ -66,6 +66,56 @@ try {
     await itemsPool.query(`UPDATE org_runtime_config SET writing_format=$1 WHERE id=1`, [JSON.stringify(prev)]); invalidateWritingFormatCache();
     chk("S1 조직이 local_path 규칙을 끄면 바꾸지 않는다", (await rowOf(`${P}paths-off`)).body_md === body);
   }
+
+  // ── S2 치환 범위 — 이번 저장이 바꾼 줄만, 펜스·관찰 기록·주입 문서·계정 둘은 그대로, 응답은 저장된 꼴을 알린다 ──
+  {
+    const ADMIN = { userId: AGENT, scopes: ["items", "context", "db", "memory", "code", "admin"] };
+    // S2a replace 는 전문을 다시 보내지만, 원문에 있던 줄(사람이 쓴 경로)은 이번 저장이 쓴 글이 아니다 — 새로 생긴 줄만 바꾼다.
+    const humanBody = "로컬 스크립트 위치를 적는다.\n\n옛 줄은 /Users/alice/old.sh 다.";
+    await saveHuman({ name: `${P}s2-replace`, title: "로컬 스크립트 위치", body_md: humanBody, category: CAT, type: "reference" });
+    await save({ name: `${P}s2-replace`, body_md: `${humanBody}\n\n새 줄은 /Users/alice/new.sh 다.` });
+    const a = (await rowOf(`${P}s2-replace`)).body_md;
+    chk("S2a replace 는 원문에 있던 줄의 경로를 그대로 두고 새 줄만 바꾼다", a.includes("/Users/alice/old.sh") && a.includes("$HOME/new.sh"), a);
+    // S2b edit 는 바꾼 글만 바꾼다(손대지 않은 줄의 경로는 그대로).
+    await save({ name: `${P}s2-replace`, mode: "edit", edits: [{ old: "새 줄은 $HOME/new.sh 다.", new: "새 줄은 /Users/alice/newer.sh 다." }] });
+    const b = (await rowOf(`${P}s2-replace`)).body_md;
+    chk("S2b edit 는 바꾼 글의 경로만 바꾼다", b.includes("/Users/alice/old.sh") && b.includes("$HOME/newer.sh"), b);
+    // S2c 형식 정리 저장(style_fix)은 손대지 않은 줄의 경로도 함께 바꾼다(에이전트 본인의 마지막 저장이라 보호 창에 안 걸린다).
+    const v = (await rowOf(`${P}s2-replace`)).version;
+    await save({ name: `${P}s2-replace`, mode: "edit", style_fix: true, expected_version: Number(v), edits: [{ old: "로컬 스크립트 위치를 적는다.", new: "로컬 스크립트 위치를 적는다(형식 정리)." }] }).catch((e) => bad("S2c 저장", e?.message));
+    const c = (await rowOf(`${P}s2-replace`)).body_md;
+    chk("S2c style_fix 는 원문에 있던 줄의 경로도 바꾼다", !c.includes("/Users/alice/") && c.includes("$HOME/old.sh"), c);
+
+    // S2d 펜스 안 경로는 글자 그대로다(로그·설정 파일·PowerShell) — 사람 확인 항목으로 남는다.
+    const fencedBody = "실행 명령을 적는다.\n\n```\ncat /Users/bob/app.conf\n```";
+    const rd = await save({ name: `${P}s2-fence`, title: "실행 명령", body_md: fencedBody, category: CAT, type: "reference" });
+    chk("S2d 펜스 안 경로는 바꾸지 않는다", (await rowOf(`${P}s2-fence`)).body_md === fencedBody, (await rowOf(`${P}s2-fence`)).body_md);
+    const lp = rd.style?.findings?.find((f) => f.rule === "local_path");
+    chk("S2d 펜스 안 경로는 사람 확인(ask_human)으로 남는다", lp?.ask_human === true, JSON.stringify(rd.style?.findings));
+
+    // S2e 계정이 둘이면 다른 사람 경로가 같은 $HOME 으로 합쳐지므로 바꾸지 않는다.
+    const twoBody = "복사 경로를 적는다.\n\n/Users/alice/data/a.csv 에서 /Users/bob/data/a.csv 로 복사한다.";
+    const re = await save({ name: `${P}s2-two`, title: "복사 경로", body_md: twoBody, category: CAT, type: "reference" });
+    chk("S2e 계정이 둘이면 바꾸지 않는다", (await rowOf(`${P}s2-two`)).body_md === twoBody && !re.home_paths, (await rowOf(`${P}s2-two`)).body_md);
+
+    // S2f 외부 관찰 기록(저장된 provenance)은 쓴 그대로 둔다.
+    await save({ name: `${P}s2-obs`, title: "관찰 기록", body_md: "관찰 기록이다.", category: CAT, type: "reference" });
+    await itemsPool.query(`UPDATE knowledge SET provenance='observed' WHERE name=$1`, [`${P}s2-obs`]);
+    const obsBody = "관찰 기록이다.\n\n경로는 /Users/bob/x/a.txt 다.";
+    await save({ name: `${P}s2-obs`, body_md: obsBody }).catch((e) => bad("S2f 저장", e?.message));
+    chk("S2f 관찰 기록은 바꾸지 않는다", (await rowOf(`${P}s2-obs`)).body_md === obsBody, (await rowOf(`${P}s2-obs`)).body_md);
+
+    // S2g 항상 주입 문서는 서버가 고쳐 쓰지 않는다(#1680 결정 — 재작성 대상에서 뺀다). 관리자 에이전트의 저장도 그대로다.
+    await save({ name: `${P}s2-inj`, title: "주입 규칙", body_md: "주입 규칙이다.", category: CAT, type: "reference" });
+    await itemsPool.query(`UPDATE knowledge SET injection='always' WHERE name=$1`, [`${P}s2-inj`]);
+    const injBody = "주입 규칙이다.\n\n경로는 /Users/bob/x/a.txt 다.";
+    await knowledgeSave.handler({ name: `${P}s2-inj`, body_md: injBody }, ADMIN, mcp).catch((e) => bad("S2g 저장", e?.message));
+    chk("S2g 항상 주입 문서는 바꾸지 않는다", (await rowOf(`${P}s2-inj`)).body_md === injBody, (await rowOf(`${P}s2-inj`)).body_md);
+
+    // S2h 응답이 «저장된 글이 보낸 글과 다르다» 와 이후 edit 의 old 에 쓸 꼴을 알린다.
+    const rh = await save({ name: `${P}s2-note`, title: "로컬 스크립트 위치", body_md: "로컬 스크립트를 적는다.\n\n/Users/bob/work/run.sh 를 쓴다.", category: CAT, type: "reference" });
+    chk("S2h home_paths 가 이후 edit 의 old 에 저장된 꼴을 쓰라고 알린다", /old/.test(rh.home_paths?.note ?? "") && /\$HOME/.test(rh.home_paths?.note ?? ""), JSON.stringify(rh.home_paths));
+  }
 } catch (e) {
   bad("실행", e?.stack ?? String(e));
 } finally {

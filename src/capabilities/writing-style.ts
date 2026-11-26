@@ -79,7 +79,7 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legac
 // 고치는 법(fix). 사실이 있어야 고칠 수 있는 규칙(needsHumanJudgment) 가운데 서버가 직접 고치는 것(홈 경로 치환)은
 //  사람에게 묻지 않는다(serverResolves·resolveFindings).
 export const RULE_FIX: Partial<Record<WritingFinding["rule"], string>> = {
-  local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
+  local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. 서버는 코드 펜스 안·URL 안의 경로와, 한 글에 계정이 둘 이상인 경로는 바꾸지 않는다(글자 그대로인 로그·설정·명령이거나 다른 사람의 경로다) — 그 경로는 ask_human 으로 남으니 사람에게 확인한다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
 };
 
 export type ResolvedFinding = WritingFinding & {
@@ -89,7 +89,8 @@ export type ResolvedFinding = WritingFinding & {
 };
 
 // 사실이 필요한 규칙이지만 서버가 사실 없이 처리하는 것 — 경로 치환은 지식 저장 때 서버가 한다.
-//  경로 치환은 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정> 등)이 있으면 사람 확인이다.
+//  경로 치환은 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정>·펜스 안·URL 안·계정 둘 이상)이
+//  있으면 사람 확인이다. text 는 본문이다 — 탐지(lintWriting local_path)도 치환도 본문만 본다.
 export interface ResolveContext { surface?: WritingSurface; text?: string }
 function serverResolves(rule: WritingFinding["rule"], ctx: ResolveContext): boolean {
   if ((ctx.surface ?? "knowledge") !== "knowledge") return false;
@@ -138,7 +139,7 @@ export async function checkWriting(
     const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
     // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
     const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
-    const marked = resolveFindings(findings, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}` });
+    const marked = resolveFindings(findings, { surface, text: String(input.body ?? "") });
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
@@ -269,7 +270,7 @@ export async function readStyleHint(
         blocked = "no_write";
       }
     }
-    const marked = resolveFindings(findings, { surface: "knowledge", text: `${k.title ?? ""}\n${k.body_md ?? ""}` });
+    const marked = resolveFindings(findings, { surface: "knowledge", text: String(k.body_md ?? "") });
     return {
       style: {
         count: findings.length,
