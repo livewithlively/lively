@@ -48,6 +48,8 @@ export interface GateBefore {
   /** 형식 정리 저장의 사람 편집 보호 창(save-guard) — 마지막 편집 시각·편집자. */
   updated_at?: string | Date | null;
   updated_by?: string | null;
+  /** 주입 방식 — 'always' 는 매 세션 실리는 조직 규칙·페르소나 섹션이다. 서버가 저장 글을 고쳐 쓰지 않는다(authoring 홈 경로). */
+  injection?: string | null;
 }
 
 export interface KnowledgeGate {
@@ -73,7 +75,7 @@ export async function resolveKnowledgeGate(
 
   const before = name
     ? (await one(itemsPool,
-      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url, updated_at, updated_by
+      `SELECT name, title, body_md, version, lifecycle, confidence, type, provenance, external_system, external_url, updated_at, updated_by, injection
          FROM knowledge WHERE name=$1`, [name])) as GateBefore | undefined
     : undefined;
   const isCreate = !before;
