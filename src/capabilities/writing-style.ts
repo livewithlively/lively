@@ -47,6 +47,9 @@ export interface WritingCheckOpts {
   human?: boolean;
   /** 시점 표현 줄의 기준 날짜(writing-resolve timeAnchors). 위반 안내에 싣는다. */
   anchors?: TimeAnchor[];
+  /** 기준 날짜를 찾는다(감사 기록 조회) — 시점 위반이 있을 때만 부른다. 형식이 꺼졌거나 시점 규칙이 꺼진 조직의 저장에
+   *  감사 기록 훑기를 물리지 않게 판정 뒤로 미룬다(anchors 를 주면 그것을 쓴다). 실패하면 날짜 없이(사람 확인으로) 안내한다. */
+  anchorsOf?: () => Promise<TimeAnchor[]>;
 }
 
 export interface WritingCheck {
@@ -79,12 +82,13 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legac
 };
 
 // 고치는 법(fix). 사실이 있어야 고칠 수 있는 규칙(needsHumanJudgment) 가운데 그 사실을 서버가 찾아 주거나(기준 날짜) 서버가
-//  직접 고치는(홈 경로) 것은 사람에게 묻지 않는다(serverResolves·resolveFindings). 시점 규칙은 그 줄의 기준 날짜를 얻었을
-//  때만 그렇다(처음 판을 못 찾은 줄도 마지막 저장일을 상한으로 한 no_later_than 날짜를 얻는다). 기준 날짜를 하나도 얻지
-//  못하면(조회 자체가 실패) ask_human 으로 남겨 사람에게 묻는다(날짜를 지어내지 않게).
+//  직접 고치는(홈 경로) 것은 사람에게 묻지 않는다(serverResolves·resolveFindings). 시점 규칙은 이번 저장에서 쓴 줄(this_save —
+//  쓴 날이 오늘이다)만 그렇다. 이미 있던 줄의 기록 날짜(first_version·no_later_than)는 «이 지식에 처음 저장된 날» 이지 쓴 날이
+//  아닐 수 있다 — 옮겨 온 글·가져온(transfer) 문서·감사 기록 이전의 옛 문서·지웠다 다시 쓴 같은 문구. 그 날로 고치면 틀린 날짜가
+//  사실처럼 박히므로, 근거(anchors)로 싣되 ask_human 으로 남겨 사람에게 확인한다. 기준 날짜를 못 얻으면(조회 실패) 그대로 ask_human.
 export const RULE_FIX: Partial<Record<WritingFinding["rule"], string>> = {
-  relative_time: "anchors 의 기준 날짜로 고친다. 상대시간은 그 날을 기준으로 절대 날짜로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
-  undated_status: "anchors 의 기준 날짜를 같은 문장에 「(YYYY-MM-DD 기준)」으로 붙이거나, 상태 대신 규칙으로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
+  relative_time: "anchors 의 기준 날짜로 고친다 — 상대시간은 그 날을 기준으로 절대 날짜로 바꾼다. 이번 저장에서 쓴 줄(basis this_save)은 그 날이 쓴 날이다. 이미 있던 줄(first_version·no_later_than)의 날은 기록상 이 지식에 처음 저장된 날이라 쓴 날과 다를 수 있으니(ask_human) 그 날을 근거로 들고 사람에게 확인한 뒤 고친다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
+  undated_status: "anchors 의 기준 날짜를 같은 문장에 「(YYYY-MM-DD 기준)」으로 붙이거나, 상태 대신 규칙으로 바꾼다. 이번 저장에서 쓴 줄(basis this_save)은 그 날이 쓴 날이다. 이미 있던 줄(first_version·no_later_than)의 날은 쓴 날과 다를 수 있으니(ask_human) 그 날을 근거로 들고 사람에게 확인한 뒤 고친다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
   local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. 서버는 코드 펜스 안·URL 안의 경로와, 한 글에 계정이 둘 이상인 경로는 바꾸지 않는다(글자 그대로인 로그·설정·명령이거나 다른 사람의 경로다) — 그 경로는 ask_human 으로 남으니 사람에게 확인한다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
 };
 
@@ -120,7 +124,11 @@ export function resolveFindings(findings: WritingFinding[], anchors: TimeAnchor[
       line: [...a.line].length > ANCHOR_LINE_MAX ? `${[...a.line].slice(0, ANCHOR_LINE_MAX).join("")}…` : a.line,
       date: a.date, basis: a.basis, hint: anchorHint(a),
     }));
-    return mine.length ? { ...f, ...(fix ? { fix } : {}), anchors: mine } : { ...f, ...ask };
+    if (!mine.length) return { ...f, ...ask };
+    //  이번 저장에서 쓴 줄만이면 쓴 날(오늘)을 서버가 안다 — 사람 확인을 뺀다. 이미 있던 줄이 하나라도 있으면 그 날은 근거일 뿐이다.
+    //  (규칙 하나로 묶인 위반이라 줄마다 가르지 못한다 — 판정은 잘라 싣기 전 전체 기준 날짜로 한다.)
+    const own = anchors.filter((a) => (a.rules as string[]).includes(f.rule)).every((a) => a.basis === "this_save");
+    return { ...f, ...(fix ? { fix } : {}), anchors: mine, ...(own ? {} : ask) };
   });
 }
 
@@ -156,7 +164,10 @@ export async function checkWriting(
     const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
     // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
     const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
-    const marked = resolveFindings(findings, opts.anchors, { surface, text: String(input.body ?? "") });
+    //  기준 날짜는 시점 위반이 있을 때만 찾는다(감사 기록 조회) — 꺼진 조직·시점 규칙을 끈 조직은 findings 에 없어 조회하지 않는다.
+    const needsAnchors = findings.some((f) => f.rule === "relative_time" || f.rule === "undated_status");
+    const anchors = opts.anchors ?? (needsAnchors && opts.anchorsOf ? await opts.anchorsOf().catch(() => []) : []);
+    const marked = resolveFindings(findings, anchors, { surface, text: String(input.body ?? "") });
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
@@ -166,11 +177,11 @@ export async function checkWriting(
     const askRules = [...new Set(marked.filter((f) => f.ask_human).map((f) => f.rule))];
     const askOnly = askRules.length > 0 && marked.every((f) => f.ask_human);
     const askLine = askRules.length
-      ? ` 그중 ${askRules.join(", ")} 는 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있으니, 지어내지 말고 사람에게 확인한 뒤 고치세요.`
+      ? ` 그중 ${askRules.join(", ")} 는 날짜·현행 여부·경로처럼 글에 없는 사실이 있어야 고칠 수 있으니, 지어내지 말고 사람에게 확인한 뒤 고치세요.${marked.some((f) => f.ask_human && f.anchors) ? " 그 항목의 anchors 는 저장 기록에서 찾은 근거입니다 — 사람에게 확인할 때 함께 보여 주세요." : ""}`
       : "";
     const stepLine = askOnly ? "" : ` ${step} 의미는 바꾸지 말고 형식만 고치세요.`;
     const fixLine = !opts.human && !askOnly && marked.some((f) => f.fix && !f.ask_human)
-      ? ` 위반마다 fix 에 고치는 법이 있습니다.${marked.some((f) => f.anchors) ? " 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓰고, 다른 날짜를 지어내지 마세요." : ""}`
+      ? ` 위반마다 fix 에 고치는 법이 있습니다.${marked.some((f) => f.anchors && !f.ask_human) ? " 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓰고, 다른 날짜를 지어내지 마세요." : ""}`
       : "";
     return {
       rejects,
@@ -245,7 +256,8 @@ function readStyleNote(findings: ResolvedFinding[], blocked: ReadStyleEditBlock 
   if (blocked) return `${head} ${EDIT_BLOCK_WHY[blocked]} 지금 고치지 않는다 — 형식 위반은 그대로 두고 내용만 근거로 쓴다.`;
   const readFull = partial ? " 고치기 전에 offset·limit 없이 전문을 읽는다(edit 의 앵커는 전문에서 찾는다)." : "";
   if (!self.length) {
-    return `${head} 모두 ${ASK_HUMAN_WHY}(findings 의 ask_human). 혼자 고치지 않는다 — 이 지식을 작업 근거로 쓰고 있다면 그 사실을 사람에게 묻고, 답을 받은 뒤에만 knowledge_save mode='edit' 로 고친다.${readFull} 사실을 지어내지 않는다.`;
+    const evidence = ask.some((f) => f.anchors) ? " anchors 는 저장 기록에서 이 줄이 처음 보이는 날이다 — 쓴 날과 다를 수 있으니 사람에게 물을 때 함께 보여 준다." : "";
+    return `${head} 모두 ${ASK_HUMAN_WHY}(findings 의 ask_human). 혼자 고치지 않는다 — 이 지식을 작업 근거로 쓰고 있다면 그 사실을 사람에게 묻고, 답을 받은 뒤에만 knowledge_save mode='edit' 로 고친다.${readFull}${evidence} 사실을 지어내지 않는다.`;
   }
   // 제목이 마지막인 까닭: 본문 저장(style_fix · expected_version)이 판을 하나 올리므로, 제목을 먼저 고치면 읽을 때 받은 version 으로
   //  보낸 본문 저장이 409 가 된다. 본문을 먼저 고치고 그 응답의 판으로 제목을 고치는 순서가 왕복이 적다.
@@ -255,7 +267,7 @@ function readStyleNote(findings: ResolvedFinding[], blocked: ReadStyleEditBlock 
     ? ` 위반마다 fix 에 고치는 법이 있다.${self.some((f) => f.anchors) ? " 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓴다." : ""}`
     : "";
   const askLine = ask.length
-    ? ` 사람 확인이 필요한 항목(findings 의 ask_human)은 ${ASK_HUMAN_WHY} — 지어내지 말고 사람에게 묻고, 답을 받은 뒤에만 고친다. 저장 응답의 안내가 한 번 더 고치라고 해도 사람 확인이 필요한 항목만 남으면 멈추고 사람에게 묻는다.`
+    ? ` 사람 확인이 필요한 항목(findings 의 ask_human)은 ${ASK_HUMAN_WHY} — 지어내지 말고 사람에게 묻고, 답을 받은 뒤에만 고친다.${ask.some((f) => f.anchors) ? " 그 항목의 anchors 는 저장 기록에서 이 줄이 처음 보이는 날이다 — 쓴 날과 다를 수 있으니 사람에게 물을 때 함께 보여 준다." : ""} 저장 응답의 안내가 한 번 더 고치라고 해도 사람 확인이 필요한 항목만 남으면 멈추고 사람에게 묻는다.`
     : "";
   return `${head} 이 지식을 작업 근거로 쓰고 있다면 직접 고칠 항목을 지금 고친다.${readFull} 본문은 knowledge_save mode='edit' 로 그 부분만 고치고, style_fix:true 와 이 응답의 knowledge.version 을 expected_version 으로 함께 보낸다(서버가 사실·수치·링크가 그대로인지와 그 사이 다른 저장이 없었는지 본다).${title}${fix} 의미·사실·수치·코드 위치·[[링크]]는 그대로 두고 형식만 고친다. 저장 응답의 style 에 직접 고칠 항목이 남아 있으면 한 번 더 고치고, 같은 규칙이 그래도 남으면 더 고치지 않고 멈춘다.${askLine}`;
 }

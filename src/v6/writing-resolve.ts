@@ -221,10 +221,15 @@ export function allowedAnchorDates(anchors: TimeAnchor[]): Set<string> {
 }
 
 /** 에이전트에게 주는 고치는 법 — 한 줄씩. 날짜는 위 기준 날짜만 쓴다. */
+//  이번 저장에서 쓴 줄도 다른 글(대화·자료·다른 지식)에서 옮겨 온 말이면 «어제» 는 그 글을 쓴 날 기준이다 — 오늘로 풀면 틀린 날이
+//  사실처럼 박힌다. 이미 있던 줄의 날은 «이 지식에 처음 저장된 날» 이라 쓴 날과 다를 수 있어(옮겨 온 글·가져온 문서·옛 문서) 근거로만
+//  쓰고 사람에게 확인한다(writing-style resolveFindings 가 ask_human 을 단다).
 export function anchorHint(a: TimeAnchor): string {
-  const when = a.basis === "this_save" ? `이번 저장에서 쓴 줄이라 기준 날짜는 ${a.date}다`
-    : a.basis === "first_version" ? `이 줄이 처음 저장된 날은 ${a.date}다`
-    : `이 줄을 처음 쓴 날은 기록에 없고 ${a.date} 이전에 쓴 줄이다`;
+  const when = a.basis === "this_save"
+    ? `이번 저장에서 쓴 줄이라 기준 날짜는 ${a.date}다(다른 글에서 옮겨 온 말이면 그 글을 쓴 날이 기준이니, 그 날을 모르면 사람에게 확인한다)`
+    : a.basis === "first_version"
+    ? `저장 기록에서 이 줄이 처음 보이는 날은 ${a.date}다 — 옮겨 온 글·가져온 문서·기록 이전의 옛 글이면 쓴 날과 다를 수 있으니 이 날을 근거로 들고 사람에게 확인한 뒤 고친다`
+    : `이 줄을 처음 쓴 날은 기록에 없고 ${a.date} 이전에 쓴 줄이다 — 사람에게 확인한 뒤 고친다`;
   const how = a.basis === "no_later_than"
     ? `상대시간은 「${a.date} 이전」처럼, 상태 서술은 「(${a.date} 이전 작성)」처럼 적는다`
     : `상대시간은 이 날을 기준으로 절대 날짜로 바꾸고(어제는 ${shiftDate(a.date, -1)}), 상태 서술은 같은 문장에 「(${a.date} 기준)」을 붙인다`;

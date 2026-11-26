@@ -150,7 +150,7 @@ export const knowledgeSave: Capability = {
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
     "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라. " +
     "**서술 형식**: 조직이 서술 형식을 켜 두면 저장된 제목·본문을 그 형식에 비춰 본다. 어긋난 곳은 응답 style(findings·guide_md)로 알려 주니 뜻은 그대로 두고 mode='edit' 로 그 부분만 고쳐라. 조직이 저장 거부로 정한 규칙에 걸리면 저장되지 않고 422 에러 메시지에 고칠 곳과 가이드가 온다 — 고친 뒤 같은 호출로 다시 저장하라. " +
-    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. 위반마다 style.findings 의 fix 에 고치는 법이 있고, 날짜가 필요한 항목은 anchors 의 기준 날짜(저장 기록에서 찾은 값)를 쓴다. ask_human 이 붙은 위반(서버도 사실을 찾지 못한 것)만 사람에게 확인한 뒤 고치고, 나머지는 묻지 않고 고친다. 에이전트가 보낸 글의 개인 홈 경로는 서버가 $HOME 으로 바꾼다(응답 home_paths).",
+    "**형식만 고치는 저장이면 style_fix:true 와 읽을 때의 expected_version 을 함께 보내라** — 서버가 원문의 사실이 그대로인지 확인해 준다. 제목을 knowledge_set_title 로 먼저 고쳤으면 판이 올랐으니 다시 읽은 version 을 보내라. 위반마다 style.findings 의 fix 에 고치는 법이 있고, 날짜가 필요한 항목엔 anchors(저장 기록에서 찾은 기준 날짜)가 붙는다 — 이번 저장에서 쓴 줄은 그 날로 고치고, 이미 있던 줄의 날은 쓴 날과 다를 수 있어 ask_human 이 붙는다. ask_human 이 붙은 위반만 사람에게 확인한 뒤 고치고(anchors 가 있으면 근거로 함께 보여 준다), 나머지는 묻지 않고 고친다. 에이전트가 보낸 글의 개인 홈 경로는 서버가 $HOME 으로 바꾼다(응답 home_paths).",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -387,7 +387,10 @@ export const knowledgeSave: Capability = {
     const lastWrite = styleFixAgent ? await lastContentWrite(gate.before!.name, gate.before!.version) : null;
     // 원문의 상대시간·상태 서술 줄에 기준 날짜를 적는 형식 정리는 사실 추가가 아니다 — 그 날짜만 새로 들어와도 받는다.
     const anchorCache: AnchorCache = new Map();
-    const allowedDates = styleFixAgent
+    //  형식이 켜져 있고 시점 규칙이 살아 있을 때만 찾는다 — 꺼진 조직(기본값)의 style_fix 저장에 감사 기록 훑기를 물리지 않는다.
+    const timeRulesOn = writingFmt.enabled && writingFmt.apply_to.includes("knowledge")
+      && (ruleLevel(writingFmt, "relative_time") !== "off" || ruleLevel(writingFmt, "undated_status") !== "off");
+    const allowedDates = styleFixAgent && timeRulesOn
       ? allowedAnchorDates(await knowledgeAnchors({ name: gate.before!.name, body: gate.before!.body_md ?? "", updatedAt: gate.before!.updated_at, cache: anchorCache }).catch(() => []))
       : undefined;
     assertStyleFixSafe({
@@ -415,10 +418,11 @@ export const knowledgeSave: Capability = {
         human: humanWriter,
         // 시점 표현 줄의 기준 날짜 — 이번 저장에 없던 줄은 오늘, 있던 줄은 처음 들어간 판의 날(감사 기록).
         //  형식 정리 저장(style_fix)은 새 사실을 쓰지 않으므로 고친 줄도 오늘로 보지 않고 감사 기록에서 찾는다(읽기와 같은 판정).
-        anchors: humanWriter ? undefined : await knowledgeAnchors({
+        //  판정이 시점 위반을 찾았을 때만 부른다(anchorsOf) — 꺼진 조직·시점 규칙을 끈 조직의 저장은 감사 기록을 훑지 않는다.
+        anchorsOf: humanWriter ? undefined : () => knowledgeAnchors({
           name: gate.name, body: saveInput.body_md, updatedAt: gate.before?.updated_at, cache: anchorCache,
           ...(input.style_fix && gate.before ? {} : { beforeBody: gate.before?.body_md ?? null }),
-        }).catch(() => []),
+        }),
       });
     const style = homePaths ? { ...info, home_paths: { replaced: homePaths, note: HOME_PATHS_NOTE } } : info;
     if (rejects.length) throw await rejectWriting("knowledge", gate.name ?? input.name ?? null, input.title ?? gate.before?.title, rejects, guide, ctx);
@@ -751,9 +755,9 @@ export const knowledgeSetTitle: Capability = {
         before: { title: gate.before.title, body: gate.before.body_md },
         human: isHumanWriter(user, ctx),
         // 본문 시점 위반의 기준 날짜 — knowledge_get·knowledge_save 와 같은 안내가 되게(없으면 같은 위반이 여기서만 사람 확인이 된다).
-        anchors: isHumanWriter(user, ctx) ? undefined : await knowledgeAnchors({
-          name: gate.before.name, body: gate.before.body_md ?? "", updatedAt: gate.before.updated_at,
-        }).catch(() => []),
+        anchorsOf: isHumanWriter(user, ctx) ? undefined : () => knowledgeAnchors({
+          name: gate.before!.name, body: gate.before!.body_md ?? "", updatedAt: gate.before!.updated_at,
+        }),
       });
     if (rejects.length) throw await rejectWriting("knowledge", gate.before.name, input.title, rejects, guide, ctx);
     const before = gate.before;

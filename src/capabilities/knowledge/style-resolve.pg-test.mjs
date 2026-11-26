@@ -10,7 +10,7 @@
 //   S8 저장 응답의 시점 위반에 기준 날짜(anchors)와 고치는 법(fix)이 실리고 ask_human 은 없다(기준 날짜를 찾았으므로)
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
-const { knowledgeSave } = await import(`${DIST}/capabilities/knowledge/authoring.js`);
+const { knowledgeSave, knowledgeSetTitle } = await import(`${DIST}/capabilities/knowledge/authoring.js`);
 const { knowledgeGet } = await import(`${DIST}/capabilities/knowledge/read.js`);
 //  형식 조회는 워크스페이스별로 캐시된다(runtime-config getWritingFormat) — DB 를 직접 고친 뒤엔 비워야 새 형식이 보인다.
 const { invalidateWritingFormatCache } = await import(`${DIST}/org/store/runtime-config.js`);
@@ -133,7 +133,9 @@ try {
     const got = await knowledgeGet.handler({ name }, { userId: AGENT }, mcp);
     const und = got.style?.findings?.find((f) => f.rule === "undated_status");
     chk("S6 읽기: 상태 서술 줄의 기준 날짜는 그 줄이 처음 저장된 판의 날이다",
-      und?.anchors?.[0]?.date === "2026-09-05" && und.anchors[0].basis === "first_version" && und.fix && !("ask_human" in und), JSON.stringify(und));
+      und?.anchors?.[0]?.date === "2026-09-05" && und.anchors[0].basis === "first_version" && und.fix, JSON.stringify(und));
+    //  이미 있던 줄의 기록 날짜는 근거일 뿐이다(옮겨 온 글·가져온 문서면 쓴 날과 다르다) — 사람 확인으로 남긴다.
+    chk("S6 읽기: 이미 있던 줄의 시점 위반은 근거를 싣고 사람 확인(ask_human)으로 남는다", und?.ask_human === true, JSON.stringify(und));
     const v = (await rowOf(name)).version;
     const wrong = await attempt(() => save({ name, mode: "edit", style_fix: true, expected_version: v,
       edits: [{ old: "아직 배포 대기 중이다.", new: "배포 대기 중이다(2026-09-07 기준)." }] }));
@@ -174,6 +176,38 @@ try {
     chk("S8 새 줄의 기준 날짜는 오늘이고 고치는 법이 있다", rel?.anchors?.[0]?.basis === "this_save" && rel.fix && !r.style.findings.some((f) => "ask_human" in f), JSON.stringify(r.style?.findings));
     chk("S8 기준 날짜는 조직 시간대의 오늘 또는 UTC 오늘이다", [today, new Date().toISOString().slice(0, 10)].includes(rel?.anchors?.[0]?.date), rel?.anchors?.[0]?.date);
     chk("S8 기준 날짜를 찾은 위반은 안내문이 사람에게 묻게 하지 않는다", !/사람에게 확인/.test(r.style?.note ?? "") && /anchors 의 기준 날짜/.test(r.style?.note ?? ""), r.style?.note);
+  }
+
+  // ── S9 기준 날짜 조회는 형식이 켜져 있고 시점 위반이 있을 때만 — 꺼진 조직(기본값)의 저장에 감사 기록 훑기를 물리지 않는다 ──
+  {
+    const name = `${P}nofmt`;
+    //  시점과 무관한 위반(헤딩 기호)도 둔다 — 시점 규칙만 끈 조직에서 판정이 다른 위반으로 돌 때도 기준 날짜를 찾지 않는지 본다.
+    await save({ name, title: "꺼진 조직 문서", body_md: "배포 절차를 정한다.\n\n## 🔴 절차\n\n- 결제 연동은 아직 배포 대기 중이다.", category: CAT, type: "how-to" });
+    const scans = [];
+    const realQuery = itemsPool.query.bind(itemsPool);
+    const spy = () => { itemsPool.query = (...a) => { const sql = typeof a[0] === "string" ? a[0] : a[0]?.text ?? ""; if (/strpos\(a\.body/.test(sql)) scans.push(sql); return realQuery(...a); }; };
+    const unspy = () => { itemsPool.query = realQuery; };
+    const fmtNow = (await itemsPool.query(`SELECT writing_format FROM org_runtime_config WHERE id=1`)).rows[0].writing_format;
+    try {
+      for (const [label, wf] of [
+        ["꺼짐", { ...fmtNow, enabled: false }],
+        ["시점 규칙 꺼짐", { ...fmtNow, rules: { ...(fmtNow.rules ?? {}), relative_time: "off", undated_status: "off" } }],
+      ]) {
+        await itemsPool.query(`UPDATE org_runtime_config SET writing_format=$1 WHERE id=1`, [JSON.stringify(wf)]); invalidateWritingFormatCache();
+        scans.length = 0;
+        spy();
+        await save({ name, mode: "append", body_md: `- ${label} 조직에서 덧붙인 줄이다.` }).catch((e) => bad(`S9 ${label} append`, e?.message));
+        await knowledgeSetTitle.handler({ name, title: `꺼진 조직 문서 ${label}` }, { userId: AGENT }, mcp).catch((e) => bad(`S9 ${label} 제목`, e?.message));
+        const v = (await rowOf(name)).version;
+        await save({ name, mode: "edit", style_fix: true, expected_version: Number(v), edits: [{ old: "배포 절차를 정한다.", new: "배포 절차를 정해 둔다." }] }).catch((e) => bad(`S9 ${label} style_fix`, e?.message));
+        unspy();
+        chk(`S9 ${label}: 에이전트 저장·제목 변경·형식 정리 저장이 감사 기록을 훑지 않는다`, scans.length === 0, `${scans.length}회`);
+        await save({ name, mode: "edit", edits: [{ old: "배포 절차를 정해 둔다.", new: "배포 절차를 정한다." }] }).catch((e) => bad(`S9 ${label} 되돌림`, e?.message));
+      }
+    } finally {
+      unspy();
+      await itemsPool.query(`UPDATE org_runtime_config SET writing_format=$1 WHERE id=1`, [JSON.stringify(fmtNow)]); invalidateWritingFormatCache();
+    }
   }
 } catch (e) {
   bad("실행", e?.stack ?? String(e));

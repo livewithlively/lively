@@ -40,6 +40,25 @@ await ta("저장 응답 — 기준 날짜를 찾은 시점 위반은 사람 확�
   const st2 = ((await checkWriting("knowledge", fixable, {}, on)).info as { style: { findings: F[]; note: string } }).style;
   assert.doesNotMatch(st2.note, /anchors/, "고치는 법이 없는 규칙만 있으면 안내를 붙이지 않는다");
 });
+await ta("저장 응답 — 이미 있던 줄(first_version·no_later_than)의 기준 날짜는 근거로 싣되 사람 확인(ask_human)으로 남긴다 — 옮겨 온 글·가져온 문서·옛 문서면 기록의 날이 쓴 날과 다르다", async () => {
+  type F = { rule: string; fix?: string; anchors?: Array<{ date: string; basis: string }>; ask_human?: true };
+  const relOf = async (anchors: Array<{ line: string; rules: Array<"relative_time" | "undated_status">; date: string; basis: "this_save" | "first_version" | "no_later_than" }>) => {
+    const st = ((await checkWriting("knowledge", BAD, { anchors }, on)).info as { style: { findings: F[]; note: string } }).style;
+    return { rel: st.findings.find((f) => f.rule === "relative_time"), note: st.note };
+  };
+  for (const basis of ["first_version", "no_later_than"] as const) {
+    const { rel, note } = await relOf([{ line: "오늘 배포했다.", rules: ["relative_time"], date: "2026-09-04", basis }]);
+    assert.equal(rel?.ask_human, true, `${basis}: ${JSON.stringify(rel)}`);
+    assert.equal(rel?.anchors?.[0].date, "2026-09-04", `${basis} 의 기준 날짜는 근거로 싣는다`);
+    assert.match(note, /사람에게 확인/, basis);
+  }
+  // 이번 저장에서 쓴 줄과 이미 있던 줄이 섞이면 사람 확인이다(규칙 하나로 묶인 위반이다).
+  const mixed = await relOf([
+    { line: "오늘 배포했다.", rules: ["relative_time"], date: "2026-11-24", basis: "this_save" },
+    { line: "어제 정했다.", rules: ["relative_time"], date: "2026-09-04", basis: "first_version" },
+  ]);
+  assert.equal(mixed.rel?.ask_human, true, JSON.stringify(mixed.rel));
+});
 await ta("서버 처리 판정 — 홈 경로는 지식 저장에서 치환으로 다 풀릴 때만 사람 확인을 뺀다(다른 표면·남는 경로는 사람 확인)", async () => {
   type F = { rule: string; ask_human?: true };
   const lp = (fs: F[]) => fs.find((f) => f.rule === "local_path");

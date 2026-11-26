@@ -350,6 +350,13 @@ await t("E first_version·this_save 안내는 date·어제 날짜·그대로 둔
   }
 });
 
+await t("E this_save 안내는 다른 글에서 옮겨 온 말이면 그 날을 모르는 한 사람에게 확인하라고 하고, 이미 있던 줄의 안내는 근거로 들고 사람에게 확인하라고 한다", () => {
+  assert.match(anchorHint(anchor(["relative_time"], "this_save", "2026-12-01")), /옮겨 온[^.]*사람에게 확인/);
+  for (const basis of ["first_version", "no_later_than"] as const) {
+    assert.match(anchorHint(anchor(["relative_time"], basis, "2026-12-01")), /사람에게 확인/, basis);
+  }
+});
+
 await t("E no_later_than 안내는 「<date> 이전」 과 그대로 둔다 를 담는다", () => {
   const h = anchorHint(anchor(["undated_status"], "no_later_than", "2026-12-01"));
   for (const s of ["2026-12-01 이전", "그대로 둔다"]) assert.ok(h.includes(s), `${s} 없음 — ${h}`);
