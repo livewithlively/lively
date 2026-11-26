@@ -85,7 +85,7 @@ const NEXT_STEP: Record<WritingSurface, { saved: string; proposed: string; legac
 export const RULE_FIX: Partial<Record<WritingFinding["rule"], string>> = {
   relative_time: "anchors 의 기준 날짜로 고친다. 상대시간은 그 날을 기준으로 절대 날짜로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
   undated_status: "anchors 의 기준 날짜를 같은 문장에 「(YYYY-MM-DD 기준)」으로 붙이거나, 상태 대신 규칙으로 바꾼다. 형식 정리 저장(style_fix)에서 기준 날짜를 새로 적는 것은 사실 변경으로 보지 않는다.",
-  local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
+  local_path: "개인 홈 접두(/Users/<계정>/)를 $HOME 으로, C:\\Users\\<계정>\\ 를 %USERPROFILE%\\ 로 바꾼다. 에이전트가 보내는 글은 서버가 저장할 때 바꾸고, 이미 있던 경로는 형식 정리 저장(mode='edit' style_fix=true)을 하면 서버가 함께 바꾼다. 의미 보존 검사는 이 치환을 사실 변경으로 보지 않는다. 서버는 코드 펜스 안·URL 안의 경로와, 한 글에 계정이 둘 이상인 경로는 바꾸지 않는다(글자 그대로인 로그·설정·명령이거나 다른 사람의 경로다) — 그 경로는 ask_human 으로 남으니 사람에게 확인한다. /home/<계정>/ 경로는 서버의 서비스 계정 경로면 사실이니 그대로 두고, 개인 컴퓨터 경로면 $HOME/ 으로 바꾼다.",
 };
 
 export type ResolvedFinding = WritingFinding & {
@@ -96,7 +96,8 @@ export type ResolvedFinding = WritingFinding & {
 };
 
 // 사실이 필요한 규칙이지만 서버가 사실 없이 처리하는 것 — 경로 치환은 지식 저장 때 서버가 한다.
-//  경로 치환은 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정> 등)이 있으면 사람 확인이다.
+//  경로 치환은 지식 저장 경로에만 있다(authoring). 경로는 치환한 뒤에도 남는 것(/home/<개인 계정>·펜스 안·URL 안·계정 둘 이상)이
+//  있으면 사람 확인이다. text 는 본문이다 — 탐지(lintWriting local_path)도 치환도 본문만 본다.
 export interface ResolveContext { surface?: WritingSurface; text?: string }
 function serverResolves(rule: WritingFinding["rule"], ctx: ResolveContext): boolean {
   if ((ctx.surface ?? "knowledge") !== "knowledge") return false;
@@ -155,7 +156,7 @@ export async function checkWriting(
     const head = `이 조직의 서술 형식에 어긋난 곳이 ${findings.length}건 있습니다(${state}).`;
     // 제안(stage) 중엔 edit 가 거부되므로, 옛 위반이 있어도 다음 행동은 제안 갱신 안내를 따른다.
     const step = opts.proposed ? NEXT_STEP[surface].proposed : legacy.length ? NEXT_STEP[surface].legacy : NEXT_STEP[surface].saved;
-    const marked = resolveFindings(findings, opts.anchors, { surface, text: `${input.title ?? ""}\n${input.body ?? ""}` });
+    const marked = resolveFindings(findings, opts.anchors, { surface, text: String(input.body ?? "") });
     const legacyLine = legacy.length
       ? ` 이 글에 원래 있던 형식 위반 ${legacy.length}건(${legacy.join(", ")})이 남아 있습니다. 내용을 고친 김에 형식도 고쳐 주세요.`
       : "";
@@ -293,7 +294,7 @@ export async function readStyleHint(
     //  기준 날짜는 시점 위반이 있을 때만 찾는다(DB 조회). 못 찾은 시점 위반은 사람 확인 항목으로 남는다.
     const needsAnchors = findings.some((f) => f.rule === "relative_time" || f.rule === "undated_status");
     const anchors = needsAnchors && opts.anchorsOf ? await opts.anchorsOf().catch(() => []) : [];
-    const marked = resolveFindings(findings, anchors, { surface: "knowledge", text: `${k.title ?? ""}\n${k.body_md ?? ""}` });
+    const marked = resolveFindings(findings, anchors, { surface: "knowledge", text: String(k.body_md ?? "") });
     return {
       style: {
         count: findings.length,

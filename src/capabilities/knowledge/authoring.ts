@@ -35,7 +35,7 @@ import { checkWriting, isHumanWriter, rejectWriting } from "../writing-style.js"
 import { assertExpectedVersion, assertStyleFixSafe, lastContentWrite, rethrowVersionConflict, versionConflictError } from "./save-guard.js";
 import { getKnowledgeVersion } from "../../v6/knowledge-store.js";   // 판 대조 — 수정 제안 접수 직전에 다시 본다
 import { knowledgeAnchors, type AnchorCache } from "./style-resolve.js";
-import { allowedAnchorDates, countHomePaths, normalizeHomePaths } from "../../v6/writing-resolve.js";
+import { allowedAnchorDates, changedLineFilter, normalizeHomePathsCounted } from "../../v6/writing-resolve.js";
 import { ruleLevel } from "../../org/policies/writing-format.js";
 import { getWritingFormat } from "../../org/store/runtime-config.js";
 
@@ -120,6 +120,10 @@ const knowledgeSaveInput = {
       + "없는 지식(새로 만드는 저장)에 보내도 409(current_version=null)다 — 새로 만들 땐 보내지 않는다."),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
+// 홈 경로 치환 응답 — 저장된 본문이 보낸 글과 달라진다는 것을 알린다. 모르면 다음 edit 의 old(보낸 글의 /Users/<계정>/…)가
+//  본문에서 안 찾아져 400 이 된다(append 응답엔 본문이 없어 에이전트가 저장된 꼴을 볼 길도 없다).
+const HOME_PATHS_NOTE = "개인 홈 경로를 $HOME(Windows 는 %USERPROFILE%)으로 바꿔 저장했습니다 — 저장된 본문은 보낸 글과 다릅니다. 이 지식을 다시 mode='edit' 로 고칠 때 old 에는 저장된 꼴($HOME/…·%USERPROFILE%\\…)을 쓰세요. 코드 펜스 안·URL 안의 경로와 한 글에 계정이 둘 이상인 경로는 바꾸지 않았습니다.";
+
 export const knowledgeSave: Capability = {
   name: "knowledge_save",
   title: "지식 저장",
@@ -299,16 +303,20 @@ export const knowledgeSave: Capability = {
     //  외부 관찰 기록인지는 저장된 행으로만 본다 — 입력 provenance 로 판정을 비껴가지 않게(checkWriting observed 와 같은 근거).
     const observedSave = gate.before?.provenance === "observed";
     // 개인 홈 경로(local_path)는 에이전트 저장에서 서버가 $HOME 으로 바꾼다 — 가리키는 곳은 같고 계정 이름만 빠진다.
-    //  조직이 그 규칙을 켰을 때만, 이번 저장이 보낸 글(replace 전문·append 조각·edit 의 new)에만 건다. 손대지 않은 기존
-    //  본문까지 바꾸는 것은 형식 정리 저장(style_fix)뿐이다. 사람의 웹 편집은 쓴 그대로 둔다.
+    //  조직이 그 규칙을 켰을 때만, 이번 저장이 쓴 줄(append 조각, replace·edit 에서 원문에 없던 줄)에만 건다. 손대지 않은 기존
+    //  줄까지 바꾸는 것은 형식 정리 저장(style_fix)뿐이다 — replace 는 전문을 다시 보내지만 원문에 있던 줄(사람이 쓴 경로 포함)은
+    //  이번 저장이 쓴 글이 아니다. 사람의 웹 편집·외부 관찰 기록·항상 주입 문서(조직 규칙·페르소나 — #1680 이 재작성 대상에서 뺐다)는
+    //  쓴 그대로 둔다. 펜스 안·URL 안·계정 둘 이상은 normalizeHomePaths 가 바꾸지 않는다.
     const writingFmt = await getWritingFormat();
-    const homeFix = !humanWriter && !observedSave && writingFmt.enabled && writingFmt.apply_to.includes("knowledge")
-      && ruleLevel(writingFmt, "local_path") !== "off";
+    const homeFix = !humanWriter && !observedSave && gate.before?.injection !== "always"
+      && writingFmt.enabled && writingFmt.apply_to.includes("knowledge") && ruleLevel(writingFmt, "local_path") !== "off";
     let homePaths = 0;
-    const fixHome = (text: string): string => {
+    //  before 를 주면 그 글에 없던 줄만 바꾼다(changedLineFilter). 안 주면 전부(신규·append 조각·style_fix).
+    const fixHome = (text: string, before?: string | null): string => {
       if (!homeFix) return text;
-      homePaths += countHomePaths(text);
-      return normalizeHomePaths(text);
+      const r = normalizeHomePathsCounted(text, before == null ? undefined : changedLineFilter(text, before));
+      homePaths += r.replaced;
+      return r.text;
     };
     // body_md 는 스키마상 optional(edit 가 안 보내므로)이라 하류(전문 string 필수)로 넘기기 전에 확정한다.
     //  edit/append 분기가 아래에서 각자 계산한 전문으로 덮는다.
@@ -329,8 +337,9 @@ export const knowledgeSave: Capability = {
       appendBase = gate.before.body_md ?? "";
       let edited: string;
       try {
-        edited = applyKnowledgeEdits(appendBase, ((input as { edits?: KnowledgeEdit[] }).edits ?? []).map((e) => ({ ...e, new: fixHome(e.new) })));
-        if (input.style_fix) edited = fixHome(edited);
+        edited = applyKnowledgeEdits(appendBase, (input as { edits?: KnowledgeEdit[] }).edits ?? []);
+        //  편집은 보낸 그대로 적용한 뒤 바뀐 줄만 고친다 — new 를 미리 고치면 뒤 편집의 old 가 앞 편집이 넣은 글을 못 찾는다.
+        edited = fixHome(edited, input.style_fix ? null : appendBase);
       } catch (e) {
         // 앵커 불일치·모호는 **호출자 실수**다(400) — 조용히 넘기면 "저장은 됐는데 안 바뀐" 최악의 실패가 된다.
         throw new HttpError(400, (e as Error).message);
@@ -371,7 +380,7 @@ export const knowledgeSave: Capability = {
       }
       saveInput = { ...input, body_md: merged };
     }
-    if (!isEdit && !isAppend) saveInput = { ...saveInput, body_md: fixHome(saveInput.body_md) };
+    if (!isEdit && !isAppend) saveInput = { ...saveInput, body_md: fixHome(saveInput.body_md, input.style_fix ? null : gate.before?.body_md ?? null) };
 
     // 보호 창 판정에만 쓰는 조회라 style_fix 에이전트 저장일 때만 한다.
     const styleFixAgent = !!input.style_fix && !!gate.before && !human;
@@ -411,7 +420,7 @@ export const knowledgeSave: Capability = {
           ...(input.style_fix && gate.before ? {} : { beforeBody: gate.before?.body_md ?? null }),
         }).catch(() => []),
       });
-    const style = homePaths ? { ...info, home_paths: { replaced: homePaths, note: "개인 홈 경로를 $HOME(Windows 는 %USERPROFILE%)으로 바꿔 저장했습니다." } } : info;
+    const style = homePaths ? { ...info, home_paths: { replaced: homePaths, note: HOME_PATHS_NOTE } } : info;
     if (rejects.length) throw await rejectWriting("knowledge", gate.name ?? input.name ?? null, input.title ?? gate.before?.title, rejects, guide, ctx);
 
     // #921 append 응답 — 본문 전문은 빼고 증분 요약만. json()(capabilities/index.ts)이 handler 결과를 통째로
