@@ -32,6 +32,14 @@
 //  fail-first(후속, 격리 리뷰): 머리줄 단추를 headR 에서 빼면 H0~H5 · 넓은 폭 숨김을 풀면 H7 · 부품의 :not([hidden]) 을 빼면 B9 ·
 //   보이는 탭(.v2-tabpane:not([hidden])) 한정을 빼면 B10 · 고르기 상자를 목록에 넣으면 B6s · 읽기 전용 제외를 빼면 B6r ·
 //   textarea · contenteditable 갈래를 빼면 B6t · B6c 가 빨갛다.
+//  흔들림(2026-11-26): B1 이 CI 에서 가끔, 맥 크롬 158 에서는 늘 빨갰다(실제 {"kb":false,"mtabs":"flex","bottom":501,"vh":557}).
+//   크롬 158 이 불투명 오리진 프레임에서 사람 동작 없이 부른 el.focus() 를 막는다(BlockingFocusWithoutUserActivation 기본 켜짐). 시험 앱이 제 칸에
+//   초점을 못 가져가 장면이 일어나지 않았다. 사람이 누르는 제품 길은 이 막음에 걸리지 않는다(누르면 브라우저가 초점을 준다). CI 는 러너 이미지가
+//   섞여 20261122(크롬 158.0.8127.36) 잡만 빨갛고 20261116(157.0.8103.78) 잡은 초록이었다. 셸이 프레임에 먼저 초점을 주고(사람이 누를 때
+//   브라우저가 하는 일) 앱이 옮긴 초점을 답한다(tell).
+//   fail-first: 고치기 전 판은 크롬 158 에서 B1 이 빨갛고(B3 · B2 는 아무 일도 없어 거짓 초록), 그 기능을 끄면
+//   (--disable-blink-features=BlockingFocusWithoutUserActivation) 고치기 전 판도 초록이다. 고친 판은 SDK 런타임에서 체크 상자를 글 상자로 치면
+//   B2 가, «났다»(on:false)를 버리면 B3 이 빨갛다(고치기 전 판은 크롬 158 에서 둘 다 초록이었다).
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { buildSync } from "esbuild";
@@ -60,9 +68,12 @@ async function PAGE_MAIN() {
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
   const APP = (id, title) => ({ app_id: id, title, attached_at: "2026-10-08T00:00:00Z", attached_by: "me", usable: true, has_ui: true, pages: [{ key: "main", title }], tables: [] });
   window.__apps = [APP("deck", "장표 수정")];
-  //  앱 화면: 부모가 보내는 시험 명령으로 제 칸에 초점을 옮긴다(샌드박스 프레임이라 부모가 안을 만질 수 없다)
+  //  앱 화면: 부모가 보내는 시험 명령으로 제 칸에 초점을 옮긴다(샌드박스 프레임이라 부모가 안을 만질 수 없다).
+  //   옮긴 뒤 한 박자 뒤에 지금 초점을 답한다(__ack). 그 한 박자는 SDK 런타임이 ui/typing 을 판정하는 setTimeout 0 보다 뒤에 걸리고,
+  //   같은 창이 보낸 메시지는 보낸 차례대로 닿는다. 그래서 답이 왔으면 그 초점 변화의 ui/typing 도 이미 셸에 왔다.
   const APP_HTML = "<!doctype html><html><body><textarea id=\"t\"></textarea><button id=\"b\">b</button><input type=\"checkbox\" id=\"c\">"
-    + "<script>addEventListener('message', function (e) { var d = e.data || {}; var id = d.__test; if (id) { var el = document.getElementById(id); if (el) el.focus(); } });<\/script></body></html>";
+    + "<script>addEventListener('message', function (e) { var d = e.data || {}; var id = d.__test; if (!id) return; var el = document.getElementById(id); if (el) el.focus();"
+    + " setTimeout(function () { var a = document.activeElement; parent.postMessage({ __ack: d.n, active: (a && a.id) || null, hasFocus: document.hasFocus() }, '*'); }, 0); });<\/script></body></html>";
   window.fetch = async (url) => {
     const u = new URL(url, "http://x/");
     if (/^\/api\/ui\/terminal\/sessions\/[^/]+\/apps$/.test(u.pathname)) return J({ apps: window.__apps });
@@ -98,7 +109,21 @@ async function PAGE_MAIN() {
   const actTab = () => { const b = $$('#app .pn-pane[data-zone="side"] .pn-tab').find((x) => x.getAttribute("aria-selected") === "true"); return b ? b.closest(".pn-tabwrap")?.getAttribute("data-tab") : null; };
   const pickTab = (k) => $$('#app .pn-pane[data-zone="side"] .pn-tab').find((b) => b.closest(".pn-tabwrap")?.getAttribute("data-tab") === k)?.click();
   const frameEl = () => $('#app .pn-pane[data-zone="side"] .pn-sessapp .v2-appui-frame');
-  const tell = (id) => frameEl()?.contentWindow?.postMessage({ __test: id }, "*");
+  //  앱 화면 안 칸 하나를 사람이 누른 꼴로 초점을 옮기고, 앱이 답한 지금 초점({ active, hasFocus })을 돌려준다.
+  //   ⚠ 크롬 158 부터 불투명 오리진(샌드박스) 프레임은 사람 동작 없이 제 칸에 초점을 가져가지 못한다(BlockingFocusWithoutUserActivation 이
+  //    기본으로 켜졌다). 앱의 el.focus() 가 아무 일도 안 해서 B1 이 늘 빨갰다(머리말 «흔들림»). 사람이 누르면 브라우저가 먼저 그 프레임에
+  //    초점을 준다. 그래서 셸 쪽에서 프레임에 먼저 초점을 주고, 앱은 이미 초점을 가진 프레임 안에서 제 칸으로 옮긴다(이건 158 에서도 된다).
+  //   앱 문서가 아직 다리를 안 걸었으면 명령이 버려진다. 고정 대기 대신 답이 올 때까지 다시 보낸다(같은 칸에 다시 초점을 줘도 그대로다).
+  const acks = new Map(); let tellN = 0;
+  window.addEventListener("message", (e) => { const d = e.data; const f = frameEl(); if (d && typeof d === "object" && d.__ack && f && e.source === f.contentWindow) acks.set(d.__ack, { active: d.active, hasFocus: d.hasFocus }); });
+  const tell = async (id) => {
+    const f = frameEl();
+    if (!f || !f.contentWindow) return null;
+    if (document.activeElement !== f) f.focus();
+    const n = ++tellN;
+    for (let i = 0; i < 20 && !acks.has(n); i++) { f.contentWindow.postMessage({ __test: id, n }, "*"); await waitFor(() => acks.has(n), 150); }
+    return acks.get(n) || null;
+  };
   const visiblePart = () => $$('#app .pn-pane[data-zone="side"] .pn-pane-body > .pn-part').find((n) => !n.hidden) || null;
   const bigView = async () => {
     const okOpen = await PN.openAppUi("deck", { title: "장표 수정" });
@@ -186,14 +211,16 @@ async function PAGE_MAIN() {
       //  B: 쓰는 동안
       p.b0 = { mtabs: mtabs(), bottom: paneBottom(), tabsTop: tabsTop() };
       await waitFor(() => frameEl() && frameEl().contentWindow);
-      await sleep(600);
-      tell("t"); await waitFor(() => $(".pn-sessapp.pn-kb"), 2500); await sleep(100);
-      p.b1 = { kb: !!$(".pn-sessapp.pn-kb"), mtabs: mtabs(), bottom: paneBottom() };
-      tell("b"); await waitFor(() => !$(".pn-sessapp.pn-kb"), 2500); await sleep(100);
-      p.b3 = { kb: !!$(".pn-sessapp.pn-kb"), mtabs: mtabs(), bottom: paneBottom() };
-      tell("c"); await sleep(400);
-      p.b2 = { kb: !!$(".pn-sessapp.pn-kb"), mtabs: mtabs() };
-      tell("b"); await sleep(200);
+      //  tell 은 앱의 답을 기다린다. 답이 왔으면 그 초점 변화의 ui/typing 도 이미 왔다(APP_HTML). 그래서 첫 명령 앞의 고정 대기와
+      //   B2 의 고정 대기는 두지 않는다. inner = 앱이 답한 초점이다. 초점이 그 칸에 안 섰으면 장면이 일어나지 않은 것이라 B1 · B3 · B2 가 빨갛다
+      //   (B3 · B2 는 «그대로» 를 재는 행이라, 초점이 안 서면 아무 일도 없어 거짓 초록이 났다).
+      const it = await tell("t"); await waitFor(() => $(".pn-sessapp.pn-kb"), 2500); await sleep(100);
+      p.b1 = { kb: !!$(".pn-sessapp.pn-kb"), mtabs: mtabs(), bottom: paneBottom(), inner: it };
+      const ib = await tell("b"); await waitFor(() => !$(".pn-sessapp.pn-kb"), 2500); await sleep(100);
+      p.b3 = { kb: !!$(".pn-sessapp.pn-kb"), mtabs: mtabs(), bottom: paneBottom(), inner: ib };
+      const ic = await tell("c");
+      p.b2 = { kb: !!$(".pn-sessapp.pn-kb"), mtabs: mtabs(), inner: ic };
+      await tell("b");
       //  곁칸의 입력칸(셸 쪽): 보이는 부품 안에 둔다
       const part = visiblePart();
       const mk = (html) => { const w = document.createElement("div"); w.innerHTML = html; const n = w.firstElementChild; part.append(n); return n; };
@@ -288,9 +315,11 @@ check(!!hp.h5 && hp.h5.hidden && hp.h5.disp === "none", "H5 null 이면 숨는�
 check(hp.h6 === true && !hp.destroyErr, "H6 머리줄을 내리면 구독을 끊는다", { h6: hp.h6, err: hp.destroyErr });
 check(!!p.dock && !p.dock.shown && p.dock.inset === "0px", "A1 폰 서랍엔 독이 없다(가림 폭 0px)", p.dock);
 check(!!p.b0 && p.b0.mtabs !== "none" && p.b0.bottom === p.b0.tabsTop && p.b0.tabsTop < ph, "B0 쓰기 전: 아래 탭 바가 서고 서랍 바닥 = 탭 바 위", { ...p.b0, vh: ph });
-check(!!p.b1 && p.b1.kb && p.b1.mtabs === "none" && p.b1.bottom === ph, "B1 앱 화면 안 글 칸 초점 → 탭 바 숨음 · 서랍 바닥 = 화면 끝", { ...p.b1, vh: ph });
-check(!!p.b3 && !p.b3.kb && p.b3.mtabs !== "none" && !!p.b0 && p.b3.bottom === p.b0.bottom, "B3 앱 안 단추로 옮기면 탭 바 · 바닥이 돌아온다", p.b3);
-check(!!p.b2 && !p.b2.kb && p.b2.mtabs !== "none", "B2 앱 안 체크 상자 초점 → 그대로", p.b2);
+//  inAt: 앱이 답한 초점이 그 칸이고 프레임이 초점을 가졌나(장면이 정말 일어났나)
+const inAt = (v, id) => !!v && !!v.inner && v.inner.active === id && v.inner.hasFocus === true;
+check(inAt(p.b1, "t") && p.b1.kb && p.b1.mtabs === "none" && p.b1.bottom === ph, "B1 앱 화면 안 글 칸 초점 → 탭 바 숨음 · 서랍 바닥 = 화면 끝", { ...p.b1, vh: ph });
+check(inAt(p.b3, "b") && !p.b3.kb && p.b3.mtabs !== "none" && !!p.b0 && p.b3.bottom === p.b0.bottom, "B3 앱 안 단추로 옮기면 탭 바 · 바닥이 돌아온다", p.b3);
+check(inAt(p.b2, "c") && !p.b2.kb && p.b2.mtabs !== "none", "B2 앱 안 체크 상자 초점 → 그대로", p.b2);
 const hid = (v) => !!v && v.focused && v.mtabs === "none" && v.bottom === ph;
 const kept = (v) => !!v && v.focused && v.mtabs !== "none" && !!p.b0 && v.bottom === p.b0.bottom;
 check(hid(p.b6), "B6 곁칸 글 입력칸 초점 → 탭 바 숨음 · 바닥 = 화면 끝", p.b6);
