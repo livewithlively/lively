@@ -1310,8 +1310,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  액자는 이미 붙어 있고 이미 그렸다 — «그렸다» 알림은 다시 오지 않으므로 그린 것으로 치고, 말이 들어가기만 기다린다(길어야 WARM_DELIVERY_GRACE_MS). */
   function takeTermAfterHeld(pd: Pending | null): void {
     composeHeld = false;
-    modeChosen = false;
+    //  넘길 수 없는 판(대화가 본자리 · 터미널이 없음)이면 «대화창에 머문다» 를 풀지 않는다 — 풀면 다음 목록 갱신의 자동 되돌리기가 화면을 가져간다.
     if (destroyed || mode !== 'chat' || chatHome() || !hasTerm()) return;
+    modeChosen = false;
+    if (yieldTerm) { yieldTerm = false; view.setNote(''); }
     if (!pd) { setMode('term'); focusTermIfHere(); return; }   // 기다릴 말이 없다(답을 여기서 못 읽는 하네스) — 곧바로
     warmPrompt = pd; warmTyped = false;
     startTermWarm();
@@ -1953,9 +1955,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
 
   // ── 대화 파일 → 대화창 ────────────────────────────────────────────────────────────────
-  //  evs — 이 턴에 그린 기록 줄(도구 결과 · 답 · 완료 알림 · 턴 끝 줄)을 그린 순서대로 적어 둔다.
+  //  evs — 이 턴에 그린 기록 줄(도구 결과 · 답 · 완료 알림 · 턴 끝 줄 · 중단 줄)을 그린 순서대로 적어 둔다.
   //   위 창을 붙일 때 화면 맨 위의 «이어짐» 턴은 지우고 이 목록으로 새 턴에 다시 그린다(loadOlder 의 고아 합치기).
-  //   ⚠ 그리는 자리마다 여기에 적어야 한다 — 안 적은 줄은 그다음 합칠 때 화면에서 사라진다(#5809: 한 턴이 창 셋 이상에 걸치면
+  //   ⚠ 턴 안에 줄을 그리는 자리는 여기에 적어야 한다 — 안 적은 줄은 그다음 합칠 때 화면에서 사라진다(#5809: 한 턴이 창 셋 이상에 걸치면
   //    위로 올릴 때마다 그 턴의 아래쪽 내용이 지워져 머리 창의 내용만 남았다).
   interface Rec { t: ChatTurn; evs: any[] }
   const recs: Rec[] = [];                     // 화면 순서(위→아래)
@@ -2097,7 +2099,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    */
   function applySay(o: any, text: string, id: string): void {
     if (!text.trim()) return;
-    if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; idleFrom(o); return; }
+    //  중단 줄도 그 턴의 evs 에 적는다(Rec 머리말) — 도구 결과가 함께 든 줄은 applyLine 이 이미 적었다(두 번 적으면 합칠 때 결과가 두 번 선다).
+    if (INTERRUPT_RE.test(text)) { if (cur) { if (o?.type === 'user' && cur.evs[cur.evs.length - 1] !== o) cur.evs.push(o); view.settle(cur.t, { interrupted: true }); } running = false; idleFrom(o); return; }
     if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text, 'end', 'compact'); cur = newRec(null); running = true; return; }
     //  #4707 tui — 보조 에이전트·백그라운드 작업의 «끝났다» 알림. 사람 말은 아니지만 터미널은 한 줄로 보인다:
     //   `● Agent "기록: …" finished · 1m 1s`(2.1.299 실측). 그 알림이 새 턴을 연다 — 뒤따르는 답이 그 아래에 선다(터미널과 같은 순서).

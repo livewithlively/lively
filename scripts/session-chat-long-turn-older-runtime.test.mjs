@@ -13,6 +13,7 @@
 //   L1-3 위로 끝까지 올린 뒤 — 네 창의 도구 호출이 모두 그 턴에 있다
 //   L1-4 위로 끝까지 올린 뒤 — 글·도구 호출이 저마다 한 번씩만 있고(겹쳐 그리지 않는다) 기록 순서대로 선다
 //   L1-5 위로 끝까지 올린 화면 = 같은 대화 줄을 한 번에 연 화면(턴 끝 줄 · 완료 알림 턴까지 같다)
+//   L1-6 도는 동안 끼워 넣은 완료 알림(턴 안의 알림 줄)도 합친 턴에 남는다
 //
 //  장면·가짜 서버는 queued-say-harness.mjs(묶음 "longturn"). 세션 화면은 실제 모듈을 싣는다.
 //  fail-first: `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
@@ -48,6 +49,8 @@ check(full.count && [...TEXTS, ...CMDS, "알림 뒤 글 L1-N"].every((m) => full
   "L1-4 위로 끝까지 올린 뒤 — 글·도구 호출이 한 번에 연 화면과 같은 횟수로, 기록 순서대로 선다", { count: full.count, whole: whole.count, pos: full.pos });
 check(full.sig && whole.sig && JSON.stringify(full.sig) === JSON.stringify(whole.sig),
   "L1-5 위로 끝까지 올린 화면 = 같은 대화 줄을 한 번에 연 화면", { full: full.sig, whole: whole.sig });
+check(whole.notices === 2 && full.notices === 2,
+  "L1-6 도는 동안 끼워 넣은 완료 알림도 합친 턴에 남는다(알림 줄 둘 — 턴 안의 것 · 턴을 연 것)", { full: full.notices, whole: whole.notices });
 
 console.log(`\n${pass} passed, ${fail} failed — 긴 턴 위로 더(#5809)`);
 process.exit(fail ? 1 : 0);

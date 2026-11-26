@@ -160,7 +160,10 @@ async function PAGE_MAIN(GROUP) {
         user("A 긴 지시 L1", "u-l1") + toolUse("l1a", "echo head-cmd-L1") + toolRes("l1a", "head ok") + ai("머리 창 글 L1-H", "h-l1"),
         toolUse("l1b", "echo mid1-cmd-L1") + toolRes("l1b", "mid1 ok") + ai("가운데 창 글 L1-M1", "m1-l1"),
         toolUse("l1c", "echo mid2-cmd-L1") + toolRes("l1c", "mid2 ok") + ai("가운데 창 글 L1-M2", "m2-l1"),
-        toolUse("l1d", "echo tail-cmd-L1") + toolRes("l1d", "tail ok") + ai("끝 답 L1-T", "t-l1") + end()
+        toolUse("l1d", "echo tail-cmd-L1") + toolRes("l1d", "tail ok")
+          //  도는 동안 끼워 넣은 완료 알림 — 꼬리 창에서 라이브 길로 그려지고, 위 창을 붙일 때마다 그 턴과 함께 다시 그려져야 한다(턴 끝 줄도).
+          + line({ type: "attachment", uuid: "q-n-l1", timestamp: ts(), attachment: { type: "queued_command", prompt: NOTE("ag0-l1"), commandMode: "task-notification", origin: { kind: "task-notification", producer: "session-task" }, timestamp: ts() } })
+          + ai("끝 답 L1-T", "t-l1") + end()
           + user(NOTE("ag-l1"), "n-l1") + ai("알림 뒤 글 L1-N", "an-l1") + end(),
       ];
       TR["box-l1"] = parts[0] + pad("p") + parts[1] + pad("q") + parts[2] + pad("r") + parts[3];
@@ -169,7 +172,7 @@ async function PAGE_MAIN(GROUP) {
       const snap = (v) => {
         const all = norm(v.box.querySelector(".livc-list").textContent);
         return { asks: v.asks(), where: Object.fromEntries(MARKS.map((m) => [m, v.where(m)])), count: Object.fromEntries(MARKS.map((m) => [m, all.split(m).length - 1])),
-          pos: MARKS.slice(0, 4).map((m) => all.indexOf(m)), sig: v.sig(), older: !!v.box.querySelector(".sc-older") };
+          pos: MARKS.slice(0, 4).map((m) => all.indexOf(m)), sig: v.sig(), older: !!v.box.querySelector(".sc-older"), notices: v.notices().length };
       };
       const v = mount("box-l1", { alive: false });
       await sleep(300);
