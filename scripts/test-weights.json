@@ -146,6 +146,7 @@
  "scripts/review-talk-runtime.test.mjs": 2,
  "scripts/serve-sync.test.mjs": 4,
  "scripts/session-app-menu-runtime.test.mjs": 3,
+ "scripts/session-chat-long-turn-older-runtime.test.mjs": 4,
  "scripts/session-face-size-runtime.test.mjs": 4,
  "scripts/session-history-runtime.test.mjs": 6,
  "scripts/session-history-scope-runtime.test.mjs": 5,

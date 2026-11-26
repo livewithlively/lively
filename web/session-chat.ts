@@ -1237,6 +1237,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let warmTyped = false;
   //  말을 보내 연 화면인데 아직 숨겨 붙이지 못했다(열 때 목록 행이 한 틱 늦어 터미널이 없었다) — 터미널이 처음 생기면 그때 숨겨 붙인다(update).
   let warmOwed = false;
+  //  ★ #5809 — 넘길 때가 됐는데 사람이 입력칸에 쓰는 중이라 대화창에 붙들어 둔 판(endTermWarm). **그 글을 보내면 터미널로 넘긴다**
+  //   (상민님 2026-11-26: «대화창에서 프롬프트를 보내면 하네스가 뜨고 바로 터미널로 넘어가야 하는데 어쩔 때는 하네스가 떴는데도 안 넘어간다 —
+  //   프롬프트를 보내고 하네스를 띄우기 전에 하나 더 보내면 이러는 것 같다»). 종전엔 붙들 때 «대화창을 고른 것»(modeChosen)으로만 적어,
+  //   쓰던 글을 보낸 뒤에도 사람이 [터미널로] 를 누르기 전까지 영영 대화창이었다. 되살리는 동안 한 번 더 보낸 말은 입력칸으로 되돌아오므로
+  //   (reviveWithPrompt 의 reviving 갈래) 그 판이 늘 여기에 걸렸다.
+  //   사람이 [보기]에서 화면을 직접 고르면(setMode) 이 붙듦은 끝난다 — 그 뒤엔 고른 화면에 머문다.
+  let composeHeld = false;
   //  ★ #4996 — **다른 사람이 이 세션을 터미널로 보고 있으면 대화창으로 연다**(상민님 2026-10-25: «터미널 화면을 동시에 두 명이 보면
   //   한 명 화면이 깨진다 — 다른 사람이 이미 보고 있으면 대화창으로 보여 주고, 그 사람이 프롬프트를 보내면 그때는 깨지더라도 터미널로.
   //   대화 UI 는 답이 끝나기 전 중간 과정을 못 보니까»). tmux 창 크기는 하나뿐이고 window-size latest 라 나중에 붙은 터미널이 창을
@@ -1298,6 +1305,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.setNote('');
     warmPrompt = pd; warmTyped = false;
     startTermWarm();
+  }
+  /** #5809 쓰는 중이라 대화창에 붙들어 둔 판(composeHeld)에서 그 글을 보냈다 — 이제 터미널로(그 말이 들어간 뒤 — #4794).
+   *  액자는 이미 붙어 있고 이미 그렸다 — «그렸다» 알림은 다시 오지 않으므로 그린 것으로 치고, 말이 들어가기만 기다린다(길어야 WARM_DELIVERY_GRACE_MS). */
+  function takeTermAfterHeld(pd: Pending | null): void {
+    composeHeld = false;
+    modeChosen = false;
+    if (destroyed || mode !== 'chat' || chatHome() || !hasTerm()) return;
+    if (!pd) { setMode('term'); focusTermIfHere(); return; }   // 기다릴 말이 없다(답을 여기서 못 읽는 하네스) — 곧바로
+    warmPrompt = pd; warmTyped = false;
+    startTermWarm();
+    onWarmPainted();
   }
   /** pane 이 셸인 세션에서만 «여기 친 말은 AI 에게 안 갑니다» 줄을 띄운다(#4135). 그 밖엔 늘 숨는다. */
   function paintShellBar(): void {
@@ -1403,7 +1421,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  입력칸에 무언가 쓰는 중이면 화면을 뺏지 않는다 — **대화창을 고른 것으로 친다**(modeChosen). 안 그러면 다음 목록 갱신의
     //   자동 되돌리기(update)가 쓰던 화면을 터미널로 가져간다. 터미널은 붙은 채 [보기]로 언제든 열린다.
     const composing = document.activeElement === view.input && !!view.input.value.trim();
-    if (show && composing) modeChosen = true;
+    if (show && composing) { modeChosen = true; composeHeld = true; }
     //  대화가 본자리인 세션(chatHome)이면 넘기지 않는다 — 열 때는 행이 얇아 몰랐다가 그새 알게 됐을 수 있다(update 의 되돌리기와 같은 축).
     if (show && !destroyed && !modeChosen && mode === 'chat' && hasTerm() && !chatHome()) {
       setMode('term');
@@ -1420,6 +1438,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4794 — 화면을 누가 정했다(사람 · 다른 갈래) — 숨겨 붙이던 판은 여기서 끝난다.
     const wasWarm = !!termWarm;
     if (wasWarm) endTermWarm(false);
+    composeHeld = false;   // #5809 — 화면이 정해졌다. 쓰는 중이라 붙들어 둔 판은 여기서 끝난다
     if (m === 'term' && !hasTerm()) m = 'chat';
     //  #4996 — 터미널로 가면 비켜 선 판은 끝난다(사람이 골랐거나 보낸 말이 들어갔다). 대화로 가면 판정을 기다릴 일이 없다.
     if (m === 'term' && yieldTerm) { yieldTerm = false; view.setNote(''); }
@@ -1934,6 +1953,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
 
   // ── 대화 파일 → 대화창 ────────────────────────────────────────────────────────────────
+  //  evs — 이 턴에 그린 기록 줄(도구 결과 · 답 · 완료 알림 · 턴 끝 줄)을 그린 순서대로 적어 둔다.
+  //   위 창을 붙일 때 화면 맨 위의 «이어짐» 턴은 지우고 이 목록으로 새 턴에 다시 그린다(loadOlder 의 고아 합치기).
+  //   ⚠ 그리는 자리마다 여기에 적어야 한다 — 안 적은 줄은 그다음 합칠 때 화면에서 사라진다(#5809: 한 턴이 창 셋 이상에 걸치면
+  //    위로 올릴 때마다 그 턴의 아래쪽 내용이 지워져 머리 창의 내용만 남았다).
   interface Rec { t: ChatTurn; evs: any[] }
   const recs: Rec[] = [];                     // 화면 순서(위→아래)
   let cur: Rec | null = null;
@@ -2031,7 +2054,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (n) {
         view.bgDone(n.taskId);
         if (!cur) cur = newRec(null, o.timestamp);
-        view.notice(cur.t, n.segs, n.tone);
+        cur.evs.push(o); view.notice(cur.t, n.segs, n.tone);
       }
       return;
     }
@@ -2058,9 +2081,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     if (o.type === 'system') {
       // 턴의 끝 — turn_duration(소요 시간)·stop_hook_summary(Stop 훅 요약) 둘 다 턴이 끝난 뒤에만 찍힌다(둘 중 하나만 있어도 마감).
-      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) view.settle(cur.t, turnEndOf(o)); running = false; idleFrom(o); }
+      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) { cur.evs.push(o); view.settle(cur.t, turnEndOf(o)); } running = false; idleFrom(o); }
       // 공통 ChatLine(#1746) — 중단(사용자가 끊음)·맥락 압축(어댑터가 system 줄로 올린다. claude 는 위의 사용자 줄 표식으로도 온다).
-      else if (o.subtype === 'interrupted') { if (cur) view.settle(cur.t, { interrupted: true }); running = false; idleFrom(o); }
+      else if (o.subtype === 'interrupted') { if (cur) { cur.evs.push(o); view.settle(cur.t, { interrupted: true }); } running = false; idleFrom(o); }
       else if (o.subtype === 'compact') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', typeof o.text === 'string' ? o.text : undefined, 'end', 'compact'); cur = newRec(null); running = true; }
       // ★ 하네스가 올린 오류 — **반드시 보이게** 하고 턴을 마감한다. 삼키면 화면이 «작업 중» 에 갇힌다
       //  (실측 2026-08-27: codex 401 이 그렇게 «10초 생각중 → 죽은 세션» 으로 보였다).
@@ -2684,6 +2707,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     let orphan: Rec | null = null;
     //  ⚠ 완료 알림이 연 턴(#4707 tui)은 «중간부터 읽은 턴»이 아니라 그 자체로 턴의 시작이다 — 합치지 않는다(합치면 알림 줄이 사라진다).
     if (firstRec && !firstRec.t.ask && !firstRec.t.root.dataset.notice && bundles.length && bundles[bundles.length - 1].kind !== 'divider') { orphan = firstRec; }
+    //  턴에 기록 줄 하나를 그리고 그 턴의 evs 에 적는다 — 이 창의 줄도, 합치는 고아의 줄도 이 한 길로 그린다(Rec 머리말 · #5809).
+    const paint = (rec: Rec, o: any): void => {
+      rec.evs.push(o);
+      if (o.type === 'user') { const { text: ut, results } = userText(o); if (results.length) view.event(rec.t, { type: 'user', message: { content: results }, toolUseResult: o.toolUseResult, permissionDecision: o.permissionDecision }); if (INTERRUPT_RE.test(ut)) view.settle(rec.t, { interrupted: true }); }
+      else if (o.type === 'assistant') view.event(rec.t, o);
+      else if (o.type === 'attachment') { const n = lineNotice(o); if (n) { view.bgDone(n.taskId); view.notice(rec.t, n.segs, n.tone); } }
+      else if (o.type === 'system') view.settle(rec.t, o.subtype === 'interrupted' ? { interrupted: true } : turnEndOf(o));
+    };
     view.prependKeepingView(() => {
       const savedCur = cur;
       for (let i = bundles.length - 1; i >= 0; i--) {
@@ -2693,16 +2724,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         cur = rec;
         //  알림 묶음 — 셈도 지운다. 묶음은 새 것부터 그리므로 알림이 그 에이전트를 띄운 줄보다 먼저 온다(chat-view 의 bgFinished 가 받아 준다).
         if (bd.notice) { rec.t.root.dataset.notice = '1'; view.bgDone(bd.notice.taskId); view.notice(rec.t, bd.notice.text, bd.notice.tone); }
-        for (const o of bd.lines) {
-          if (o.type === 'user') { const { text: ut, results } = userText(o); if (results.length) view.event(rec.t, { type: 'user', message: { content: results }, toolUseResult: o.toolUseResult, permissionDecision: o.permissionDecision }); if (INTERRUPT_RE.test(ut)) view.settle(rec.t, { interrupted: true }); }
-          else if (o.type === 'assistant') view.event(rec.t, o);
-          else if (o.type === 'attachment') { const n = lineNotice(o); if (n) { view.bgDone(n.taskId); view.notice(rec.t, n.segs, n.tone); } }
-          else if (o.type === 'system') view.settle(rec.t, o.subtype === 'interrupted' ? { interrupted: true } : turnEndOf(o));
-        }
+        for (const o of bd.lines) paint(rec, o);
         if (i === bundles.length - 1 && orphan) {
           // 고아 이어짐의 이벤트를 이 턴 뒤에 다시 그리고 고아는 치운다. 고아가 '지금 도는 턴'이었으면 그 표시(깜빡임·경과 줄)도 옮긴다.
+          //  ⚠ 다시 그린 줄도 이 턴의 evs 에 적힌다(paint) — 이 턴이 그다음 창에서 또 고아가 되면 그 목록으로 다시 그린다(#5809).
           const wasLive = !!orphan.t.live;
-          for (const o of orphan.evs) view.event(rec.t, o);
+          for (const o of orphan.evs) paint(rec, o);
           orphan.t.root.remove(); recs.splice(recs.indexOf(orphan), 1);
           if (savedCur === orphan) cur = rec;
           if (wasLive) { view.running(rec.t); continue; }   // 도는 턴은 마감하지 않는다
@@ -2871,6 +2898,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); onSent?.();
         //  #4996 — 비켜 서 있었으면 답을 볼 곳은 터미널뿐이다 — 기다릴 말(에코)이 없으니 곧바로 넘긴다.
         if (yieldTerm && !modeChosen) setMode('term');
+        else if (composeHeld) takeTermAfterHeld(null);   // #5809 — 쓰는 중이라 붙들어 둔 판에서 보냈다
         return;
       }
       // ⚠ 이 말은 **정말 다른 컴퓨터일 때만** 맞다. app-server 세션은 여기서 도는데 게이트웨이 박스가 노드로도
@@ -2884,6 +2912,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       onSent?.();
       //  #4996 — 다른 사람이 터미널을 쥐고 있어 대화창으로 비켜 서 있었다 — 말을 보냈으니 이제 터미널로(중간 과정은 터미널에서만 보인다).
       if (yieldTerm && !modeChosen) takeTermAfterSend(pd);
+      //  #5809 — 넘길 때 쓰는 중이라 대화창에 붙들어 둔 판이었다 — 그 글을 보냈으니 이제 터미널로(이 말이 들어간 뒤).
+      else if (composeHeld) takeTermAfterHeld(pd);
     } catch (e: any) {
       //  #5620 — 서버가 «멈춘 세션이라 넣지 않았다 — 되살리면 들어간다» 고 답했다(이 화면은 아직 살아 있다고 믿던 틈). 그 자리에서
       //   되살려 **이 말을** 넣는다 — 방금 그린 말풍선을 그대로 잇는다(같은 말이 두 개 서지 않게). 이미 되살리는 중이면 아래 실패 길로.
@@ -2967,6 +2997,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  죽은 박스에 붙어 있던 액자는 걷는다 — 되살린 박스엔 새 액자가 붙는다(다시 마운트된 화면과 같다).
     if (termFrame) { termFrame.remove(); termFrame = null; termReady = false; termQueue = []; emitView(); }
     modeChosen = false;   // 말을 보냈다 = 하네스가 뜨면 터미널로(다시 마운트된 화면은 늘 이 값으로 섰다)
+    composeHeld = false;
     view.setNote('');
     pd.state.textContent = QSTATE_TEXT.queued;
     warmPrompt = pd; warmTyped = false; warmOwed = true;
