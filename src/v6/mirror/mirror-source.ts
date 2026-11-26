@@ -26,6 +26,14 @@ export function sourceKindOf(system: string): string {
   }
 }
 
+// 슬랙 메시지는 수집 API 마다 같은 글을 다른 표기로 준다: search.messages 는 멘션에 표시 이름을 붙이고(`<@U123|이름>`)
+//  링크 URL 의 & 를 그대로 두지만 conversations.history 는 `<@U123>`·`&amp;` 로 준다. 변경 판정에서만 이 차이를 접는다(저장값은 받은 그대로).
+function slackMessageChangeKey(text: string): string {
+  return text
+    .replace(/<(@[^|>\s]*|#[^|>\s]*|!subteam\^[^|>\s]*)\|[^>]*>/g, "<$1>")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
 // slack/gmail/discord message(및 미정제 raw) → source(자료) 멱등 upsert (#541). distill 이 여기서 지식을 증류(source→knowledge).
 //  external 좌표(source_external_uidx) ON CONFLICT. 본문 실변경 시에만 audit(노이즈 게이트 — knowledge 미러와 동일).
 //  🔴H1 redact — title/body/raw 평문 시크릿 마스킹. provenance=observed(외부 수집물). knowledge_search 에 자동 미포함(별 테이블).
@@ -58,9 +66,11 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
   );
   const prevRow = prev.rows[0] as { id: number; title: string | null; body_md: string } | undefined;
   const isInsert = !prevRow;
-  const contentChanged = isInsert
-    || (prevRow.title ?? null) !== (title ?? null)
-    || (prevRow.body_md ?? "") !== (body ?? "");
+  //  슬랙 메시지 제목은 본문 첫 줄을 잘라 만든 파생값이라(connectors/slack.ts deriveTitle · connector-parse.ts firstLineTitle)
+  //   표기 길이에 따라 자른 자리만 달라진다 — 본문만 비교한다. 제목이 따로 있는 슬랙 파일(note)은 글자 그대로 비교한다.
+  const contentChanged = isInsert || (system === "slack" && it.type === "message"
+    ? slackMessageChangeKey(prevRow.body_md ?? "") !== slackMessageChangeKey(body ?? "")
+    : (prevRow.title ?? null) !== (title ?? null) || (prevRow.body_md ?? "") !== (body ?? ""));
 
   const r = await client.query(
     `INSERT INTO source(
