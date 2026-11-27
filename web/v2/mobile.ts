@@ -12,22 +12,26 @@
 //  ── 폰(≤640px, #4088 원준 2026-09-19 "슬랙 웹·모바일 뷰 참고 — 반응형이 아니라 레이아웃을 다시") ────────────
 //   태블릿까지는 위 서랍 셸이 맞는데, 폰에선 왼쪽 끝 레일(56px)이 폭의 14% 를 늘 먹고 서랍은 그 옆에 쪽문처럼 열렸다.
 //   슬랙 모바일 문법으로 바꾼다:
-//   · **아래 탭 바**(.v2-mtabs) 가 구역을 맡는다 — [홈] [AI 세션] [프로젝트] [위키] [나](#5615 — 종전 [더보기]). 레일은 없다.
+//   · ⚠ #5820(원준 2026-11-27 «하단바 공간 아까워 — 싹 없애고 모든 앱 안으로») — **아래 탭 바는 없다.** 구역(홈 · 세션 목록 · 프로젝트 · 위키)과
+//     [나] 는 맨 윗줄의 [모든 앱](⊞)이 여는 앱 찾기 맨 위 「바로가기」 줄로 옮겼다(apps.ts setLaunchpadHub). 아래 옛 설명은 그 전의 것이다.
+//   · 종전: **아래 탭 바**(.v2-mtabs) 가 구역을 맡는다 — [홈] [AI 세션] [프로젝트] [위키] [나](#5615 — 종전 [더보기]). 레일은 없다.
 //     ([확인할 것] 탭은 #4180 에서 뺐다 — 레일과 같은 표(railSections)를 읽으므로 저절로 빠졌고, 알림은 홈의 종이 든다.
 //      폰에선 종을 누르면 「확인할 것」 화면(#/inbox)이 열린다. 종은 #5615 부터 폰 맨 윗줄 오른쪽에 늘 선다 — 어느 화면에서든.)
 //   · 구역 탭을 누르면 그 구역의 **목록이 화면 한 장**으로 선다(사이드바 서랍을 전폭으로) — 슬랙의 「홈」탭이 채널 목록인 것과
 //     같다. 목록에서 하나를 고르면 본문이 전폭으로 열리고, 같은 탭을 다시 누르면 목록으로 돌아온다.
 //   · [나] = 슬랙의 [You] — 내 카드 · 워크스페이스(바꾸기 · 설정) · 확인할 것 · 모든 앱 · 사용 가이드가 아래 판(.v2-msheet)으로.
 //   · 맨 윗줄은 [워크스페이스] [☰?] [검색] [종] [타임라인?] 한 줄(#5615) — 슬랙 모바일 홈 머리의 «워크스페이스 아이콘 + 찾기».
-//     ☰ 는 그 화면(앱)에 제 사이드바가 있을 때만, 홈에선 없다(홈의 목록은 [AI 세션] 탭과 같은 것). 뒤로·앞으로는 브라우저 몫.
+//     ☰ 는 그 화면(앱)에 제 사이드바가 있을 때만. 홈에서도 선다(#5820 — 탭 바를 걷었으니 홈의 세션 목록 사이드바로 가는 문이 ☰ 하나다). 뒤로·앞으로는 브라우저 몫.
+//   · 맨 윗줄 오른쪽에 [모든 앱](⊞, #5820) — 어느 화면에서든 앱 찾기를 연다. 탭 바가 하던 «다른 데로 가는 길» 이 이 단추다.
 //   JS 짝은 이 파일, CSS 짝은 public/styles/50-mobile.css(≤640 블록). 문턱은 PHONE_MQ 하나다.
 import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { el, personName, profileAvatar, state, sv } from '../core.js';
 import { ICONS, icon } from './icons.js';
-import { appByKey, appHref, openLaunchpad } from './apps.js';
+import { appGlassIcon } from './glass-icon.js';
+import { appByKey, appHref, closeLaunchpad, openLaunchpad, setLaunchpadHub, type HubTile } from './apps.js';
 import { openMeModal } from './me-modal.js';
 import { notifyBell } from './notify-bell.js';
-import { onUnread, unreadCount } from './notifications.js';
+import { unreadCount } from './notifications.js';
 import { openWorkspaceMenu, workspaceFace, workspaceInfo } from './switcher.js';
 import { openWorkspaceSettingsNow, railLitSection, railSections, setRailSection, type RailSection } from './rail.js';
 
@@ -62,7 +66,9 @@ export interface MobileChrome {
   wsBtn: HTMLElement;
   /** 폰 맨 윗줄 오른쪽의 종(#5615) — 「확인할 것」. 폰 밖에선 CSS 가 숨긴다(넓은 폭은 홈 머리줄의 종이 맡는다). */
   bellBtn: HTMLElement;
-  /** 지금 화면이 홈인가 — 폰 홈에선 ☰ 를 걷는다(홈의 사이드바 = [AI 세션] 탭의 목록과 같은 것이라 같은 문이 둘이 된다). */
+  /** 폰 맨 윗줄의 [모든 앱](#5820) — 앱 찾기를 연다. 그 맨 위 「바로가기」 줄이 옛 아래 탭 바(홈 · 세션 목록 · 프로젝트 · 위키 · 나)다. 폰 밖에선 CSS 가 숨긴다. */
+  appsBtn: HTMLElement;
+  /** 지금 화면이 홈인가 — 워크스페이스 타일을 다시 칠한다. (종전엔 폰 홈에서 ☰ 를 걷었다 — #5820 에서 탭 바를 걷으며 되살렸다.) */
   setHome(on: boolean): void;
   /** 우측 서랍이 무엇인가 — 우패널(타임라인)인가, 칸 셸의 곁칸(자료·지식·타임라인)인가. 단추의 아이콘·이름이 따라 바뀐다(#4088 후속). */
   setAsideKind(kind: 'timeline' | 'panes'): void;
@@ -118,6 +124,10 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   //  종 — 홈 머리줄의 그것과 같은 부품(notify-bell.ts). 폰에선 누르면 「확인할 것」 화면으로 간다.
   const bellBtn = notifyBell();
   bellBtn.classList.add('v2-mbar-bell');
+  //  #5820 [모든 앱] — 옛 아래 탭 바의 다섯 칸은 앱 찾기 맨 위 「바로가기」 줄로 갔다. 그 문을 어느 화면에서든 닿게 맨 윗줄에 둔다.
+  const appsBtn = el('button', { class: 'v2-mbar-btn v2-mbar-apps', type: 'button', 'aria-label': '모든 앱', title: '모든 앱 · 홈 · 세션 목록 · 프로젝트 · 위키 · 나', 'aria-haspopup': 'dialog' },
+    icon('apps', 'v2-mbar-ic')) as HTMLButtonElement;
+  appsBtn.addEventListener('click', (e: Event) => { e.stopPropagation(); closeAll(); openLaunchpad(); });
   let asideTarget: HTMLElement | null = null;
   const bar = el('div', { class: 'v2-mbar' }, menuBtn, slot, asideBtn) as HTMLElement;
   const scrim = el('div', { class: 'v2-scrim', hidden: true, 'aria-hidden': 'true' }) as HTMLElement;
@@ -151,7 +161,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     open = null; sheetOpen = false; sheetSec = null; paint();
     if (hadSheet) for (const f of sheetEndFns) { try { f(); } catch (_) { /* 다시 그리기가 깨져도 닫기는 끝난다 */ } }
     //  [나] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([나])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
-    if (!was) { if (wasSheet && returnFocus && moreBtn) moreBtn.focus({ preventScroll: true }); return; }
+    if (!was) { if (wasSheet && returnFocus) appsBtn.focus({ preventScroll: true }); return; }
     const panel = was === 'side' ? side : (asideTarget || aside);
     if (returnFocus) { (was === 'side' ? menuBtn : asideBtn).focus({ preventScroll: true }); }
     else if (panel.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
@@ -166,8 +176,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   };
   //  사이드바가 없는 앱이면 좁은 폭의 ☰ 를 걷는다 — 걷는 것은 CSS 다(47-v2-rail.css .v2-mbar-menu.no-side, ≤900 만). 넓은 폭의 같은 단추(레일 여닫이, main.ts)는
   //   그대로 서야 해서 hidden 이 아니라 문턱 안에서만 듣는 표지로 둔다 — 회전 · 창 크기 바꾸기로 문턱을 넘나들어도 JS 없이 맞는다.
-  let onHome = false;
-  const paintMenu = (): void => { menuBtn.classList.toggle('no-side', !sideOn); menuBtn.classList.toggle('on-home', onHome); };
+  const paintMenu = (): void => { menuBtn.classList.toggle('no-side', !sideOn); };
   menuBtn.addEventListener('click', () => {   // ☰ = 지금 화면(앱)의 사이드바 — 없는 앱이면 아무것도 안 연다
     if (open === 'side') { closeAll(); return; }
     if (!sideOn) return;
@@ -188,22 +197,20 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   });
   window.addEventListener('hashchange', () => closeAll());
 
-  // ── 폰 아래 탭 바(#4088) ──────────────────────────────────────────────────────
-  //  구역 넷 + [나]. 레일(rail.ts)과 같은 표(railSections)를 읽으므로 구역이 늘거나 이름이 바뀌면 여기도 따라온다.
-  //  ⚠ 여기서는 구역만 다룬다 — 앱은 폰에선 홈의 「최근에 연 앱」과 [모든 앱]이 맡는다(탭 바는 다섯을 넘기지 않는다 — 390px 에서 78px/칸).
-  const tabs = el('nav', { class: 'v2-mtabs', 'aria-label': '구역' }) as HTMLElement;
+  // ── 구역 · [나] — 앱 찾기의 「바로가기」 줄(#5820, 종전 폰 아래 탭 바 #4088) ─────────────────────────
+  //  원준 2026-11-27 «하단바 홈 세션목록 프로젝트 위키 — 싹 없애고 모든 앱 보는 버튼 안으로. 하단바 공간 아까워 항상».
+  //   그래서 아래 탭 바는 서지 않는다. 같은 다섯 칸(레일과 같은 표 railSections + [나])이 앱 찾기 맨 위에 선다 — 폰에서만.
+  //   구역 칸을 누르면 종전 탭과 똑같이 움직인다: 홈은 화면으로 가고, 세션 목록 · 프로젝트 · 위키는 그 구역의 목록(사이드바)을 화면 한 장으로 연다.
+  //  ⚠ .v2-mtabs 는 남는다 — [나] 판을 얹는 높이 0 의 받침이다(50-mobile.css). main.ts 잠금(#5058)도 이 이름을 읽는다.
+  const tabs = el('div', { class: 'v2-mtabs' }) as HTMLElement;
   const sheet = el('div', { class: 'v2-msheet', hidden: true, role: 'dialog', 'aria-label': '나' }) as HTMLElement;
-  const secBtns = new Map<RailSection, HTMLButtonElement>();
-  let moreBtn: HTMLButtonElement | null = null;
-  let meFaceKey = '';
-  const tabIcon = (name: string): SVGElement => icon(name, 'v2-mtab-ic');
+  tabs.append(sheet);
   function onSectionTap(sec: RailSection): void {
     if (!isPhone()) return;
     //  홈은 **화면**이다(목록이 아니라) — 그 화면으로 간다. 이미 그 구역이면 setRailSection 이 changed=false 라
-    //   navigate 를 명시해야 주소가 옮겨진다(같은 탭을 다시 눌러 첫 화면으로 돌아오는 손짓).
+    //   navigate 를 명시해야 주소가 옮겨진다.
     if (sec === 'home') { closeAll(); setRailSection(sec, { navigate: true }); return; }
-    //  AI 세션·프로젝트·위키는 **목록**이다 — 사이드바(그 구역의 목록)를 화면 한 장으로 연다. 같은 탭을 다시 누르면 닫는다.
-    if (open === 'side' && sheetSec === sec) { closeAll(); return; }   // 그 구역의 목록을 띄워 둔 채 같은 탭을 다시 눌렀다
+    //  세션 목록 · 프로젝트 · 위키는 **목록**이다 — 사이드바(그 구역의 목록)를 화면 한 장으로 연다.
     sheetOpen = false;
     sheetSec = sec;   // 먼저 적는다 — setRailSection 이 사이드바를 다시 그리는데, 그때 이 구역의 목록이 서야 한다(앱 화면 · 구역과 같은 문 위에서도)
     setRailSection(sec, { navigate: false });
@@ -214,6 +221,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   //   워크스페이스 메뉴(설정 · 전환 · 추가 · 받은 초대)가 폰에서 통째로 사라졌다(레일을 걷으며 옮겨 두지 않았다).
   //   슬랙 모바일의 [You] 탭과 같은 자리로 다시 짠다: 맨 위 내 카드 → 워크스페이스 묶음 → 나머지 문 몇 개.
   //   앱은 여기 늘어놓지 않는다 — 홈의 「최근에 연 앱」과 [모든 앱](런치패드)이 맡는다(같은 목록을 두 자리에 두지 않는다).
+  //   #5820 — 이 판은 이제 앱 찾기의 「바로가기」 [나] 칸이 연다(아래 탭 바가 없다). 화면 맨 아래에서 올라온다.
   function buildSheet(): void {
     const chev = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'v2-msheet-go', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' }));
     const row = (ic: Element, label: string, attrs: Record<string, unknown>, tag: 'a' | 'button' = 'button', sub?: string, tail?: Element | null): HTMLElement =>
@@ -247,7 +255,6 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
           row(icon('bell', 'v2-mtab-ic'), '확인할 것', { href: '#/inbox' }, 'a', undefined,
             n > 0 ? el('span', { class: 'v2-msheet-bd', text: n > 99 ? '99+' : String(n) }) : null),
           LIV_ENTRY_VISIBLE ? row(icon('liv', 'v2-mtab-ic'), '리브', { href: '#/liv' }, 'a') : null,   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
-          row(icon('apps', 'v2-mtab-ic'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }),
           guide ? row(icon('learn', 'v2-mtab-ic'), guide.title, { href: appHref(guide) }, 'a') : null)));
   }
   function toggleSheet(): void {
@@ -259,51 +266,24 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     const t = e.target as HTMLElement | null;
     if (t && t.closest && t.closest('a[href]')) closeAll();
   });
-  function buildTabs(): void {
-    secBtns.clear();
-    const btns: HTMLElement[] = railSections().map((s) => {
-      const b = el('button', { class: 'v2-mtab', type: 'button', 'data-sec': s.key, onclick: () => onSectionTap(s.key) },
-        el('span', { class: 'v2-mtab-icw' }, tabIcon(s.icon)),
-        el('span', { class: 'v2-mtab-t', text: s.label })) as HTMLButtonElement;
-      secBtns.set(s.key, b);
-      return b;
-    });
-    //  [나](#5615) — 슬랙 모바일의 [You]. 아이콘 자리에 내 얼굴(작은 원)이 선다 — «나» 라는 글자보다 먼저 읽힌다.
-    moreBtn = el('button', { class: 'v2-mtab v2-mtab--me', type: 'button', onclick: () => toggleSheet(), 'aria-haspopup': 'dialog' },
-      el('span', { class: 'v2-mtab-icw' }),
-      el('span', { class: 'v2-mtab-t', text: '나' })) as HTMLButtonElement;
-    meFaceKey = '';
-    tabs.replaceChildren(...btns, moreBtn, sheet);
-    paintTabs();
-  }
-  function paintTabs(): void {
-    const sec = (open === 'side' && sheetSec) || railLitSection();   // 앱 화면이면 어느 구역도 안 켠다(레일과 같은 잣대)
-    for (const [k, b] of secBtns) {
-      const on = !sheetOpen && k === sec;
-      b.classList.toggle('on', on);
-      b.setAttribute('aria-current', on ? 'page' : 'false');
-      //  목록을 여는 구역만 «펼침» 상태를 갖는다 — 같은 자리를 다시 누르면 닫힌다는 손짓. 홈은 화면으로 가는 단추라 그 속성이 없다.
-      if (k === 'home') b.removeAttribute('aria-expanded');
-      else b.setAttribute('aria-expanded', String(open === 'side' && k === sec));
-    }
-    if (moreBtn) {
-      const n = unreadCount();
-      moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); moreBtn.classList.toggle('has-dot', n > 0);
-      moreBtn.setAttribute('aria-label', n > 0 ? `나: 안 읽은 알림 ${n}개` : '나');
-      //  내 얼굴은 [나] 창에서 바뀔 수 있고 부팅 때 state.me 가 늦게 올 수 있다 — 칠할 때마다 값이 바뀌었으면 갈아 끼운다(#5615 리뷰).
-      const me: any = state.me || {};
-      const key = [me.avatar, personName(me), me.userId, me.avatar_char, me.avatar_color].join('|');
-      if (key !== meFaceKey) {
-        meFaceKey = key;
-        moreBtn.querySelector('.v2-mtab-icw')?.replaceChildren(profileAvatar(me.avatar, personName(me) || '나', me.userId, 'v2-mtab-ava', { char: me.avatar_char, color: me.avatar_color }));
-      }
-    }
-    sheet.hidden = !sheetOpen;
-  }
-  buildTabs();
-  //  [나] 탭의 배지(#5615) — 안 읽은 알림이 있으면 내 얼굴에 점 하나(숫자는 종이 말한다 — 같은 숫자를 두 자리에 두지 않는다).
-  //   ⚠ 탭을 지은 뒤에 구독한다 — onUnread 는 구독하자마자 한 번 부르고, paintTabs 는 위의 secBtns · sheet 를 읽는다.
-  onUnread(() => paintTabs());
+  function paintTabs(): void { sheet.hidden = !sheetOpen; }
+  //  앱 찾기 「바로가기」 줄(#5820) — 폰에서만 선다. 칸을 누르면 앱 찾기를 닫고 종전 탭과 같은 일을 한다.
+  setLaunchpadHub((): HubTile[] | null => {
+    if (!isPhone()) return null;
+    const me: any = state.me || {};
+    const n = unreadCount();
+    const secs: HubTile[] = railSections().map((s) => ({
+      key: 'sec:' + s.key, title: s.label, icon: appGlassIcon(s.icon),   // 앱 칸과 같은 타일 그림 — 같은 격자에 서니 같은 붓이다
+      on: (open === 'side' && sheetSec === s.key) || (!open && railLitSection() === s.key),
+      run: () => { closeLaunchpad(); onSectionTap(s.key); },
+    }));
+    return [...secs, {
+      key: 'me', title: '나', on: sheetOpen,
+      icon: el('span', { class: 'v2-pad-hub-me' + (n > 0 ? ' has-dot' : '') },
+        profileAvatar(me.avatar, personName(me) || '나', me.userId, 'v2-pad-hub-ava', { char: me.avatar_char, color: me.avatar_color })),
+      run: () => { closeLaunchpad(); toggleSheet(); },
+    }];
+  });
 
   // 탭 줄 입양 — 모바일이면 바 가운데, 아니면 제자리. 회전·리사이즈로 문턱을 넘나들 때마다 옮긴다(DOM 이동이라 탭 상태는 그대로).
   let strip: { el: HTMLElement; restore: () => void } | null = null;
@@ -347,14 +327,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     },
     setAsideTarget(target: HTMLElement | null): void { asideTarget = target; },
     onChange(fn: () => void): () => void { changeFns.add(fn); return () => { changeFns.delete(fn); }; },
-    syncTabs(): void {
-      //  구역 표가 바뀌었을 수 있다(navOn 토글) — 개수가 다르면 다시 짓는다.
-      if (secBtns.size !== railSections().length) buildTabs(); else paintTabs();
-    },
-    menuBtn, asideBtn, wsBtn, bellBtn,
-    setHome(on: boolean): void {
-      onHome = on;
-      paintMenu();
+    syncTabs(): void { paintTabs(); },   // 구역 칸은 앱 찾기를 열 때마다 새로 짓는다(#5820) — 여기선 [나] 판만 맞춘다
+    menuBtn, asideBtn, wsBtn, bellBtn, appsBtn,
+    setHome(_on: boolean): void {
       paintWs();   // 워크스페이스 이름 · 얼굴은 설정 모달에서 바뀔 수 있다 — 화면을 옮길 때마다 다시 칠한다(싸다)
     },
   };

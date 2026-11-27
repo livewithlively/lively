@@ -302,6 +302,11 @@ let padEl: HTMLElement | null = null;
 type PadCtx = { sessions: ReadonlyArray<{ id: string; label: string; projectId: number | null; owned?: boolean; task?: unknown }>; projects: ReadonlyArray<{ id: number; name: string }> };
 let padCtx: (() => PadCtx) | null = null;
 export function setLaunchpadContext(fn: () => PadCtx): void { padCtx = fn; }
+/** #5820 앱 찾기 맨 위 「바로가기」 줄의 칸 하나 — 폰의 옛 아래 탭 바(홈 · 세션 목록 · 프로젝트 · 위키 · 나). */
+export interface HubTile { key: string; title: string; icon: Element; on?: boolean; run: () => void }
+let padHub: (() => HubTile[] | null) | null = null;
+/** 폰 셸(mobile.ts)이 건다 — 열 때마다 불러 칸을 새로 짓는다(켜짐 · 내 얼굴 · 알림 점이 그때 값이다). null 을 돌려주면 줄이 서지 않는다(넓은 폭). */
+export function setLaunchpadHub(fn: () => HubTile[] | null): void { padHub = fn; }
 /** 이 앱을 앱빌더가 새로 만드는 중인가 — 이 브라우저의 새 앱 기록, 또는 그 앱의 만들기 세션이 앱빌더의 새 앱 세션(lib/builder-flow isBuildingSession). */
 function buildingNow(a: SessionApp): boolean {
   if (studioRecBuildingFor(a.id)) return true;
@@ -326,6 +331,8 @@ export function openLaunchpad(): void {
   let sApps: SessionApp[] = [];
   //  묶음 둘(#4554) — 「기본 앱」 · 「워크스페이스 앱」. 묶음마다 제목 한 줄 + 격자 하나. 빈 묶음은 제목째 안 선다.
   const body = el('div', { class: 'v2-pad-body' });
+  //  #5820 「바로가기」 — 폰에서만(padHub 가 null 을 주면 없다). 검색 중엔 이름이 맞는 칸만 남고, 하나도 없으면 줄째 빠진다.
+  const hub = padHub ? padHub() : null;
   const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' }) as HTMLInputElement;
   const draw = () => {
     const q = input.value.trim().toLowerCase();
@@ -416,7 +423,14 @@ export function openLaunchpad(): void {
       el('span', { class: 'v2-pad-ico v2-pad-ico--new', 'aria-hidden': 'true' }, lineIcon('plus', 'v2-ic')),
       el('b', { text: '새 앱' }));
     const showNew = !q || '새 앱 만들기 추가 new'.includes(q);
-    body.replaceChildren(...PAD_GROUPS.map((g) => {
+    const hubTiles = (hub || []).filter((h) => !q || h.title.toLowerCase().includes(q));
+    const hubSec = hubTiles.length ? el('section', { class: 'v2-pad-sec v2-pad-hub', 'data-group': 'hub', 'aria-label': '바로가기' },
+      el('h3', { class: 'v2-pad-sec-h', text: '바로가기' }),
+      el('div', { class: 'v2-pad-grid', role: 'list' }, ...hubTiles.map((h) =>
+        el('button', { class: 'v2-pad-item v2-pad-item--hub' + (h.on ? ' on' : ''), role: 'listitem', type: 'button', 'data-hub': h.key,
+          'aria-current': h.on ? 'page' : 'false', onclick: () => h.run() },
+          el('span', { class: 'v2-pad-ico' }, h.icon), el('b', { text: h.title }))))) : null;
+    body.replaceChildren(...(hubSec ? [hubSec] : []), ...PAD_GROUPS.map((g) => {
       const mine = tiles.filter((t) => t.group === g.key).map((t) => t.node);
       if (g.key === 'workspace' && showNew) mine.push(newTile);
       if (!mine.length) return null;
@@ -464,7 +478,8 @@ export function openLaunchpad(): void {
         el('kbd', { class: 'v2-pad-esc', text: 'esc' })),
       el('button', { class: 'v2-pad-cancel', type: 'button', text: '취소', 'aria-label': '앱 찾기 닫기', onclick: () => closeLaunchpad() })),
     body);
-  document.body.append(padEl as HTMLElement); draw(); input.focus();
+  //  #5820 폰(바로가기 줄이 선 때)은 검색칸에 초점을 주지 않는다 — 주면 키보드가 올라와 바로가기 · 격자를 가린다. 찾으려면 칸을 누르면 된다.
+  document.body.append(padEl as HTMLElement); draw(); if (!hub) input.focus();
   document.addEventListener('keydown', padKey);
 }
 function padKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeLaunchpad(); }

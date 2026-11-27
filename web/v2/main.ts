@@ -597,7 +597,8 @@ export async function bootV2(): Promise<void> {
       //   한 줄 더 섰다(폰에서 크롬 한 줄은 대화 세 줄이다). 넓은 폭에선 CSS 가 숨긴다(데스크톱은 .v2-tl-btn 이 맡는다).
       webTopbar.append(mobile.asideBtn);
       //  #5615 폰 맨 윗줄 — 왼쪽 끝 워크스페이스 타일, 오른쪽 종. 자리는 CSS order 가 정한다(50-mobile.css). 폰 밖에선 둘 다 숨는다.
-      webTopbar.append(mobile.wsBtn, mobile.bellBtn);
+      //  #5820 [모든 앱] — 아래 탭 바를 걷었다. 홈 · 세션 목록 · 프로젝트 · 위키 · 나 는 이 단추가 여는 앱 찾기 맨 위 「바로가기」 줄에 있다.
+      webTopbar.append(mobile.wsBtn, mobile.appsBtn, mobile.bellBtn);
     }
     if (titlebar) titlebar.host.prepend(mobile.menuBtn); else webTopbar?.prepend(mobile.menuBtn);
     //  #5581 — 미리보기 안이면 «미리보기» 표시와 [워크스페이스로 돌아가기]. 브라우저는 창 맨 위 띠, 데스크톱 앱은 타이틀바 줄 안의 알약(preview-strip.ts).
@@ -1531,7 +1532,7 @@ function applyTabChrome(tab: ShellTab): void {
   //  좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 서랍이다. 사이드바가 없는 앱이면 그 ☰ 를 걷는다(원준 2026-10-19 «아니 각자 앱 사이드바로»):
   //   ☰ 는 그 앱의 사이드바만 연다. 종전엔 구역 목록(대개 홈)이 대신 열렸다.
   mobile?.setSide(hasSide);
-  mobile?.setHome(!parseRoute(tab.route).segs[0]);   // #5615 폰 홈엔 ☰ 가 없다(그 목록은 [AI 세션] 탭이 연다)
+  mobile?.setHome(!parseRoute(tab.route).segs[0]);   // #5820 폰 홈에도 ☰ 가 선다 — 아래 탭 바를 걷어 홈의 세션 목록 사이드바로 가는 문이 ☰ 하나다
   //  모바일 맨 윗줄의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다.
   //  #4088 — 칸 셸(세션·프로젝트)은 우패널 대신 **곁칸**을 가진다. 좁은 폭에선 그 곁칸이 접혀 있으니(42-v2-panes.css)
   //   이 단추가 그 곁칸을 서랍으로 연다(50-mobile.css `#v2-root.m-aside .pn-pane[data-zone="side"]`). 셸이 아직 안 섰으면

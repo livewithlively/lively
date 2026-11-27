@@ -314,7 +314,8 @@ check(hp.h4 === "none" && hp.h4ok !== "none", "H4 연결 이상(data-term=wait)�
 check(!!hp.h5 && hp.h5.hidden && hp.h5.disp === "none", "H5 null 이면 숨는다", hp.h5);
 check(hp.h6 === true && !hp.destroyErr, "H6 머리줄을 내리면 구독을 끊는다", { h6: hp.h6, err: hp.destroyErr });
 check(!!p.dock && !p.dock.shown && p.dock.inset === "0px", "A1 폰 서랍엔 독이 없다(가림 폭 0px)", p.dock);
-check(!!p.b0 && p.b0.mtabs !== "none" && p.b0.bottom === p.b0.tabsTop && p.b0.tabsTop < ph, "B0 쓰기 전: 아래 탭 바가 서고 서랍 바닥 = 탭 바 위", { ...p.b0, vh: ph });
+//  #5820 — 폰 아래 탭 바는 걷혔다(높이 0 받침만 남는다). 그래서 «탭 바 위» 는 화면 끝과 같을 수 있다(<=).
+check(!!p.b0 && p.b0.mtabs !== "none" && p.b0.bottom === p.b0.tabsTop && p.b0.tabsTop <= ph, "B0 쓰기 전: 서랍 바닥 = 아래 받침 위(#5820 받침 높이 0 — 화면 끝)", { ...p.b0, vh: ph });
 //  inAt: 앱이 답한 초점이 그 칸이고 프레임이 초점을 가졌나(장면이 정말 일어났나)
 const inAt = (v, id) => !!v && !!v.inner && v.inner.active === id && v.inner.hasFocus === true;
 check(inAt(p.b1, "t") && p.b1.kb && p.b1.mtabs === "none" && p.b1.bottom === ph, "B1 앱 화면 안 글 칸 초점 → 탭 바 숨음 · 서랍 바닥 = 화면 끝", { ...p.b1, vh: ph });

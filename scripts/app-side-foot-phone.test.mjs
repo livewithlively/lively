@@ -151,7 +151,11 @@ async function PAGE_PHONE(inner) {
     });
     //  ⚠ 이 헤드리스에선 매체 질의의 change 이벤트가 오지 않는다(실측 0회) — 그래서 문턱 넘나들기는 CSS 가 맡고(계산된 모양을 잰다), 이벤트에 기대는 판정은 여기서 못 잰다.
     const resize = async (px) => { f.style.width = px + "px"; void f.offsetWidth; await sleep(60); };
-    const tap = async (sec) => { const b = D.querySelector(`.v2-mtab[data-sec="${sec}"]`); if (b) b.click(); await sleep(30); return !!b; };
+    //  #5820 — 아래 탭 바는 걷혔다. 같은 구역 칸은 맨 윗줄 [모든 앱] 이 여는 앱 찾기의 「바로가기」 줄에 있다.
+    const tap = async (sec) => {
+      if (mc.appsBtn) { mc.appsBtn.click(); await sleep(30); }
+      const b = D.querySelector(`.v2-pad-item--hub[data-hub="sec:${sec}"]`); if (b) b.click(); await sleep(30); return !!b;
+    };
     //  setSide 가 없는 트리(이 변경 전)에서도 끝까지 돌아 «빨강» 으로 보이게 — 없으면 아무 일도 안 한다.
     const side = (on) => { if (typeof mc.setSide === "function") mc.setSide(on); else R.noSetSide = true; };
     return { f, mc, st, resize, tap, side, click: async () => { mc.menuBtn.click(); await sleep(30); } };
@@ -187,9 +191,27 @@ async function PAGE_PHONE(inner) {
     R.p6 = { tab: had, open: t.st() };
     t.side(false); await sleep(30);
     R.p8 = t.st();
-    await t.tap("wiki");
+    //  #5820 — 다시 닫는 손짓은 탭 재누름이 아니라 [모든 앱] 이다(누르면 서랍을 닫고 앱 찾기를 연다). 앱 찾기는 닫고 잰다.
+    t.mc.appsBtn.click(); await sleep(30); t.f.contentDocument.querySelector(".v2-pad-cancel")?.click(); await sleep(30);
     R.p6close = t.st();
     t.f.remove();
+  }
+  // P9 — #5820 폰(390) 홈: ☰ 가 서고 누르면 홈의 사이드바(세션 목록) 서랍이 열린다 · 아래 탭 칸은 없다 · 넓은 폭엔 「바로가기」 가 없다
+  {
+    const t = await make(390);
+    t.side(true); if (t.mc.setHome) t.mc.setHome(true); await sleep(30);
+    const a = t.st(); await t.click(); const b = t.st();
+    const D = t.f.contentDocument;
+    R.p9 = { home: a, afterClick: b, tabBtns: D.querySelectorAll(".v2-mtab").length, tabsH: Math.round(t.mc.tabs.getBoundingClientRect().height) };
+    await t.click();
+    t.mc.appsBtn && t.mc.appsBtn.click(); await sleep(30);
+    R.p9hub = [...D.querySelectorAll(".v2-pad-item--hub")].map((n) => n.getAttribute("data-hub"));
+    D.querySelector(".v2-pad-cancel")?.click(); await sleep(30);
+    t.f.remove();
+    const w = await make(1400);
+    w.mc.appsBtn && w.mc.appsBtn.click(); await sleep(30);
+    R.p9wide = w.f.contentDocument.querySelectorAll(".v2-pad-item--hub").length;
+    w.f.remove();
   }
   // P7 — setSide 를 부르지 않은 셸(종전 임베더)
   {
@@ -238,7 +260,12 @@ same([P.p4n && P.p4n.menu, P.p4w && P.p4w.menu], [false, true], "P4 문턱을 �
 same(P.p5, no, "P5 ☰ 로 연 서랍이 열린 채 사이드바 없는 앱으로 — 서랍을 닫고 ☰ 를 걷는다");
 same(P.p6, { tab: true, open: { menu: false, drawer: true, sheet: "wiki" } }, "P6 폰(390) · 사이드바 없는 앱에서 탭 「위키」 — 사람이 고른 구역의 목록이 서고 ☰ 는 여전히 없다");
 same(P.p8, { menu: false, drawer: true, sheet: "wiki" }, "P8 탭 바로 연 목록이 열린 채 다시 «사이드바 없음» — 사람이 고른 목록은 그대로");
-same(P.p6close, no, "P6 같은 탭을 다시 누르면 닫힌다");
+same(P.p9 && { home: P.p9.home, afterClick: P.p9.afterClick, tabBtns: P.p9.tabBtns, tabsH: P.p9.tabsH },
+  { home: { menu: true, drawer: false, sheet: null }, afterClick: { menu: true, drawer: true, sheet: null }, tabBtns: 0, tabsH: 0 },
+  "P9 #5820 폰 홈 — ☰ 가 서고 누르면 홈 사이드바(세션 목록) 서랍 · 아래 탭 칸 없음 · 받침 높이 0");
+same((P.p9hub || []).slice(-1)[0] === "me" && (P.p9hub || []).includes("sec:home") && (P.p9hub || []).includes("sec:wiki"), true, "P9 #5820 폰 [모든 앱] 맨 위 「바로가기」 — 홈 · … · 위키 · 나");
+same(P.p9wide, 0, "P9 #5820 넓은 폭 앱 찾기엔 「바로가기」 가 없다(경계)");
+same(P.p6close, no, "P6 [모든 앱] 을 누르면 그 목록 서랍이 닫힌다(#5820 — 종전: 같은 탭을 다시 누르면 닫힌다)");
 same(P.p7, { before: { menu: true, drawer: false, sheet: null }, after: { menu: true, drawer: true, sheet: null } }, "P7 setSide 를 부르지 않은 셸 — 종전 그대로(☰ 가 서고 서랍이 열린다)");
 same(P.errors, [], "P  페이지 예외 없음");
 
