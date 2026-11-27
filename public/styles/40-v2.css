@@ -3579,9 +3579,9 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
   .v2-review-bar > .v2-review-note { order: 30; flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; }
   .v2-review-bar:not(.v2-review-bar--dock) > .v2-studio-sp { display: none; }
 }
-/* 폰 — 아래 탭 바(50-mobile.css .v2-mtabs · 56px)를 덮지 않게 그 위에 뜬다. 막대는 몸(body)에 붙어 #v2-root 의 --v2-mtabs-h 를 못 받아 값을 그대로 쓴다. */
+/* 폰 — 화면 아래 안전 영역 위에 뜬다(#5820 아래 탭 바를 걷어 그 56px 는 뺐다). */
 @media (max-width: 640px) {
-  .v2-review-bar:not(.v2-review-bar--dock):not(.v2-review-bar--top) { bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 8px); }
+  .v2-review-bar:not(.v2-review-bar--dock):not(.v2-review-bar--top) { bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); }
 }
 
 /* ── 미리보기 안 표시 · [워크스페이스로 돌아가기] (#5581, web/v2/preview-strip.ts) ─────────────────────────────

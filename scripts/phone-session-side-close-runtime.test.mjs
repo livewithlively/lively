@@ -96,7 +96,9 @@ async function PAGE(inners) {
     await t.click(t.D.querySelector(".sc-side")); R.s1 = t.st();
     await t.click(t.mc.menuBtn); R.s5 = t.st();
     //  목록을 여는 구역 탭 아무거나 — 구역 표(railSections)가 바뀌어도 시험이 따라간다. 홈 · 확인할 것(stage 판엔 아직 있다)은 화면으로 가는 탭이라 뺀다.
-    const b = t.D.querySelector(".v2-mtab[data-sec]:not([data-sec=home]):not([data-sec=inbox])");
+    //  #5820 — 아래 탭 바는 걷혔다. 같은 구역 칸은 [모든 앱] 이 여는 앱 찾기 「바로가기」 줄에 있다.
+    if (t.mc.appsBtn) await t.click(t.mc.appsBtn);
+    const b = t.D.querySelector('.v2-pad-item--hub[data-hub^="sec:"]:not([data-hub="sec:home"]):not([data-hub="sec:inbox"])');
     R.s6tab = !!b;
     if (b) { await t.click(b); R.s6 = t.st(); await t.click(t.mc.menuBtn); R.s6close = t.st(); }
     t.f.remove();

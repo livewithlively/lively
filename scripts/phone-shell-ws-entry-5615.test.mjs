@@ -16,10 +16,10 @@ test('폰 맨 윗줄 워크스페이스 타일이 워크스페이스 메뉴를 �
   assert.match(m, /class: 'v2-mbar-btn v2-mws'/);
   assert.match(m, /openWorkspaceMenu\(wsBtn\)/);
   const main = read('web/v2/main.ts');
-  assert.match(main, /webTopbar\.append\(mobile\.wsBtn, mobile\.bellBtn\)/, '타일·종이 브라우저 맨 윗줄에 붙어야 한다');
+  assert.match(main, /webTopbar\.append\(mobile\.wsBtn, mobile\.appsBtn, mobile\.bellBtn\)/, '타일·[모든 앱](#5820)·종이 브라우저 맨 윗줄에 붙어야 한다');
   const css = read('public/styles/50-mobile.css');
   assert.match(phoneBlock(css), /\.v2-topbar > \.v2-mws \{ display: inline-flex !important;/, '폰 블록에서 타일이 보여야 한다');
-  assert.match(css, /^\.v2-mws, \.v2-mbar-bell \{ display: none !important; \}/m, '폰 밖에선 숨는다');
+  assert.match(css, /^\.v2-mws, \.v2-mbar-bell, \.v2-mbar-apps \{ display: none !important; \}/m, '폰 밖에선 숨는다');
 });
 
 test('[나] 판에 워크스페이스 메뉴 · 워크스페이스 설정 줄이 있고 [더보기] 는 없다', () => {
