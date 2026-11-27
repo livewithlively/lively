@@ -17,7 +17,7 @@
 //  S2 (5-3) 1200 — 다섯 단계 이름이 다 보인다
 //  I1 (5-5) 500 · 처음 안내 — 세 장이 한 줄에 하나씩(한 칸) · 그림이 칸을 넘지 않는다
 //  T1 (5-4) 500 · 둘러보기 2번(긴 카드) — 단추 줄이 상자 안 · 상자가 화면 안 · 장면 칸이 스스로 굴린다
-//  R1 (5-6) 500 · 실제 화면 막대 — 「완료 · 다음 단계로」 · 자리 바꾸기는 숨고 「⋯」 · 도구는 그림만 · 두 줄 이하 · 모든 단추가 화면 안 · 아래 탭 바(56px) 위
+//  R1 (5-6) 500 · 실제 화면 막대 — 「완료 · 다음 단계로」 · 자리 바꾸기는 숨고 「⋯」 · 도구는 그림만 · 두 줄 이하 · 모든 단추가 화면 안 · 화면 끝에서 8px 위(#5820 — 종전 아래 탭 바 56px 위)
 //  R2 (5-6) 500 · 막대의 「⋯」 → 「완료 · 다음 단계로」 — onLike 1건
 //  R3 (5-6) 1200 — 「완료 · 다음 단계로」 가 막대에 그대로 · 「⋯」 없음
 //  W  페이지 예외 없음
@@ -223,7 +223,7 @@ check(N.h2 && Array.isArray(N.h2.items) && N.h2.items.includes("AI 세션 보기
 check(N.s1 && N.s1.on >= 0 && N.s1.names.filter(Boolean).length === 1 && N.s1.names[N.s1.on] && N.s1.overflow <= 0 && /^① /.test(N.s1.text || ""), "S1 500 · 단계 바 — 지금 단계만 이름 · 나머지는 번호 · 넘치지 않는다(글은 그대로)", N.s1);
 check(N.i1 && N.i1.cols === 1 && N.i1.picsFit && N.i1.picOverflow.every((o) => o === "hidden"), "I1 500 · 처음 안내 — 세 장이 한 줄에 하나씩 · 그림이 칸을 넘지 않는다", N.i1);
 check(N.t1 && /^2\./.test(N.t1.h2 || "") && N.t1.actIn && N.t1.boxIn && N.t1.scrolls, "T1 500 · 둘러보기 2번 — 단추 줄이 상자 안 · 상자가 화면 안 · 장면만 굴린다", N.t1);
-check(N.r1 && !N.r1.like && N.r1.more && N.r1.h <= 100 && N.r1.allIn && N.r1.toolNames.length === 4 && N.r1.toolNames.every((x) => !x) && N.r1.bottom >= 56, "R1 500 · 실제 화면 막대 — 완료는 「⋯」 로 · 도구는 그림만 · 두 줄 이하 · 화면 안 · 아래 탭 바 위", N.r1);
+check(N.r1 && !N.r1.like && N.r1.more && N.r1.h <= 100 && N.r1.allIn && N.r1.toolNames.length === 4 && N.r1.toolNames.every((x) => !x) && N.r1.bottom >= 8, "R1 500 · 실제 화면 막대 — 완료는 「⋯」 로 · 도구는 그림만 · 두 줄 이하 · 화면 안 · 화면 끝에서 8px 위(#5820 아래 탭 바를 걷었다 — 종전 56px)", N.r1);
 check(N.r2 && Array.isArray(N.r2.items) && N.r2.items.includes("완료 · 다음 단계로") && N.r2.inView && N.r2.liked === 1, "R2 500 · 막대 「⋯」 → 「완료 · 다음 단계로」 — onLike 1건 · 메뉴가 화면 안", N.r2);
 check(N.errors && N.errors.length === 0, "W 500 · 페이지 예외 없음", N.errors);
 
