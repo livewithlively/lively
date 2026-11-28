@@ -12,6 +12,13 @@
 //  'lively 가 심은 것'만 추적 → 멤버 본인 스킬은 절대 안 건드리고, lively 가 더는 원치 않는 것만 회수한다.
 //  content_hash 로 변경분만 재작성(불필요 write skip). Claude 는 reloadSkills:true 로 같은 세션 즉시 반영.
 //
+// **워크스페이스(다중 워크스페이스 게이트웨이)**: 멤버가 속한 워크스페이스 **전부**의 자산을 받는다. 디스크(~/.claude/skills 등)는
+//  머신에 한 벌이라 세션의 워크스페이스만 받으면, 다른 워크스페이스 세션을 켤 때마다 서로의 자산을 회수했다(받은 목록이 하네스로만
+//  나뉘어 있어서). 그래서 세션 워크스페이스를 먼저, 이어 내가 속한 나머지 워크스페이스를 차례로 받고, 받은 목록 항목에 주인 워크스페이스
+//  (ws)를 적어 둔다. 회수는 그 주인 워크스페이스의 목록을 받았는데 빠졌을 때, 또는 내가 그 워크스페이스에서 빠졌을 때만 한다.
+//  같은 id 가 두 워크스페이스에 있으면 먼저 받은 쪽(세션 워크스페이스)이 그 자리를 갖는다. 남의 워크스페이스 자산은 게이트웨이가
+//  명부로 막는다(x-lively-workspace + 멤버 게이트). 훅(run-custom)은 세션 워크스페이스 것만 돈다.
+//
 // **회수 정책(설계): fail-OPEN(last-known-good).** 훅(run-custom)은 control 이라 fail-CLOSED(게이트웨이 미도달→무실행)지만,
 //  자산은 capability 라 게이트웨이 블립에 스킬을 잃으면 안 된다 → fetch 실패 시 디스크 현상 유지(prune 안 함).
 //  위험 자산의 즉시 무력화는 짝훅(paired_hook, fail-CLOSED 런너)이 담당한다(그 액션을 차단).
@@ -19,7 +26,7 @@
 // 보안: id 슬러그 재검증 + 경로 containment(대상 디렉터리 밖이면 skip) + 심링크 통과 거부(멤버 파일 탈취 방지).
 // 페일오픈: 어떤 실패든 조용히 exit 0 — 실제 작업 세션을 절대 막지 않는다. 토큰 값은 절대 출력/로깅하지 않는다.
 // 비활성화(incognito): LIVELY_OFF=1 → no-op. 어드민 토글: hooks-config.json hooks.sync_harness_assets===false.
-import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync, renameSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join, dirname, relative, isAbsolute } from "node:path";
@@ -259,18 +266,41 @@ function composeFile(asset0) {
   return `---\n${lines.join("\n")}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
-async function fetchAssets() {
-  if (!TOKEN) return null;
+const PRIMARY_WS = "primary";
+const WS_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const wsSlug = (v) => { const s = String(v || "").trim().toLowerCase(); return WS_SLUG.test(s) ? s : null; };
+
+async function getJson(path, headers, ms) {
+  if (!TOKEN || ms <= 0) return null;
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), FETCH_MS);
+  const t = setTimeout(() => ctl.abort(), ms);
   try {
-    const url = `${GW}/api/ui/org/runner/assets?harness=${encodeURIComponent(HARNESS)}`;
-    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS } });
+    const res = await fetch(`${GW}${path}`, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...headers } });
     if (!res.ok) return null;
-    const j = await res.json();
-    return Array.isArray(j?.assets) ? j.assets : [];
+    return await res.json();
   } catch { return null; }
   finally { clearTimeout(t); }
+}
+
+async function fetchAssets(headers, ms) {
+  const j = await getJson(`/api/ui/org/runner/assets?harness=${encodeURIComponent(HARNESS)}`, headers, ms);
+  if (j === null) return null;
+  return Array.isArray(j?.assets) ? j.assets : [];
+}
+
+// 내 워크스페이스 목록과, 세션 신호로 게이트웨이가 판정한 이 세션의 워크스페이스(current).
+//  slugs=null 은 모른다(실패) → 다른 워크스페이스 항목은 건드리지 않는다. registry 모드가 아니면(single·managed) 이
+//  게이트웨이에서 헤더로 갈 다른 워크스페이스가 없다 → [] (managed 는 워크스페이스마다 주소가 달라 헤더 전환이 아니다).
+async function fetchMemberWorkspaces(ms) {
+  const j = await getJson("/api/ui/me/workspaces", SCOPE_HDRS, ms);
+  if (!j || typeof j !== "object") return { current: null, slugs: null };
+  const current = wsSlug(j.current);
+  if (j.mode !== "registry") return { current, slugs: [] };
+  if (!Array.isArray(j.workspaces)) return { current, slugs: null };
+  const slugs = j.workspaces
+    .filter((w) => w && (w.state === undefined || w.state === "active"))
+    .map((w) => wsSlug(w.slug)).filter(Boolean);
+  return { current, slugs };
 }
 
 function loadManifest() {
@@ -371,13 +401,13 @@ function writeAsset(asset, prevEntry) {
   if (anySymlink([file, place.skillDir].filter(Boolean))) return { ok: false, symlink: true, id };
   // ★ 비파괴① — lively 가 심지 않은 기존 파일(멤버 본인 자산)은 절대 덮지 않는다. 슬러그 충돌(admin id == 멤버 로컬 스킬 id)
   //  시 org 자산을 그 멤버엔 미배포하고 멤버 파일을 보존한다(managed=매니페스트에 이 id 가 있었나 = lively 소유였나).
-  const managed = !!prevEntry;
+  const managed = !!prevEntry && prevEntry.file === file;
   if (!managed && existsSync(file) && !isOurCopy(file)) return { ok: false, collision: true, id };
 
   const content = composeFile(asset);
   const entry = { kind, hash: asset.content_hash || "", file };
   // content_hash 동일 + 파일 존재 = 변경 없음(재작성 skip)
-  if (prevEntry?.hash && prevEntry.hash === entry.hash && existsSync(file)) return { ok: true, changed: false, entry };
+  if (managed && prevEntry.hash && prevEntry.hash === entry.hash && existsSync(file)) return { ok: true, changed: false, entry };
   try {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, content, { mode: 0o644 });
@@ -569,28 +599,78 @@ async function main() {
   //  «이 세션만 끔» 도 여기서 듣는다 — 이 훅은 입력을 읽지 않으므로 클로드가 훅에 싣는 지금 세션 id(env)로 본다(그 밖의 하네스는 폴더 판정만).
   const sidEnv = HARNESS === "claude" || !HARNESS ? String(process.env.CLAUDE_CODE_SESSION_ID || "").trim() : "";
   if (!process.argv.includes("--preload") && !inScopeNow({ env: process.env, input: sidEnv ? { session_id: sidEnv } : null, cwd: process.cwd(), harness: HARNESS, lively: LIVELY }).inScope) return;
-  const assets = await Promise.race([fetchAssets(), new Promise((r) => setTimeout(() => r(null), HARD_MS))]);
-  if (assets === null) return; // fetch 실패/타임아웃 → fail-OPEN(현상 유지, prune 안 함)
+  const deadline = Date.now() + HARD_MS;
+  const left = () => Math.min(FETCH_MS, deadline - Date.now() - 100);
+  const [sessionAssets, mine] = await Promise.all([fetchAssets(SCOPE_HDRS, left()), fetchMemberWorkspaces(left())]);
+  if (sessionAssets === null) return; // fetch 실패/타임아웃 → fail-OPEN(현상 유지, prune 안 함)
+  // 세션 자산을 받은 그 헤더로 게이트웨이가 판정한 값이 정본이다 — env 는 그 응답을 못 받았을 때의 추정일 뿐이다.
+  const SESSION_WS = mine.current || wsSlug(process.env.LVLY_TENANT_SLUG) || PRIMARY_WS;
+  // 세션 맵으로만 소속이 정해지는 세션(세션 id 만 있고 slug env 없음)에서 current 를 못 받으면 라벨이 추정일 뿐이다 —
+  //  그 추정으로 회수하면 엉뚱한 워크스페이스 몫을 지운다. 이번엔 쓰기만 하고 회수는 다음 받기로 미룬다.
+  const labelGuessed = !mine.current && !wsSlug(process.env.LVLY_TENANT_SLUG) && !!SCOPE_HDRS["x-lively-session"];
+  const memberWs = mine.slugs;
+  const otherWs = memberWs ? [...new Set(memberWs)].filter((ws) => ws !== SESSION_WS) : [];
+  const otherAssets = await Promise.all(otherWs.map((ws) => fetchAssets({ "x-lively-workspace": ws }, left())));
+  // 짝훅(paired_hook_id)은 그 자산의 위험 통제인데 훅은 세션 워크스페이스 것만 돈다 — 다른 워크스페이스 세션에선 통제 없이
+  //  쓰이게 되므로 그 워크스페이스 세션에서만 깐다(다른 워크스페이스 세션에서는 받지 않은 것으로 보고 회수한다).
+  const unguarded = (a) => !(a && a.paired_hook_id);
+  const plans = [{ ws: SESSION_WS, assets: sessionAssets }, ...otherWs.map((ws, i) => ({ ws, assets: otherAssets[i] && otherAssets[i].filter(unguarded) }))];
+  const fetched = new Set(plans.filter((p) => p.assets !== null).map((p) => p.ws));
+  const members = memberWs ? new Set([SESSION_WS, ...memberWs]) : null;
 
   const manifest = loadManifest();
   const prev = (manifest[HARNESS] && typeof manifest[HARNESS] === "object") ? manifest[HARNESS] : {};
+  // 종전 항목엔 ws 가 없다 — 세션 워크스페이스 하나만 받던 때라 그 세션의 것으로 본다(같은 받기에서 다른 워크스페이스가 원하면 그쪽이 갖는다).
+  const ownerOf = (e) => (e && typeof e.ws === "string" && e.ws) ? e.ws : SESSION_WS;
+  // 짝훅 자산은 주인 워크스페이스 세션이 아니면 통제 훅이 안 돈다 — 세션 목록을 받은 받기에서는 다른 워크스페이스 몫을 남겨 두지 않는다.
+  const unguardedHere = (e) => e?.paired && ownerOf(e) !== SESSION_WS;
+  // 주인 워크스페이스의 목록을 이번에 못 받은 항목은 그대로 둔다(fail-OPEN) — 그 자리는 다른 워크스페이스가 가져가지 않는다.
+  const held = (e) => !unguardedHere(e) && !fetched.has(ownerOf(e)) && (!members || members.has(ownerOf(e)));
+  // 회수 보류 — held 에 더해, 라벨이 추정이면 이번엔 회수하지 않는다(쓰기·갱신은 그대로 한다). 짝훅 자산은 라벨로 주인을 가릴 수
+  //  없으므로 세션 목록에 있을 때만 산다(그 경우는 아래 desiredBy 갈래가 유지한다).
+  const keep = (e) => held(e) || (labelGuessed && !e?.paired);
   const next = {};
   let changed = false;
-  const desiredIds = new Set();
+  const desiredBy = new Map(); // id → { ws, paired } 이번에 그 자리를 가진 워크스페이스
+  const shadowed = [];         // 같은 이름 자산이 이미 자리를 가져 생략한 다른 워크스페이스 몫 — 워크스페이스마다 기본 스킬이 시드돼 겹치므로 한 줄로 모아 알린다
+  const sameFile = (a, b) => {
+    if (relative(a, b) === "") return true;
+    try { const x = statSync(a), y = statSync(b); return x.dev === y.dev && x.ino === y.ino; } catch { return false; }
+  };
 
-  for (const a of assets) {
-    const id = String(a?.id || "").trim().toLowerCase();
-    if (!SLUG.test(id)) continue;
-    desiredIds.add(id); // 게이트웨이가 이 멤버에게 원하는 자산(써졌든 아니든)
-    const res = writeAsset(a, prev[id]);
-    if (res.ok) { next[id] = res.entry; if (res.changed) changed = true; }
-    else if (res.collision) process.stderr.write(`[lively] 자산 '${id}' — 동명의 로컬 파일이 이미 있어 배포 생략(멤버 자산 보존)\n`);
-    // res.ok=false(미지원 codex·심링크·충돌·일시 write 실패): next 에 안 넣지만 desiredIds 에 있어 prune 안 됨(멤버 파일 보존·다음 세션 재시도).
+  for (const { ws: planWs, assets } of plans) {
+    if (assets === null) continue;
+    // 라벨이 추정이면 세션 목록이 실제로 어느 워크스페이스 것인지 모른다 — 세션 몫은 자리를 갖고 갱신하되, 이미 적힌 주인은 바꾸지 않는다.
+    const guessedSession = labelGuessed && planWs === SESSION_WS;
+    for (const a of assets) {
+      const id = String(a?.id || "").trim().toLowerCase();
+      if (!SLUG.test(id)) continue;
+      const ws = guessedSession && prev[id]?.ws ? prev[id].ws : planWs;
+      if (desiredBy.has(id) || (!guessedSession && prev[id] && held(prev[id]))) {
+        if (desiredBy.get(id)?.ws !== ws) shadowed.push(`${id}@${ws}`);
+        continue;
+      }
+      desiredBy.set(id, { ws, paired: !!a.paired_hook_id }); // 게이트웨이가 이 멤버에게 원하는 자산(써졌든 아니든)
+      const res = writeAsset(a, prev[id]);
+      if (res.ok) {
+        next[id] = { ...res.entry, ws, ...(a.paired_hook_id ? { paired: true } : {}) }; if (res.changed) changed = true;
+        // 같은 id 라도 워크스페이스마다 종류가 다를 수 있다(skill ↔ command) — 자리가 바뀌면 옛 자리의 사본을 거둔다.
+        if (prev[id]?.file && !sameFile(prev[id].file, res.entry.file)) { removeAsset(prev[id]); changed = true; }
+      }
+      else if (res.collision) process.stderr.write(`[lively] 자산 '${id}' — 동명의 로컬 파일이 이미 있어 배포 생략(멤버 자산 보존)\n`);
+      // res.ok=false(미지원 codex·심링크·충돌·일시 write 실패): next 에 안 넣지만 desiredBy 에 있어 prune 안 됨(멤버 파일 보존·다음 세션 재시도).
+    }
   }
-  // desired 지만 이번에 (재)작성 안 됨(일시 실패 등) → 소유권 유지 위해 이전 매니페스트 엔트리 보존(파일 prune 방지).
-  for (const id of Object.keys(prev)) if (desiredIds.has(id) && !next[id]) next[id] = prev[id];
-  // prune — 게이트웨이가 더는 원치 않는 것(회수/비활성/타깃 제외)만 제거. fetch 성공했을 때만 도달(fail-OPEN).
-  for (const id of Object.keys(prev)) if (!desiredIds.has(id)) { removeAsset(prev[id]); delete next[id]; changed = true; }
+  if (shadowed.length) process.stderr.write(`[lively] 같은 이름 자산 ${shadowed.length}개는 먼저 받은 워크스페이스 판을 썼다(생략: ${shadowed.join(", ")})\n`);
+  for (const id of Object.keys(prev)) {
+    if (next[id]) continue;
+    const e = prev[id];
+    // desired 지만 이번에 (재)작성 안 됨(일시 실패 등) → 소유권 유지 위해 이전 매니페스트 엔트리 보존(파일 prune 방지).
+    if (desiredBy.has(id)) { const d = desiredBy.get(id); const { paired: _p, ...rest } = e; next[id] = { ...rest, ws: d.ws, ...(d.paired ? { paired: true } : {}) }; continue; }
+    if (keep(e)) { next[id] = e; continue; }
+    // prune — 주인 워크스페이스가 더는 원치 않거나(회수/비활성/타깃 제외) 내가 그 워크스페이스에서 빠졌다. fetch 성공했을 때만 도달(fail-OPEN).
+    removeAsset(e); changed = true;
+  }
   saveManifestFor(HARNESS, next);
   if (changed) emitReload();
 

@@ -2405,7 +2405,7 @@ async function gatherStatus() {
         const server = Array.isArray(r?.assets) ? r.assets.length : null;
         if (server === null) continue;
         const mine = (manifest[h] && typeof manifest[h] === "object") ? manifest[h] : {};
-        const local = Object.keys(mine).length;
+        const local = r.assets.filter((a) => Object.hasOwn(mine, String(a?.id || "").trim().toLowerCase())).length;
         let collision = null;
         if (placementFor) {
           collision = 0;
@@ -2889,7 +2889,7 @@ async function cmdSelfcheck(opts) {
   let man = {}; try { man = JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")); } catch { /* 없으면 빈 것 */ }
   const hs = Object.keys(man);
   out.kit = readLively("kit-version") || null;
-  out.assets = Object.fromEntries(hs.map((x) => [x, Object.entries(man[x] || {}).map(([id, v]) => ({ id, kind: v.kind, hash: v.hash, missing: !!(v.file && !existsSync(v.file)) }))]));
+  out.assets = Object.fromEntries(hs.map((x) => [x, Object.entries(man[x] || {}).map(([id, v]) => ({ id, kind: v.kind, hash: v.hash, ws: v.ws ?? null, missing: !!(v.file && !existsSync(v.file)) }))]));
   const EV = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact", "SessionEnd"];
   let fired = null; const cache = {};
   for (const e of EV) { try { const c = JSON.parse(readFileSync(join(LIVELY, `custom-hooks-${e}.json`), "utf8"));
@@ -2909,12 +2909,19 @@ async function cmdSelfcheck(opts) {
     const h = hs[0] || "claude";
     try {
       const srv = (await api(`/api/ui/org/runner/assets?harness=${encodeURIComponent(h)}`, { timeoutMs: 8000 })).assets || [];
-      const lm = new Map((out.assets[h] || []).map((a) => [a.id, a.hash]));
+      // 받은 목록엔 내가 속한 다른 워크스페이스 몫(ws)도 있다 — 이 조회가 본 워크스페이스(current)의 몫만 대조하고 나머지는 수만 적는다.
+      //  current 를 못 받으면 가르지 않는다(종전처럼 전부 대조).
+      const cur = String((await api("/api/ui/me/workspaces", { timeoutMs: 8000 }).catch(() => null))?.current || "").trim().toLowerCase() || null;
+      const all = out.assets[h] || [];
+      const local = cur ? all.filter((a) => !a.ws || a.ws === cur) : all;
+      out.workspace = cur;
+      const lm = new Map(local.map((a) => [a.id, a.hash]));
       out.server = { harness: h, assets: srv.length,
-        sameHash: srv.length === (out.assets[h] || []).length && srv.every((a) => lm.get(a.id) === a.content_hash),
+        sameHash: srv.length === local.length && srv.every((a) => lm.get(a.id) === a.content_hash),
         notLocal: srv.filter((a) => !lm.has(a.id)).map((a) => `${a.kind}:${a.id}`),
         mismatch: srv.filter((a) => lm.has(a.id) && lm.get(a.id) !== a.content_hash).map((a) => `${a.kind}:${a.id}`),
-        stale: (out.assets[h] || []).filter((a) => !srv.some((s) => s.id === a.id)).map((a) => a.id) };
+        stale: local.filter((a) => !srv.some((s) => s.id === a.id)).map((a) => a.id),
+        otherWorkspaces: all.length - local.length };
       const c = (await api("/api/ui/org/preview", { timeoutMs: 8000 }))?.context || "";
       out.server.contextFresh = norm(c) === norm(ctx);
     } catch (e) { out.server = { error: e.message }; }
@@ -2926,7 +2933,7 @@ async function cmdSelfcheck(opts) {
   for (const x of hs) {
     const l = out.assets[x], miss = l.filter((a) => a.missing);
     say(`  자산 ${x.padEnd(8)} ${l.length ? green(`${l.length}개`) : yellow("0개 — 이 하네스에 하나도 안 깔렸다")}${miss.length ? "  " + yellow(`파일없음 ${miss.length}개`) : ""}`);
-    if (l.length) say(`    ${dim(l.map((a) => `${a.kind}:${a.id}`).join(" "))}`);
+    if (l.length) say(`    ${dim(l.map((a) => `${a.kind}:${a.id}${a.ws && out.workspace && a.ws !== out.workspace ? `@${a.ws}` : ""}`).join(" "))}`);
     for (const a of miss) say(`    ${red("✗")} ${a.id}`);
   }
   if (hs.length > 1) say(`  ${dim("↑ whoami 의 session.harness 와 같은 줄을 보라 — 다른 줄은 이 PC 의 다른 하네스 것이다.")}`);
@@ -2939,6 +2946,7 @@ async function cmdSelfcheck(opts) {
     for (const x of out.server.notLocal) say(`    ${red("✗")} 로컬에 없음 ${x}`);
     for (const x of out.server.mismatch) say(`    ${yellow("·")} 내용 다름 ${x} ${dim("(다음 세션에 갱신된다)")}`);
     for (const x of out.server.stale) say(`    ${yellow("·")} 서버에 없음(잔재) ${x}`);
+    if (out.server.otherWorkspaces) say(`                ${dim(`다른 워크스페이스 몫 ${out.server.otherWorkspaces}개는 대조하지 않았다(그 워크스페이스 세션에서 확인)`)}`);
     say(`                맥락 ${out.server.contextFresh ? green("= 이 세션이 받은 것(최신)") : yellow("≠ 세션 시작 뒤 서버가 바뀜 — 다음 세션에 반영")}`);
   }
   say("");
