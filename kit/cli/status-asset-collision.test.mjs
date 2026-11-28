@@ -24,6 +24,7 @@ const check = (n, cond, why) => { if (cond) { pass++; console.log(`ok  ${n}`); }
 
 // 서버 자산 = 스킬 2 + 서브에이전트 1. 로컬에 어느 것을 미리 놔두느냐로 충돌 수를 만든다.
 const SERVER = [{ id: "a0", kind: "skill" }, { id: "a1", kind: "skill" }, { id: "sub0", kind: "subagent" }];
+let CURRENT = "primary";   // 게이트웨이가 이 요청에 판정한 워크스페이스(매니지드면 테넌트 slug)
 const srv = createServer((req, res) => {
   const send = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
   if (req.url.startsWith("/api/ui/org/runtime-config")) return send({ kit_version: "test", hooks: {} });
@@ -32,6 +33,7 @@ const srv = createServer((req, res) => {
     return send({ assets: h === "claude" ? SERVER : [] });
   }
   if (req.url.startsWith("/api/ui/me/profile")) return send({ id: "tester", display_name: "테스터" });
+  if (req.url.startsWith("/api/ui/me/workspaces")) return send({ mode: "registry", current: CURRENT, workspaces: [] });
   send({});
 });
 await new Promise((r) => srv.listen(0, "127.0.0.1", r));
@@ -45,7 +47,7 @@ function mkCase(name, { mine = [], local = [] } = {}) {
   writeFileSync(join(home, ".lively", "gateway-url"), GW + "\n");
   writeFileSync(join(home, ".lively", "token"), "t\n");
   writeFileSync(join(home, ".lively", "managed-harness-assets.json"),
-    JSON.stringify({ claude: Object.fromEntries(mine.map((id) => [id, { kind: "skill" }])) }));
+    JSON.stringify({ claude: Object.fromEntries(mine.map((m) => Array.isArray(m) ? [m[0], { kind: "skill", ws: m[1] }] : [m, { kind: "skill" }])) }));
   for (const [kind, id] of local) {
     if (kind === "skill") { mkdirSync(join(ccd, "skills", id), { recursive: true }); writeFileSync(join(ccd, "skills", id, "SKILL.md"), "---\nname: x\n---\n"); }
     else { mkdirSync(join(ccd, "agents"), { recursive: true }); writeFileSync(join(ccd, "agents", `${id}.md`), "---\nname: x\n---\n"); }
@@ -113,6 +115,24 @@ try {
     const chk = assetCheck(await run(c, "doctor", CLI_NOLIB));
     check("C4b 경보 유지 — 모르는 걸 정상이라 우기지 않는다", chk && chk.pass === false, JSON.stringify(chk));
     check("C4c 문구가 불확실성을 밝힌다", chk && /확인 못 했습니다/.test(chk.detail), JSON.stringify(chk));
+  }
+
+  // ── C5 다른 워크스페이스 몫이 섞인 받은 목록 — 서버(primary) 목록과 겹치는 것만 센다. a0 는 다른 워크스페이스가 같은 이름으로 쥐고 있다 ──
+  {
+    const c = mkCase("other-ws", { mine: [["a0", "team-a"], ["a1", "primary"], "sub0", ["ta-only", "team-a"]] });
+    const a = (await run(c, "status")).harness.claude.assets;
+    check("C5 서버 목록과 겹치는 것만 센다", a && a.local === 3 && a.server === 3, JSON.stringify(a));
+    const sc = (await run(c, "selfcheck")).server;
+    check("C5b selfcheck — 다른 워크스페이스 몫은 잔재로 세지 않고 따로 센다", sc && sc.stale.length === 0 && sc.otherWorkspaces === 2, JSON.stringify(sc));
+  }
+
+  // ── C6 매니지드 — 조회가 본 워크스페이스가 primary 가 아니라 테넌트 slug 다. 그 몫은 그대로 대조된다 ──
+  {
+    CURRENT = "tenant-x";
+    const c = mkCase("managed", { mine: [["a0", "tenant-x"], ["a1", "tenant-x"], ["sub0", "tenant-x"]] });
+    const sc = (await run(c, "selfcheck")).server;
+    CURRENT = "primary";
+    check("C6 selfcheck — 테넌트 몫은 로컬에 있고 잔재·다른 몫 없음", sc && sc.notLocal.length === 0 && sc.stale.length === 0 && sc.otherWorkspaces === 0, JSON.stringify(sc));
   }
 
   console.log(`\n${fail ? "FAIL" : "PASS"} — ${pass} passed, ${fail} failed`);
